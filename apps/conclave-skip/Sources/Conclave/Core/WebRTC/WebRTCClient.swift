@@ -82,7 +82,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     /// onLocal*EnabledChanged callbacks. The binding handlers hop through
     /// `Task { @MainActor }` (async), so on the reconnect-rejoin path a cleanup()
     /// that fired them would land AFTER the VM restored the user's mute/camera
-    /// intent and flip it back — leaving an unmuted user rejoining muted. The
+    /// intent and flip it back - leaving an unmuted user rejoining muted. The
     /// rejoin teardown sets this via cleanup(notifyLocalState: false).
     private var suppressLocalStateCallbacks = false
     private(set) var localAudioEnabled: Bool = false {
@@ -144,7 +144,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         let kind: String
         let type: String
         // Key under which the video track is stored in remoteVideoTracks:
-        // "{userId}" for webcam, "{userId}-screen" for a screen-share — so a
+        // "{userId}" for webcam, "{userId}-screen" for a screen-share - so a
         // user's webcam and screen tracks coexist instead of overwriting.
         var trackKey: String = ""
     }
@@ -1479,7 +1479,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         consumer.delegate = self
         consumer.resume()
 
-        // A user can produce a webcam AND a screen-share at once — store them
+        // A user can produce a webcam AND a screen-share at once - store them
         // under distinct keys so one never overwrites the other.
         let isScreenVideo = (producerType == "screen" && response.kind == "video")
         let trackKey = isScreenVideo ? "\(producerUserId)-screen" : producerUserId
@@ -1537,7 +1537,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             removeConsumer(consumerId: entry.key, info: entry.value, closeConsumer: true)
         }
 
-        // User left entirely (empty producerId path) — clear both their slots.
+        // User left entirely (empty producerId path) - clear both their slots.
         if producerId.isEmpty, !userId.isEmpty {
             for key in Array(remoteVideoTracks.keys) where trackKeyMatchesUser(key, userId: userId) {
                 remoteVideoTracks.removeValue(forKey: key)
@@ -2753,7 +2753,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     /// Mirrors the web freeze watchdog: for each remote VIDEO consumer, if
     /// framesDecoded stays flat while real media still flows (bytesReceived
     /// climbs >= threshold) across 2 consecutive checks, the decoder is stuck on
-    /// a stale frame — request a keyframe (PLI) so it un-freezes. A frozen decoder
+    /// a stale frame - request a keyframe (PLI) so it un-freezes. A frozen decoder
     /// that keeps receiving RTP is invisible to track-mute callbacks, so this is
     /// the only path that recovers it. Driven from the VM poll (~every 2s).
     func checkVideoFreezes() async {
@@ -2771,7 +2771,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 stalls = stuck ? prev.stalls + 1 : 0
             }
             if stalls >= stallSamplesBeforePLI {
-                // Still frozen — request a keyframe. Do NOT reset the stall
+                // Still frozen - request a keyframe. Do NOT reset the stall
                 // counter: if this PLI is lost on a congested link, the next
                 // ~2s poll still sees frames flat and re-requests immediately,
                 // instead of waiting out two fresh stall windows (~4s of dead
@@ -2841,7 +2841,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         // process-wide singleton reused across calls, so leaving them stale-true
         // would make the NEXT join's unmute / camera-on take the resume branch
         // (`guard let producer = audioProducer else { return }`) against a
-        // now-nil producer — silently producing nothing (inaudible / black tile,
+        // now-nil producer - silently producing nothing (inaudible / black tile,
         // no error). They're otherwise only cleared by onTransportClose, which
         // cannot fire here since the producers are nilled before the transport
         // closes. Resetting them makes a reused client create fresh producers.

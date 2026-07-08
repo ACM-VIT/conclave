@@ -731,10 +731,10 @@ final class SocketIOManager {
 
     /// Snapshot the room's current producers (producer-sync safety net). The SFU
     /// `getProducers` handler is callback-only (`(callback) => …`), so emit with
-    /// NO payload — the payloaded emit() would put `{}` in the first arg slot and
+    /// NO payload - the payloaded emit() would put `{}` in the first arg slot and
     /// the server would bind the ack callback to it, silently dropping the reply.
     /// Returns the whole response object (not the array) so the Skip-transpiled
-    /// caller iterates `.producers` itself — a bare `[ProducerInfo]` across the
+    /// caller iterates `.producers` itself - a bare `[ProducerInfo]` across the
     /// hand-written-Kotlin boundary trips Skip's Array/List bridging.
     func getProducers() async throws -> GetProducersResponse {
         let data = try await emitAckOnly(event: SocketEvent.getProducers)
@@ -1313,7 +1313,7 @@ final class SocketIOManager {
 
     // MARK: - Private: Emit with Ack
 
-    /// Emit an event that carries NO request payload — just an ack callback (e.g.
+    /// Emit an event that carries NO request payload - just an ack callback (e.g.
     /// getProducers). The SFU handlers for these are `(callback) => …`; the
     /// payloaded emit() below would send `{}` as a real first arg, so the server
     /// would bind the ack callback to that object and never reply. Mirrors the

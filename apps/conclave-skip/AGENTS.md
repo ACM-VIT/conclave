@@ -70,6 +70,34 @@ agent-device install com.acmvit.conclave /tmp/conclave-ios-dd/Build/Products/Deb
 agent-device open com.acmvit.conclave --platform ios --udid <SIMULATOR_UDID>
 ```
 
+Debug **simulator** builds default the SFU join endpoint to
+`http://127.0.0.1:3000` (local dev stack); a guest join fails with the branded
+"Could not connect to the server" screen unless a local stack is running. To
+smoke against production instead, launch with the env override:
+
+```bash
+xcrun simctl terminate <SIMULATOR_UDID> com.acmvit.conclave
+SIMCTL_CHILD_SFU_JOIN_URL="https://conclave.acmvit.in/api/sfu/join" \
+  xcrun simctl launch <SIMULATOR_UDID> com.acmvit.conclave
+```
+
+(Resolution order lives in `SfuJoinService.joinURL()`: env override → bundled
+config → 127.0.0.1 on sim / production on device. Debug on a real device and
+all Release builds already point at production.)
+
+`agent-device snapshot` + `click @ref` (accessibility refs) is the reliable
+way to drive the app on simulator - prefer it over coordinate taps. Sim smoke
+of the core loop (guest create → entry overlay with animating Lottie →
+settled meeting → chat/sheet → hang up) passed against production on
+2026-07-07.
+
+One more transpile gotcha proven here: `.map(String.init)` (any
+`map`/`compactMap` with an initializer or function reference) transpiles to
+Kotlin `map(String)` - passing the companion object - and fails
+`compileReleaseKotlin`. Always use an explicit closure: `.map { String($0) }`.
+This shipped in the chess commits and broke the Android build while iOS stayed
+green; Android compile is part of "done" for every commit.
+
 Real Android proof still matters for completion:
 
 ```bash
@@ -81,6 +109,16 @@ adb pull /sdcard/ui.xml /tmp/conclave-ui.xml
 
 Do not use `uiautomator dump /dev/tty`; it can collide with stale
 UiAutomation sessions. Dump to a file and pull it.
+
+Do not run two Gradle invocations on this project concurrently (e.g. a
+background `:app:assembleRelease` while a foreground `:Conclave:compileDebugKotlin`
+or an Xcode build runs). The skip prebuild and shared `.build` outputs
+collide and the build fails spuriously ("N actionable tasks: 1 executed" with
+no error lines). Re-run sequentially before diagnosing anything.
+
+Prod rate-limits rapid room creation per client: after ~a dozen creates in
+one session the app path returns "Join request failed" for a while. Space out
+sim smoke runs or reuse one room instead of creating fresh rooms per test.
 
 ## Performance Learnings
 
@@ -184,6 +222,31 @@ Important Lottie rules:
 ```bash
 unzip -l apps/conclave-skip/.build/Android/app/outputs/apk/release/app-release.apk | rg "conclave-animation|dotlottie|dlplayer|lottie"
 ```
+
+## Game Stage Layout Rules
+
+Learned from user feedback on 2026-07-07 (Wordle screenshot review):
+
+- **No floating self view over a game.** The tile strip force-includes the
+  local user (`tileStripSnapshot(forceSelfTile: true)` in
+  `GameStageTileStrip`); `GameStageCardView` renders no
+  `DetachedSelfViewOverlay`. During a game you are a player in the strip like
+  everyone else - game inputs must never be obscured.
+- **No accent side-bars on game section headers.** Flat title + faint subtitle
+  (see `WordleGameView.statusBlock`). The stage chrome already carries game
+  identity; body headers state the task quietly. No emoji in status chips -
+  the timer is a bordered capsule with plain text.
+- **Game boards must fit the compact fold.** Wordle tiles are 38pt/4pt gaps so
+  board + field + button + keyboard rows fit an iPhone card without clipping.
+- **Keyboard handling (iOS):** the meeting column ignores the keyboard
+  (`.ignoresSafeArea(.keyboard)` in MeetingView) and `GameStageCardView` pads
+  its body by the real keyboard overlap via `KeyboardFrameObserver` +
+  `KeyboardOverlapAvoidance` (`KeyboardOverlap.swift`). Verified on sim: at
+  rest, hardware-keyboard focus, and software-keyboard focus - the stage never
+  collapses and the focused game input stays visible. Before this fix, typing
+  a guess collapsed the stage and floated the controls bar over the game card.
+  Android IME behavior is untested on device - verify when a phone is
+  available.
 
 ## Bottom Sheets
 

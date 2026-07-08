@@ -172,6 +172,63 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(response.vote?.candidates.first?.options.first?.defaultConfigValue.numberValue, 3)
     }
 
+    func testNativeGamePublicStateDecodesLateJoinAndConfigFields() throws {
+        // The stage reads config (rematch), pendingJoiners (seated next round),
+        // and canJoinLate (Join affordance). Older payloads omit them, so they
+        // must stay optional.
+        let full = try JSONDecoder().decode(GamePublicState.self, from: Data("""
+        {
+          "gameId": "trivia",
+          "name": "Trivia",
+          "phase": "results",
+          "players": [{ "id": "u1", "name": "Ishaan" }],
+          "hostId": "u1",
+          "view": { "scoreboard": [{ "id": "u1", "name": "Ishaan", "score": 5 }] },
+          "finished": true,
+          "hasLeaderboard": true,
+          "config": { "rounds": 5, "pace": "normal" },
+          "pendingJoiners": [{ "id": "u2", "name": "Bea" }],
+          "canJoinLate": true
+        }
+        """.utf8))
+
+        XCTAssertTrue(full.finished)
+        XCTAssertEqual(full.config?["rounds"]?.numberValue, 5)
+        XCTAssertEqual(full.config?["pace"]?.stringValue, "normal")
+        XCTAssertEqual(full.pendingJoiners?.first?.name, "Bea")
+        XCTAssertEqual(full.canJoinLate, true)
+
+        let legacy = try JSONDecoder().decode(GamePublicState.self, from: Data("""
+        {
+          "gameId": "trivia",
+          "name": "Trivia",
+          "phase": "question",
+          "players": [],
+          "hostId": null,
+          "view": null,
+          "finished": false,
+          "hasLeaderboard": true
+        }
+        """.utf8))
+        XCTAssertNil(legacy.config)
+        XCTAssertNil(legacy.pendingJoiners)
+        XCTAssertNil(legacy.canJoinLate)
+    }
+
+    func testNativeGameFinishedStateSurvivesBroadcastForResultsAndRematch() throws {
+        // Regression: a finished round must NOT be nulled by the game:state
+        // broadcast handler (only game:ended clears it), or the stage flashes
+        // its results away and the rematch action never appears. Matches web.
+        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
+        let marker = "private func applyGamePublicState(_ notification: GamePublicState)"
+        let range = try XCTUnwrap(source.range(of: marker))
+        let tail = String(source[range.lowerBound...].prefix(600))
+        XCTAssertFalse(
+            tail.contains("if notification.finished {"),
+            "applyGamePublicState must not discard finished games on broadcast."
+        )
+    }
+
     func testNativeGameViewAndMovePayloadWireModelsPreserveObjects() throws {
         let notification = try JSONDecoder().decode(GamePlayerViewNotification.self, from: Data("""
         {
@@ -5493,7 +5550,7 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual("Conclave", testData.testModuleName)
     }
 
-    func testPortraitTwoPersonTileLayoutUsesTwoColumns() throws {
+    func testPortraitTwoPersonTileLayoutStacksFullWidth() throws {
         let layout = computeOptimalTileLayout(
             participantCount: 2,
             containerWidth: 393,
@@ -5502,13 +5559,15 @@ final class ConclaveTests: XCTestCase {
             padding: 16
         )
 
-        XCTAssertEqual(layout.columns, 2)
-        XCTAssertEqual(layout.rows, 1)
-        XCTAssertGreaterThan(layout.tileWidth, 0)
-        XCTAssertGreaterThan(layout.tileHeight, layout.tileWidth)
+        // Meet-style stacked pair: two full-width tiles that split the stage.
+        XCTAssertEqual(layout.columns, 1)
+        XCTAssertEqual(layout.rows, 2)
+        XCTAssertGreaterThan(layout.tileWidth, 300)
+        let content = layout.tileHeight * 2 + 12
+        XCTAssertLessThanOrEqual(content, 640 - 32 + 1)
     }
 
-    func testPortraitSingleVisibleRemoteTileKeepsStageInsideBounds() throws {
+    func testPortraitSingleVisibleRemoteTileFillsStage() throws {
         let layout = computeOptimalTileLayout(
             participantCount: 1,
             containerWidth: 393,
@@ -5519,7 +5578,24 @@ final class ConclaveTests: XCTestCase {
 
         XCTAssertEqual(layout.columns, 1)
         XCTAssertEqual(layout.rows, 1)
-        XCTAssertEqual(layout.tileHeight, layout.tileWidth, accuracy: 0.5)
+        // Fills the available height instead of floating a square card.
+        XCTAssertEqual(layout.tileHeight, 608, accuracy: 1.0)
+        XCTAssertLessThanOrEqual(layout.tileHeight, layout.tileWidth * 2.1)
+    }
+
+    func testPortraitThreePersonTilesFillAvailableHeight() throws {
+        let layout = computeOptimalTileLayout(
+            participantCount: 3,
+            containerWidth: 393,
+            containerHeight: 640,
+            spacing: 12,
+            padding: 16
+        )
+
+        XCTAssertEqual(layout.columns, 2)
+        XCTAssertEqual(layout.rows, 2)
+        let content = layout.tileHeight * 2 + 12
+        XCTAssertEqual(content, 608, accuracy: 2.0)
     }
 
     func testMeetingGridSizingClampsTinyContainerMeasurements() throws {
@@ -5579,6 +5655,54 @@ final class ConclaveTests: XCTestCase {
         XCTAssertGreaterThan(finalRow.count, 0)
         XCTAssertGreaterThan(finalRowWidth, 0)
         XCTAssertLessThanOrEqual(insetDifference, 1)
+    }
+
+    func testGridTileFramePolicyCentersShortLastRowAndStaysInCanvas() throws {
+        // 3 tiles in 2 columns: rows are [2, 1]; the lone last tile centers.
+        let tileWidth: CGFloat = 180
+        let tileHeight: CGFloat = 240
+        let spacing: CGFloat = 12
+        let contentWidth = 2 * tileWidth + spacing
+
+        let first = GridTileFramePolicy.origin(
+            index: 0, count: 3, columns: 2,
+            tileWidth: tileWidth, tileHeight: tileHeight,
+            contentWidth: contentWidth, spacing: spacing
+        )
+        let second = GridTileFramePolicy.origin(
+            index: 1, count: 3, columns: 2,
+            tileWidth: tileWidth, tileHeight: tileHeight,
+            contentWidth: contentWidth, spacing: spacing
+        )
+        let third = GridTileFramePolicy.origin(
+            index: 2, count: 3, columns: 2,
+            tileWidth: tileWidth, tileHeight: tileHeight,
+            contentWidth: contentWidth, spacing: spacing
+        )
+
+        XCTAssertEqual(first.x, 0, accuracy: 0.001)
+        XCTAssertEqual(first.y, 0, accuracy: 0.001)
+        XCTAssertEqual(second.x, tileWidth + spacing, accuracy: 0.001)
+        XCTAssertEqual(second.y, 0, accuracy: 0.001)
+        // Last row: single tile centered in the canvas.
+        XCTAssertEqual(third.x, (contentWidth - tileWidth) / 2.0, accuracy: 0.001)
+        XCTAssertEqual(third.y, tileHeight + spacing, accuracy: 0.001)
+
+        // Every origin stays inside the canvas for a range of counts.
+        for count in 1...8 {
+            let columns = count == 2 ? 1 : min(count, 2)
+            let width = columns == 1 ? contentWidth : tileWidth
+            for index in 0..<count {
+                let origin = GridTileFramePolicy.origin(
+                    index: index, count: count, columns: columns,
+                    tileWidth: width, tileHeight: tileHeight,
+                    contentWidth: contentWidth, spacing: spacing
+                )
+                XCTAssertGreaterThanOrEqual(origin.x, 0)
+                XCTAssertGreaterThanOrEqual(origin.y, 0)
+                XCTAssertLessThanOrEqual(origin.x + width, contentWidth + 0.001)
+            }
+        }
     }
 
     func testGridLayoutClampsInvalidOptionsBeforeLayoutMath() throws {
@@ -5844,12 +5968,14 @@ final class ConclaveTests: XCTestCase {
         )
     }
 
-    func testAndroidChatComposerUsesCompactTouchTargets() throws {
-        XCTAssertEqual(ChatComposerLayout.inputHeight(isAndroid: true), 36)
+    func testAndroidChatComposerSitsBesideMaterialTextField() throws {
+        // The Android field is a Material3 OutlinedTextField with an enforced
+        // 56dp minimum height; action buttons must stay at least 44dp to hold
+        // their own visually, and no layout constant may clamp below 56.
+        XCTAssertEqual(ChatComposerLayout.inputHeight(isAndroid: true), 44)
         XCTAssertEqual(ChatComposerLayout.inputVerticalPadding(isAndroid: true), 0)
-        XCTAssertEqual(ChatComposerLayout.composerVerticalPadding(isAndroid: true), 4)
-        XCTAssertEqual(ChatComposerLayout.composerMinHeight(isAndroid: true), 44)
-        XCTAssertLessThan(ChatComposerLayout.composerMinHeight(isAndroid: true), ChatComposerLayout.composerMinHeight(isAndroid: false))
+        XCTAssertEqual(ChatComposerLayout.composerVerticalPadding(isAndroid: true), 6)
+        XCTAssertGreaterThanOrEqual(ChatComposerLayout.inputHeight(isAndroid: true), 44)
     }
 
     func testCompactControlsBarFitsNarrowPhoneWidth() throws {

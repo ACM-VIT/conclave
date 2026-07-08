@@ -1,6 +1,6 @@
 import SwiftUI
 // Lottie is linked iOS-only (see Package.swift). Gate on os(iOS), not
-// canImport — canImport is true on the macOS transpile host (the module is
+// canImport - canImport is true on the macOS transpile host (the module is
 // checked out) even though it isn't linked there, which would fail at link.
 #if os(iOS)
 import Lottie

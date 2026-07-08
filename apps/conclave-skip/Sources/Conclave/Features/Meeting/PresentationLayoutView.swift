@@ -127,7 +127,7 @@ struct PresentationLayoutView: View {
                     )
                         .overlay {
                             // Persistent presenter attribution (always know who's
-                            // sharing) — same flat name-plate tokens as the tiles.
+                            // sharing) - same flat name-plate tokens as the tiles.
                             VStack {
                                 Spacer()
                                 HStack {
@@ -176,6 +176,7 @@ struct PresentationLayoutView: View {
             isHandRaised: viewModel.state.isHandRaised,
             isSpeaking: viewModel.state.isEffectiveActiveSpeaker(viewModel.state.userId),
             isLocal: true,
+            identityId: viewModel.state.userId,
             isThumbnail: true,
             avatarSizeOverride: 34.0,
             localCameraFacing: viewModel.localCameraFacing,
@@ -193,6 +194,7 @@ struct PresentationLayoutView: View {
             isHandRaised: participant.isHandRaised,
             isSpeaking: viewModel.state.isEffectiveActiveSpeaker(participant.id),
             isLocal: false,
+            identityId: participant.id,
             connectionStatus: participant.connectionStatus,
             isThumbnail: true,
             avatarSizeOverride: 34.0,

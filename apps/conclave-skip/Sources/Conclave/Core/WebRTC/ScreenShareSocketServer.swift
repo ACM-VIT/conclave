@@ -5,8 +5,8 @@
 //  App-side counterpart to the ReplayKit broadcast-upload extension.
 //
 //  The extension (SampleHandler) captures the whole device screen, JPEG-encodes
-//  each frame and writes it — framed as a serialized CFHTTPMessage with
-//  Content-Length / Buffer-Width / Buffer-Height / Buffer-Orientation headers —
+//  each frame and writes it - framed as a serialized CFHTTPMessage with
+//  Content-Length / Buffer-Width / Buffer-Height / Buffer-Orientation headers -
 //  over an AF_UNIX stream socket living in the shared App Group container
 //  (`<group>/rtc_SSFD`). This server binds + listens on that socket, parses the
 //  framed stream (handling coalesced / partial frames), decodes each JPEG back
@@ -42,7 +42,7 @@ final class ScreenShareSocketServer: @unchecked Sendable {
 
     // fd lifecycle is guarded by `lock`; the accept/read loop runs on a global
     // queue so stop() (called from the main actor) can tear it down without
-    // deadlocking — recv() is woken by shutdown(), accept() by a self-connect
+    // deadlocking - recv() is woken by shutdown(), accept() by a self-connect
     // (see wakeAccept()), since close() alone doesn't reliably interrupt
     // either on Darwin.
     private let lock = NSLock()
@@ -56,7 +56,7 @@ final class ScreenShareSocketServer: @unchecked Sendable {
     /// without spending CPU on frames that WebRTC will drop anyway.
     private var shouldDecodeFrame: (@Sendable () -> Bool)?
     /// Called on the read queue when the extension actually connects (the
-    /// broadcast went live) — lets the app distinguish a real share from a
+    /// broadcast went live) - lets the app distinguish a real share from a
     /// picker the user cancelled.
     private var onClientConnect: (@Sendable () -> Void)?
     /// Called on the read queue when the extension disconnects (broadcast ended,
@@ -224,7 +224,7 @@ final class ScreenShareSocketServer: @unchecked Sendable {
         lock.unlock()
         message = nil
 
-        // The extension is live — let the app flip from "starting" to "sharing"
+        // The extension is live - let the app flip from "starting" to "sharing"
         // and cancel its start-timeout.
         onClientConnect?()
 
@@ -284,7 +284,7 @@ final class ScreenShareSocketServer: @unchecked Sendable {
     private func drainCompleteFrames() {
         while let msg = message, CFHTTPMessageIsHeaderComplete(msg) {
             guard let contentLength = intHeader(msg, "Content-Length"), contentLength > 0 else {
-                // Header complete but no/invalid Content-Length — unrecoverable;
+                // Header complete but no/invalid Content-Length - unrecoverable;
                 // reset to resync on the next bytes.
                 message = nil
                 return
@@ -332,7 +332,7 @@ final class ScreenShareSocketServer: @unchecked Sendable {
 
     private func emitFrame(jpeg: Data, width: Int, height: Int, orientation: Int) {
         guard let pixelBuffer = Self.pixelBuffer(fromJPEG: jpeg) else {
-            // Device-only feature with no CI coverage — a silent decode failure
+            // Device-only feature with no CI coverage - a silent decode failure
             // leaves a black/frozen share undebuggable. Throttled to ~1/s.
             let now = Date().timeIntervalSince1970
             if now - lastDecodeFailureLogAt >= 1.0 {

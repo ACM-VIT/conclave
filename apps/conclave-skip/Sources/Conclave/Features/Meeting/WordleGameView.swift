@@ -98,12 +98,16 @@ struct WordleGameView: View {
         HStack(alignment: .top, spacing: ACMSpacing.sm) {
             statusBlock(title: headerTitle, subtitle: headerSubtitle)
             if phase == "playing", let remaining = remainingSeconds {
-                Text("⏱ \(remaining)s")
+                Text("\(remaining)s")
                     .font(ACMFont.trial(13, weight: .semibold))
                     .foregroundStyle(remaining <= 10 ? ACMColors.error : ACMColors.textMuted)
                     .padding(.horizontal, 10)
                     .frame(height: 26)
                     .background(ACMColors.surfaceRaised, in: Capsule())
+                    .overlay {
+                        Capsule().strokeBorder(lineWidth: 1)
+                            .foregroundStyle(remaining <= 10 ? ACMColors.error.opacity(0.4) : ACMColors.borderSubtle)
+                    }
             }
         }
     }
@@ -129,7 +133,7 @@ struct WordleGameView: View {
             if let setterName, !setterName.isEmpty { return "\(setterName) is choosing a word." }
             return "Waiting for the word."
         case "playing":
-            return "\(wordLength) letters - \(maxTries) tries."
+            return "\(wordLength) letters · \(maxTries) tries"
         default:
             return nil
         }
@@ -221,10 +225,10 @@ struct WordleGameView: View {
     // MARK: - Word grid
 
     private var wordGrid: some View {
-        VStack(spacing: 5) {
+        VStack(spacing: 4) {
             ForEach(Array(0..<maxTries), id: \.self) { row in
                 let cells = rowContent(row)
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
                         tile(letter: cell.letter, state: cell.state)
                     }
@@ -265,9 +269,9 @@ struct WordleGameView: View {
             ? (hasLetter ? ACMColors.borderStrong : ACMColors.border)
             : Color.clear
         return Text(letter)
-            .font(ACMFont.trial(20, weight: .bold))
+            .font(ACMFont.trial(18, weight: .bold))
             .foregroundStyle(Color.white)
-            .frame(width: 42, height: 42)
+            .frame(width: 38, height: 38)
             .background(tileColor(state), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
@@ -412,26 +416,20 @@ struct WordleGameView: View {
 
     // MARK: - Shared styling
 
+    // Flat title/subtitle block - no accent bar. The stage chrome already
+    // carries the game identity; this row just states the task, quietly.
     private func statusBlock(title: String, subtitle: String?) -> some View {
-        HStack(alignment: .top, spacing: ACMSpacing.sm) {
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(wordleGreen)
-                .frame(width: 3)
-                .frame(maxHeight: .infinity)
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title)
-                    .font(ACMFont.trial(16, weight: .semibold))
-                    .foregroundStyle(ACMColors.text)
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(ACMFont.trial(15, weight: .semibold))
+                .foregroundStyle(ACMColors.text)
+                .lineLimit(2)
+            if let subtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines), !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(ACMFont.trial(12.5))
+                    .foregroundStyle(ACMColors.textFaint)
                     .lineLimit(2)
-                if let subtitle = subtitle?.trimmingCharacters(in: .whitespacesAndNewlines), !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(ACMFont.trial(13))
-                        .foregroundStyle(ACMColors.textMuted)
-                        .lineLimit(3)
-                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

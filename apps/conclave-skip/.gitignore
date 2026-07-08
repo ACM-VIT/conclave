@@ -43,6 +43,7 @@ xcodebuild*.log
 *.perspectivev3
 !default.perspectivev3
 *.xcscmblueprint
+*.md
 *.xccheckout
 
 ## Obj-C/Swift specific

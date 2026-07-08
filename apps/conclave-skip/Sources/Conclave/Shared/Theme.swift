@@ -80,36 +80,19 @@ enum ACMColors {
 
     // Mirrors `@conclave/ui-tokens` AVATAR_PALETTE so users keep the same
     // avatar color across web and native.
-    static let avatarPalette: [Color] = [
-        acmColor(red: 249.0, green: 95.0, blue: 74.0),    // #F95F4A orange
-        acmColor(red: 255.0, green: 0.0, blue: 122.0),    // #FF007A pink
-        acmColor(red: 124.0, green: 92.0, blue: 255.0),   // #7C5CFF violet
-        acmColor(red: 45.0, green: 168.0, blue: 168.0),   // #2DA8A8 teal
-        acmColor(red: 79.0, green: 134.0, blue: 247.0),   // #4F86F7 blue
-        acmColor(red: 63.0, green: 166.0, blue: 106.0),   // #3FA66A green
-        acmColor(red: 224.0, green: 145.0, blue: 58.0),   // #E0913A amber
-        acmColor(red: 196.0, green: 78.0, blue: 207.0)    // #C44ECF magenta
-    ]
-
-    /// Deterministic avatar fill matching the web `avatarColor` hash.
+    /// Deterministic identity color; delegates to the facehash palette so
+    /// color dots and face avatars always agree with the web app.
     static func avatarColor(for key: String) -> Color {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        if avatarPalette.isEmpty { return primaryOrange }
-        if trimmed.isEmpty { return avatarPalette[0] }
-        var hash: Int32 = 0
-        for unit in trimmed.utf16 {
-            hash = hash &* 31 &+ Int32(unit)
-        }
-        let magnitude: Int64 = abs(Int64(hash))
-        let index = Int(magnitude % Int64(avatarPalette.count))
-        return avatarPalette[index]
+        if trimmed.isEmpty { return FacehashPresentation.palette[0] }
+        return FacehashPresentation.color(for: trimmed)
     }
 
     // MARK: - Hand Raised Colors
     static let handRaised = acmColor(red: 251.0, green: 191.0, blue: 36.0, opacity: 0.95)        // amber-400
     static let handRaisedBackground = acmColor(red: 251.0, green: 191.0, blue: 36.0, opacity: 0.2)
     static let handRaisedBorder = acmColor(red: 251.0, green: 191.0, blue: 36.0, opacity: 0.4)
-    static let handRaisedShadow = Color.clear // neutralised — no glow
+    static let handRaisedShadow = Color.clear // neutralised - no glow
 }
 
 // MARK: - Spacing Scale (4pt grid system)
@@ -133,6 +116,16 @@ enum ACMRadius {
     static let lg: CGFloat = 16
     static let xl: CGFloat = 28
     static let full: CGFloat = 999
+}
+
+// MARK: - Motion
+
+/// Layout motion matches the web app's FLIP system (GridLayout.tsx):
+/// cubic-bezier(0.22, 1, 0.36, 1), 220ms for tile glides on identity
+/// changes, 280ms for stage-level reflows and surface swaps.
+enum ACMMotion {
+    static let tileGlide = Animation.timingCurve(0.22, 1.0, 0.36, 1.0, duration: 0.22)
+    static let stageSwap = Animation.timingCurve(0.22, 1.0, 0.36, 1.0, duration: 0.28)
 }
 
 // MARK: - Typography
@@ -222,7 +215,7 @@ func ACMAndroidSemanticText(_ label: String) -> some View {
 }
 #endif
 
-// MARK: - Control Button Styles (Carbon — filled circles, Meet semantics)
+// MARK: - Control Button Styles (Carbon - filled circles, Meet semantics)
 //  default = white@10% fill · active = solid accent · muted = solid danger
 //  (Meet's red mic-off) · danger = solid danger. No borders, no shadows.
 
@@ -371,7 +364,7 @@ extension View {
     }
 }
 
-// MARK: - Video Tile Style (flat — speaking = 2px solid accent, NO glow)
+// MARK: - Video Tile Style (flat - speaking = 2px solid accent, NO glow)
 
 extension View {
     public func acmVideoTile(isSpeaking: Bool = false) -> some View {
@@ -385,7 +378,7 @@ extension View {
     }
 }
 
-// MARK: - Label Style (sans — no monospace, no uppercase tracking gimmick)
+// MARK: - Label Style (sans - no monospace, no uppercase tracking gimmick)
 
 extension View {
     public func acmLabel() -> some View {

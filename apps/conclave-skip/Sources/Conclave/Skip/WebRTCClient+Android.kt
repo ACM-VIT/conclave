@@ -98,7 +98,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var device: Device? = null
     private var configurationGeneration: Long = 0
     // True once configure() has set up the mediasoup Device and before cleanup()
-    // tears it down — lets the rejoin path detect a still-live prior session.
+    // tears it down - lets the rejoin path detect a still-live prior session.
     internal val isConfigured: Boolean get() = device != null
     private var sendTransport: SendTransport? = null
     private var receiveTransport: RecvTransport? = null
@@ -703,7 +703,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     // on a different EglBase.create(), those texture frames can't be drawn and
     // remote video (incl. screen-share) shows black. One shared context across
     // factory (encoder/decoder), capturers, and renderers. Process-global
-    // singleton — never released here.
+    // singleton - never released here.
     private val eglBase: EglBase = VideoRendererShared.eglBase
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var videoSource: VideoSource? = null
@@ -844,10 +844,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         // mediasoup Device.load() takes the router rtpCapabilities as a JSON
         // string. We use the verbatim JSON the server sent in the joinRoom ack
         // (captured by SocketIOManager) rather than re-encoding the decoded
-        // Codable struct — Skip's JSONEncoder crashes on the [String: String]
+        // Codable struct - Skip's JSONEncoder crashes on the [String: String]
         // codec `parameters` map ("Tuple2 cannot be cast to Encodable"). The
         // raw JSON matches what the iOS path feeds load (numeric `apt`/
-        // `packetization-mode`, string `profile-level-id`) — keep it verbatim.
+        // `packetization-mode`, string `profile-level-id`) - keep it verbatim.
         val capabilities = socketManager.routerRtpCapabilitiesJson
         if (capabilities.isNullOrBlank()) {
             debugLog("[WebRTC] Router RTP capabilities JSON unavailable")
@@ -1186,7 +1186,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     /// MediaProjection. The permission result Intent was stored by
     /// ScreenCaptureManager from the consent dialog; ScreenCapturerAndroid mints
     /// its own MediaProjection from it (the foreground service must already be
-    /// live with type mediaProjection — the VM awaits requestCapture() first).
+    /// live with type mediaProjection - the VM awaits requestCapture() first).
     internal suspend fun startScreenSharing() {
         createSendTransportIfNeeded()
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
@@ -1197,7 +1197,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         // MediaProjection -> one createVirtualDisplay). ScreenCapturerAndroid
         // calls getMediaProjection(RESULT_OK, data) + createVirtualDisplay()
         // synchronously inside startCapture(); both are gated by the OS on the
-        // mediaProjection-type FGS already being foregrounded — which the VM
+        // mediaProjection-type FGS already being foregrounded - which the VM
         // guarantees by awaiting ScreenCaptureManager.requestCapture() first.
         val data = ScreenCaptureManager.getCaptureResultIntent()
             ?: throw ErrorException("No screen capture permission")
@@ -4585,7 +4585,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
-    // Video freeze watchdog — mirrors iOS checkVideoFreezes (and the web one):
+    // Video freeze watchdog - mirrors iOS checkVideoFreezes (and the web one):
     // if framesDecoded stays flat while real media still flows (bytesReceived
     // climbs >= threshold) across 2 checks, the decoder is stuck on a stale
     // frame; request a keyframe (PLI) so it un-freezes. Invisible to track-mute.
@@ -4615,7 +4615,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 stalls = if (stuck) prev.third + 1 else 0
             }
             if (stalls >= stallSamplesBeforePLI) {
-                // Still frozen — request a keyframe. Do NOT reset the stall
+                // Still frozen - request a keyframe. Do NOT reset the stall
                 // counter (mirrors the Swift fix): if this PLI is lost on a
                 // congested link, the next ~2s poll still sees frames flat and
                 // re-requests, instead of waiting out two fresh stall windows.

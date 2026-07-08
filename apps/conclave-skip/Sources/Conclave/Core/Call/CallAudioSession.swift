@@ -73,7 +73,7 @@ final class CallAudioSession {
         deactivateSession()
     }
 
-    /// Called by CallKit's didActivate — re-assert our configuration so the
+    /// Called by CallKit's didActivate - re-assert our configuration so the
     /// WebRTC audio unit runs against the right category/mode.
     func handleCallKitActivation() {
         guard isCallActive else { return }
@@ -161,7 +161,7 @@ final class CallAudioSession {
         case .began:
             debugLog("[CallAudio] interruption began")
         case .ended:
-            // The interruption ended — re-activate audio if the system says we
+            // The interruption ended - re-activate audio if the system says we
             // should resume (and we're still in a call).
             debugLog("[CallAudio] interruption ended")
             if let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt {
@@ -170,7 +170,7 @@ final class CallAudioSession {
                     scheduleActivationReassertion()
                 }
             } else {
-                // No options provided — best-effort re-activate while in a call.
+                // No options provided - best-effort re-activate while in a call.
                 scheduleActivationReassertion()
             }
         @unknown default:
@@ -188,7 +188,7 @@ final class CallAudioSession {
     }
 
     @objc private func handleMediaServicesReset(_ notification: Notification) {
-        // The media server crashed and restarted — everything needs re-arming.
+        // The media server crashed and restarted - everything needs re-arming.
         guard isCallActive else { return }
         scheduleActivationReassertion()
     }

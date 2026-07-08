@@ -41,8 +41,8 @@ struct SpotlightLayoutView: View {
                     }
                 }
             }
-            .frame(width: geo.size.width, height: visibleHeight, alignment: .top)
             .padding(8)
+            .frame(width: geo.size.width, height: visibleHeight, alignment: .top)
         }
     }
 
@@ -68,8 +68,7 @@ struct SpotlightLayoutView: View {
                         .foregroundStyle(Color.white)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
-                        .acmColorBackground(ACMColors.scrim)
-                        .clipShape(Capsule())
+                        .acmGlassCapsule(interactive: true)
                     }
                     .buttonStyle(.plain)
                     .padding(10)
@@ -133,6 +132,7 @@ struct SpotlightLayoutView: View {
                 isHandRaised: viewModel.state.isHandRaised,
                 isSpeaking: viewModel.state.isEffectiveActiveSpeaker(viewModel.state.userId),
                 isLocal: true,
+                identityId: viewModel.state.userId,
                 isThumbnail: isThumbnail,
                 avatarSizeOverride: isThumbnail ? 34.0 : nil,
                 localCameraFacing: viewModel.localCameraFacing,
@@ -147,6 +147,7 @@ struct SpotlightLayoutView: View {
                 isHandRaised: participant.isHandRaised,
                 isSpeaking: viewModel.state.isEffectiveActiveSpeaker(participant.id),
                 isLocal: false,
+                identityId: participant.id,
                 connectionStatus: participant.connectionStatus,
                 isThumbnail: isThumbnail,
                 avatarSizeOverride: isThumbnail ? 34.0 : nil,
@@ -160,6 +161,7 @@ struct SpotlightLayoutView: View {
                 isHandRaised: false,
                 isSpeaking: false,
                 isLocal: false,
+                identityId: userId,
                 isThumbnail: isThumbnail,
                 avatarSizeOverride: isThumbnail ? 34.0 : nil
             )

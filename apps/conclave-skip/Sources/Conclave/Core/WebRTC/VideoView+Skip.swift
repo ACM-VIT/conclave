@@ -36,6 +36,7 @@ struct RemoteVideoView: View {
                         fallbackDisplayName,
                         userId: trackWrapper.userId
                     ),
+                    identityId: trackWrapper.userId,
                     isEnabled: trackWrapper.isEnabled
                 )
             }
@@ -45,6 +46,7 @@ struct RemoteVideoView: View {
 
 private struct VideoTrackFallbackView: View {
     let displayName: String
+    var identityId: String? = nil
     let isEnabled: Bool
 
     private var resolvedDisplayName: String {
@@ -54,19 +56,12 @@ private struct VideoTrackFallbackView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let avatarSize = min(max(min(geo.size.width, geo.size.height) * 0.28, 44.0), 112.0)
+            let avatarSize = min(max(min(geo.size.width, geo.size.height) * 0.22, 44.0), 88.0)
 
             ZStack {
                 ACMColors.bgAlt
 
-                Circle()
-                    .fill(ACMColors.avatarColor(for: resolvedDisplayName))
-                    .frame(width: avatarSize, height: avatarSize)
-                    .overlay {
-                        Text(String(resolvedDisplayName.prefix(1)).uppercased())
-                            .font(.system(size: avatarSize * 0.40, weight: .bold))
-                            .foregroundStyle(Color.white)
-                    }
+                FacehashAvatarView(name: resolvedDisplayName, id: identityId, size: avatarSize)
 
                 if isEnabled {
                     ProgressView()
@@ -91,6 +86,9 @@ struct VideoGridItem: View {
     let isHandRaised: Bool
     let isSpeaking: Bool
     let isLocal: Bool
+    // Stable identity for the facehash avatar (falls back to the remote
+    // track's user id, then to the name alone).
+    var identityId: String? = nil
     var connectionStatus: ParticipantConnectionStatus? = nil
     // Expands camera-off avatars on stage while leaving video aspect handling to the renderer.
     var fillStage: Bool = false
@@ -169,21 +167,14 @@ struct VideoGridItem: View {
             let labelClearance: CGFloat = isThumbnail ? 30.0 : 44.0
             let shortestSide = min(geo.size.width, max(1.0, geo.size.height - labelClearance))
             let minAvatarSize = min(isThumbnail ? 24.0 : 44.0, shortestSide)
-            let maxAvatarSize = min(isThumbnail ? 40.0 : (fillStage ? 220.0 : 104.0), shortestSide)
-            let proportionalSize = shortestSide * (isThumbnail ? 0.46 : 0.42)
+            let maxAvatarSize = min(isThumbnail ? 36.0 : 96.0, shortestSide)
+            let proportionalSize = shortestSide * (isThumbnail ? 0.42 : 0.30)
             let avatarSize = min(max(avatarSizeOverride ?? proportionalSize, minAvatarSize), maxAvatarSize)
 
             ZStack {
                 ACMColors.bgAlt
 
-                Circle()
-                    .fill(ACMColors.avatarColor(for: resolvedDisplayName))
-                    .frame(width: avatarSize, height: avatarSize)
-                    .overlay {
-                        Text(avatarInitial)
-                            .font(.system(size: avatarSize * 0.40, weight: .bold))
-                            .foregroundStyle(Color.white)
-                    }
+                FacehashAvatarView(name: resolvedDisplayName, id: identityId ?? trackWrapper?.userId, size: avatarSize)
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
@@ -268,6 +259,8 @@ struct VideoGridItem: View {
             Spacer()
 
             HStack {
+                // Web-style nameplate: a dark pill chip instead of a text
+                // shadow, so it stays readable over video without any glow.
                 HStack(spacing: 5) {
                     if isMuted {
                         ACMSystemIcon.icon("mic.slash.fill", android: "mic.off", size: isThumbnail ? 9.0 : 10.0)
@@ -279,8 +272,11 @@ struct VideoGridItem: View {
                         .foregroundStyle(ACMColors.text)
                         .lineLimit(1)
                 }
+                .padding(.horizontal, isThumbnail ? 7.0 : 9.0)
+                .padding(.vertical, isThumbnail ? 3.0 : 5.0)
+                .acmColorBackground(ACMColors.blackOverlay(0.55))
+                .clipShape(Capsule())
                 .frame(maxWidth: isThumbnail ? 112.0 : 220.0, alignment: .leading)
-                .shadow(color: ACMColors.blackOverlay(0.9), radius: 2.0, x: 0.0, y: 1.0)
 
                 Spacer()
             }

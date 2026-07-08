@@ -206,7 +206,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
         isConnected = false
 
         if hasConnectedAtLeastOnce {
-          log("Main app closed connection — finishing broadcast gracefully")
+          log("Main app closed connection - finishing broadcast gracefully")
           finishDueToConnectionLoss(message: "Screen sharing stopped.", intentional: true)
           return
         }
@@ -236,9 +236,9 @@ final class SampleHandler: RPBroadcastSampleHandler {
     isConnected = false
 
     if intentional {
-      log("Intentional stop — finishing broadcast gracefully")
+      log("Intentional stop - finishing broadcast gracefully")
     } else {
-      log("Connection loss — finishing broadcast with error")
+      log("Connection loss - finishing broadcast with error")
     }
     let error = NSError(
       domain: "com.acmvit.conclave.screenshare",

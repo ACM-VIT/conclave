@@ -56,14 +56,14 @@ final class CallSessionCoordinator {
     }
 
     /// A short title for the call presence (the meeting code, or a generic
-    /// fallback) — used for the notification + CallKit handle.
+    /// fallback) - used for the notification + CallKit handle.
     var callTitle: String {
         let room = activeViewModel?.state.roomId ?? ""
         return room.isEmpty ? "Conclave meeting" : room
     }
 
     /// The user id of the participant the UI is currently ringing as the active
-    /// speaker (or the local user when nobody else is talking) — used to pick
+    /// speaker (or the local user when nobody else is talking) - used to pick
     /// the video shown in Android Picture-in-Picture.
     var activeSpeakerUserId: String? {
         activeViewModel?.state.activeSpeakerId

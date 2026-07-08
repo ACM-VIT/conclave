@@ -9,6 +9,15 @@ export type GamePlayer = {
   name: string;
 };
 
+/**
+ * Show this option only while another select option holds one of the given
+ * values (mirrors the SFU schema).
+ */
+export type GameOptionCondition = {
+  id: string;
+  equals: string[];
+};
+
 /** Host-configurable option spec for a game (mirrors the SFU schema). */
 export type GameOptionSpec =
   | {
@@ -20,6 +29,7 @@ export type GameOptionSpec =
       default: number;
       presets?: number[];
       suffix?: string;
+      showWhen?: GameOptionCondition;
     }
   | {
       id: string;
@@ -27,6 +37,7 @@ export type GameOptionSpec =
       label: string;
       default: string;
       choices: { value: string; label: string }[];
+      showWhen?: GameOptionCondition;
     }
   | {
       id: string;
@@ -35,6 +46,7 @@ export type GameOptionSpec =
       default: string;
       placeholder?: string;
       maxLength?: number;
+      showWhen?: GameOptionCondition;
     };
 
 export type GameConfig = Record<string, number | string>;

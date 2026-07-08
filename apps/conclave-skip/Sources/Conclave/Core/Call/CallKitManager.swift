@@ -31,7 +31,7 @@ final class CallKitManager: NSObject {
         configuration.supportsVideo = true
         configuration.maximumCallsPerCallGroup = 1
         configuration.maximumCallGroups = 1
-        // Only supportedHandleTypes .generic — we don't dial phone numbers.
+        // Only supportedHandleTypes .generic - we don't dial phone numbers.
         configuration.supportedHandleTypes = [.generic]
         self.provider = CXProvider(configuration: configuration)
         super.init()
@@ -41,7 +41,7 @@ final class CallKitManager: NSObject {
     // MARK: - Reporting the call
 
     /// Report an ongoing outgoing call to CallKit when the user joins a meeting.
-    /// Idempotent — calling it while a call is already reported is a no-op.
+    /// Idempotent - calling it while a call is already reported is a no-op.
     func reportCallStarted(title: String) {
         guard activeCallUUID == nil else { return }
         let uuid = UUID()
@@ -57,7 +57,7 @@ final class CallKitManager: NSObject {
             if let error = error {
                 debugLog("[CallKit] startCall request failed: \(error.localizedDescription)")
                 // CallKit refused the call (e.g. another app owns the call UI).
-                // Drop our bookkeeping so we don't get wedged — but only if this
+                // Drop our bookkeeping so we don't get wedged - but only if this
                 // failure is for the call we still think is active (a fast
                 // leave/rejoin could have replaced it).
                 Task { @MainActor in

@@ -592,8 +592,8 @@ enum ProducerType: String, Codable {
 //  on iOS / RendererCommon.ScalingType on Android).
 
 enum VideoContentMode {
-    case fill   // scaleAspectFill — cameras (crop to fill, no distortion)
-    case fit    // scaleAspectFit — screen-share (letterbox on black)
+    case fill   // scaleAspectFill - cameras (crop to fill, no distortion)
+    case fit    // scaleAspectFit - screen-share (letterbox on black)
 }
 
 // MARK: - Meet Error

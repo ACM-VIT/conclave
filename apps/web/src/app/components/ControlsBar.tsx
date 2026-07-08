@@ -92,6 +92,8 @@ function MediaClusterButton({
     | "selectedAudioOutputDeviceId"
     | "onAudioInputDeviceChange"
     | "onAudioOutputDeviceChange"
+    | "isNoiseCancellationEnabled"
+    | "onToggleNoiseCancellation"
   >;
   video?: Pick<
     MediaControlClusterProps,
@@ -365,11 +367,15 @@ function ControlsBar(props: ControlsBarProps) {
     onAudioInputDeviceChange,
     onAudioOutputDeviceChange,
     onVideoInputDeviceChange,
+    isNoiseCancellationEnabled,
+    onToggleNoiseCancellation,
     isMirrorCamera,
     onToggleMirror,
   } = props;
   const hasAudioDevicePicker = Boolean(
-    onAudioInputDeviceChange || onAudioOutputDeviceChange,
+    onAudioInputDeviceChange ||
+      onAudioOutputDeviceChange ||
+      onToggleNoiseCancellation,
   );
   const hasVideoDevicePicker = Boolean(
     onVideoInputDeviceChange || onToggleMirror,
@@ -553,6 +559,8 @@ function ControlsBar(props: ControlsBarProps) {
                   selectedAudioOutputDeviceId,
                   onAudioInputDeviceChange,
                   onAudioOutputDeviceChange,
+                  isNoiseCancellationEnabled,
+                  onToggleNoiseCancellation,
                 }}
               />
             );
@@ -942,6 +950,8 @@ function ControlsBar(props: ControlsBarProps) {
                       onAudioInputDeviceChange={onAudioInputDeviceChange}
                       onAudioOutputDeviceChange={onAudioOutputDeviceChange}
                       onVideoInputDeviceChange={onVideoInputDeviceChange}
+                      isNoiseCancellationEnabled={isNoiseCancellationEnabled}
+                      onToggleNoiseCancellation={onToggleNoiseCancellation}
                       isMirrorCamera={isMirrorCamera}
                       onToggleMirror={onToggleMirror}
                     />

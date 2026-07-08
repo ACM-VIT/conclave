@@ -121,7 +121,7 @@ func computeGridLayout(
     let pages = Int(ceil(Double(total) / Double(maxTilesPerPage)))
     let perPage = min(total, maxTilesPerPage)
 
-    // Degenerate container — return a single column so the caller still renders.
+    // Degenerate container - return a single column so the caller still renders.
     if !width.isFinite || !height.isFinite || width <= 0 || height <= 0 {
         let placement = buildGridTilePositions(
             cols: 1, rows: perPage, perPage: perPage,

@@ -1,0 +1,64 @@
+# Cloudflare Workers Static Assets headers.
+# These apply only to files served by the assets binding, not SSR/API responses.
+
+/effects/*
+  Cache-Control: public, max-age=31536000, immutable
+  Cross-Origin-Resource-Policy: same-origin
+  X-Content-Type-Options: nosniff
+
+/mediapipe/*
+  Cache-Control: public, max-age=31536000, immutable
+  Cross-Origin-Resource-Policy: same-origin
+  X-Content-Type-Options: nosniff
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+  Cross-Origin-Resource-Policy: same-origin
+  X-Content-Type-Options: nosniff
+
+/reactions/*
+  Cache-Control: public, max-age=31536000, immutable
+  Cross-Origin-Resource-Policy: same-origin
+  X-Content-Type-Options: nosniff
+
+/_/rtcvidproc/release/*
+  Cache-Control: public, max-age=31536000, immutable
+  Cross-Origin-Resource-Policy: same-origin
+  X-Content-Type-Options: nosniff
+
+/transcript-pcm-processor.js
+  Cache-Control: public, max-age=31536000, immutable
+  Cross-Origin-Resource-Policy: same-origin
+
+/conclave-animation.lottie
+  Cache-Control: public, max-age=31536000, immutable
+
+/conclave-lock.mp3
+  Cache-Control: public, max-age=31536000, immutable
+
+/apple-touch-icon.svg
+  Cache-Control: public, max-age=31536000, immutable
+
+/favicon.svg
+  Cache-Control: public, max-age=31536000, immutable
+
+/klipy.svg
+  Cache-Control: public, max-age=31536000, immutable
+
+/logo.png
+  Cache-Control: public, max-age=31536000, immutable
+
+/logo.svg
+  Cache-Control: public, max-age=31536000, immutable
+
+/og.png
+  Cache-Control: public, max-age=31536000, immutable
+
+/og.svg
+  Cache-Control: public, max-age=31536000, immutable
+
+/pow-by-klipy.svg
+  Cache-Control: public, max-age=31536000, immutable
+
+/roblox-logo.png
+  Cache-Control: public, max-age=31536000, immutable

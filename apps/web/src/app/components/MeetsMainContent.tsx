@@ -157,6 +157,8 @@ interface MeetsMainContentProps {
   onAudioInputDeviceChange?: (deviceId: string) => void;
   onAudioOutputDeviceChange?: (deviceId: string) => void;
   onVideoInputDeviceChange?: (deviceId: string) => void;
+  isNoiseCancellationEnabled?: boolean;
+  onToggleNoiseCancellation?: () => void;
   activeSpeakerId: string | null;
   currentUserId: string;
   audioOutputDeviceId?: string;
@@ -387,6 +389,8 @@ export default function MeetsMainContent({
   onAudioInputDeviceChange,
   onAudioOutputDeviceChange,
   onVideoInputDeviceChange,
+  isNoiseCancellationEnabled,
+  onToggleNoiseCancellation,
   activeSpeakerId,
   currentUserId,
   audioOutputDeviceId,
@@ -1475,6 +1479,8 @@ export default function MeetsMainContent({
     onAudioInputDeviceChange,
     onAudioOutputDeviceChange,
     onVideoInputDeviceChange,
+    isNoiseCancellationEnabled,
+    onToggleNoiseCancellation,
     isMirrorCamera,
     onToggleMirror,
     isVideoEffectsOpen,

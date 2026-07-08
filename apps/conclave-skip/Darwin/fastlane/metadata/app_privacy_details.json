@@ -1,7 +1,17 @@
 [
   {
-    "data_protections": [
-      "DATA_NOT_COLLECTED"
-    ]
+    "category": "NAME",
+    "purposes": ["APP_FUNCTIONALITY"],
+    "data_protections": ["DATA_LINKED_TO_YOU"]
+  },
+  {
+    "category": "EMAIL_ADDRESS",
+    "purposes": ["APP_FUNCTIONALITY"],
+    "data_protections": ["DATA_LINKED_TO_YOU"]
+  },
+  {
+    "category": "PRODUCT_INTERACTION",
+    "purposes": ["ANALYTICS"],
+    "data_protections": ["DATA_NOT_LINKED_TO_YOU"]
   }
 ]

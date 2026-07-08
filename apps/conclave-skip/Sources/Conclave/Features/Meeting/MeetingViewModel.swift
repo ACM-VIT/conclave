@@ -465,6 +465,10 @@ final class MeetingViewModel {
     private var remoteProducerCloseGraceTasks: [String: Task<Void, Never>] = [:]
     private var remoteProducerCloseGraceProducers: [String: ProducerInfo] = [:]
     private var pendingDisplayNameSnapshot: DisplayNameSnapshotNotification?
+    // In-flight optimistic chat sends awaiting their server echo (broadcast or
+    // ack). Lets receiveChatMessage swap the optimistic row in place instead
+    // of appending a transient duplicate.
+    private var pendingOptimisticChatSends: [(id: String, signature: String)] = []
     private var pendingPreAckRosterEvents: [PendingPreAckRosterEvent] = []
     private var pendingPreAckWaitingRoomEvents: [PendingPreAckWaitingRoomEvent] = []
     private var pendingChatHistorySnapshot: ChatHistorySnapshotNotification?
@@ -510,6 +514,7 @@ final class MeetingViewModel {
     private var reactionRemovalTasks: [String: Task<Void, Never>] = [:]
     private var chatOverlayRemovalTasks: [String: Task<Void, Never>] = [:]
     private var chatOverlayRemovalTokens: [String: UUID] = [:]
+    private var gameEndArmTask: Task<Void, Never>?
     private var browserActivityTask: Task<Void, Never>?
     private var browserActivityContext: CallActionContext?
     private var activeAppSyncTask: Task<Void, Never>?
@@ -1824,7 +1829,7 @@ final class MeetingViewModel {
     }
 
     private func applyLocalCameraOffStateFromServer(_ cameraOff: Bool, context: SocketEventContext? = nil) {
-        // Server may force the local camera OFF (admin), never ON — see
+        // Server may force the local camera OFF (admin), never ON - see
         // applyLocalMutedStateFromServer for why turning it on would fight intent.
         guard cameraOff else { return }
         let eventContext = context ?? currentSocketEventContext()
@@ -2196,6 +2201,7 @@ final class MeetingViewModel {
 
     private func clearRoomConversationStateForFreshJoin() {
         state.chatMessages.removeAll()
+        pendingOptimisticChatSends.removeAll()
         state.systemMessages.removeAll()
         clearChatOverlayMessages()
         state.unreadChatCount = 0
@@ -4272,17 +4278,18 @@ final class MeetingViewModel {
 
     private func applyGamePublicState(_ notification: GamePublicState) {
         guard isCurrentRoomEvent(notification.roomId) else { return }
-        if notification.finished {
-            state.gamePublicState = nil
+        // A finished round is a real, persistent state: it carries the final
+        // scoreboard and drives the rematch affordance. Keep it (like the web
+        // client) until an explicit `game:ended` clears it or a new game
+        // replaces it. Nulling here would flash the results away and bounce the
+        // stage back to the grid the instant a game ends.
+        state.gamePublicState = notification
+        if state.gamePlayerView?.gameId != notification.gameId {
             state.gamePlayerView = nil
-        } else {
-            state.gamePublicState = notification
-            if state.gamePlayerView?.gameId != notification.gameId {
-                state.gamePlayerView = nil
-            }
         }
         state.isGameActionInFlight = false
-        state.gameErrorMessage = nil
+        // Server pushes arrive constantly during a game; they must not wipe a
+        // just-surfaced action error before the player can read it.
     }
 
     private func applyGamePlayerView(_ notification: GamePlayerViewNotification) {
@@ -4290,16 +4297,12 @@ final class MeetingViewModel {
               state.gamePublicState?.gameId == notification.gameId else { return }
         state.gamePlayerView = notification
         state.isGameActionInFlight = false
-        state.gameErrorMessage = nil
     }
 
     private func applyGameVote(_ vote: GameVoteState?) {
         guard isCurrentRoomEvent(vote?.roomId) else { return }
         state.gameVote = vote
         state.isGameActionInFlight = false
-        if vote != nil {
-            state.gameErrorMessage = nil
-        }
     }
 
     private func applyGameEnded(_ notification: GameEndedNotification) {
@@ -4320,6 +4323,9 @@ final class MeetingViewModel {
         state.gameVote = nil
         state.isGameActionInFlight = false
         state.gameErrorMessage = nil
+        gameEndArmTask?.cancel()
+        gameEndArmTask = nil
+        state.isGameEndArmed = false
     }
 
     private func clearAppSyncState() {
@@ -5203,7 +5209,7 @@ final class MeetingViewModel {
         // Clear any error left over from a prior session on THIS reused singleton
         // VM (e.g. a kick / room-ended notice, or a transient in-call error).
         // cleanup() deliberately preserves errorMessage so the .error screens
-        // (ErrorView) still show it after teardown — so the fresh-join path is
+        // (ErrorView) still show it after teardown - so the fresh-join path is
         // where we wipe it, or it would leak into the next meeting's banner.
         self.state.errorMessage = nil
         self.state.meetingEndedNoticeMessage = nil
@@ -5448,7 +5454,7 @@ final class MeetingViewModel {
     // MARK: - Active Speaker Poll
 
     /// Starts the active-speaker poll that reads remote audio levels and updates
-    /// `state.activeSpeakerId`. Idempotent — a running poll is cancelled first.
+    /// `state.activeSpeakerId`. Idempotent - a running poll is cancelled first.
     /// Called by the view when a sheet or the chat panel covers the video stage,
     /// so the active-speaker poll can relax its main-thread sampling.
     func setStageObscuredByOverlay(_ obscured: Bool) {
@@ -5464,7 +5470,7 @@ final class MeetingViewModel {
         let pollContext = currentSocketEventContext()
         // @MainActor so the poll (which iterates the WebRTC client's consumers +
         // mutates the freeze-watchdog state) is serialized with consume/close on
-        // both platforms — on Android a plain Task would run off-main and could
+        // both platforms - on Android a plain Task would run off-main and could
         // race the consumer maps.
         activeSpeakerTask = Task { @MainActor [weak self] in
             var freezeTick = 0
@@ -6570,6 +6576,7 @@ final class MeetingViewModel {
         isDisplayNameUpdateInFlight = false
         adminActionsInFlight.removeAll()
         state.chatMessages.removeAll()
+        pendingOptimisticChatSends.removeAll()
         clearChatOverlayMessages()
         clearReactions()
         state.isHandRaised = false
@@ -6626,7 +6633,7 @@ final class MeetingViewModel {
         state.roomId = ""
         // Reset adaptive video quality: the SFU only pushes setVideoQuality when
         // a room's quality CHANGES (or is already low), so a new standard-quality
-        // room may never re-raise it — leaving the reused singleton stuck at .low
+        // room may never re-raise it - leaving the reused singleton stuck at .low
         // from a previous large room.
         resetAdaptiveVideoQualityState()
         state.videoQuality = .standard
@@ -7477,6 +7484,7 @@ final class MeetingViewModel {
 
                 case .clear:
                     state.chatMessages.removeAll()
+        pendingOptimisticChatSends.removeAll()
                     state.systemMessages.removeAll()
                     state.unreadChatCount = 0
                     clearChatOverlayMessages()
@@ -7805,9 +7813,36 @@ final class MeetingViewModel {
             )
             return nil
         }
+        // Our own message echoed back by the room broadcast. Without this, the
+        // echo appended a second copy alongside the optimistic row until the
+        // send ack cleaned it up - a visible one-second double/flip that made
+        // sending feel broken. Swap the optimistic row in place instead.
+        if state.isLocalIdentityUserId(normalized.userId),
+           let pendingIndex = pendingOptimisticChatSends.firstIndex(where: {
+               $0.signature == Self.chatEchoSignature(
+                   content: normalized.content,
+                   gif: normalized.gif,
+                   replyTo: normalized.replyTo
+               )
+           }) {
+            let optimisticId = pendingOptimisticChatSends[pendingIndex].id
+            pendingOptimisticChatSends.remove(at: pendingIndex)
+            if let messageIndex = state.chatMessages.firstIndex(where: { $0.id == optimisticId }) {
+                state.chatMessages[messageIndex] = normalized
+                return normalized
+            }
+        }
         state.chatMessages.append(normalized)
         playTtsIfNeeded(for: normalized, sourceContent: message.content, shouldSpeakTts: shouldSpeakTts)
         return normalized
+    }
+
+    static func chatEchoSignature(
+        content: String,
+        gif: ChatGifAttachment?,
+        replyTo: ChatReplyPreview?
+    ) -> String {
+        "\(content)|\(gif?.url ?? "")|\(replyTo?.id ?? "")"
     }
 
     @discardableResult
@@ -7851,10 +7886,25 @@ final class MeetingViewModel {
             roomId: state.roomId,
             replyTo: replyTo
         )
-        return appendChatMessage(message)
+        let appended = appendChatMessage(message)
+        if let appended {
+            // Signature from the NORMALIZED stored message, not the raw input:
+            // the echo is matched post-normalization, so both sides of the
+            // comparison must go through the same transform (TTS prefixes etc).
+            pendingOptimisticChatSends.append((
+                id: appended.id,
+                signature: Self.chatEchoSignature(
+                    content: appended.content,
+                    gif: appended.gif,
+                    replyTo: appended.replyTo
+                )
+            ))
+        }
+        return appended
     }
 
     private func removeOptimisticChatMessage(id: String) {
+        pendingOptimisticChatSends.removeAll { $0.id == id }
         state.chatMessages.removeAll { $0.id == id }
     }
 
@@ -7865,6 +7915,7 @@ final class MeetingViewModel {
         context: CallActionContext,
         shouldSpeakTts: Bool = false
     ) -> ChatMessage? {
+        pendingOptimisticChatSends.removeAll { $0.id == optimisticMessageId }
         guard isSameCallContext(context) else { return nil }
         let normalized = normalizedChatMessage(message)
         guard isCurrentRoomEvent(normalized.roomId), isVisibleChatMessage(normalized) else {
@@ -8893,6 +8944,29 @@ final class MeetingViewModel {
         }
     }
 
+    /// Two-step end: first call arms for a few seconds, second call confirms.
+    func armOrConfirmEndGame() {
+        debugLog("[Game] armOrConfirmEndGame entry armed=\(state.isGameEndArmed)")
+        if state.isGameEndArmed {
+            gameEndArmTask?.cancel()
+            gameEndArmTask = nil
+            state.isGameEndArmed = false
+            debugLog("[Game] end confirmed")
+            endActiveGame()
+        } else {
+            state.isGameEndArmed = true
+            debugLog("[Game] end armed")
+            gameEndArmTask?.cancel()
+            gameEndArmTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                debugLog("[Game] end disarmed by timeout")
+                self.state.isGameEndArmed = false
+                self.gameEndArmTask = nil
+            }
+        }
+    }
+
     /// Ask for a seat in the running game; the server grants it at the next
     /// round boundary.
     func joinActiveGame() {
@@ -8942,7 +9016,10 @@ final class MeetingViewModel {
         guard state.connectionState == .joined,
               !state.isWebinarAttendee,
               !state.isGameActionInFlight,
-              !requiresAdmin || state.isAdmin else { return }
+              !requiresAdmin || state.isAdmin else {
+            debugLog("[Game] action dropped: joined=\(state.connectionState == .joined) webinar=\(state.isWebinarAttendee) inFlight=\(state.isGameActionInFlight) requiresAdmin=\(requiresAdmin) isAdmin=\(state.isAdmin)")
+            return
+        }
         let actionContext = currentCallActionContext()
         state.isGameActionInFlight = true
         state.gameErrorMessage = nil
@@ -8953,14 +9030,19 @@ final class MeetingViewModel {
                     state.isGameActionInFlight = false
                 }
             }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else {
+                debugLog("[Game] action abandoned: call context changed")
+                return
+            }
             do {
                 let response = try await operation()
                 guard isCurrentJoinedCall(actionContext) else { return }
                 try validateGameActionResponse(response)
+                debugLog("[Game] action ok")
                 refreshGameState()
             } catch {
                 guard isSameCallContext(actionContext) else { return }
+                debugLog("[Game] action failed: \(error)")
                 state.gameErrorMessage = gameActionErrorMessage(error)
             }
         }

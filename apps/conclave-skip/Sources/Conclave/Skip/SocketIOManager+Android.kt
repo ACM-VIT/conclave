@@ -214,7 +214,7 @@ internal class SocketIOManager {
         private set
 
     /// The router's RTP capabilities exactly as the server sent them in the
-    /// joinRoom ack. Passed verbatim to mediasoup `Device.load()` — see
+    /// joinRoom ack. Passed verbatim to mediasoup `Device.load()` - see
     /// ConsumeRawResult for why we avoid re-encoding the Codable struct.
     internal var routerRtpCapabilitiesJson: String? = null
         private set
@@ -564,7 +564,7 @@ internal class SocketIOManager {
                 throw ErrorException(errorMessage)
             }
 
-            // Stash the router rtpCapabilities verbatim BEFORE decoding — mediasoup
+            // Stash the router rtpCapabilities verbatim BEFORE decoding - mediasoup
             // Device.load() wants this JSON, and re-encoding the decoded struct
             // crashes Skip's JSONEncoder (AnyCodable codec params -> Tuple2).
             extractRawObjectField(data, "rtpCapabilities")?.let { routerRtpCapabilitiesJson = it }
@@ -729,7 +729,7 @@ internal class SocketIOManager {
     }
 
     /// Snapshot the room's current producers (producer-sync safety net). The SFU
-    /// handler takes ONLY an ack callback — emit with no payload via emitAckOnly.
+    /// handler takes ONLY an ack callback - emit with no payload via emitAckOnly.
     /// Returns the whole response object; the caller iterates `.producers` (a
     /// bare list return trips Skip's Array/List bridging). Throws on failure;
     /// the caller's do/catch swallows it.

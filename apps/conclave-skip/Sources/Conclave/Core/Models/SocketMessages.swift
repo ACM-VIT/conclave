@@ -762,7 +762,7 @@ struct ProducerInfo: Codable {
     let roomId: String?
 }
 
-/// Ack response for the `getProducers` RPC — the room's current producer list,
+/// Ack response for the `getProducers` RPC - the room's current producer list,
 /// used by the periodic producer-sync safety net.
 struct GetProducersResponse: Codable {
     let producers: [ProducerInfo]
@@ -1085,7 +1085,7 @@ struct ChatMessageNotification: Codable {
     let content: String
     let timestamp: Double
     let gif: ChatGifAttachment?
-    // DM fields (meeting-core ChatMessage) — present only on direct messages.
+    // DM fields (meeting-core ChatMessage) - present only on direct messages.
     let isDirect: Bool?
     let dmTargetUserId: String?
     let dmTargetDisplayName: String?

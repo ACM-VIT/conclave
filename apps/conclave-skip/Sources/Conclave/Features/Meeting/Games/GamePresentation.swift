@@ -344,6 +344,19 @@ enum GameStageTextPolicy {
         count == 1 ? "1 vote" : "\(count) votes"
     }
 
+    /// Server prompts are fragments like "to become a world leader"; read them
+    /// as a sentence under the game's name.
+    static func mostLikelyHeadline(_ prompt: String?) -> String {
+        guard let prompt = prompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !prompt.isEmpty else {
+            return "Waiting for the prompt."
+        }
+        if prompt.lowercased().hasPrefix("to ") {
+            return "Most likely \(prompt)"
+        }
+        return prompt
+    }
+
     static func triviaWinnerText(_ view: GameJSONValue?) -> String {
         let rows = GameDetailsPresentationPolicy.scoreboardRows(from: view)
         guard let winner = rows.first else { return "Scores are not available yet." }
@@ -368,6 +381,7 @@ enum GameStageTextPolicy {
     }
 
     static func reactionTitle(phase: String, tapped: Bool, early: Bool, reactionMs: Int?) -> String {
+        if phase == "results" { return "Final scores" }
         if early { return "Too early" }
         if let reactionMs { return "\(reactionMs) ms" }
         if tapped { return "Locked in" }
@@ -377,6 +391,13 @@ enum GameStageTextPolicy {
     }
 
     static func reactionSubtitle(_ view: GameJSONValue?, phase: String) -> String {
+        if phase == "results" {
+            let rows = GameDetailsPresentationPolicy.scoreboardRows(from: view)
+            if let winner = rows.first, winner.score > 0 {
+                return "\(winner.name) takes it with \(winner.score)"
+            }
+            return "That was quick."
+        }
         if let winner = view?.string("winnerName"), !winner.isEmpty {
             return "Fastest: \(winner)"
         }

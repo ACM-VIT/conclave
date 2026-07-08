@@ -1,1 +1,31 @@
-Conclave is a fast video meeting app for creating rooms, joining calls, chatting, sharing screens, and collaborating across web and native devices.
+Conclave is a fast, no-fuss video meeting app. Start a room in one tap, share the link, and anyone can join from their phone or a browser - no account required.
+
+MEET IN SECONDS
+• One tap to start a meeting as a guest, or sign in with Google
+• Join with a room code or an invite link
+• Locked rooms with a waiting room the host controls
+• Crisp, dark, distraction-free meeting screen
+
+EVERYTHING A CALL NEEDS
+• Reliable audio and video with quick mute and camera controls
+• Screen sharing from your phone
+• Live transcription with captions for the whole room
+• Emoji reactions and raise-hand
+• Picture-in-picture and background calling, so the call continues while you multitask
+
+CHAT THAT FEELS RIGHT
+• Fast in-meeting chat with replies and message actions
+• GIF search built in
+• Private messages when you need a side conversation
+
+PLAY TOGETHER
+Turn any meeting into game night. The built-in catalog runs right on the meeting stage:
+• Trivia, Bluff, Would You Rather, Most Likely To, Reaction
+• Imposter - spot the faker in the room
+• Wordle - same word, solo boards, fastest solve wins
+• Chess - duel a friend, play in teams, or take on the computer
+
+BUILT FOR YOUR TEAM AND YOUR FRIENDS
+Conclave works seamlessly with the Conclave web app, so people on laptops and phones share the same rooms, chat, and games.
+
+Privacy policy: https://conclave.acmvit.in/privacy

@@ -59,7 +59,7 @@ struct ContentView: View {
             pendingJoinPromptOverlay
         }
         .overlay {
-            // Branded entry takeover — above everything, gated on an entering
+            // Branded entry takeover - above everything, gated on an entering
             // connection state plus an observable hard ceiling so error /
             // waiting / disconnected / stale entries auto-hide even if the
             // view-model timing tasks are cancelled.
@@ -86,7 +86,7 @@ struct ContentView: View {
         .task(id: meetingViewModel.state.meetingEntryGeneration) {
             await runMeetingEntryDeadline()
         }
-        // Zero-parameter onChange (no non-null lambda param) — these fire during
+        // Zero-parameter onChange (no non-null lambda param) - these fire during
         // the entry sequence, where SkipUI's rememberSaveable can restore a null
         // oldValue and crash the two-parameter form on Android. Both handlers
         // ignore their values anyway.

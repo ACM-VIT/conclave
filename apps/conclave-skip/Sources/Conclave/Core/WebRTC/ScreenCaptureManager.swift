@@ -5,7 +5,7 @@
 //  Coordinates whole-device screen sharing via a ReplayKit Broadcast Upload
 //  Extension (NOT in-app RPScreenRecorder, which can only capture this app's own
 //  window). Standing up an App-Group socket server, then presenting the system
-//  broadcast picker, lets the user share ANY app / their whole screen — the
+//  broadcast picker, lets the user share ANY app / their whole screen - the
 //  extension streams JPEG frames back over the socket, which we decode and feed
 //  into the WebRTC screen producer. Mirrors the working react-native-webrtc flow.
 //
@@ -133,7 +133,7 @@ final class ScreenCaptureManager: NSObject {
         let started = server.start(
             onFrame: { [weak self] box in
                 // Hop to the main actor (WebRTCClient is @MainActor-isolated)
-                // via DispatchQueue.main.async — it preserves FIFO order across
+                // via DispatchQueue.main.async - it preserves FIFO order across
                 // the hop, unlike unstructured Tasks which can reorder frames.
                 DispatchQueue.main.async { [weak self] in
                     guard self?.startGeneration == generation else { return }

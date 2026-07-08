@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Full-screen branded takeover shown the instant a meeting is created or joined
-/// (mirrors the web's `MeetingEnterOverlay`). It stays up — over both the join
-/// screen and the meeting — until `MeetingViewModel` reports the meeting fully
+/// (mirrors the web's `MeetingEnterOverlay`). It stays up - over both the join
+/// screen and the meeting - until `MeetingViewModel` reports the meeting fully
 /// ready, so the entry feels instant and the post-join device-init hiccups are
 /// hidden. Errors clear the takeover and hand off to the existing `ErrorView`.
 struct MeetingEntryOverlayView: View {

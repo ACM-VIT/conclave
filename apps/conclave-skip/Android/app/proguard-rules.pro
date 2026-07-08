@@ -1,4 +1,4 @@
-# R8's optimization pass miscompiles SkipUI's framework code in release builds —
+# R8's optimization pass miscompiles SkipUI's framework code in release builds -
 # e.g. skip.ui.PreferenceValues.collectPreferences dereferences a null
 # skip.ui.Preference (NPE in PresentationRoot on sheet/presentation recomposition).
 # Disable the optimization pass while keeping the wins that actually matter for

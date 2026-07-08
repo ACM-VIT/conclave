@@ -126,18 +126,11 @@ struct RemoteVideoView: View {
                     fallbackDisplayName,
                     userId: trackWrapper.userId
                 )
-                let avatarSize = min(max(min(geometry.size.width, geometry.size.height) * 0.28, 44.0), 112.0)
+                let avatarSize = min(max(min(geometry.size.width, geometry.size.height) * 0.22, 44.0), 88.0)
                 ZStack {
                     ACMColors.bgAlt
 
-                    Circle()
-                        .fill(ACMColors.avatarColor(for: displayName))
-                        .frame(width: avatarSize, height: avatarSize)
-                        .overlay {
-                            Text(String(displayName.prefix(1)).uppercased())
-                                .font(.system(size: avatarSize * 0.40, weight: .bold))
-                                .foregroundStyle(Color.white)
-                        }
+                    FacehashAvatarView(name: displayName, id: trackWrapper.userId, size: avatarSize)
 
                     if trackWrapper.isEnabled {
                         ProgressView()
@@ -220,6 +213,9 @@ struct VideoGridItem: View {
     let isHandRaised: Bool
     let isSpeaking: Bool
     let isLocal: Bool
+    // Stable identity for the facehash avatar (falls back to the remote
+    // track's user id, then to the name alone).
+    var identityId: String? = nil
     var connectionStatus: ParticipantConnectionStatus? = nil
     // When set AND camera off, the tile fills its frame (immersive solo avatar)
     // rather than locking to 16:9. Video tiles always keep 16:9.
@@ -301,20 +297,13 @@ struct VideoGridItem: View {
             let labelClearance: CGFloat = isThumbnail ? 30.0 : 44.0
             let shortestSide = min(geo.size.width, max(1.0, geo.size.height - labelClearance))
             let minAvatarSize = min(isThumbnail ? 24.0 : 44.0, shortestSide)
-            let maxAvatarSize = min(isThumbnail ? 40.0 : 240.0, shortestSide)
+            let maxAvatarSize = min(isThumbnail ? 36.0 : 96.0, shortestSide)
             let avatarSize = avatarSizeOverride
-                ?? min(max(shortestSide * (isThumbnail ? 0.46 : 0.42), minAvatarSize), maxAvatarSize)
+                ?? min(max(shortestSide * (isThumbnail ? 0.42 : 0.30), minAvatarSize), maxAvatarSize)
             ZStack {
                 ACMColors.bgAlt
 
-                Circle()
-                    .fill(ACMColors.avatarColor(for: resolvedDisplayName))
-                    .frame(width: avatarSize, height: avatarSize)
-                    .overlay {
-                        Text(avatarInitial)
-                            .font(.system(size: avatarSize * 0.40, weight: .bold))
-                            .foregroundStyle(Color.white)
-                    }
+                FacehashAvatarView(name: resolvedDisplayName, id: identityId ?? trackWrapper?.userId, size: avatarSize)
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
@@ -400,6 +389,8 @@ struct VideoGridItem: View {
             Spacer()
 
             HStack {
+                // Web-style nameplate: a dark pill chip instead of a text
+                // shadow, so it stays readable over video without any glow.
                 HStack(spacing: 5) {
                     if isMuted {
                         Image(systemName: "mic.slash.fill")
@@ -412,8 +403,11 @@ struct VideoGridItem: View {
                         .foregroundStyle(ACMColors.text)
                         .lineLimit(1)
                 }
+                .padding(.horizontal, isThumbnail ? 7.0 : 9.0)
+                .padding(.vertical, isThumbnail ? 3.0 : 5.0)
+                .acmColorBackground(ACMColors.blackOverlay(0.55))
+                .clipShape(Capsule())
                 .frame(maxWidth: isThumbnail ? 112.0 : 220.0, alignment: .leading)
-                .shadow(color: ACMColors.blackOverlay(0.9), radius: 2.0, x: 0.0, y: 1.0)
 
                 Spacer()
             }
