@@ -1,4 +1,5 @@
 import {
+  AudioLines,
   Bot,
   Copy,
   FlipHorizontal2,
@@ -91,6 +92,7 @@ const ROW_KEYWORDS: Record<string, string> = {
   watch: "watch together youtube video party",
   "dev-playground": "dev playground code sandbox",
   "apps-lock": "lock unlock apps editing",
+  settings: "settings devices test mic microphone camera speaker gain connection quality stats network",
 };
 
 /**
@@ -223,6 +225,8 @@ export function buildPaletteActions(
     // Rows that only open the URL launcher UI have no direct handler; the
     // curated quick-launch list below covers that case.
     if (!row.onPress) continue;
+    // The voice agent gets a richer dedicated entry in the AI section below.
+    if (row.id === "voice-agent") continue;
     actions.push({
       id: row.id,
       section: "Apps & tools",
@@ -267,7 +271,7 @@ export function buildPaletteActions(
           ? "AI voice agent is starting…"
           : "Start AI voice agent",
       keywords: "ai assistant voice agent bot companion",
-      icon: Bot,
+      icon: AudioLines,
       active: Boolean(p.isVoiceAgentRunning),
       disabled: Boolean(p.isVoiceAgentStarting),
       run: voiceAgentHandler,

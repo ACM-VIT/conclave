@@ -29,7 +29,7 @@ type DeviceOption = { deviceId: string; label: string };
 
 export type DeviceOptionList = DeviceOption[];
 
-export function useEnumeratedDevices(active: boolean) {
+export function useEnumeratedDevices(active: boolean, refreshToken?: unknown) {
   const [audioInput, setAudioInput] = useState<DeviceOption[]>([]);
   const [audioOutput, setAudioOutput] = useState<DeviceOption[]>([]);
   const [videoInput, setVideoInput] = useState<DeviceOption[]>([]);
@@ -64,9 +64,11 @@ export function useEnumeratedDevices(active: boolean) {
     }
   }, []);
 
+  // refreshToken lets callers force a refetch — e.g. right after a
+  // getUserMedia grant, when device labels first become readable.
   useEffect(() => {
     if (active) void fetchDevices();
-  }, [active, fetchDevices]);
+  }, [active, refreshToken, fetchDevices]);
 
   useEffect(() => {
     if (!navigator.mediaDevices?.addEventListener) return;

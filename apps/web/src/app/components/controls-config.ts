@@ -1,4 +1,5 @@
 import {
+  AudioLines,
   Gamepad2,
   FileText,
   Globe,
@@ -13,6 +14,7 @@ import {
   MonitorPlay,
   PictureInPicture2,
   ScanFace,
+  Settings,
   Shield,
   StickyNote,
   TerminalSquare,
@@ -79,6 +81,8 @@ export interface ControlsBarProps {
   onToggleVideoEffects?: () => void;
   isViewPanelOpen?: boolean;
   onToggleViewPanel?: () => void;
+  isDeviceSettingsOpen?: boolean;
+  onToggleDeviceSettings?: () => void;
   isAdmin?: boolean | null;
   isParticipantsOpen?: boolean;
   onToggleParticipants?: () => void;
@@ -436,6 +440,38 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       label: p.isAppsLocked ? "Unlock app editing" : "Lock app editing",
       active: p.isAppsLocked,
       onPress: p.onToggleAppsLock,
+    });
+  }
+  // Host-only AI voice agent. Until now this was reachable only through the
+  // Mod+K palette; give it a discoverable home in the More menu too.
+  {
+    const voiceAgentPress = p.isVoiceAgentRunning
+      ? p.onStopVoiceAgent
+      : p.onStartVoiceAgent;
+    if (voiceAgentPress) {
+      overflow.push({
+        id: "voice-agent",
+        icon: AudioLines,
+        label: p.isVoiceAgentRunning
+          ? "Stop AI voice agent"
+          : p.isVoiceAgentStarting
+            ? "AI voice agent is starting…"
+            : "AI voice agent",
+        active: Boolean(p.isVoiceAgentRunning),
+        disabled: Boolean(p.isVoiceAgentStarting),
+        onPress: voiceAgentPress,
+      });
+    }
+  }
+  // Desktop-only: device/mic/camera testing and connection stats. The compact
+  // bar already has its own Settings tile wired to the mobile drawer.
+  if (!p.compact && p.onToggleDeviceSettings) {
+    overflow.push({
+      id: "settings",
+      icon: Settings,
+      label: "Settings",
+      active: p.isDeviceSettingsOpen,
+      onPress: p.onToggleDeviceSettings,
     });
   }
   // Phone-width: the standalone host-controls shield is dropped from the right

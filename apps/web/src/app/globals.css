@@ -523,6 +523,173 @@ select:focus {
   }
 }
 
+/* AI voice agent orb — an ambient "sky" sphere: a bright base with blurred
+   cloud layers drifting inside, brightening and speeding up while speaking.
+   Palette is driven by CSS vars so the whole orb recolors in one place. */
+.voice-agent-orb {
+  --vao-sky-top: #eaf6ff;
+  --vao-sky-mid: #bfe0ff;
+  --vao-sky-bottom: #2f7be8;
+  --vao-cloud-deep: rgba(20, 78, 200, 0.9);
+  --vao-cloud-light: rgba(255, 255, 255, 0.92);
+  --vao-blur: 9px;
+  /* Live loudness 0–1, written by the orb's analyser; 0 when not reactive. */
+  --vao-level: 0;
+  position: relative;
+  display: grid;
+  place-items: center;
+  /* Reactive swell lives on the root so the core is free to breathe + hue-shift
+     without transform fighting the loudness scale. */
+  transform: scale(calc(1 + var(--vao-level) * 0.09));
+  transition: transform 90ms ease-out;
+}
+.voice-agent-orb--regular {
+  width: 96px;
+  height: 96px;
+}
+.voice-agent-orb--compact {
+  width: 54px;
+  height: 54px;
+  --vao-blur: 5px;
+}
+
+.voice-agent-orb-core {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 9999px;
+  overflow: hidden;
+  background: radial-gradient(
+    130% 115% at 50% -6%,
+    var(--vao-sky-top) 0%,
+    var(--vao-sky-mid) 30%,
+    var(--vao-sky-bottom) 100%
+  );
+  /* Slow, soothing hue drift stays within the blue family (never a rainbow
+     spin), over a gentle resting breath. */
+  animation: vao-hue 17s ease-in-out infinite, vao-breathe 6s ease-in-out infinite;
+}
+.voice-agent-orb[data-state="speaking"] .voice-agent-orb-core {
+  animation-duration: 17s, 3.4s;
+}
+/* A bright near-white bloom in the upper area, drifting slowly. */
+.voice-agent-orb-core::before {
+  content: "";
+  position: absolute;
+  inset: -6% 6% 40% -2%;
+  border-radius: 9999px;
+  background: radial-gradient(closest-side, #ffffff, transparent 66%);
+  filter: blur(var(--vao-blur));
+  opacity: 0.75;
+  animation: vao-drift-b 15s ease-in-out infinite alternate;
+}
+/* Reactive core glow: intensifies with the agent's live loudness. */
+.voice-agent-orb-core::after {
+  content: "";
+  position: absolute;
+  inset: 22% 22% 28% 22%;
+  border-radius: 9999px;
+  background: radial-gradient(closest-side, #ffffff, transparent 70%);
+  filter: blur(var(--vao-blur));
+  opacity: calc(0.08 + var(--vao-level) * 0.6);
+  pointer-events: none;
+}
+
+.voice-agent-orb-cloud {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(var(--vao-blur));
+  will-change: transform, opacity;
+}
+/* Deep-blue cloud mass billowing up from the bottom; the tighter transparent
+   stop + lower blur give it a defined, puffy top edge near the middle. */
+.voice-agent-orb-cloud:nth-child(1) {
+  inset: 34% -14% -30% -14%;
+  background: radial-gradient(
+    closest-side,
+    var(--vao-cloud-deep),
+    transparent 62%
+  );
+  animation: vao-drift-a 13s ease-in-out infinite alternate;
+}
+/* A second, offset blue tuft so the billow reads as layered cloud, not a disc. */
+.voice-agent-orb-cloud:nth-child(2) {
+  inset: 46% -24% -26% 16%;
+  background: radial-gradient(
+    closest-side,
+    var(--vao-cloud-deep),
+    transparent 60%
+  );
+  opacity: 0.9;
+  animation: vao-drift-b 10s ease-in-out infinite alternate;
+}
+/* White wisp catching light along the cloud's upper edge. */
+.voice-agent-orb-cloud:nth-child(3) {
+  inset: 20% 12% 40% 2%;
+  background: radial-gradient(
+    closest-side,
+    var(--vao-cloud-light),
+    transparent 66%
+  );
+  opacity: 0.7;
+  animation: vao-drift-a 17s ease-in-out infinite alternate-reverse;
+}
+.voice-agent-orb[data-state="speaking"] {
+  --vao-cloud-light: rgba(255, 255, 255, 0.98);
+}
+.voice-agent-orb[data-state="speaking"] .voice-agent-orb-cloud:nth-child(1) {
+  animation-duration: 6.5s;
+}
+.voice-agent-orb[data-state="speaking"] .voice-agent-orb-cloud:nth-child(2) {
+  animation-duration: 5.5s;
+}
+.voice-agent-orb[data-state="speaking"] .voice-agent-orb-cloud:nth-child(3) {
+  animation-duration: 8s;
+}
+
+@keyframes vao-drift-a {
+  0% {
+    transform: translate(-6%, 4%) scale(1);
+  }
+  100% {
+    transform: translate(8%, -6%) scale(1.14);
+  }
+}
+@keyframes vao-drift-b {
+  0% {
+    transform: translate(5%, -3%) scale(1.08);
+  }
+  100% {
+    transform: translate(-7%, 6%) scale(0.92);
+  }
+}
+/* Soothing hue drift: a narrow sweep around the base blue (never a full spin). */
+@keyframes vao-hue {
+  0%, 100% {
+    filter: hue-rotate(-15deg) saturate(1);
+  }
+  50% {
+    filter: hue-rotate(20deg) saturate(1.08);
+  }
+}
+@keyframes vao-breathe {
+  0%, 100% {
+    transform: scale(0.97);
+  }
+  50% {
+    transform: scale(1.03);
+  }
+}
+
+/* Reduced motion: hold a calm, legible resting frame. */
+@media (prefers-reduced-motion: reduce) {
+  .voice-agent-orb-core,
+  .voice-agent-orb-core::before,
+  .voice-agent-orb-cloud {
+    animation: none !important;
+  }
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

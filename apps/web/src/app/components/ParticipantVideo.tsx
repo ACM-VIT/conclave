@@ -10,10 +10,13 @@ import {
 } from "../lib/participant-media";
 import type { Participant } from "../lib/types";
 import { truncateDisplayName } from "../lib/utils";
+import { isVoiceAgentUserId } from "../lib/voice-agent";
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
 import GameTileOverlay from "./games/GameTileOverlay";
+import VoiceAgentOrb from "./VoiceAgentOrb";
 import { Avatar } from "@conclave/ui-tokens/web";
+import { color } from "@conclave/ui-tokens";
 
 interface ParticipantVideoProps {
   participant: Participant;
@@ -57,6 +60,7 @@ function ParticipantVideo({
   const videoRef = useRef<HTMLVideoElement>(null);
   const labelWidthClass = compact ? "max-w-[65%]" : "max-w-[75%]";
   const displayLabel = truncateDisplayName(displayName, compact ? 12 : 18);
+  const isAgent = isVoiceAgentUserId(participant.userId);
   const videoStream = getRenderableParticipantVideoStream(participant);
   const isRenderingScreenShare = isRenderingParticipantScreenShare(
     participant,
@@ -160,6 +164,66 @@ function ParticipantVideo({
       onAdminClick(participant.userId);
     }
   };
+
+  // The AI voice agent has no camera and is not a person. It keeps the native
+  // tile frame, label, and active-speaker ring so it sits naturally in the
+  // grid, but swaps the avatar for a waveform mark and tags the label "AI".
+  if (isAgent) {
+    return (
+      <div
+        className={`acm-video-tile group ${
+          compact ? "h-36 w-48 shrink-0 sm:w-auto" : "w-full h-full"
+        } ${isActiveSpeaker ? "speaking" : ""}`}
+        data-userid={participant.userId}
+        data-meet-voice-agent-tile="true"
+        style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+      >
+        {!disableAudio && (
+          <ParticipantAudio
+            participant={participant}
+            audioOutputDeviceId={audioOutputDeviceId}
+            onAudioAutoplayBlocked={onAudioAutoplayBlocked}
+            onAudioPlaybackStarted={onAudioPlaybackStarted}
+            audioPlaybackAttemptToken={audioPlaybackAttemptToken}
+          />
+        )}
+        <ParticipantConnectionOverlay
+          status={connectionStatus}
+          compact={compact}
+        />
+        <div className="absolute inset-0 flex items-center justify-center bg-[#131316]">
+          <VoiceAgentOrb
+            state={isActiveSpeaker ? "speaking" : "idle"}
+            compact={compact}
+            audioStream={participant.audioStream ?? null}
+          />
+        </div>
+        <div
+          className={`absolute bottom-3 left-3 bg-black/70 border border-[#fafafa]/10 rounded-full px-3 py-1.5 flex items-center gap-2 ${
+            compact ? "text-[10px]" : "text-xs"
+          }`}
+        >
+          <span className="font-medium text-[#fafafa] truncate" title={displayName}>
+            {displayLabel}
+          </span>
+          <span
+            className="rounded-md px-1.5 py-px text-[9px] font-semibold tracking-wide"
+            style={{ backgroundColor: color.accent, color: "#fff" }}
+          >
+            AI
+          </span>
+          {isActiveSpeaker && (
+            <span className="acm-voice-activity" aria-label="Speaking">
+              <span />
+              <span />
+              <span />
+            </span>
+          )}
+        </div>
+        <GameTileOverlay userId={participant.userId} compact={compact} />
+      </div>
+    );
+  }
 
   const speakerHighlight = isActiveSpeaker ? "speaking" : "";
   const handRaisedHighlight = participant.isHandRaised ? "!border-amber-400/60" : "";

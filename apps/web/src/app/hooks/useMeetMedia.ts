@@ -1499,6 +1499,7 @@ export function useMeetMedia({
           sourceTrackId: track.id,
           outputTrackId: processedTrack.id,
           worklet: pipeline.usedWorklet,
+          engine: pipeline.engine,
         });
         return processedTrack;
       } catch (error) {

@@ -33,6 +33,7 @@ import { useMeetHandRaiseSound } from "./hooks/useMeetHandRaiseSound";
 import { useMeetLifecycle } from "./hooks/useMeetLifecycle";
 import { useMeetMedia } from "./hooks/useMeetMedia";
 import { useMeetMediaSettings } from "./hooks/useMeetMediaSettings";
+import { useLocalCameraPreview } from "./hooks/useLocalCameraPreview";
 import { useMeetPictureInPicture } from "./hooks/useMeetPictureInPicture";
 import { useMeetPopout } from "./hooks/useMeetPopout";
 import { useMeetReactions } from "./hooks/useMeetReactions";
@@ -65,6 +66,12 @@ import { usePrewarmSocket } from "./hooks/usePrewarmSocket";
 import { useScreenWakeLock } from "./hooks/useScreenWakeLock";
 import { useSharedBrowser } from "./hooks/useSharedBrowser";
 import { useVoiceAgentParticipant } from "./hooks/useVoiceAgentParticipant";
+import VoiceAgentDialog from "./components/VoiceAgentDialog";
+import {
+  clearStoredVoiceAgentKey,
+  getStoredVoiceAgentKey,
+  storeVoiceAgentKey,
+} from "./lib/voice-agent-key";
 import type { JoinMode, PrejoinMediaHandoff } from "./lib/types";
 import {
   readStoredMeetViewSettings,
@@ -840,12 +847,7 @@ export default function MeetsClient({
     useState(0);
   const [isBrowserServiceAvailable, setIsBrowserServiceAvailable] =
     useState(false);
-  const [isVoiceAgentKeyPromptOpen, setIsVoiceAgentKeyPromptOpen] =
-    useState(false);
-  const [voiceAgentKeyInput, setVoiceAgentKeyInput] = useState("");
-  const [voiceAgentKeyPromptError, setVoiceAgentKeyPromptError] =
-    useState<string | null>(null);
-  const voiceAgentApiKeyRef = useRef("");
+  const [isVoiceAgentDialogOpen, setIsVoiceAgentDialogOpen] = useState(false);
   const toggleMuteCommandRef = useRef<(() => void | Promise<void>) | null>(null);
   const toggleCameraCommandRef = useRef<(() => void | Promise<void>) | null>(
     null,
@@ -938,6 +940,20 @@ export default function MeetsClient({
     allowNetworkAutoDowngrade:
       connectionState === "disconnected" || connectionState === "waiting",
   });
+
+  // Local-only camera preview for the Settings/effects panels: acquired with a
+  // plain getUserMedia and never attached to a producer, so nothing reaches
+  // the room while the real camera stays off.
+  const cameraPreview = useLocalCameraPreview({
+    deviceId: selectedVideoInputDeviceId,
+  });
+  const stopCameraPreview = cameraPreview.stop;
+  const localStreamHasLiveVideo = hasLiveVideoTrack(localStream);
+  useEffect(() => {
+    // The real camera taking over makes the private preview redundant (and
+    // would hold a second capture of the same device) — release it.
+    if (localStreamHasLiveVideo) stopCameraPreview();
+  }, [localStreamHasLiveVideo, stopCameraPreview]);
 
   const isAdminFlag = Boolean(currentIsAdmin);
   const isWebinarAttendee =
@@ -1304,7 +1320,7 @@ export default function MeetsClient({
 
   const videoEffectsSourceStream = hasLiveVideoTrack(localStream)
     ? localStream
-    : devCameraStream;
+    : (devCameraStream ?? cameraPreview.stream);
   const processedLocalStream = shouldRunVideoEffects
     ? videoEffectsBridgeState.effectiveStream
     : null;
@@ -1322,7 +1338,33 @@ export default function MeetsClient({
   const videoEffectsDebugStats = shouldRunVideoEffects
     ? videoEffectsBridgeState.debugStats
     : null;
-  const displayLocalStream = processedLocalStream ?? localStream;
+  // When the effects pipeline is fed by the private preview (camera off, no
+  // dev fixture), its processed output must stay panel-only: it must not
+  // become the display stream that the grid / PiP / popout render, or the
+  // preview would look like the camera is on.
+  const processedSourceIsLocalPreview =
+    !hasLiveVideoTrack(localStream) &&
+    !devCameraStream &&
+    Boolean(cameraPreview.stream);
+  // Once the bridge has processed the private preview, its output track (which
+  // can survive source switches with the same id) must not be published until
+  // the effects debug metadata positively confirms the source is the real
+  // camera again. Cleared inside getVideoPublishTrack on that confirmation.
+  const requireExplicitProcessedSourceMatchRef = useRef(false);
+  useEffect(() => {
+    if (processedSourceIsLocalPreview) {
+      requireExplicitProcessedSourceMatchRef.current = true;
+    }
+  }, [processedSourceIsLocalPreview]);
+  const displayLocalStream =
+    (processedSourceIsLocalPreview ? null : processedLocalStream) ??
+    localStream;
+  // What the Settings/effects panels render while previewing: the processed
+  // output when effects are active, otherwise the raw private preview.
+  const cameraPreviewDisplayStream = cameraPreview.stream
+    ? ((processedSourceIsLocalPreview ? processedLocalStream : null) ??
+      cameraPreview.stream)
+    : null;
   const mirrorLocalPreview = isMirrorCamera;
   const getVideoPublishTrack = useCallback(
     (stream?: MediaStream | null) => {
@@ -1404,7 +1446,39 @@ export default function MeetsClient({
           (!processedTrackHasExplicitOutputMismatch ||
             processedTrackOutputIsWarming),
       );
+      // Guard against publishing output derived from the PRIVATE camera
+      // preview. While the preview feeds the bridge, processed output is
+      // blocked outright; after a handoff to the real camera it stays blocked
+      // until the debug metadata positively names the real camera track as
+      // the source (mere absence of metadata is not proof during a handoff —
+      // the retained output track may still be showing preview frames).
+      const processedSourceExplicitlyMatches =
+        processedSourceMatchesRawTrack || processedSourceMatchesChainedInput;
       if (
+        requireExplicitProcessedSourceMatchRef.current &&
+        !processedSourceIsLocalPreview &&
+        processedSourceExplicitlyMatches
+      ) {
+        requireExplicitProcessedSourceMatchRef.current = false;
+      }
+      const processedTrackPublishBlocked = Boolean(
+        processedTrack &&
+          (processedSourceIsLocalPreview ||
+            (requireExplicitProcessedSourceMatchRef.current &&
+              !processedSourceExplicitlyMatches)),
+      );
+      if (processedTrackPublishBlocked && processedTrack) {
+        // The bridge output is (or may still be) the private preview. That
+        // must never be published: it dies when the panel closes, and it was
+        // never meant to leave this machine. Publish raw; the effects bridge
+        // re-pipes to the real camera right after it goes live.
+        logMeetVideo("skip_processed_track_local_preview_source", {
+          processedTrack: getMeetTrackDebugSnapshot(processedTrack),
+          rawTrack: getMeetTrackDebugSnapshot(rawTrack),
+          processedSourceIsLocalPreview,
+          processedSourceExplicitlyMatches,
+        });
+      } else if (
         shouldPublishProcessedVideo &&
         !processedTrackSuppressed &&
         processedTrackReady &&
@@ -1434,6 +1508,7 @@ export default function MeetsClient({
       }
       if (
         shouldPublishProcessedVideo &&
+        !processedTrackPublishBlocked &&
         !processedTrackSuppressed &&
         !processedTrackReady &&
         processedTrack &&
@@ -1508,6 +1583,7 @@ export default function MeetsClient({
       return rawTrack;
     },
     [
+      processedSourceIsLocalPreview,
       processedTrackVersion,
       processedTrackReady,
       refs.localStreamRef,
@@ -2260,68 +2336,68 @@ export default function MeetsClient({
     localStream,
     participants,
     recentMessages: chatMessages,
+    // Give the agent recall over the meeting: the live transcript feed and the
+    // running notes/minutes so it can answer "what was decided" accurately.
+    transcriptSegments: transcript.allSegments,
+    isTranscriptActive: transcriptActive,
+    meetingMinutes: transcriptActive ? transcript.minutes : null,
     resolveDisplayName,
   });
 
-  const openVoiceAgentKeyPrompt = useCallback(() => {
-    setVoiceAgentKeyPromptError(null);
-    setVoiceAgentKeyInput("");
-    setIsVoiceAgentKeyPromptOpen(true);
-  }, []);
-
-  const closeVoiceAgentKeyPrompt = useCallback(() => {
-    setVoiceAgentKeyPromptError(null);
-    setVoiceAgentKeyInput("");
-    setIsVoiceAgentKeyPromptOpen(false);
-  }, []);
+  const {
+    start: startVoiceAgent,
+    stop: stopVoiceAgent,
+    clearError: clearVoiceAgentError,
+    isStarting: isVoiceAgentStarting,
+    isRunning: isVoiceAgentRunning,
+    errorCode: voiceAgentErrorCode,
+  } = voiceAgent;
 
   const handleStartVoiceAgent = useCallback(() => {
-    const apiKey = voiceAgentApiKeyRef.current.trim();
-    if (!apiKey) {
-      openVoiceAgentKeyPrompt();
-      return;
-    }
-    void voiceAgent.start(apiKey);
-  }, [openVoiceAgentKeyPrompt, voiceAgent]);
+    // The dialog is the single surface for starting: it shows the key form,
+    // or — when a key is already remembered for this tab — a connecting state
+    // while the agent joins. It closes itself once the agent is live.
+    clearVoiceAgentError();
+    setIsVoiceAgentDialogOpen(true);
+    const storedKey = getStoredVoiceAgentKey();
+    if (storedKey) void startVoiceAgent(storedKey);
+  }, [clearVoiceAgentError, startVoiceAgent]);
 
-  const handleSubmitVoiceAgentKeyPrompt = useCallback(() => {
-    const apiKey = voiceAgentKeyInput.trim();
-    if (!apiKey) {
-      setVoiceAgentKeyPromptError("Enter your OpenAI API key.");
-      return;
-    }
-    if (!apiKey.startsWith("sk-")) {
-      setVoiceAgentKeyPromptError("OpenAI API keys usually start with \"sk-\".");
-      return;
-    }
-    voiceAgentApiKeyRef.current = apiKey;
-    setVoiceAgentKeyPromptError(null);
-    setVoiceAgentKeyInput("");
-    setIsVoiceAgentKeyPromptOpen(false);
-    void voiceAgent.start(apiKey);
-  }, [voiceAgent, voiceAgentKeyInput]);
+  const handleVoiceAgentDialogStart = useCallback(
+    (apiKey: string, remember: boolean) => {
+      storeVoiceAgentKey(apiKey, remember);
+      void startVoiceAgent(apiKey);
+    },
+    [startVoiceAgent],
+  );
 
+  const handleCloseVoiceAgentDialog = useCallback(() => {
+    setIsVoiceAgentDialogOpen(false);
+    // Cancelling mid-connect aborts the start; otherwise just drop any
+    // stale error so the next open starts clean.
+    if (isVoiceAgentStarting) stopVoiceAgent();
+    else clearVoiceAgentError();
+  }, [clearVoiceAgentError, isVoiceAgentStarting, stopVoiceAgent]);
+
+  // The dialog stays open (showing progress) until the agent is actually
+  // live, so failures land inline instead of in a toast after the fact.
   useEffect(() => {
-    if (!voiceAgent.error) return;
-    const lower = voiceAgent.error.toLowerCase();
-    const isApiKeyError =
-      lower.includes("api key") ||
-      lower.includes("unauthorized") ||
-      lower.includes("401");
-    if (!isApiKeyError) return;
-    voiceAgentApiKeyRef.current = "";
-    setVoiceAgentKeyInput("");
-    setVoiceAgentKeyPromptError("API key rejected. Enter a valid key.");
-    setIsVoiceAgentKeyPromptOpen(true);
-  }, [voiceAgent.error]);
+    if (isVoiceAgentRunning) setIsVoiceAgentDialogOpen(false);
+  }, [isVoiceAgentRunning]);
+
+  // A rejected key is useless — forget it and re-prompt with the reason.
+  useEffect(() => {
+    if (voiceAgentErrorCode !== "invalid-key") return;
+    clearStoredVoiceAgentKey();
+    setIsVoiceAgentDialogOpen(true);
+  }, [voiceAgentErrorCode]);
 
   const handleStopVoiceAgent = useCallback(() => {
-    voiceAgentApiKeyRef.current = "";
-    setVoiceAgentKeyInput("");
-    setVoiceAgentKeyPromptError(null);
-    setIsVoiceAgentKeyPromptOpen(false);
-    voiceAgent.stop();
-  }, [voiceAgent]);
+    // Deliberately keeps the remembered key: stop → start again later in the
+    // meeting shouldn't demand re-entering it. It dies with the tab.
+    setIsVoiceAgentDialogOpen(false);
+    stopVoiceAgent();
+  }, [stopVoiceAgent]);
 
   const { mounted } = useMeetLifecycle({
     cleanup: socket.cleanup,
@@ -2454,12 +2530,6 @@ export default function MeetsClient({
   useEffect(() => {
     leaveRoomCommandRef.current = leaveRoom;
   }, [leaveRoom]);
-
-  useEffect(() => {
-    return () => {
-      voiceAgentApiKeyRef.current = "";
-    };
-  }, []);
 
   const toggleBrowserAudio = useCallback(() => {
     if (browserAudioNeedsGesture) {
@@ -2920,65 +2990,15 @@ export default function MeetsClient({
       </div>
     </div>
   ) : null;
-  const voiceAgentKeyPrompt = isVoiceAgentKeyPromptOpen ? (
-    <div className="fixed inset-0 z-[145] flex items-center justify-center bg-black/75 px-4">
-      <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#111111] p-5 shadow-2xl">
-        <h2 className="text-sm font-semibold text-[#fafafa]">
-          Voice Agent API Key
-        </h2>
-        <p className="mt-1 text-xs text-[#fafafa]/75">
-          Enter your own OpenAI API key. It stays in-memory in this tab and is
-          sent directly to OpenAI, never to this server.
-        </p>
-        <input
-          type="password"
-          value={voiceAgentKeyInput}
-          onChange={(event) => {
-            setVoiceAgentKeyInput(event.target.value);
-            if (voiceAgentKeyPromptError) {
-              setVoiceAgentKeyPromptError(null);
-            }
-          }}
-          autoFocus
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          autoComplete="off"
-          placeholder="sk-..."
-          className="mt-4 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm text-[#fafafa] outline-none focus:border-[#fafafa]/35"
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              handleSubmitVoiceAgentKeyPrompt();
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              closeVoiceAgentKeyPrompt();
-            }
-          }}
-        />
-        {voiceAgentKeyPromptError ? (
-          <p className="mt-2 text-xs text-[#F95F4A]">{voiceAgentKeyPromptError}</p>
-        ) : null}
-        <div className="mt-4 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={closeVoiceAgentKeyPrompt}
-            className="rounded-xl border border-white/15 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-[#fafafa]/82 transition-colors hover:border-white/25 hover:text-[#fafafa]"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSubmitVoiceAgentKeyPrompt}
-            className="rounded-xl bg-[#F95F4A] px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-white transition-opacity hover:opacity-90"
-          >
-            Save & Start
-          </button>
-        </div>
-      </div>
-    </div>
-  ) : null;
+  const voiceAgentKeyPrompt = (
+    <VoiceAgentDialog
+      open={isVoiceAgentDialogOpen}
+      isStarting={isVoiceAgentStarting}
+      error={voiceAgent.error}
+      onStart={handleVoiceAgentDialogStart}
+      onClose={handleCloseVoiceAgentDialog}
+    />
+  );
 
   if (connectionState === "waiting") {
     const waitingTitle = waitingMessage ?? "Waiting for host to let you in";
@@ -3061,6 +3081,12 @@ export default function MeetsClient({
         videoEffectsDebugStats={videoEffectsDebugStats}
         activeVideoEffectsCount={activeVideoEffectsCount}
         deferVideoEffectsPreload={shouldDeferVideoEffectsPreload}
+        cameraPreviewStream={cameraPreviewDisplayStream}
+        isCameraPreviewStarting={cameraPreview.isStarting}
+        cameraPreviewError={cameraPreview.error}
+        onStartCameraPreview={cameraPreview.start}
+        onStopCameraPreview={stopCameraPreview}
+        connectionStats={selfConnectionStats}
         onDevCameraStreamChange={setDevCameraStream}
         onPrejoinMediaCommit={handlePrejoinMediaCommit}
         isCameraOff={isCameraOff}
@@ -3201,7 +3227,14 @@ export default function MeetsClient({
         transcript={transcript}
         isVoiceAgentRunning={voiceAgent.isRunning}
         isVoiceAgentStarting={voiceAgent.isStarting}
-        voiceAgentError={voiceAgent.error}
+        voiceAgentError={
+          // The dialog surfaces start/key errors inline; the toast only
+          // covers failures that happen while no dialog is up (e.g. the
+          // agent dropping mid-call).
+          isVoiceAgentDialogOpen || voiceAgentErrorCode === "invalid-key"
+            ? null
+            : voiceAgent.error
+        }
         onStartVoiceAgent={canModerateMeeting ? handleStartVoiceAgent : undefined}
         onStopVoiceAgent={canModerateMeeting ? handleStopVoiceAgent : undefined}
         onClearVoiceAgentError={voiceAgent.clearError}

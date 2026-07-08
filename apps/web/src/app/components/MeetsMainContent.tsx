@@ -42,6 +42,7 @@ import type {
   VideoEffectsDebugStats,
   VideoEffectsRuntimeStatus,
 } from "../hooks/useVideoEffects";
+import type { ConnectionQualityStats } from "../hooks/useConnectionQuality";
 import type { MeetingTranscriptController } from "../hooks/useMeetingTranscript";
 import type {
   CapturedSurfaceControlState,
@@ -93,6 +94,9 @@ const JoinScreen = dynamic(() => import("./JoinScreen"), {
 const VideoEffectsPanel = dynamic(() => import("./VideoEffectsPanel"), {
   ssr: false,
 });
+const DeviceSettingsPanel = dynamic(() => import("./DeviceSettingsPanel"), {
+  ssr: false,
+});
 const DevMeetToolsPanel = dynamic(() => import("./DevMeetToolsPanel"), {
   ssr: false,
 });
@@ -141,6 +145,15 @@ interface MeetsMainContentProps {
   videoEffectsDebugStats?: VideoEffectsDebugStats | null;
   activeVideoEffectsCount: number;
   deferVideoEffectsPreload?: boolean;
+  /** Private local-only camera preview (Settings + effects panels). Already
+   * routed through the effects pipeline when effects are active. */
+  cameraPreviewStream?: MediaStream | null;
+  isCameraPreviewStarting?: boolean;
+  cameraPreviewError?: string | null;
+  onStartCameraPreview?: () => void;
+  onStopCameraPreview?: () => void;
+  /** Self connection quality (poll-updated) for the Settings panel. */
+  connectionStats?: ConnectionQualityStats;
   onDevCameraStreamChange?: (stream: MediaStream | null) => void;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   isCameraOff: boolean;
@@ -373,6 +386,12 @@ export default function MeetsMainContent({
   videoEffectsDebugStats = null,
   activeVideoEffectsCount,
   deferVideoEffectsPreload = false,
+  cameraPreviewStream = null,
+  isCameraPreviewStarting = false,
+  cameraPreviewError = null,
+  onStartCameraPreview,
+  onStopCameraPreview,
+  connectionStats,
   onDevCameraStreamChange,
   onPrejoinMediaCommit,
   isCameraOff,
@@ -583,6 +602,7 @@ export default function MeetsMainContent({
   const [isHostControlsOpen, setIsHostControlsOpen] = useState(false);
   const [isVideoEffectsOpen, setIsVideoEffectsOpen] = useState(false);
   const [isViewPanelOpen, setIsViewPanelOpen] = useState(false);
+  const [isDeviceSettingsOpen, setIsDeviceSettingsOpen] = useState(false);
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
   // Which tab the transcript panel mounts on; the catch-up pill sets "minutes".
   const [transcriptInitialTab, setTranscriptInitialTab] = useState<
@@ -695,6 +715,17 @@ export default function MeetsMainContent({
     : localStream;
   const effectiveIsCameraOff =
     shouldUseDevCameraStream && hasLiveDevCamera ? false : isCameraOff;
+  // Local-only preview feed for the Settings/effects panels. Kept out of
+  // effectiveLocalStream on purpose: the grid, PiP, and popout must keep
+  // treating the camera as off while a private preview runs.
+  const hasLivePreviewVideo = Boolean(getLiveVideoStream(cameraPreviewStream));
+  const panelPreviewStream = getLiveVideoStream(effectiveLocalStream)
+    ? effectiveLocalStream
+    : hasLivePreviewVideo
+      ? cameraPreviewStream
+      : effectiveLocalStream;
+  const panelPreviewIsLocalOnly =
+    !getLiveVideoStream(effectiveLocalStream) && hasLivePreviewVideo;
   const effectiveActiveSpeakerId =
     shouldUseDevCameraStream && hasLiveDevCamera
       ? currentUserId
@@ -971,6 +1002,7 @@ export default function MeetsMainContent({
       setIsHostControlsOpen(false);
       setIsVideoEffectsOpen(false);
       setIsViewPanelOpen(false);
+      setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
     }
     setIsParticipantsOpen(opening);
@@ -988,6 +1020,7 @@ export default function MeetsMainContent({
     setIsHostControlsOpen(false);
     setIsVideoEffectsOpen(false);
     setIsViewPanelOpen(false);
+    setIsDeviceSettingsOpen(false);
     setIsTranscriptOpen(false);
     setIsParticipantsOpen(true);
   }, [toggleChat, setIsParticipantsOpen]);
@@ -1018,6 +1051,7 @@ export default function MeetsMainContent({
     isHostControlsOpen ||
     isVideoEffectsOpen ||
     isViewPanelOpen ||
+    isDeviceSettingsOpen ||
     isTranscriptOpen;
   const isGameDockPresent = isGameActive || isGamesOpen;
   const gameDockOffset =
@@ -1055,6 +1089,7 @@ export default function MeetsMainContent({
       setIsParticipantsOpen(false);
       setIsVideoEffectsOpen(false);
       setIsViewPanelOpen(false);
+      setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
     }
     setIsHostControlsOpen(opening);
@@ -1089,6 +1124,7 @@ export default function MeetsMainContent({
       setIsParticipantsOpen(false);
       setIsHostControlsOpen(false);
       setIsViewPanelOpen(false);
+      setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
     }
     setIsVideoEffectsOpen(opening);
@@ -1113,6 +1149,7 @@ export default function MeetsMainContent({
       setIsParticipantsOpen(false);
       setIsHostControlsOpen(false);
       setIsVideoEffectsOpen(false);
+      setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
     }
     setIsViewPanelOpen(opening);
@@ -1121,6 +1158,33 @@ export default function MeetsMainContent({
   const handleCloseViewPanel = useCallback(() => {
     setIsViewPanelOpen(false);
   }, []);
+
+  const handleToggleDeviceSettings = useCallback(() => {
+    const opening = !isDeviceSettingsOpen;
+    if (opening && isChatOpenRef.current) {
+      toggleChat();
+    }
+    if (opening) {
+      setIsParticipantsOpen(false);
+      setIsHostControlsOpen(false);
+      setIsVideoEffectsOpen(false);
+      setIsViewPanelOpen(false);
+      setIsTranscriptOpen(false);
+    }
+    setIsDeviceSettingsOpen(opening);
+  }, [isDeviceSettingsOpen, setIsParticipantsOpen, toggleChat]);
+
+  const handleCloseDeviceSettings = useCallback(() => {
+    setIsDeviceSettingsOpen(false);
+  }, []);
+
+  // The private camera preview only makes sense while a panel that shows it is
+  // open; release the capture (camera light off) the moment both are closed.
+  useEffect(() => {
+    if (!isVideoEffectsOpen && !isDeviceSettingsOpen) {
+      onStopCameraPreview?.();
+    }
+  }, [isVideoEffectsOpen, isDeviceSettingsOpen, onStopCameraPreview]);
 
   const handleToggleTranscript = useCallback(() => {
     const opening = !isTranscriptOpen;
@@ -1132,6 +1196,7 @@ export default function MeetsMainContent({
       setIsHostControlsOpen(false);
       setIsVideoEffectsOpen(false);
       setIsViewPanelOpen(false);
+      setIsDeviceSettingsOpen(false);
     } else {
       setTranscriptInitialTab("transcript");
     }
@@ -1244,6 +1309,7 @@ export default function MeetsMainContent({
       setIsHostControlsOpen(false);
       setIsVideoEffectsOpen(false);
       setIsViewPanelOpen(false);
+      setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
     }
     toggleChat();
@@ -1489,6 +1555,8 @@ export default function MeetsMainContent({
     onToggleVideoEffects: handleToggleVideoEffects,
     isViewPanelOpen,
     onToggleViewPanel: handleToggleViewPanel,
+    isDeviceSettingsOpen,
+    onToggleDeviceSettings: handleToggleDeviceSettings,
     isAdmin,
     isParticipantsOpen,
     onToggleParticipants: handleToggleParticipants,
@@ -2198,8 +2266,8 @@ export default function MeetsMainContent({
           effects={videoEffects}
           onEffectsChange={onVideoEffectsChange}
           onRecenterFraming={onVideoEffectsRecenter}
-          localStream={effectiveLocalStream}
-          isCameraOff={effectiveIsCameraOff}
+          localStream={panelPreviewStream}
+          isCameraOff={effectiveIsCameraOff && !panelPreviewIsLocalOnly}
           status={videoEffectsStatus}
           error={videoEffectsError}
           debugStats={videoEffectsDebugStats}
@@ -2207,7 +2275,41 @@ export default function MeetsMainContent({
           deferPreload={deferVideoEffectsPreload}
           cameraPermissionBlocked={isCameraPermissionBlocked}
           onToggleCamera={toggleCamera}
+          isCameraPreviewActive={panelPreviewIsLocalOnly}
+          isCameraPreviewStarting={isCameraPreviewStarting}
+          cameraPreviewError={cameraPreviewError}
+          onStartCameraPreview={onStartCameraPreview}
+          onStopCameraPreview={onStopCameraPreview}
           onClose={handleCloseVideoEffects}
+        />
+      )}
+
+      {isJoined && !isWebinarAttendee && isDeviceSettingsOpen && (
+        <DeviceSettingsPanel
+          localStream={panelPreviewStream}
+          isLocalVideoLive={Boolean(getLiveVideoStream(effectiveLocalStream))}
+          isPreviewOnly={panelPreviewIsLocalOnly}
+          mirrorLocalPreview={mirrorLocalPreview}
+          isMirrorCamera={isMirrorCamera}
+          onToggleMirror={onToggleMirror}
+          selectedAudioInputDeviceId={selectedAudioInputDeviceId}
+          selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
+          selectedVideoInputDeviceId={selectedVideoInputDeviceId}
+          onAudioInputDeviceChange={onAudioInputDeviceChange}
+          onAudioOutputDeviceChange={onAudioOutputDeviceChange}
+          onVideoInputDeviceChange={onVideoInputDeviceChange}
+          isNoiseCancellationEnabled={isNoiseCancellationEnabled}
+          onToggleNoiseCancellation={onToggleNoiseCancellation}
+          isCameraPreviewStarting={isCameraPreviewStarting}
+          cameraPreviewError={cameraPreviewError}
+          onStartCameraPreview={onStartCameraPreview}
+          onStopCameraPreview={onStopCameraPreview}
+          connectionStats={connectionStats}
+          isCameraPermissionBlocked={isCameraPermissionBlocked}
+          onOpenEffects={
+            isCameraPermissionBlocked ? undefined : handleToggleVideoEffects
+          }
+          onClose={handleCloseDeviceSettings}
         />
       )}
 
