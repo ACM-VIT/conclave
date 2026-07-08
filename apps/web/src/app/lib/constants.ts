@@ -116,6 +116,7 @@ export const buildMicrophoneOpusCodecOptions = (
   opusStereo: false,
   opusFec: true,
   opusDtx: true,
+  opusNack: true,
   opusMaxAverageBitrate:
     MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE[profile],
   opusPtime: OPUS_PACKET_TIME_MS,
@@ -126,6 +127,7 @@ export const buildScreenShareAudioOpusCodecOptions = (
   opusStereo: false,
   opusFec: true,
   opusDtx: true,
+  opusNack: true,
   opusMaxAverageBitrate:
     SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE[profile],
   opusPtime: OPUS_PACKET_TIME_MS,
