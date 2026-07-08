@@ -518,6 +518,9 @@ export function useMeetMedia({
   );
   const [audioProducerRecoveryPulse, setAudioProducerRecoveryPulse] =
     useState(0);
+  const pendingAudioProcessingSwitchRef = useRef(false);
+  const [audioProcessingSwitchPulse, setAudioProcessingSwitchPulse] =
+    useState(0);
   const cameraRecoveryInFlightRef = useRef(false);
   const [cameraProducerRecoveryPulse, setCameraProducerRecoveryPulse] =
     useState(0);
@@ -575,6 +578,11 @@ export function useMeetMedia({
     },
     [],
   );
+  const flushPendingAudioProcessingSwitch = useCallback(() => {
+    if (!pendingAudioProcessingSwitchRef.current) return;
+    pendingAudioProcessingSwitchRef.current = false;
+    setAudioProcessingSwitchPulse((value) => value + 1);
+  }, []);
   const notificationVolume = clampMeetVolume(meetVolume);
   const requestAudioProducerRecovery = useCallback(() => {
     if (isMediaRecoveryBlocked()) {
@@ -2955,6 +2963,7 @@ export function useMeetMedia({
         }
       } finally {
         audioRecoveryInFlightRef.current = false;
+        flushPendingAudioProcessingSwitch();
       }
     };
 
@@ -2985,6 +2994,7 @@ export function useMeetMedia({
     setIsMuted,
     setMeetError,
     closeLocalAudioProducerForReplacement,
+    flushPendingAudioProcessingSwitch,
     getPublishNetworkProfile,
     requestAudioProducerRecovery,
   ]);
@@ -2993,18 +3003,28 @@ export function useMeetMedia({
     if (isObserverMode) return;
     if (connectionState !== "joined") return;
     if (isMediaRecoveryBlocked()) return;
-    if (audioRecoveryInFlightRef.current) return;
+    if (audioRecoveryInFlightRef.current) {
+      pendingAudioProcessingSwitchRef.current = true;
+      return;
+    }
 
     const currentStream = localStreamRef.current ?? localStream;
     const currentAudioTrack = getFirstLiveTrack(
       currentStream?.getAudioTracks() ?? [],
     );
-    if (!currentAudioTrack) return;
+    if (!currentAudioTrack) {
+      pendingAudioProcessingSwitchRef.current = false;
+      return;
+    }
 
     const isProcessed = isNoiseCancellationProcessedTrack(currentAudioTrack);
-    if (isNoiseCancellationEnabled === isProcessed) return;
+    if (isNoiseCancellationEnabled === isProcessed) {
+      pendingAudioProcessingSwitchRef.current = false;
+      return;
+    }
 
     let cancelled = false;
+    pendingAudioProcessingSwitchRef.current = false;
 
     const switchAudioProcessing = async () => {
       audioRecoveryInFlightRef.current = true;
@@ -3051,9 +3071,13 @@ export function useMeetMedia({
           attachLocalAudioTrackHandlers(nextTrack);
         }
 
-        commitAudioTrackToLocalStream(nextTrack, currentStream, {
-          stopReplacedTracks: isNoiseCancellationEnabled,
-        });
+        commitAudioTrackToLocalStream(
+          nextTrack,
+          localStreamRef.current ?? currentStream,
+          {
+            stopReplacedTracks: isNoiseCancellationEnabled,
+          },
+        );
 
         if (!producer || producer.closed) {
           requestAudioProducerRecovery();
@@ -3065,6 +3089,7 @@ export function useMeetMedia({
         }
       } finally {
         audioRecoveryInFlightRef.current = false;
+        flushPendingAudioProcessingSwitch();
       }
     };
 
@@ -3075,10 +3100,12 @@ export function useMeetMedia({
     };
   }, [
     attachLocalAudioTrackHandlers,
+    audioProcessingSwitchPulse,
     audioProducerRef,
     commitAudioTrackToLocalStream,
     connectionState,
     detachNoiseCancellationSourceHandler,
+    flushPendingAudioProcessingSwitch,
     isMediaRecoveryBlocked,
     isNoiseCancellationEnabled,
     isObserverMode,
