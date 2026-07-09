@@ -24,6 +24,7 @@ import {
   MINUTES_QUIET_DEBOUNCE_MS,
   MINUTES_MAX_WAIT_MS,
   MINUTES_MIN_WORDS,
+  SFU_RELAY_DISCONNECT_SUPPRESSION_MS,
 } from "./constants";
 import {
   signTranscriptSfuRelayStartToken,
@@ -417,6 +418,9 @@ export class TranscriptRoom {
           minutesStatus: this.minutesStatus,
         });
         return;
+      case "relay.ping":
+        this.handleSfuRelayPing(viewer, message.id);
+        return;
       case "relay.handoff.prepare":
         this.prepareSfuRelayHandoff(viewer, message.id);
         return;
@@ -595,7 +599,8 @@ export class TranscriptRoom {
       return;
     }
 
-    this.suppressSfuRelayDisconnectsUntil = Date.now() + 5000;
+    this.suppressSfuRelayDisconnectsUntil =
+      Date.now() + SFU_RELAY_DISCONNECT_SUPPRESSION_MS;
     this.suppressSfuRelayDisconnectCount += 1;
     this.closeTranscriptionProvider();
     const roomId = this.session?.roomId || "unknown";
@@ -826,10 +831,19 @@ export class TranscriptRoom {
 
   private prepareSfuRelayHandoff(viewer: Viewer, id?: string): void {
     if (!this.canRelayAudio(viewer)) return;
-    this.suppressSfuRelayDisconnectsUntil = Date.now() + 5000;
+    this.suppressSfuRelayDisconnectsUntil =
+      Date.now() + SFU_RELAY_DISCONNECT_SUPPRESSION_MS;
     this.suppressSfuRelayDisconnectCount += 1;
     this.send(viewer.socket, {
       type: "relay.handoff.ready",
+      id: trimText(id ?? "", 120),
+    });
+  }
+
+  private handleSfuRelayPing(viewer: Viewer, id?: string): void {
+    if (!this.canRelayAudio(viewer)) return;
+    this.send(viewer.socket, {
+      type: "relay.pong",
       id: trimText(id ?? "", 120),
     });
   }
@@ -1320,13 +1334,15 @@ export class TranscriptRoom {
       case "audio.commit":
       case "audio.clear":
         return "audio";
+      case "relay.handoff.prepare":
+      case "relay.ping":
+        return "control";
       case "export.snapshot":
         return "export";
       case "minutes.refresh":
         return "minutes";
       case "qa.ask":
         return "qa";
-      case "relay.handoff.prepare":
       case "session.start":
       case "session.stop":
       case "session.pause":

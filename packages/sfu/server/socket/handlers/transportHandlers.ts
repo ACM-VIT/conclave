@@ -6,6 +6,7 @@ import type {
 } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
+import { connectWebRtcTransportOnce } from "../transportConnect.js";
 import { respond } from "./ack.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 
@@ -169,14 +170,10 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           respond(callback, { error: "Producer transport is closed" });
           return;
         }
-        if (producerTransport.dtlsState === "connected") {
-          respond(callback, { success: true });
-          return;
-        }
-
-        await producerTransport.connect({
-          dtlsParameters: data.dtlsParameters,
-        });
+        await connectWebRtcTransportOnce(
+          producerTransport,
+          data.dtlsParameters,
+        );
 
         respond(callback, { success: true });
       } catch (error) {
@@ -217,14 +214,10 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           respond(callback, { error: "Consumer transport is closed" });
           return;
         }
-        if (consumerTransport.dtlsState === "connected") {
-          respond(callback, { success: true });
-          return;
-        }
-
-        await consumerTransport.connect({
-          dtlsParameters: data.dtlsParameters,
-        });
+        await connectWebRtcTransportOnce(
+          consumerTransport,
+          data.dtlsParameters,
+        );
 
         respond(callback, { success: true });
       } catch (error) {
