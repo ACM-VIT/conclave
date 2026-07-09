@@ -1,5 +1,6 @@
 export type TranscriptRateBucketName =
   | "audio"
+  | "control"
   | "export"
   | "minutes"
   | "qa"
@@ -20,6 +21,7 @@ const limits: Record<
   { max: number; windowMs: number }
 > = {
   audio: { max: 600, windowMs: 10_000 },
+  control: { max: 120, windowMs: 60_000 },
   export: { max: 20, windowMs: 60_000 },
   minutes: { max: 12, windowMs: 60_000 },
   qa: { max: 10, windowMs: 60_000 },

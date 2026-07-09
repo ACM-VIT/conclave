@@ -36,4 +36,19 @@ describe("takeTranscriptRateLimit", () => {
     expect(takeTranscriptRateLimit(state, "qa", 2_000)).toBe(false);
     expect(takeTranscriptRateLimit(state, "minutes", 2_000)).toBe(true);
   });
+
+  it("keeps relay control traffic separate from user session commands", () => {
+    const state: TranscriptRateLimitState = {};
+    const now = 3_000;
+
+    for (let index = 0; index < 8; index += 1) {
+      expect(takeTranscriptRateLimit(state, "session", now)).toBe(true);
+    }
+    expect(takeTranscriptRateLimit(state, "session", now)).toBe(false);
+
+    for (let index = 0; index < 120; index += 1) {
+      expect(takeTranscriptRateLimit(state, "control", now)).toBe(true);
+    }
+    expect(takeTranscriptRateLimit(state, "control", now)).toBe(false);
+  });
 });

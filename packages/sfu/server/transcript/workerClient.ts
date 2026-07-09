@@ -1,7 +1,8 @@
 import type { TranscriptSpeaker } from "../../types.js";
 
 const WORKER_CONNECT_TIMEOUT_MS = 8000;
-const WORKER_HANDOFF_TIMEOUT_MS = 1000;
+const WORKER_HANDOFF_TIMEOUT_MS = 5000;
+const WORKER_HEARTBEAT_INTERVAL_MS = 20000;
 
 const toWorkerWebSocketUrl = (
   workerUrl: string,
@@ -21,6 +22,7 @@ const toWorkerWebSocketUrl = (
 
 export class TranscriptWorkerRelayClient {
   private socket: WebSocket | null = null;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
   private readonly handoffResolvers = new Map<string, (ok: boolean) => void>();
 
   constructor(
@@ -57,6 +59,8 @@ export class TranscriptWorkerRelayClient {
         ) {
           this.handoffResolvers.get(message.id)?.(true);
           this.handoffResolvers.delete(message.id);
+        } else if (message.type === "relay.pong") {
+          return;
         } else if (message.type === "error" && message.message) {
           this.options.onError?.(message.message);
         }
@@ -69,7 +73,10 @@ export class TranscriptWorkerRelayClient {
         settled = true;
         clearTimeout(timeout);
         if (error) reject(error);
-        else resolve();
+        else {
+          this.startHeartbeat(socket);
+          resolve();
+        }
       };
       const timeout = setTimeout(() => {
         try {
@@ -90,6 +97,7 @@ export class TranscriptWorkerRelayClient {
         const isCurrentSocket = this.socket === socket;
         if (isCurrentSocket) {
           this.socket = null;
+          this.stopHeartbeat();
         }
         if (!settled) {
           finish(new Error("Transcript worker relay connection closed."));
@@ -134,6 +142,7 @@ export class TranscriptWorkerRelayClient {
   close(): void {
     const socket = this.socket;
     this.socket = null;
+    this.stopHeartbeat();
     for (const resolve of this.handoffResolvers.values()) {
       resolve(false);
     }
@@ -145,8 +154,32 @@ export class TranscriptWorkerRelayClient {
 
   private send(payload: unknown): boolean {
     if (this.socket?.readyState !== WebSocket.OPEN) return false;
-    this.socket.send(JSON.stringify(payload));
-    return true;
+    try {
+      this.socket.send(JSON.stringify(payload));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private startHeartbeat(socket: WebSocket): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) {
+        this.stopHeartbeat();
+        return;
+      }
+      this.send({
+        type: "relay.ping",
+        id: `ping-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      });
+    }, WORKER_HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (!this.heartbeatTimer) return;
+    clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
   }
 }
 

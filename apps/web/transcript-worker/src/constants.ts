@@ -31,6 +31,7 @@ export const MINUTES_MAX_WAIT_MS = 45_000;
 export const MINUTES_MIN_WORDS = 24;
 export const MAX_CLIENT_MESSAGE_BYTES = 192 * 1024;
 export const MAX_AUDIO_CHUNK_BASE64_BYTES = 48 * 1024;
+export const SFU_RELAY_DISCONNECT_SUPPRESSION_MS = 15000;
 export const OPENAI_REALTIME_URL = "https://api.openai.com/v1/realtime";
 export const OPENAI_REALTIME_TRANSCRIPTION_INTENT = "transcription";
 export const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";

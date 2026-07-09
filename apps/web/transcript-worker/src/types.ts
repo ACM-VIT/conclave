@@ -94,6 +94,7 @@ export type ClientEnvelope =
   | { type: "qa.ask"; id?: string; question?: string; model?: string }
   | { type: "minutes.refresh" }
   | { type: "export.snapshot" }
+  | { type: "relay.ping"; id?: string }
   | { type: "relay.handoff.prepare"; id?: string };
 
 export type SessionStartEnvelope = Extract<
