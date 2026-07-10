@@ -21,7 +21,12 @@ import {
   useWatchRequests,
   type WatchRequest,
 } from "../hooks/useWatchRequests";
-import { fetchVideoTitle, thumbnailUrl } from "../youtubeMeta";
+import {
+  fetchVideoMetadata,
+  fetchVideoTitle,
+  thumbnailUrl,
+  type WatchVideoMetadata,
+} from "../youtubeMeta";
 import { GestureOverlay } from "./GestureOverlay";
 import { HostPill } from "./HostPill";
 import { WatchControls } from "./WatchControls";
@@ -59,7 +64,36 @@ export function WatchWebApp() {
 
   const { videoId, videoTitle, queue } = useWatchDocState(doc);
 
-  const player = useSyncedPlayback({ doc, videoId, readOnly: isReadOnly });
+  // YouTube reports a growing finite duration for active broadcasts, so the
+  // player cannot identify live content from duration alone. Keep metadata
+  // keyed to its video to ensure a slow response never labels the next item.
+  const [videoMetadata, setVideoMetadata] =
+    useState<WatchVideoMetadata | null>(null);
+  useEffect(() => {
+    if (!videoId) {
+      setVideoMetadata(null);
+      return;
+    }
+    let cancelled = false;
+    setVideoMetadata(null);
+    void fetchVideoMetadata(videoId).then((metadata) => {
+      if (!cancelled && metadata?.videoId === videoId) {
+        setVideoMetadata(metadata);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [videoId]);
+  const liveHint =
+    videoMetadata?.videoId === videoId ? videoMetadata.isLive : null;
+
+  const player = useSyncedPlayback({
+    doc,
+    videoId,
+    readOnly: isReadOnly,
+    liveHint,
+  });
 
   // Start a video: play immediately when idle, append to the queue otherwise.
   // Playback starts instantly with no title; the title backfills into the doc
@@ -220,6 +254,7 @@ export function WatchWebApp() {
   // compare-and-swap lets exactly one writer win across the room.
   const videoOver =
     hasVideo &&
+    !player.isLive &&
     !isPlaying &&
     player.duration > 0 &&
     player.currentTime >= player.duration - 1.5;
@@ -399,13 +434,7 @@ export function WatchWebApp() {
       return;
     }
     pokeControls();
-    if (isReadOnly) return;
-    if (isPlaying) {
-      player.pause();
-    } else {
-      player.play();
-    }
-  }, [browsing, isPlaying, isReadOnly, player, pokeControls]);
+  }, [browsing, pokeControls]);
 
   return (
     <div
@@ -468,15 +497,13 @@ export function WatchWebApp() {
                 }
               />
               {/* Click shield: the iframe never receives input, so the hidden
-                  native UI can never inject intent. Tapping toggles play/pause,
-                  or returns from browse when in mini form. */}
+                  native UI can never inject intent. A stage tap only reveals
+                  controls; shared play/pause requires the explicit button. */}
               <button
                 type="button"
-                aria-label={
-                  browsing ? "Back to video" : isPlaying ? "Pause" : "Play"
-                }
+                aria-label={browsing ? "Back to video" : "Show playback controls"}
                 onClick={handleShieldClick}
-                className="absolute inset-0 m-0 cursor-pointer border-0 p-0"
+                className="absolute inset-0 m-0 cursor-default border-0 p-0"
                 style={{ backgroundColor: "transparent" }}
               />
               {browsing ? (
@@ -518,7 +545,6 @@ export function WatchWebApp() {
             <GestureOverlay
               need={player.gestureNeed}
               onResolve={player.resolveGesture}
-              videoId={videoId}
               title={videoTitle}
             />
           ) : null}
@@ -618,6 +644,8 @@ export function WatchWebApp() {
                 playbackState={player.playbackState}
                 currentTime={player.currentTime}
                 duration={player.duration}
+                isLive={player.isLive}
+                isAtLiveEdge={player.isAtLiveEdge}
                 muted={player.muted}
                 volume={player.volume}
                 readOnly={isReadOnly}
@@ -642,6 +670,7 @@ export function WatchWebApp() {
                 onPlay={player.play}
                 onPause={player.pause}
                 onSeek={player.seek}
+                onGoLive={player.goLive}
                 onToggleMute={player.toggleMute}
                 onVolumeChange={player.setVolume}
               />
