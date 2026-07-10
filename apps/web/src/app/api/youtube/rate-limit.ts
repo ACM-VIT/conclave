@@ -8,7 +8,10 @@ type RateLimitBucket = {
 
 type RateLimitOptions = {
   scope: string;
-  binding: "YOUTUBE_SEARCH_RATE_LIMITER" | "YOUTUBE_TRENDING_RATE_LIMITER";
+  binding:
+    | "YOUTUBE_SEARCH_RATE_LIMITER"
+    | "YOUTUBE_TRENDING_RATE_LIMITER"
+    | "YOUTUBE_METADATA_RATE_LIMITER";
   limit: number;
   windowMs: number;
 };

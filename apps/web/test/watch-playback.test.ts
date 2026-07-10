@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  advanceQueue,
   createWatchDoc,
+  enqueue,
   getPlayback,
+  playQueueItemNow,
   setVideo,
   writePlayback,
 } from "../../../packages/apps-sdk/src/apps/watch/core/doc/index";
@@ -12,21 +15,34 @@ import {
 } from "../../../packages/apps-sdk/src/apps/watch/web/playbackSync";
 
 describe("watch-together live playback", () => {
-  it("persists live-edge mode and clears it for the next video", () => {
+  it("keeps fresh live-edge intent but preserves an early explicit seek", () => {
     const doc = createWatchDoc();
     setVideo(doc, "abcdefghijk", { play: true });
-    expect(getPlayback(doc).liveEdge).toBe(false);
+    expect(getPlayback(doc).liveEdge).toBe(true);
 
     writePlayback(doc, {
       state: "playing",
-      positionSeconds: 3_600,
+      positionSeconds: 0.25,
       rate: 1,
-      liveEdge: true,
+      liveEdge: false,
     });
-    expect(getPlayback(doc).liveEdge).toBe(true);
+    expect(getPlayback(doc).liveEdge).toBe(false);
 
     setVideo(doc, "lmnopqrstuv", { play: true });
-    expect(getPlayback(doc).liveEdge).toBe(false);
+    expect(getPlayback(doc).liveEdge).toBe(true);
+
+    const playNow = enqueue(doc, { videoId: "01234567890" });
+    playQueueItemNow(doc, playNow.id);
+    expect(getPlayback(doc).liveEdge).toBe(true);
+
+    writePlayback(doc, {
+      state: "playing",
+      positionSeconds: 15,
+      liveEdge: false,
+    });
+    enqueue(doc, { videoId: "zyxwvutsrqp" });
+    advanceQueue(doc, "01234567890");
+    expect(getPlayback(doc).liveEdge).toBe(true);
   });
 
   it("keeps small playing drift seamless and seeks real jumps", () => {

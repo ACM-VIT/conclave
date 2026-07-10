@@ -82,7 +82,7 @@ export async function GET(request: Request): Promise<Response> {
 
   const rateLimit = await takeYouTubeRateLimit(request, {
     scope: "video-metadata",
-    binding: "YOUTUBE_TRENDING_RATE_LIMITER",
+    binding: "YOUTUBE_METADATA_RATE_LIMITER",
     limit: RATE_LIMIT_REQUESTS,
     windowMs: RATE_LIMIT_WINDOW_MS,
   });

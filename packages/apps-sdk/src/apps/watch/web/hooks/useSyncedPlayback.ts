@@ -29,11 +29,6 @@ const END_GUARD_SECONDS = 0.75;
 // blocked autoplay and a user gesture is required.
 const AUTOPLAY_PROBE_MS = 1200;
 
-// A fresh setVideo record starts at zero before metadata has told the room
-// whether this is a broadcast. Zero is only inferred as "latest" for that one
-// untouched record; any later seek to zero remains a real seek.
-const INITIAL_LIVE_POSITION_SECONDS = 0.5;
-
 export type GestureNeed = "none" | "sound" | "sync";
 
 /**
@@ -326,7 +321,6 @@ export function useSyncedPlayback({
   isLiveRef.current = isLive;
   const [isAtLiveEdge, setIsAtLiveEdge] = useState(false);
   const initializedLiveForRef = useRef<string | null>(null);
-  const inferredLiveEdgeRecordKeyRef = useRef<string | null>(null);
   const [captionsAvailable, setCaptionsAvailable] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(false);
   const [captionTracks, setCaptionTracks] = useState<WatchCaptionTrack[]>([]);
@@ -629,9 +623,7 @@ export function useSyncedPlayback({
       }
 
       const followsLiveEdge =
-        isLiveRef.current &&
-        (target.liveEdge ||
-          inferredLiveEdgeRecordKeyRef.current === anchor.key);
+        isLiveRef.current && target.liveEdge;
       const edge = followsLiveEdge
         ? readElementLiveEdge(element, elementDuration)
         : null;
@@ -731,18 +723,13 @@ export function useSyncedPlayback({
 
     const target = recordRef.current;
     initializedLiveForRef.current = currentVideo;
-    // An untouched setVideo record is the one safe legacy signal that zero
-    // means "start this broadcast" rather than an intentional rewind.
-    const startsAtLiveEdge =
-      target.liveEdge ||
-      target.positionSeconds <= INITIAL_LIVE_POSITION_SECONDS;
-    if (!startsAtLiveEdge) {
+    // Fresh video records carry explicit live-edge intent. Every user playback
+    // action clears it, including an intentional seek to the first half-second.
+    if (!target.liveEdge) {
       correctDrift(target);
       return;
     }
 
-    const targetKey = playbackKey(target);
-    inferredLiveEdgeRecordKeyRef.current = targetKey;
     applyPlaybackRate(target.rate);
     setCurrentTime(snapshot.liveEdge);
     try {
@@ -751,15 +738,7 @@ export function useSyncedPlayback({
       /* player will retry through drift correction */
     }
 
-    if (!readOnlyRef.current && !target.liveEdge) {
-      writePlayback(doc, {
-        state: target.state,
-        positionSeconds: snapshot.liveEdge,
-        rate: target.rate,
-        liveEdge: true,
-      });
-    }
-  }, [applyPlaybackRate, correctDrift, doc, syncMediaSnapshot]);
+  }, [applyPlaybackRate, correctDrift, syncMediaSnapshot]);
 
   // A new video started: allow it to advance the queue when it ends, clear any
   // stale error from the previous one, and let the fresh element correct
@@ -771,7 +750,6 @@ export function useSyncedPlayback({
     anchorRef.current = null;
     lastCorrectionRef.current = null;
     initializedLiveForRef.current = null;
-    inferredLiveEdgeRecordKeyRef.current = null;
     detectedLiveRef.current = null;
     isLiveRef.current = false;
     setDetectedLive(null);
@@ -897,7 +875,6 @@ export function useSyncedPlayback({
 
   const play = useCallback(() => {
     if (readOnlyRef.current) return;
-    inferredLiveEdgeRecordKeyRef.current = null;
     writePlayback(doc, {
       state: "playing",
       positionSeconds: readElementTime(),
@@ -908,7 +885,6 @@ export function useSyncedPlayback({
 
   const pause = useCallback(() => {
     if (readOnlyRef.current) return;
-    inferredLiveEdgeRecordKeyRef.current = null;
     writePlayback(doc, {
       state: "paused",
       positionSeconds: readElementTime(),
@@ -921,7 +897,6 @@ export function useSyncedPlayback({
     (seconds: number) => {
       if (readOnlyRef.current) return;
       const target = Math.max(0, seconds);
-      inferredLiveEdgeRecordKeyRef.current = null;
       applyPlaybackRate(recordRef.current.rate);
       const element = elementRef.current;
       if (element) {
@@ -949,7 +924,6 @@ export function useSyncedPlayback({
     const element = elementRef.current;
     if (!snapshot?.live || snapshot.liveEdge === null || !element) return;
 
-    inferredLiveEdgeRecordKeyRef.current = null;
     applyPlaybackRate(recordRef.current.rate);
     setCurrentTime(snapshot.liveEdge);
     try {

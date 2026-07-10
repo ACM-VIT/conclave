@@ -215,7 +215,12 @@ export const writePlayback = (
 export const setVideo = (
   doc: Y.Doc,
   videoId: string,
-  options?: { play?: boolean; positionSeconds?: number; title?: string | null },
+  options?: {
+    play?: boolean;
+    positionSeconds?: number;
+    title?: string | null;
+    liveEdge?: boolean;
+  },
 ): void => {
   const root = getRoot(doc);
   const playback = getPlaybackMap(doc);
@@ -225,7 +230,10 @@ export const setVideo = (
     playback.set(PB_STATE, options?.play === false ? "paused" : "playing");
     playback.set(PB_POSITION, normalizePosition(options?.positionSeconds ?? 0));
     playback.set(PB_RATE, DEFAULT_RATE);
-    playback.set(PB_LIVE_EDGE, false);
+    // Preserve explicit room-start intent until a real play/pause/seek write.
+    // It is dormant for ordinary videos and becomes the default latest mode
+    // only when metadata confirms that the source is actively live.
+    playback.set(PB_LIVE_EDGE, options?.liveEdge !== false);
     playback.set(PB_UPDATED_AT, Date.now());
   });
 };
@@ -295,7 +303,7 @@ export const playQueueItemNow = (doc: Y.Doc, itemId: string): void => {
     playback.set(PB_STATE, "playing");
     playback.set(PB_POSITION, 0);
     playback.set(PB_RATE, DEFAULT_RATE);
-    playback.set(PB_LIVE_EDGE, false);
+    playback.set(PB_LIVE_EDGE, true);
     playback.set(PB_UPDATED_AT, Date.now());
   });
 };
@@ -336,7 +344,7 @@ export const advanceQueue = (
     playback.set(PB_STATE, "playing");
     playback.set(PB_POSITION, 0);
     playback.set(PB_RATE, DEFAULT_RATE);
-    playback.set(PB_LIVE_EDGE, false);
+    playback.set(PB_LIVE_EDGE, true);
     playback.set(PB_UPDATED_AT, Date.now());
     advancedTo = next.videoId;
   });
