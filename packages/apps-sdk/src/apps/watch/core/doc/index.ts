@@ -28,6 +28,7 @@ const PB_STATE = "state";
 const PB_POSITION = "positionSeconds";
 const PB_UPDATED_AT = "updatedAt";
 const PB_RATE = "rate";
+const PB_LIVE_EDGE = "liveEdge";
 
 const DEFAULT_RATE = 1;
 
@@ -165,6 +166,7 @@ export const getPlayback = (doc: Y.Doc): PlaybackRecord => {
     positionSeconds: normalizePosition(playback.get(PB_POSITION)),
     updatedAt: normalizeUpdatedAt(playback.get(PB_UPDATED_AT)),
     rate: normalizeRate(playback.get(PB_RATE)),
+    liveEdge: playback.get(PB_LIVE_EDGE) === true,
   };
 };
 
@@ -192,6 +194,7 @@ export const writePlayback = (
     state: PlaybackState;
     positionSeconds: number;
     rate?: number;
+    liveEdge?: boolean;
   },
 ): void => {
   const playback = getPlaybackMap(doc);
@@ -199,6 +202,7 @@ export const writePlayback = (
     playback.set(PB_STATE, normalizeState(next.state));
     playback.set(PB_POSITION, normalizePosition(next.positionSeconds));
     playback.set(PB_RATE, normalizeRate(next.rate ?? DEFAULT_RATE));
+    playback.set(PB_LIVE_EDGE, next.liveEdge === true);
     playback.set(PB_UPDATED_AT, Date.now());
   });
 };
@@ -221,6 +225,7 @@ export const setVideo = (
     playback.set(PB_STATE, options?.play === false ? "paused" : "playing");
     playback.set(PB_POSITION, normalizePosition(options?.positionSeconds ?? 0));
     playback.set(PB_RATE, DEFAULT_RATE);
+    playback.set(PB_LIVE_EDGE, false);
     playback.set(PB_UPDATED_AT, Date.now());
   });
 };
@@ -290,6 +295,7 @@ export const playQueueItemNow = (doc: Y.Doc, itemId: string): void => {
     playback.set(PB_STATE, "playing");
     playback.set(PB_POSITION, 0);
     playback.set(PB_RATE, DEFAULT_RATE);
+    playback.set(PB_LIVE_EDGE, false);
     playback.set(PB_UPDATED_AT, Date.now());
   });
 };
@@ -330,6 +336,7 @@ export const advanceQueue = (
     playback.set(PB_STATE, "playing");
     playback.set(PB_POSITION, 0);
     playback.set(PB_RATE, DEFAULT_RATE);
+    playback.set(PB_LIVE_EDGE, false);
     playback.set(PB_UPDATED_AT, Date.now());
     advancedTo = next.videoId;
   });

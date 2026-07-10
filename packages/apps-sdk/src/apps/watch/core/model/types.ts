@@ -12,6 +12,8 @@ export type PlaybackRecord = {
   updatedAt: number;
   /** Playback rate; default 1. */
   rate: number;
+  /** Active live broadcasts follow their moving edge instead of a fixed time. */
+  liveEdge: boolean;
 };
 
 /** An up-next queue entry. */

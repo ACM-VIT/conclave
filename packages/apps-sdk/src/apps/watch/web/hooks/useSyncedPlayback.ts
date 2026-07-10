@@ -8,10 +8,12 @@ import {
   writePlayback,
 } from "../../core/doc/index";
 import type { PlaybackRecord, PlaybackState } from "../../core/model/types";
-
-// If the local player drifts more than this from the extrapolated doc position,
-// we seek. 1.5s absorbs buffering jitter while keeping everyone visibly in sync.
-const DRIFT_THRESHOLD_SECONDS = 1.5;
+import {
+  LIVE_EDGE_TOLERANCE_SECONDS,
+  liveEdgeLag,
+  liveEdgeTime,
+  planPlaybackCorrection,
+} from "../playbackSync";
 
 // While the doc record has not changed, never hard-seek more often than this.
 // A genuinely stuck player still converges (the anchored expected position is
@@ -26,6 +28,11 @@ const END_GUARD_SECONDS = 0.75;
 // How long after asking for playback we wait before deciding the browser
 // blocked autoplay and a user gesture is required.
 const AUTOPLAY_PROBE_MS = 1200;
+
+// A fresh setVideo record starts at zero before metadata has told the room
+// whether this is a broadcast. Zero is only inferred as "latest" for that one
+// untouched record; any later seek to zero remains a real seek.
+const INITIAL_LIVE_POSITION_SECONDS = 0.5;
 
 export type GestureNeed = "none" | "sound" | "sync";
 
@@ -44,6 +51,8 @@ export type WatchMediaElement = Pick<
   | "play"
   | "pause"
   | "seeking"
+  | "seekable"
+  | "playbackRate"
   | "textTracks"
 >;
 
@@ -80,6 +89,10 @@ export type SyncedPlaybackHandle = {
   currentTime: number;
   duration: number;
   playbackState: PlaybackState;
+  /** True only while the current YouTube broadcast is actively live. */
+  isLive: boolean;
+  /** True when the local player is close enough to the moving live edge. */
+  isAtLiveEdge: boolean;
   /** Whether this video has caption tracks at all. */
   captionsAvailable: boolean;
   /** Whether a caption track is currently showing (local only). */
@@ -95,6 +108,7 @@ export type SyncedPlaybackHandle = {
   play: () => void;
   pause: () => void;
   seek: (seconds: number) => void;
+  goLive: () => void;
   toggleMute: () => void;
   setVolume: (value: number) => void;
   toggleCaptions: () => void;
@@ -121,11 +135,82 @@ type CaptionsApi = {
   loadModule?: (module: string) => void;
 };
 
+type YoutubeVideoData = {
+  isLive?: unknown;
+  isLiveContent?: unknown;
+  liveBroadcastContent?: unknown;
+};
+
+type YoutubeMediaApi = CaptionsApi & {
+  getVideoData?: () => YoutubeVideoData;
+  playerInfo?: { videoData?: YoutubeVideoData };
+};
+
 const captionsApiOf = (
   element: WatchMediaElement | null,
 ): CaptionsApi | null => {
-  const api = (element as unknown as { api?: CaptionsApi } | null)?.api;
+  const api = (element as unknown as { api?: YoutubeMediaApi } | null)?.api;
   return api && typeof api === "object" ? api : null;
+};
+
+/**
+ * Feature-detected fallback for deployments without YouTube Data API metadata.
+ * The public iframe wrapper exposes video data on current players, but the
+ * server-provided hint remains authoritative because this surface is not part
+ * of the HTMLMediaElement contract.
+ */
+const readApiLiveStatus = (
+  element: WatchMediaElement | null,
+): boolean | null => {
+  const api = (element as unknown as { api?: YoutubeMediaApi } | null)?.api;
+  if (!api || typeof api !== "object") return null;
+  let direct: YoutubeVideoData | null = null;
+  try {
+    direct = api.getVideoData?.() ?? null;
+  } catch {
+    direct = null;
+  }
+  const candidates = [direct, api.playerInfo?.videoData].filter(
+    (value): value is YoutubeVideoData => Boolean(value),
+  );
+  let sawExplicitFalse = false;
+  for (const data of candidates) {
+    if (
+      data.isLive === true ||
+      data.isLiveContent === true ||
+      data.liveBroadcastContent === "live"
+    ) {
+      return true;
+    }
+    if (
+      data.isLive === false ||
+      data.isLiveContent === false ||
+      data.liveBroadcastContent === "none"
+    ) {
+      sawExplicitFalse = true;
+    }
+  }
+  return sawExplicitFalse ? false : null;
+};
+
+const playbackKey = (record: PlaybackRecord): string =>
+  `${record.state}|${record.positionSeconds}|${record.rate}|${record.updatedAt}|${record.liveEdge}`;
+
+const readElementLiveEdge = (
+  element: WatchMediaElement,
+  duration: number,
+): number | null => {
+  try {
+    const ranges = element.seekable;
+    if (ranges && ranges.length > 0) {
+      const end = ranges.end(ranges.length - 1);
+      const edge = liveEdgeTime(end);
+      if (edge !== null) return edge;
+    }
+  } catch {
+    /* YouTube's media shim may not expose seekable ranges. */
+  }
+  return liveEdgeTime(duration);
 };
 
 type ApiCaptionState = {
@@ -186,6 +271,8 @@ type UseSyncedPlaybackArgs = {
   videoId: string | null;
   /** When true, actions author nothing; the player still follows the doc. */
   readOnly: boolean;
+  /** Authoritative server metadata when available; null uses player fallback. */
+  liveHint?: boolean | null;
 };
 
 /**
@@ -200,12 +287,15 @@ export function useSyncedPlayback({
   doc,
   videoId,
   readOnly,
+  liveHint = null,
 }: UseSyncedPlaybackArgs): SyncedPlaybackHandle {
   const elementRef = useRef<WatchMediaElement | null>(null);
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
   const videoIdRef = useRef<string | null>(videoId);
   videoIdRef.current = videoId;
+  const liveHintRef = useRef<boolean | null>(liveHint);
+  liveHintRef.current = liveHint;
   // The last video this client advanced away from, so a duplicate ENDED event
   // cannot make the same client advance the queue twice.
   const advancedFromRef = useRef<string | null>(null);
@@ -213,6 +303,9 @@ export function useSyncedPlayback({
   const [record, setRecord] = useState<PlaybackRecord>(() => getPlayback(doc));
   const recordRef = useRef(record);
   recordRef.current = record;
+  const [effectiveRate, setEffectiveRate] = useState(record.rate);
+  const effectiveRateRef = useRef(effectiveRate);
+  effectiveRateRef.current = effectiveRate;
 
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -225,6 +318,15 @@ export function useSyncedPlayback({
   const [volume, setVolumeState] = useState(100);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [detectedLive, setDetectedLive] = useState<boolean | null>(null);
+  const detectedLiveRef = useRef<boolean | null>(detectedLive);
+  detectedLiveRef.current = detectedLive;
+  const isLive = liveHint ?? detectedLive ?? false;
+  const isLiveRef = useRef(isLive);
+  isLiveRef.current = isLive;
+  const [isAtLiveEdge, setIsAtLiveEdge] = useState(false);
+  const initializedLiveForRef = useRef<string | null>(null);
+  const inferredLiveEdgeRecordKeyRef = useRef<string | null>(null);
   const [captionsAvailable, setCaptionsAvailable] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(false);
   const [captionTracks, setCaptionTracks] = useState<WatchCaptionTrack[]>([]);
@@ -393,6 +495,70 @@ export function useSyncedPlayback({
   }, []);
   applyCaptionFontSizeRef.current = applyCaptionFontSize;
 
+  const applyPlaybackRate = useCallback((nextRate: number) => {
+    if (!Number.isFinite(nextRate) || nextRate <= 0) return;
+    if (Math.abs(effectiveRateRef.current - nextRate) < 0.01) return;
+    effectiveRateRef.current = nextRate;
+    setEffectiveRate(nextRate);
+    const element = elementRef.current;
+    if (!element) return;
+    try {
+      // Apply immediately as well as declaratively through ReactPlayer.
+      element.playbackRate = nextRate;
+    } catch {
+      /* player may still be loading */
+    }
+  }, []);
+
+  type MediaSnapshot = {
+    current: number;
+    duration: number;
+    live: boolean;
+    liveEdge: number | null;
+  };
+
+  const syncMediaSnapshot = useCallback((): MediaSnapshot | null => {
+    const element = elementRef.current;
+    if (!element) return null;
+    let nextCurrent = 0;
+    let nextDuration = 0;
+    try {
+      nextCurrent = Number.isFinite(element.currentTime)
+        ? element.currentTime
+        : 0;
+      nextDuration = Number.isFinite(element.duration) ? element.duration : 0;
+    } catch {
+      return null;
+    }
+
+    const apiLive = readApiLiveStatus(element);
+    if (liveHintRef.current === null && apiLive !== null) {
+      detectedLiveRef.current = apiLive;
+      setDetectedLive((previous) =>
+        previous === apiLive ? previous : apiLive,
+      );
+    }
+    const liveNow =
+      liveHintRef.current ?? apiLive ?? detectedLiveRef.current ?? false;
+    isLiveRef.current = liveNow;
+    const edge = liveNow
+      ? readElementLiveEdge(element, nextDuration)
+      : null;
+    setCurrentTime(nextCurrent);
+    setDuration(nextDuration);
+    setIsAtLiveEdge(
+      liveNow && edge !== null
+        ? edge - nextCurrent <= LIVE_EDGE_TOLERANCE_SECONDS
+        : false,
+    );
+    return {
+      current: nextCurrent,
+      duration: nextDuration,
+      live: liveNow,
+      liveEdge: edge,
+    };
+  }, []);
+
   /* ---- Drift correction, hardened against restart loops. ----
      The doc's `updatedAt` is the WRITER'S wall clock. Extrapolating from it on
      every check means a writer whose clock runs ahead freezes everyone else's
@@ -414,7 +580,7 @@ export function useSyncedPlayback({
   const lastCorrectionRef = useRef<{ key: string; at: number } | null>(null);
 
   const anchorFor = useCallback((target: PlaybackRecord): PlaybackAnchor => {
-    const key = `${target.state}|${target.positionSeconds}|${target.rate}|${target.updatedAt}`;
+    const key = playbackKey(target);
     const existing = anchorRef.current;
     if (existing && existing.key === key) return existing;
     const now = Date.now();
@@ -433,18 +599,22 @@ export function useSyncedPlayback({
     return anchor;
   }, []);
 
-  // Seek the local player toward the doc when it has drifted too far.
+  // Reconcile toward the room without turning small drift into visible
+  // buffering. Explicit timeline jumps and large gaps still seek immediately;
+  // ordinary jitter gets a short, local-only playback-rate nudge.
   const correctDrift = useCallback(
     (target: PlaybackRecord) => {
       const element = elementRef.current;
       if (!element) return;
-      const anchor = anchorFor(target);
+      const previousAnchor = anchorRef.current;
       const now = Date.now();
-      const expected =
-        anchor.state === "playing"
-          ? anchor.position + ((now - anchor.at) / 1000) * anchor.rate
-          : anchor.position;
-      if (!Number.isFinite(expected)) return;
+      const previousExpected = previousAnchor
+        ? previousAnchor.state === "playing"
+          ? previousAnchor.position +
+            ((now - previousAnchor.at) / 1000) * previousAnchor.rate
+          : previousAnchor.position
+        : null;
+      const anchor = anchorFor(target);
 
       let current = 0;
       let elementDuration = Number.NaN;
@@ -458,30 +628,67 @@ export function useSyncedPlayback({
         return;
       }
 
-      // Live streams have no shared timeline to converge on; play/pause still
-      // follows the doc, but position is the stream's business.
-      if (elementDuration === Number.POSITIVE_INFINITY) return;
+      const followsLiveEdge =
+        isLiveRef.current &&
+        (target.liveEdge ||
+          inferredLiveEdgeRecordKeyRef.current === anchor.key);
+      const edge = followsLiveEdge
+        ? readElementLiveEdge(element, elementDuration)
+        : null;
+      const expected =
+        edge ??
+        (anchor.state === "playing"
+          ? anchor.position + ((now - anchor.at) / 1000) * anchor.rate
+          : anchor.position);
+      if (!Number.isFinite(expected)) return;
 
       let seekTarget = Math.max(0, expected);
-      if (Number.isFinite(elementDuration) && elementDuration > END_GUARD_SECONDS * 2) {
+      if (
+        !followsLiveEdge &&
+        Number.isFinite(elementDuration) &&
+        elementDuration > END_GUARD_SECONDS * 2
+      ) {
         seekTarget = Math.min(seekTarget, elementDuration - END_GUARD_SECONDS);
       }
-      if (Math.abs(current - seekTarget) <= DRIFT_THRESHOLD_SECONDS) return;
+      const recordChanged =
+        previousAnchor !== null && previousAnchor.key !== anchor.key;
+      const forceSeek =
+        recordChanged &&
+        (target.liveEdge ||
+          (previousExpected !== null &&
+            Math.abs(seekTarget - previousExpected) > 1.5));
+      const correction = planPlaybackCorrection({
+        current,
+        target: seekTarget,
+        state: anchor.state,
+        baseRate: anchor.rate,
+        forceSeek,
+      });
 
-      // Fresh intent (a new record) seeks immediately; repeat corrections for
-      // the SAME record are rate-limited so no failure mode can seek-loop.
+      if (correction.kind !== "seek") {
+        applyPlaybackRate(correction.rate);
+        return;
+      }
+      applyPlaybackRate(correction.rate);
+
+      // Repeat hard corrections for the SAME record are rate-limited so a
+      // pathological source cannot get stuck in a seek/buffer loop.
       const last = lastCorrectionRef.current;
-      if (last && last.key === anchor.key && now - last.at < CORRECTION_COOLDOWN_MS) {
+      if (
+        last &&
+        last.key === anchor.key &&
+        now - last.at < CORRECTION_COOLDOWN_MS
+      ) {
         return;
       }
       lastCorrectionRef.current = { key: anchor.key, at: now };
       try {
-        element.currentTime = seekTarget;
+        element.currentTime = correction.target;
       } catch {
         /* element not ready to seek yet */
       }
     },
-    [anchorFor],
+    [anchorFor, applyPlaybackRate],
   );
 
   // Follow the doc: mirror the record into state (which drives the `playing`
@@ -489,6 +696,8 @@ export function useSyncedPlayback({
   useEffect(() => {
     const sync = () => {
       const next = getPlayback(doc);
+      if (playbackKey(next) === playbackKey(recordRef.current)) return;
+      recordRef.current = next;
       setRecord(next);
       correctDrift(next);
     };
@@ -505,30 +714,79 @@ export function useSyncedPlayback({
   // runs even if the ready event was missed; every step is element-guarded.
   useEffect(() => {
     const interval = setInterval(() => {
-      const element = elementRef.current;
-      if (!element) return;
-      try {
-        setCurrentTime(element.currentTime ?? 0);
-      } catch {
-        /* ignore */
-      }
+      if (!syncMediaSnapshot()) return;
       correctDrift(recordRef.current);
       syncCaptionState();
     }, 1000);
     return () => clearInterval(interval);
-  }, [correctDrift, syncCaptionState]);
+  }, [correctDrift, syncCaptionState, syncMediaSnapshot]);
+
+  const initializeLivePlayback = useCallback(() => {
+    const currentVideo = videoIdRef.current;
+    if (!currentVideo || !isLiveRef.current) return;
+    const snapshot = syncMediaSnapshot();
+    const element = elementRef.current;
+    if (!snapshot?.live || snapshot.liveEdge === null || !element) return;
+    if (initializedLiveForRef.current === currentVideo) return;
+
+    const target = recordRef.current;
+    initializedLiveForRef.current = currentVideo;
+    // An untouched setVideo record is the one safe legacy signal that zero
+    // means "start this broadcast" rather than an intentional rewind.
+    const startsAtLiveEdge =
+      target.liveEdge ||
+      target.positionSeconds <= INITIAL_LIVE_POSITION_SECONDS;
+    if (!startsAtLiveEdge) {
+      correctDrift(target);
+      return;
+    }
+
+    const targetKey = playbackKey(target);
+    inferredLiveEdgeRecordKeyRef.current = targetKey;
+    applyPlaybackRate(target.rate);
+    setCurrentTime(snapshot.liveEdge);
+    try {
+      element.currentTime = snapshot.liveEdge;
+    } catch {
+      /* player will retry through drift correction */
+    }
+
+    if (!readOnlyRef.current && !target.liveEdge) {
+      writePlayback(doc, {
+        state: target.state,
+        positionSeconds: snapshot.liveEdge,
+        rate: target.rate,
+        liveEdge: true,
+      });
+    }
+  }, [applyPlaybackRate, correctDrift, doc, syncMediaSnapshot]);
 
   // A new video started: allow it to advance the queue when it ends, clear any
   // stale error from the previous one, and let the fresh element correct
   // immediately instead of inheriting the previous video's seek cooldown.
   useEffect(() => {
-    if (!videoId) return;
-    if (advancedFromRef.current !== videoId) {
+    if (videoId && advancedFromRef.current !== videoId) {
       advancedFromRef.current = null;
     }
+    anchorRef.current = null;
     lastCorrectionRef.current = null;
+    initializedLiveForRef.current = null;
+    inferredLiveEdgeRecordKeyRef.current = null;
+    detectedLiveRef.current = null;
+    isLiveRef.current = false;
+    setDetectedLive(null);
+    setIsAtLiveEdge(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setReady(false);
+    setGestureNeed("none");
     setError(null);
   }, [videoId]);
+
+  useEffect(() => {
+    if (!ready || !isLive) return;
+    initializeLivePlayback();
+  }, [initializeLivePlayback, isLive, ready, videoId]);
 
   // Probe for blocked autoplay: if the room wants playback but the element is
   // still paused shortly after, a gesture is needed to start at all ("sync").
@@ -553,13 +811,20 @@ export function useSyncedPlayback({
   const onReady = useCallback(() => {
     setReady(true);
     setError(null);
+    syncMediaSnapshot();
     correctDrift(recordRef.current);
-  }, [correctDrift]);
+  }, [correctDrift, syncMediaSnapshot]);
 
   const onTimeUpdate = useCallback(
     (event: MediaEvent) => {
       const element = event.currentTarget;
       setCurrentTime(element.currentTime ?? 0);
+      if (isLiveRef.current) {
+        const lag = liveEdgeLag(element.currentTime, element.duration);
+        setIsAtLiveEdge(
+          lag !== null && lag <= LIVE_EDGE_TOLERANCE_SECONDS,
+        );
+      }
       if (recordRef.current.state === "playing") {
         correctDrift(recordRef.current);
       }
@@ -567,18 +832,19 @@ export function useSyncedPlayback({
     [correctDrift],
   );
 
-  const onDurationChange = useCallback((event: MediaEvent) => {
-    const value = event.currentTarget.duration;
-    setDuration(typeof value === "number" && Number.isFinite(value) ? value : 0);
-  }, []);
+  const onDurationChange = useCallback(() => {
+    syncMediaSnapshot();
+  }, [syncMediaSnapshot]);
 
   const onPlaying = useCallback(() => {
+    syncMediaSnapshot();
+    initializeLivePlayback();
     // Playback genuinely running: downgrade or clear the gesture prompt.
     setGestureNeed((prev) => {
       if (prev === "none") return prev;
       return mutedRef.current ? "sound" : "none";
     });
-  }, []);
+  }, [initializeLivePlayback, syncMediaSnapshot]);
 
   const onEnded = useCallback(() => {
     const ended = videoIdRef.current;
@@ -599,7 +865,12 @@ export function useSyncedPlayback({
     } catch {
       position = 0;
     }
-    writePlayback(doc, { state: "paused", positionSeconds: position, rate: 1 });
+    writePlayback(doc, {
+      state: "paused",
+      positionSeconds: position,
+      rate: 1,
+      liveEdge: false,
+    });
   }, [doc]);
 
   const onError = useCallback((event: MediaEvent) => {
@@ -626,19 +897,23 @@ export function useSyncedPlayback({
 
   const play = useCallback(() => {
     if (readOnlyRef.current) return;
+    inferredLiveEdgeRecordKeyRef.current = null;
     writePlayback(doc, {
       state: "playing",
       positionSeconds: readElementTime(),
       rate: recordRef.current.rate,
+      liveEdge: false,
     });
   }, [doc, readElementTime]);
 
   const pause = useCallback(() => {
     if (readOnlyRef.current) return;
+    inferredLiveEdgeRecordKeyRef.current = null;
     writePlayback(doc, {
       state: "paused",
       positionSeconds: readElementTime(),
       rate: recordRef.current.rate,
+      liveEdge: false,
     });
   }, [doc, readElementTime]);
 
@@ -646,6 +921,8 @@ export function useSyncedPlayback({
     (seconds: number) => {
       if (readOnlyRef.current) return;
       const target = Math.max(0, seconds);
+      inferredLiveEdgeRecordKeyRef.current = null;
+      applyPlaybackRate(recordRef.current.rate);
       const element = elementRef.current;
       if (element) {
         try {
@@ -655,14 +932,38 @@ export function useSyncedPlayback({
         }
       }
       setCurrentTime(target);
+      setIsAtLiveEdge(false);
       writePlayback(doc, {
         state: recordRef.current.state,
         positionSeconds: target,
         rate: recordRef.current.rate,
+        liveEdge: false,
       });
     },
-    [doc],
+    [applyPlaybackRate, doc],
   );
+
+  const goLive = useCallback(() => {
+    if (readOnlyRef.current || !isLiveRef.current) return;
+    const snapshot = syncMediaSnapshot();
+    const element = elementRef.current;
+    if (!snapshot?.live || snapshot.liveEdge === null || !element) return;
+
+    inferredLiveEdgeRecordKeyRef.current = null;
+    applyPlaybackRate(recordRef.current.rate);
+    setCurrentTime(snapshot.liveEdge);
+    try {
+      element.currentTime = snapshot.liveEdge;
+    } catch {
+      /* the new shared record will retry */
+    }
+    writePlayback(doc, {
+      state: "playing",
+      positionSeconds: snapshot.liveEdge,
+      rate: recordRef.current.rate,
+      liveEdge: true,
+    });
+  }, [applyPlaybackRate, doc, syncMediaSnapshot]);
 
   /* ---- Local mute / volume (never synced). ---- */
 
@@ -804,7 +1105,7 @@ export function useSyncedPlayback({
     playing: Boolean(videoId) && record.state === "playing",
     mutedProp: muted,
     volumeProp: volume / 100,
-    rate: record.rate,
+    rate: effectiveRate,
     onReady,
     onTimeUpdate,
     onDurationChange,
@@ -819,6 +1120,8 @@ export function useSyncedPlayback({
     currentTime,
     duration,
     playbackState: record.state,
+    isLive,
+    isAtLiveEdge,
     captionsAvailable,
     captionsOn,
     captionTracks,
@@ -827,6 +1130,7 @@ export function useSyncedPlayback({
     play,
     pause,
     seek,
+    goLive,
     toggleMute,
     setVolume,
     toggleCaptions,

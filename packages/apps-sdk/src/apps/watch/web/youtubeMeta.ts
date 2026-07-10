@@ -4,6 +4,7 @@
 // the UI falls back to the video id.
 
 const TITLE_FETCH_TIMEOUT_MS = 2_500;
+const METADATA_FETCH_TIMEOUT_MS = 3_000;
 
 /** Medium-quality 16:9 thumbnail for a video id. */
 export const thumbnailUrl = (videoId: string): string =>
@@ -17,6 +18,12 @@ export type WatchSearchResult = {
   durationSeconds: number | null;
   views: number | null;
   publishedAt: string | null;
+};
+
+export type WatchVideoMetadata = {
+  videoId: string;
+  title: string;
+  isLive: boolean;
 };
 
 /** 3661 -> "1:01:01", 754 -> "12:34". Null in, null out. */
@@ -136,6 +143,41 @@ export const fetchTrending = async (
     };
   } catch {
     return empty;
+  }
+};
+
+/**
+ * Resolve live status through the host's YouTube Data API proxy. Null means
+ * the proxy is unavailable; the player hook retains a feature-detected iframe
+ * fallback so playback still works without a configured API key.
+ */
+export const fetchVideoMetadata = async (
+  videoId: string,
+): Promise<WatchVideoMetadata | null> => {
+  if (typeof fetch !== "function" || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+    return null;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), METADATA_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(
+      `/api/youtube/video?id=${encodeURIComponent(videoId)}`,
+      { signal: controller.signal },
+    );
+    if (!response.ok) return null;
+    const payload = (await response.json()) as Partial<WatchVideoMetadata>;
+    if (
+      payload.videoId !== videoId ||
+      typeof payload.title !== "string" ||
+      typeof payload.isLive !== "boolean"
+    ) {
+      return null;
+    }
+    return payload as WatchVideoMetadata;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
 };
 

@@ -8,6 +8,8 @@ type WatchControlsProps = {
   playbackState: PlaybackState;
   currentTime: number;
   duration: number;
+  isLive: boolean;
+  isAtLiveEdge: boolean;
   muted: boolean;
   volume: number;
   readOnly: boolean;
@@ -25,6 +27,7 @@ type WatchControlsProps = {
   onPlay: () => void;
   onPause: () => void;
   onSeek: (seconds: number) => void;
+  onGoLive: () => void;
   onToggleMute: () => void;
   onVolumeChange: (value: number) => void;
 };
@@ -38,6 +41,8 @@ export function WatchControls({
   playbackState,
   currentTime,
   duration,
+  isLive,
+  isAtLiveEdge,
   muted,
   volume,
   readOnly,
@@ -53,6 +58,7 @@ export function WatchControls({
   onPlay,
   onPause,
   onSeek,
+  onGoLive,
   onToggleMute,
   onVolumeChange,
 }: WatchControlsProps) {
@@ -63,6 +69,7 @@ export function WatchControls({
   const max = duration > 0 ? duration : 0;
   const displayTime = scrubValue ?? currentTime;
   const clampedDisplay = max > 0 ? Math.min(displayTime, max) : displayTime;
+  const liveDelay = Math.max(0, max - clampedDisplay);
 
   return (
     <div className="flex items-center gap-2.5 py-2 pl-2.5 pr-2">
@@ -86,8 +93,12 @@ export function WatchControls({
         )}
       </button>
 
-      <span className="w-9 shrink-0 text-right text-[11px] tabular-nums text-[#e4e4e7]">
-        {formatTime(clampedDisplay)}
+      <span className="w-10 shrink-0 text-right text-[11px] tabular-nums text-[#e4e4e7]">
+        {isLive
+          ? isAtLiveEdge && scrubValue === null
+            ? "Live"
+            : `-${formatTime(liveDelay)}`
+          : formatTime(clampedDisplay)}
       </span>
 
       <Slider
@@ -106,9 +117,29 @@ export function WatchControls({
         }}
       />
 
-      <span className="w-9 shrink-0 text-[11px] tabular-nums text-[#71717a]">
-        {formatTime(max)}
-      </span>
+      {isLive ? (
+        <button
+          type="button"
+          onClick={onGoLive}
+          disabled={readOnly || isAtLiveEdge}
+          aria-label={isAtLiveEdge ? "At live edge" : "Go to live edge"}
+          className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-semibold uppercase tracking-[0.08em] transition-colors ${
+            isAtLiveEdge
+              ? "cursor-default border-[#F95F4A]/35 bg-[#F95F4A]/10 text-[#ff8a78]"
+              : "cursor-pointer border-white/10 text-[#e4e4e7] hover:border-[#F95F4A]/35 hover:bg-[#F95F4A]/10 hover:text-[#ff8a78] disabled:cursor-not-allowed disabled:opacity-45"
+          }`}
+        >
+          <span
+            className="h-1.5 w-1.5 rounded-full"
+            style={{ backgroundColor: "#F95F4A" }}
+          />
+          {isAtLiveEdge ? "Live" : "Go live"}
+        </button>
+      ) : (
+        <span className="w-9 shrink-0 text-[11px] tabular-nums text-[#71717a]">
+          {formatTime(max)}
+        </span>
+      )}
 
       <div className="group/vol flex shrink-0 items-center">
         <button
