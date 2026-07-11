@@ -769,6 +769,7 @@ interface UseMeetSocketOptions {
     userId: string;
     displayName: string;
     text: string;
+    ttsVoiceToken?: string;
   }) => void;
   prewarm?: {
     Device: typeof import("mediasoup-client").Device | null;
@@ -5451,6 +5452,7 @@ export function useMeetSocket({
                   userId: normalized.userId,
                   displayName: normalized.displayName,
                   text: ttsText,
+                  ttsVoiceToken: normalized.ttsVoiceToken,
                 });
               }
               if (!chat.isChatOpenRef.current) {

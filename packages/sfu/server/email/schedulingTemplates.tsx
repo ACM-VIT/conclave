@@ -19,7 +19,7 @@ export type SchedulingEmailRow = {
   value: string;
 };
 
-export type SchedulingEmailWhen = {
+type SchedulingEmailWhen = {
   weekday: string;
   day: string;
   month: string;
@@ -292,7 +292,7 @@ function SummaryPanel({ rows }: { rows: SchedulingEmailRow[] }) {
   );
 }
 
-export function SchedulingEmailTemplate({
+function SchedulingEmailTemplate({
   preview,
   heading,
   intro,

@@ -1,6 +1,6 @@
 import type { PlaybackState } from "../core/model/types";
 
-export const LIVE_EDGE_HEADROOM_SECONDS = 1.25;
+const LIVE_EDGE_HEADROOM_SECONDS = 1.25;
 export const LIVE_EDGE_TOLERANCE_SECONDS = 4;
 
 const SETTLED_DRIFT_SECONDS = 0.45;

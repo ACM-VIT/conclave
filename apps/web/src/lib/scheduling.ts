@@ -24,7 +24,6 @@ export type {
   CalendarConnectionSummary,
   PublicSchedulingPage,
   SchedulingEventType,
-  SchedulingProfile,
   WeeklyAvailability,
 };
 
@@ -33,30 +32,6 @@ export type SchedulingDashboardResponse = {
   availability: WeeklyAvailability;
   eventTypes: SchedulingEventType[];
   calendar: CalendarConnectionSummary;
-};
-
-export type SchedulingBookingsResponse = {
-  bookings?: Array<{
-    id: string;
-    clientId: string;
-    roomCode: string;
-    title: string;
-    hostName: string;
-    attendeeName?: string | null;
-    attendeeEmail?: string | null;
-    attendeeNote?: string | null;
-    attendeeTimeZone?: string | null;
-    scheduledStartAt: number;
-    scheduledEndAt: number;
-    googleCalendarEventId?: string | null;
-    calendarSyncStatus?: string;
-    emailNotificationStatus?: string;
-    emailNotificationError?: string | null;
-    emailNotificationSentAt?: number | null;
-    emailReminderStatus?: string;
-    emailReminderError?: string | null;
-    emailReminderSentAt?: number | null;
-  }>;
 };
 
 export const resolveSchedulingBase = (): string => {

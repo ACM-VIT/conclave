@@ -3,6 +3,7 @@
 import {
   BrainIcon,
   FileTextIcon,
+  GithubIcon,
   GlobeIcon,
   ListTreeIcon,
   PencilLineIcon,
@@ -49,6 +50,11 @@ const TASK_META: Record<
     running: "Reading the transcript",
     done: "Read the meeting transcript",
   },
+  github_issue: {
+    icon: GithubIcon,
+    running: "Opening a GitHub issue",
+    done: "Finished the GitHub issue request",
+  },
   answer: {
     icon: PencilLineIcon,
     running: "Writing the answer",
@@ -89,7 +95,10 @@ function ConclaveMessage({ message, isNew }: ConclaveMessageProps) {
 
   const tasks = message.tasks ?? [];
   const visibleTasks = tasks.filter(
-    (task) => task.kind === "web_search" || task.kind === "transcript",
+    (task) =>
+      task.kind === "web_search" ||
+      task.kind === "transcript" ||
+      task.kind === "github_issue",
   );
   const reasoning = message.reasoning?.trim() ?? "";
   const answer = message.content.trim();

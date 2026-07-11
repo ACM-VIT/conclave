@@ -7,7 +7,7 @@ This guide defines how to contribute safely and efficiently to the Conclave mono
 This repository includes:
 
 - web client (`apps/web`)
-- mobile client (`apps/mobile`)
+- native iOS and Android client (`apps/conclave-skip`)
 - SFU service (`packages/sfu`)
 - in-meeting apps runtime SDK (`packages/apps-sdk`)
 - optional shared browser service (`packages/shared-browser`)
@@ -23,10 +23,12 @@ This repository includes:
 pnpm install
 ```
 
-Mobile has separate install flow:
+Native checks use Swift directly:
 
 ```bash
-pnpm -C apps/mobile install
+cd apps/conclave-skip
+swift build
+swift test -q
 ```
 
 ## Development Commands
@@ -43,10 +45,12 @@ SFU:
 pnpm -C packages/sfu run dev
 ```
 
-Mobile:
+Native:
 
 ```bash
-pnpm -C apps/mobile run start
+cd apps/conclave-skip
+swift build
+swift test -q
 ```
 
 Shared browser service (optional):
@@ -75,7 +79,7 @@ pnpm -C packages/apps-sdk run check:apps:fix
 ## Pull Request Guidelines
 
 - Keep PRs focused and scoped.
-- Explain what changed, why, and impacted surfaces (web/mobile/sfu/apps-sdk).
+- Explain what changed, why, and impacted surfaces (web/native/SFU/apps SDK).
 - Link related issues (`Fixes #<id>` when applicable).
 - Include screenshots/video for meaningful UI changes.
 - Update docs when behavior, workflows, or public APIs change.

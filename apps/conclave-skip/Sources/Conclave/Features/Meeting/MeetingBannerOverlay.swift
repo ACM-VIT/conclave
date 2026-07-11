@@ -1,6 +1,6 @@
-//  A fixed in-flow status slot under the header. Keeping a stable height avoids
-//  moving/recomposing the video stage when connection notices appear, while also
-//  avoiding the duplicate Compose-backed icons seen with Android stage overlays.
+//  Transient meeting notices rendered above the stage. This view deliberately
+//  owns no in-flow spacer: banners must not move/recompose video tiles, and an
+//  empty banner state must not leave a dead strip below the meeting header.
 
 import SwiftUI
 import Observation
@@ -16,7 +16,7 @@ struct QualityBannerInfo {
 }
 
 enum MeetingBannerSlotLayout {
-    static let reservedHeight: CGFloat = 58.0
+    static let overlayHeight: CGFloat = 58.0
 }
 
 enum MeetingQualityBannerPolicy {
@@ -93,10 +93,6 @@ struct MeetingBannerOverlay: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color.clear
-                .frame(height: MeetingBannerSlotLayout.reservedHeight)
-                .accessibilityHidden(true)
-
             Group {
                 if isOffline {
                     MeetingBanner(
@@ -184,7 +180,7 @@ struct MeetingBannerOverlay: View {
             .padding(.horizontal, ACMSpacing.sm)
             .padding(.top, ACMSpacing.xs)
         }
-        .frame(minHeight: MeetingBannerSlotLayout.reservedHeight, alignment: .top)
+        .frame(height: MeetingBannerSlotLayout.overlayHeight, alignment: .top)
         #if SKIP
         .onChange(of: "\(currentQualitySeverity)") {
             if MeetingQualityBannerPolicy.shouldResetDismissal(

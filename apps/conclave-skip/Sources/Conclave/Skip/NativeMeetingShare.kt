@@ -33,8 +33,35 @@ object NativeMeetingShare {
             context.startActivity(chooser)
             return true
         } catch (t: Throwable) {
+            PipManager.restoreAutoEnterAfterExternalActivity()
             debugLog("[Share] Failed to open Android share sheet: ${t}")
             ClipboardHelper.copyToClipboard(text = link, label = "Meeting link")
+            return true
+        }
+    }
+
+    fun shareText(title: String, text: String): Boolean {
+        val activity = UIApplication.shared.androidActivity
+        val context = activity ?: ProcessInfo.processInfo.androidContext.applicationContext
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, title)
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        val chooser = Intent.createChooser(shareIntent, title)
+
+        try {
+            if (activity != null) {
+                PipManager.suppressNextAutoEnter("transcript_share")
+            } else {
+                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+            return true
+        } catch (t: Throwable) {
+            PipManager.restoreAutoEnterAfterExternalActivity()
+            debugLog("[Share] Failed to share text: ${t}")
+            ClipboardHelper.copyToClipboard(text = text, label = title)
             return true
         }
     }

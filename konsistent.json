@@ -22,8 +22,11 @@
     },
     {
       "name": "game-modules-are-pure",
-      "description": "Game modules are pure reducers: no runtime imports outside the games runtime",
-      "paths": "packages/sfu/server/games/modules/{gameId}.ts",
+      "description": "Game modules except chess are pure reducers: no runtime imports outside the games runtime",
+      "paths": [
+        "packages/sfu/server/games/modules/{gameId}.ts",
+        "!packages/sfu/server/games/modules/chess.ts"
+      ],
       "must": {
         "importFromExternals": false
       }

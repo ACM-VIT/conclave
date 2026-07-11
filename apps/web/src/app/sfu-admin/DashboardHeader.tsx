@@ -31,14 +31,14 @@ const formatUptime = (seconds: number): string => {
   return `${minutes}m`;
 };
 
-export const CONNECTION_LABEL: Record<ConnectionState, string> = {
+const CONNECTION_LABEL: Record<ConnectionState, string> = {
   connecting: "Connecting",
   live: "Live",
   reconnecting: "Reconnecting",
   offline: "Offline",
 };
 
-export const CONNECTION_TONE: Record<ConnectionState, string> = {
+const CONNECTION_TONE: Record<ConnectionState, string> = {
   connecting: color.warning,
   live: color.success,
   reconnecting: color.warning,

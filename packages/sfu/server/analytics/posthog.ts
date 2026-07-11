@@ -24,12 +24,12 @@ import { config as sfuConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
 
 /** The PostHog group type used to roll events up by meeting/room. */
-export const ROOM_GROUP_TYPE = "room" as const;
+const ROOM_GROUP_TYPE = "room" as const;
 
 /** Property values we are willing to send. Deliberately NON-PII: only ids,
  *  counts, booleans, durations, phase labels, and numeric/enum config. Never
  *  free text, names, chat, or user-authored content. */
-export type AnalyticsPropertyValue = string | number | boolean | null;
+type AnalyticsPropertyValue = string | number | boolean | null;
 export type AnalyticsProperties = Record<string, AnalyticsPropertyValue>;
 
 export type CaptureGameEventArgs = {
@@ -146,6 +146,3 @@ export const shutdownAnalytics = async (): Promise<void> => {
     Logger.warn("[Analytics] shutdown flush failed", error);
   }
 };
-
-/** Test/introspection helper: whether analytics is active this process. */
-export const isAnalyticsEnabled = (): boolean => sfuConfig.analytics.enabled;

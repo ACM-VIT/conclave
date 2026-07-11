@@ -1,6 +1,6 @@
 # @conclave/apps-sdk
 
-In-meeting app runtime SDK for Conclave (`web` + `native`).
+In-meeting web app runtime SDK for Conclave.
 
 This package gives you a shared runtime for collaborative meeting apps and server-authoritative games:
 
@@ -9,7 +9,6 @@ This package gives you a shared runtime for collaborative meeting apps and serve
 - Yjs doc sync and awareness sync over SFU socket events
 - React provider + hooks for app and host UI
 - game provider + hooks for server-owned rules, scoring, and private views
-- optional cross-platform asset uploads
 
 ## Documentation
 
@@ -29,8 +28,8 @@ This package gives you a shared runtime for collaborative meeting apps and serve
 
 - App authors: building a collaborative meeting surface (polls, notes, timers, etc.)
 - Game authors: building a game where the SFU owns rules, scoring, timers, or hidden information
-- Host integrators: wiring app menu and layout into Conclave web/mobile meeting shells
-- Reviewers/maintainers: validating permissions, sync behavior, and cross-platform wiring
+- Host integrators: wiring app menus and layouts into the web meeting shell
+- Reviewers/maintainers: validating permissions and sync behavior
 
 ## Quick Task Map
 
@@ -46,7 +45,7 @@ This package gives you a shared runtime for collaborative meeting apps and serve
 
 ## Runtime Architecture (Mental Model)
 
-1. Host process registers app definitions with `registerApps(...)`.
+1. Host passes its app definitions to `AppsProvider`.
 2. `AppsProvider` bridges host UI and SFU socket events.
 3. Each app gets one Yjs doc (`useAppDoc(appId)`) and one awareness instance.
 4. SFU handlers enforce permissions and relay updates to room participants.
@@ -58,8 +57,8 @@ A Conclave app is a collaborative meeting surface with:
 
 - stable `id` (used in registration, controls, and sync routing)
 - human-readable `name`
-- at least one renderer (`web` and/or `native`)
-- optional Yjs doc initializer (`createDoc`)
+- a web renderer
+- optional empty-on-join Yjs doc factory (`createDoc`)
 
 Room app state is shared by everyone:
 
@@ -69,29 +68,15 @@ Room app state is shared by everyone:
 ## Minimal Integration Example
 
 ```tsx
-import {
-  AppsProvider,
-  createAssetUploadHandler,
-  defineApp,
-  registerApps,
-} from "@conclave/apps-sdk";
+import { AppsProvider, defineApp } from "@conclave/apps-sdk";
 
 const pollApp = defineApp({
   id: "polls",
   name: "Polls",
   web: PollsWebApp,
-  native: PollsNativeApp,
 });
 
-registerApps([pollApp]);
-
-const uploadAsset = createAssetUploadHandler({
-  // defaults to POST /api/apps
-  // set baseUrl for native/non-web hosts
-  baseUrl: process.env.EXPO_PUBLIC_API_URL,
-});
-
-<AppsProvider socket={socket} user={user} isAdmin={isAdmin} uploadAsset={uploadAsset}>
+<AppsProvider apps={[pollApp]} socket={socket} user={user} isAdmin={isAdmin}>
   <MeetingUI />
 </AppsProvider>;
 ```
@@ -99,7 +84,7 @@ const uploadAsset = createAssetUploadHandler({
 ## App Lifecycle (High-Level)
 
 1. Define app with `defineApp(...)`.
-2. Register app with `registerApps(...)`.
+2. Add the definition to the host's `AppsProvider` list.
 3. Admin opens app via `useApps().openApp(appId)`.
 4. All clients receive `apps:state` with new `activeAppId`.
 5. Provider syncs Yjs doc + awareness for active app.
@@ -146,7 +131,7 @@ Dry run:
 pnpm -C packages/apps-sdk run new:app polls --dry-run
 ```
 
-Validate exports and mobile path aliases:
+Validate app structure and package exports:
 
 ```bash
 pnpm -C packages/apps-sdk run check:apps
@@ -163,8 +148,9 @@ Full workflow: [docs/guides/contributing-to-apps-sdk.md](./docs/guides/contribut
 ## Built-In App Exports
 
 - Whiteboard (web): `@conclave/apps-sdk/whiteboard/web`
-- Whiteboard (native): `@conclave/apps-sdk/whiteboard/native`
 - Whiteboard (core): `@conclave/apps-sdk/whiteboard/core`
+- Watch together (web): `@conclave/apps-sdk/watch/web`
+- Watch together (core): `@conclave/apps-sdk/watch/core`
 - Dev playground (web): `@conclave/apps-sdk/dev-playground/web`
 - Dev playground (core): `@conclave/apps-sdk/dev-playground/core`
 
@@ -194,9 +180,8 @@ It demonstrates:
 ## Common Pitfalls
 
 - App id mismatch between definition, open call, and `useAppDoc`.
-- App registered on web only (or native only) when both are expected.
 - `AppsProvider` missing around components using SDK hooks.
-- Missing mobile `tsconfig` aliases for new subpath exports.
+- Missing package subpath exports for a new app.
 - Durable state stored in awareness instead of Yjs doc.
 
 ## Next Reading

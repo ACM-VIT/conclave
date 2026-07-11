@@ -18,7 +18,7 @@ type CleanupOptions = {
  * - "gate": the hand-rolled adaptive RMS gate worklet (fallback).
  * - "filters": neither worklet was available; only the filter/dynamics chain.
  */
-export type NoiseCancellationEngine = "rnnoise" | "gate" | "filters";
+type NoiseCancellationEngine = "rnnoise" | "gate" | "filters";
 
 export type NoiseCancellationPipeline = {
   sourceTrack: MediaStreamTrack;
@@ -291,7 +291,7 @@ export const getNoiseCancellationSourceTrack = (
 ): MediaStreamTrack | null =>
   track ? outputTrackPipelines.get(track)?.sourceTrack ?? null : null;
 
-export const getNoiseCancellationOutputTrack = (
+const getNoiseCancellationOutputTrack = (
   track?: MediaStreamTrack | null,
 ): MediaStreamTrack | null =>
   track ? sourceTrackPipelines.get(track)?.outputTrack ?? null : null;

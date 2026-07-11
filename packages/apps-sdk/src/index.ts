@@ -5,9 +5,6 @@ export * from "./sdk/doc/createAppDoc";
 export * from "./sdk/hooks/useApps";
 export * from "./sdk/hooks/useAppDoc";
 export * from "./sdk/hooks/useAppPresence";
-export * from "./sdk/hooks/useAppAssets";
-export * from "./sdk/hooks/useRegisteredApps";
-export * from "./sdk/assets/createAssetUploadHandler";
 export * from "./games/index";
 
 export * as WhiteboardCore from "./apps/whiteboard/core/index";

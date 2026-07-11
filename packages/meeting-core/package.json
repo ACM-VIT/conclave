@@ -21,12 +21,14 @@
   "scripts": {
     "gen:swift-events": "node scripts/gen-swift-events.mjs",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
     "mediasoup-client": "^3.18.3"
   },
   "devDependencies": {
+    "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   }
 }

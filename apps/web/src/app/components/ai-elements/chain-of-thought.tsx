@@ -62,7 +62,7 @@ export const ChainOfThoughtContent = memo(
 );
 ChainOfThoughtContent.displayName = "ChainOfThoughtContent";
 
-export type ChainOfThoughtStepStatus = "complete" | "active" | "pending";
+type ChainOfThoughtStepStatus = "complete" | "active" | "pending";
 
 export type ChainOfThoughtStepProps = ComponentProps<"div"> & {
   icon?: ReactNode;

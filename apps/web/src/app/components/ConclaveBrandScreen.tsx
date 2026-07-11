@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { motion } from "motion/react";
 import ConclaveLottie from "./ConclaveLottie";
 
-export function BrandDots() {
+function BrandDots() {
   return (
     <span className="inline-flex items-center gap-[3px]" aria-hidden>
       {[0, 1, 2].map((i) => (

@@ -20,7 +20,11 @@ import {
   type AssistantTask,
   type ConclaveAssistantRelayPacket,
 } from "../../../lib/conclave-assistant";
-
+import {
+  createGithubIssue,
+  isExplicitGithubIssueRequest,
+  parseGithubIssueDraft,
+} from "./github-issues";
 
 const CONCLAVE_ASSISTANT_WEB_SEARCH_TOOL: WebSearchTool = {
   type: "web_search",
@@ -39,12 +43,84 @@ const GET_MEETING_TRANSCRIPT_TOOL: FunctionTool = {
     additionalProperties: false,
   },
 };
+const CREATE_GITHUB_ISSUE_TOOL: FunctionTool = {
+  type: "function",
+  name: "create_github_issue",
+  description:
+    "Create a detailed issue in the configured Conclave GitHub repository. Use this only when the participant explicitly asks to open, create, file, or submit a GitHub issue. Supports bug reports, feature requests, documentation work, and other requests.",
+  strict: true,
+  parameters: {
+    type: "object",
+    properties: {
+      issue_type: {
+        type: "string",
+        enum: ["bug_report", "feature_request", "documentation", "other"],
+        description: "The category that best matches the requested issue.",
+      },
+      title: {
+        type: "string",
+        description: "A concise, specific, actionable GitHub issue title.",
+      },
+      overview: {
+        type: "string",
+        description:
+          "A self-contained overview of the problem or requested capability and why it matters.",
+      },
+      details: {
+        type: "string",
+        description:
+          "Detailed technical or product context, including scope, affected behavior, and useful implementation notes when known.",
+      },
+      reproduction_steps: {
+        type: ["array", "null"],
+        items: { type: "string" },
+        description:
+          "Ordered steps that reproduce a bug, or null when not applicable or unknown.",
+      },
+      expected_behavior: {
+        type: ["string", "null"],
+        description:
+          "What should happen, or null when it is not applicable or not known.",
+      },
+      actual_behavior: {
+        type: ["string", "null"],
+        description:
+          "What currently happens for a bug, or null for non-bugs or when unknown.",
+      },
+      acceptance_criteria: {
+        type: ["array", "null"],
+        items: { type: "string" },
+        description:
+          "Concrete, verifiable completion criteria, or null when none can be inferred.",
+      },
+      additional_context: {
+        type: ["string", "null"],
+        description:
+          "Other relevant constraints, examples, environment details, or null when there are none.",
+      },
+    },
+    required: [
+      "issue_type",
+      "title",
+      "overview",
+      "details",
+      "reproduction_steps",
+      "expected_behavior",
+      "actual_behavior",
+      "acceptance_criteria",
+      "additional_context",
+    ],
+    additionalProperties: false,
+  },
+};
 const CONCLAVE_ASSISTANT_TOOLS: Tool[] = [
   CONCLAVE_ASSISTANT_WEB_SEARCH_TOOL,
   GET_MEETING_TRANSCRIPT_TOOL,
+  CREATE_GITHUB_ISSUE_TOOL,
 ];
-const TRANSCRIPT_TOOL_MAX_ROUNDS = 3;
+const FUNCTION_TOOL_MAX_ROUNDS = 4;
 const TRANSCRIPT_TOOL_NAME = "get_meeting_transcript";
+const GITHUB_ISSUE_TOOL_NAME = "create_github_issue";
 
 // In-meeting "@Conclave" assistant. Unlike the transcript Q&A (which is strictly
 // grounded in the transcript), this is a general helper a participant can summon
@@ -57,6 +133,7 @@ const ASSISTANT_SYSTEM_PROMPT = [
   "Context you may receive:",
   "- Recent chat messages, each prefixed with the sender's name.",
   "- A `get_meeting_transcript` tool that returns the live meeting transcript when it is available.",
+  "- A `create_github_issue` tool that files a structured issue in Conclave's configured GitHub repository.",
   "- Web search results when you need current or source-backed external information.",
   "",
   "How to answer:",
@@ -65,6 +142,10 @@ const ASSISTANT_SYSTEM_PROMPT = [
   "- For questions about what was said, decided, or asked in THIS meeting, call `get_meeting_transcript` when chat alone is insufficient, then cite the speaker (and timestamp when it helps).",
   "- For general questions (definitions, code, ideas, planning, explanations, quick research-style asks), answer directly even if the transcript has no relevant context.",
   "- Use web search for current facts, links, market/product/news/current-event questions, or when the user asks for sources. Cite sources by name or link when you rely on search.",
+  "- Call `create_github_issue` only when the participant explicitly asks you to open, create, file, or submit a GitHub issue. Discussing a bug or feature idea alone is not permission to create one.",
+  "- Before creating an issue, turn the available details into a self-contained title, overview, detailed context, and relevant reproduction steps or acceptance criteria. Do not invent unknown facts; use null for optional unknowns.",
+  "- Never put API keys, credentials, private raw transcripts, or unrelated personal information in a GitHub issue. Include only the context needed for the requested issue.",
+  "- After the issue tool runs, clearly say whether it succeeded and include the returned issue number and link. Never claim an issue exists unless the tool confirms it.",
   "- If meeting context is needed but missing (e.g. transcript is off, or nothing relevant was said), say so briefly, then help as best you can.",
   "- Never invent who said what. Do not attribute a statement to a speaker unless the chat or transcript supports it.",
   "",
@@ -331,23 +412,54 @@ export async function POST(request: Request) {
       expiresAt: Date.now() + RELAY_PACKET_TTL_MS,
     });
 
-  const executeTranscriptTool = (call: ResponseFunctionToolCall): string => {
-    if (call.name !== TRANSCRIPT_TOOL_NAME) {
+  let createdGithubIssueOutput: string | null = null;
+  const executeFunctionTool = async (
+    call: ResponseFunctionToolCall,
+  ): Promise<string> => {
+    if (call.name === TRANSCRIPT_TOOL_NAME) {
       return JSON.stringify({
-        error: `Unknown tool: ${call.name}`,
+        transcriptActive,
+        transcriptAvailable: transcriptActive && transcript.length > 0,
+        format: "[HH:MM:SS] Speaker: text",
+        transcript: transcriptActive
+          ? transcript || "(Transcript is on but nothing has been captured yet.)"
+          : "",
+        note: transcriptActive
+          ? "Use this transcript only for meeting-specific claims."
+          : "The transcript panel is off, so no transcript is available.",
       });
     }
 
+    if (call.name === GITHUB_ISSUE_TOOL_NAME) {
+      if (!isExplicitGithubIssueRequest(question)) {
+        return JSON.stringify({
+          success: false,
+          error:
+            "No issue was created because the current participant did not explicitly ask to open or file one.",
+        });
+      }
+      // A single assistant request may loop through tools several times. Reuse a
+      // successful result rather than risking duplicate issues in the same run.
+      if (createdGithubIssueOutput) return createdGithubIssueOutput;
+      try {
+        const draft = parseGithubIssueDraft(call.arguments);
+        const issue = await createGithubIssue(draft);
+        createdGithubIssueOutput = JSON.stringify({ success: true, issue });
+        return createdGithubIssueOutput;
+      } catch (error) {
+        return JSON.stringify({
+          success: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "GitHub issue creation failed.",
+        });
+      }
+    }
+
     return JSON.stringify({
-      transcriptActive,
-      transcriptAvailable: transcriptActive && transcript.length > 0,
-      format: "[HH:MM:SS] Speaker: text",
-      transcript: transcriptActive
-        ? transcript || "(Transcript is on but nothing has been captured yet.)"
-        : "",
-      note: transcriptActive
-        ? "Use this transcript only for meeting-specific claims."
-        : "The transcript panel is off, so no transcript is available.",
+      success: false,
+      error: `Unknown tool: ${call.name}`,
     });
   };
 
@@ -398,14 +510,20 @@ export async function POST(request: Request) {
         });
       };
 
-      const emitTranscriptTask = (
+      const emitFunctionTask = (
         call: Pick<ResponseFunctionToolCall, "id" | "call_id" | "name">,
         status: AssistantTask["status"],
       ): void => {
-        if (call.name !== TRANSCRIPT_TOOL_NAME) return;
+        const kind =
+          call.name === TRANSCRIPT_TOOL_NAME
+            ? "transcript"
+            : call.name === GITHUB_ISSUE_TOOL_NAME
+              ? "github_issue"
+              : null;
+        if (!kind) return;
         emitTask({
           id: call.id ?? call.call_id,
-          kind: "transcript",
+          kind,
           status,
         });
       };
@@ -427,7 +545,7 @@ export async function POST(request: Request) {
             status: "done",
           });
         };
-        for (let round = 0; round < TRANSCRIPT_TOOL_MAX_ROUNDS; round += 1) {
+        for (let round = 0; round < FUNCTION_TOOL_MAX_ROUNDS; round += 1) {
           const responseStream = client.responses.stream(
             buildRequestParams(nextInput),
           );
@@ -508,8 +626,8 @@ export async function POST(request: Request) {
             writeStreamEvent({ type: "reasoning", done: true });
           });
 
-          // Surface output items (reasoning, hosted tools, transcript function,
-          // final answer) as agent steps in the process timeline.
+          // Surface output items (reasoning, hosted tools, function tools, final
+          // answer) as agent steps in the process timeline.
           responseStream.on("response.output_item.added", (event) => {
             completeAssistantStart();
             if (event.item.type === "reasoning") {
@@ -532,11 +650,8 @@ export async function POST(request: Request) {
                 status: "running",
                 ...(action?.query ? { query: action.query } : {}),
               });
-            } else if (
-              event.item.type === "function_call" &&
-              event.item.name === TRANSCRIPT_TOOL_NAME
-            ) {
-              emitTranscriptTask(event.item, "running");
+            } else if (event.item.type === "function_call") {
+              emitFunctionTask(event.item, "running");
             }
           });
 
@@ -566,13 +681,14 @@ export async function POST(request: Request) {
           });
 
           responseStream.on("response.function_call_arguments.done", (event) => {
-            if (event.name === TRANSCRIPT_TOOL_NAME) {
-              emitTask({
+            emitFunctionTask(
+              {
                 id: event.item_id,
-                kind: "transcript",
-                status: "running",
-              });
-            }
+                call_id: event.item_id,
+                name: event.name,
+              },
+              "running",
+            );
           });
 
           responseStream.on("response.failed", (event) => {
@@ -633,10 +749,7 @@ export async function POST(request: Request) {
 
           const functionCalls: ResponseFunctionToolCall[] = [];
           for (const item of response.output) {
-            if (
-              item.type === "function_call" &&
-              item.name === TRANSCRIPT_TOOL_NAME
-            ) {
+            if (item.type === "function_call") {
               functionCalls.push(item);
             }
           }
@@ -652,22 +765,23 @@ export async function POST(request: Request) {
             return;
           }
 
-          const functionOutputs: ResponseInputItem[] = functionCalls.map((call) => {
-            const output = executeTranscriptTool(call);
-            emitTranscriptTask(call, "done");
-            return {
+          const functionOutputs: ResponseInputItem[] = [];
+          for (const call of functionCalls) {
+            const output = await executeFunctionTool(call);
+            emitFunctionTask(call, "done");
+            functionOutputs.push({
               type: "function_call_output",
               call_id: call.call_id,
               output,
-            };
-          });
+            });
+          }
           nextInput = [
             ...nextInput,
             ...functionCalls.map(toReplayableFunctionCall),
             ...functionOutputs,
           ];
         }
-        throw new Error("Conclave used too many transcript tool calls.");
+        throw new Error("Conclave used too many function tool calls.");
       } catch (error) {
         console.error("[Conclave] assistant stream failed:", error);
         const relayContent = fullText.trim()

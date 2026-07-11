@@ -4,7 +4,7 @@
 
 <h2>Conclave</h2>
 
-<p>Real-time meetings platform with web/mobile clients, SFU, and an apps SDK</p>
+<p>Real-time meetings platform with web and native clients, an SFU, and an apps SDK</p>
 
 <p>
   <a href="https://acmvit.in/" target="_blank">
@@ -34,10 +34,10 @@
 Conclave is a real-time meetings platform with:
 
 - `apps/web`: Next.js web client and API routes
-- `apps/mobile`: Expo/React Native mobile client
-- `apps/conclave-skip`: Skip.dev project for native clients
+- `apps/conclave-skip`: active SwiftUI/Skip project for iOS and Android
+- `apps/mobile`: deprecated Expo client; do not use for new work
 - `packages/sfu`: mediasoup SFU and real-time socket handlers
-- `packages/apps-sdk`: in-meeting apps runtime SDK (registry, provider, Yjs sync, awareness, uploads)
+- `packages/apps-sdk`: web in-meeting apps runtime (provider, Yjs sync, and awareness)
 - `packages/shared-browser`: optional VNC-based shared browser service
 
 ---
@@ -47,7 +47,7 @@ Conclave is a real-time meetings platform with:
 ```text
 apps/
   web/
-  mobile/
+  conclave-skip/
 packages/
   sfu/
   apps-sdk/
@@ -58,7 +58,8 @@ scripts/
 Prerequisites:
 
 - Node.js 20+
-- `pnpm` 9+
+- `pnpm` 11.7.0
+- Swift and Xcode for native development
 - Docker (optional, for deploy scripts and shared browser runtime image)
 
 ---
@@ -94,19 +95,18 @@ Notes:
 
 ## Mobile Development
 
-`apps/mobile` is intentionally excluded from workspace lockstep due to native tooling constraints.
+The active native application is `apps/conclave-skip`. It shares SwiftUI source
+between iOS and Android through Skip.
 
 ```bash
-pnpm -C apps/mobile install
-pnpm -C apps/mobile run start
+cd apps/conclave-skip
+swift build
+swift test -q
 ```
 
-Useful targets:
-
-```bash
-pnpm -C apps/mobile run ios
-pnpm -C apps/mobile run android
-```
+See [`apps/conclave-skip/README.md`](./apps/conclave-skip/README.md) for Android
+and iOS build commands. `apps/mobile` is deprecated and excluded from the
+workspace.
 
 ---
 

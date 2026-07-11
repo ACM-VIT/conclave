@@ -235,7 +235,7 @@ const broadcastVote = (io: SocketIOServer, room: Room): void => {
   io.to(room.channelId).emit("game:vote", buildVoteState(room));
 };
 
-export const buildGameStateResponse = (
+const buildGameStateResponse = (
   room: Room | null | undefined,
   playerId: string | null | undefined,
 ): GameStateResponse => {

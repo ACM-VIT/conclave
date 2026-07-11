@@ -1,12 +1,5 @@
 import type { GameConfig, GameOptionSpec } from "./types.js";
 
-/** Build the all-defaults config for a set of option specs. */
-export const defaultConfig = (options: GameOptionSpec[] = []): GameConfig => {
-  const config: GameConfig = {};
-  for (const opt of options) config[opt.id] = opt.default;
-  return config;
-};
-
 /**
  * Validate a raw (untrusted) config from the client against the module's option
  * specs. Unknown keys are dropped; numbers are clamped to range and rounded;

@@ -13,7 +13,7 @@ import ChessGame from "./ChessGame";
 
 // Add a web renderer here (one line). The key is the game id from the SFU
 // module. Everything else (launcher, stage routing) reads from this map.
-export const GAME_RENDERERS: Record<string, React.ComponentType<GameViewProps>> = {
+const GAME_RENDERERS: Record<string, React.ComponentType<GameViewProps>> = {
   trivia: TriviaGame as React.ComponentType<GameViewProps>,
   bluff: BluffGame as React.ComponentType<GameViewProps>,
   "would-you-rather": WouldYouRatherGame as React.ComponentType<GameViewProps>,

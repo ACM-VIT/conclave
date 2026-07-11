@@ -709,7 +709,7 @@ export default function VideoEffectsPanel({
   };
 
   const setBackground = (background: BackgroundEffectId) => {
-    if (background !== "none" && background !== "gradient") {
+    if (background !== "none") {
       void prewarmVideoEffectsAssets({
         segmentation: true,
         backgrounds: [background],
@@ -1033,12 +1033,7 @@ export default function VideoEffectsPanel({
 
   const prewarmForBackground = useCallback(
     (background: BackgroundEffectId) => {
-      if (
-        background === "none" ||
-        background === "gradient"
-      ) {
-        return;
-      }
+      if (background === "none") return;
       void prewarmVideoEffectsAssets({
         segmentation: true,
         backgrounds: [background],

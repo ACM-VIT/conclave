@@ -145,9 +145,12 @@ describe("formatters", () => {
 
 describe("normalizeChatMessage", () => {
   it("rewrites a /tts message and surfaces ttsText", () => {
-    const result = normalizeChatMessage(baseMessage({ content: "/tts hi there" }));
+    const result = normalizeChatMessage(
+      baseMessage({ content: "/tts hi there", ttsVoiceToken: "encrypted-token" }),
+    );
     expect(result.ttsText).toBe("hi there");
     expect(result.message.content).toBe("TTS: hi there");
+    expect(result.message.ttsVoiceToken).toBe("encrypted-token");
   });
 
   it("passes a normal message through untouched", () => {

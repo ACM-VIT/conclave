@@ -147,14 +147,25 @@ const body = [
     "Server → client: notifications and broadcast state.",
   ),
 ].join("\n\n");
-
-writeFileSync(OUT, `${header}\n${body}\n`);
+const generated = `${header}\n${body}\n`;
 
 const counts = {
   system: Object.keys(SFU_EVENTS.system).length,
   clientToServer: Object.keys(SFU_EVENTS.clientToServer).length,
   serverToClient: Object.keys(SFU_EVENTS.serverToClient).length,
 };
-console.log(
-  `Generated ${OUT}\n  system=${counts.system} clientToServer=${counts.clientToServer} serverToClient=${counts.serverToClient}`,
-);
+const countSummary = `system=${counts.system} clientToServer=${counts.clientToServer} serverToClient=${counts.serverToClient}`;
+
+if (process.argv.includes("--check")) {
+  if (readFileSync(OUT, "utf8") !== generated) {
+    console.error(
+      `Generated Swift events are out of date: ${OUT}\nRun this script without --check to update them.`,
+    );
+    process.exitCode = 1;
+  } else {
+    console.log(`Swift events are up to date (${countSummary}).`);
+  }
+} else {
+  writeFileSync(OUT, generated);
+  console.log(`Generated ${OUT}\n  ${countSummary}`);
+}

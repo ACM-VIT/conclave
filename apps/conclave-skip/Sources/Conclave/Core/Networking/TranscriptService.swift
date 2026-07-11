@@ -33,6 +33,7 @@ final class TranscriptService {
     // Whether the queued start should be sent as a takeover (captured before
     // sessionStatus flips to "starting").
     private var pendingStartIsTakeover = false
+    private var activeStartOptions = TranscriptStartOptions()
     private var pendingRelayStart = false
     private var didRequestClose = false
     private var reconnectTask: Task<Void, Never>?
@@ -42,11 +43,6 @@ final class TranscriptService {
     // Bumped by close()/open() so an in-flight open() that resumes after a close
     // doesn't resurrect a WebSocket for a torn-down panel.
     private var openGeneration = 0
-
-    // Canonical default models (index 0 of the web catalogs). If unavailable the
-    // worker reports an error over `session.state`, which we surface verbatim.
-    private static let transcriptModel = "gpt-realtime-whisper"
-    private static let qaModel = "gpt-5.6-terra"
 
     init(state: TranscriptState, socketManager: SocketIOManager) {
         self.state = state
@@ -70,8 +66,12 @@ final class TranscriptService {
             // A close() (or a newer open()) landed while we were awaiting the token.
             guard generation == openGeneration, !didRequestClose else { return }
             roomId = token.roomId
-            state.canStart = token.capabilities.start
-            state.canStop = token.capabilities.stop
+            state.applyCapabilities(
+                start: token.capabilities.start,
+                takeover: token.capabilities.takeover,
+                stop: token.capabilities.stop,
+                ask: token.capabilities.ask
+            )
 
             guard let urlString = Self.workerWebSocketURL(token: token) else {
                 throw TranscriptServiceError.invalidURL
@@ -106,6 +106,7 @@ final class TranscriptService {
         pendingRelayStart = false
         recoverSessionAfterReconnect = false
         startedByThisClient = false
+        activeStartOptions = TranscriptStartOptions()
         if state.connectionStatus != .idle {
             state.connectionStatus = .idle
         }
@@ -113,12 +114,17 @@ final class TranscriptService {
 
     // MARK: - Controller actions
 
-    func startTranscription() {
-        guard state.canStart else { return }
+    func startTranscription(options: TranscriptStartOptions = TranscriptStartOptions()) {
+        let isTakeover = state.sessionStatus == "takeover_needed"
+        guard isTakeover ? state.canTakeover : state.canStart else {
+            state.errorMessage = "You do not have permission to control this transcript."
+            return
+        }
         state.errorMessage = nil
         // Capture before overwriting the status: the send may be deferred
         // until the socket opens, and "starting" would mask the takeover.
-        pendingStartIsTakeover = state.sessionStatus == "takeover_needed"
+        pendingStartIsTakeover = isTakeover
+        activeStartOptions = options
         recoverSessionAfterReconnect = false
         startedByThisClient = true
         state.sessionStatus = "starting"
@@ -135,6 +141,10 @@ final class TranscriptService {
 
     func stopTranscription() {
         guard state.canStop || state.isLive else { return }
+        guard state.connectionStatus == .connected else {
+            state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            return
+        }
         state.sessionStatus = "stopping"
         pendingRelayStart = false
         recoverSessionAfterReconnect = false
@@ -143,6 +153,79 @@ final class TranscriptService {
         Task { [socketManager] in
             _ = try? await socketManager.stopTranscriptSfuRelay()
         }
+    }
+
+    @discardableResult
+    func pauseTranscription() -> Bool {
+        guard state.canPause else {
+            state.errorMessage = "You do not have permission to pause this transcript."
+            return false
+        }
+        guard state.connectionStatus == .connected else {
+            state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            return false
+        }
+        state.errorMessage = nil
+        return sendJSON(["type": "session.pause"])
+    }
+
+    @discardableResult
+    func resumeTranscription() -> Bool {
+        guard state.canPause else {
+            state.errorMessage = "You do not have permission to resume this transcript."
+            return false
+        }
+        guard state.connectionStatus == .connected else {
+            state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            return false
+        }
+        state.errorMessage = nil
+        return sendJSON(["type": "session.resume"])
+    }
+
+    @discardableResult
+    func ask(_ question: String) -> Bool {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard state.canAsk else {
+            state.errorMessage = "You do not have permission to ask about this transcript."
+            return false
+        }
+        guard state.connectionStatus == .connected else {
+            state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            return false
+        }
+
+        let id = "qa-\(Int(Date().timeIntervalSince1970 * 1000.0))-\(String(UUID().uuidString.prefix(6)).lowercased())"
+        let now = Date().timeIntervalSince1970 * 1000.0
+        state.errorMessage = nil
+        state.beginQuestion(id: id, question: trimmed, timestamp: now)
+        let didSend = sendJSON(["type": "qa.ask", "id": id, "question": trimmed])
+        if !didSend {
+            state.applyQuestionUpdate(
+                id: id,
+                question: trimmed,
+                answer: "",
+                status: .error,
+                error: "Question could not be sent.",
+                timestamp: now
+            )
+        }
+        return didSend
+    }
+
+    @discardableResult
+    func refreshMinutes() -> Bool {
+        guard state.canAsk else {
+            state.errorMessage = "You do not have permission to refresh meeting minutes."
+            return false
+        }
+        guard state.connectionStatus == .connected else {
+            state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            return false
+        }
+        state.errorMessage = nil
+        return sendJSON(["type": "minutes.refresh"])
     }
 
     // MARK: - WebSocket callbacks
@@ -210,12 +293,19 @@ final class TranscriptService {
         pendingRelayStart = true
         // When the previous controller stepped away the worker expects a
         // takeover, not a fresh start (mirrors the web client).
-        sendJSON([
+        var payload: [String: Any] = [
             "type": pendingStartIsTakeover ? "session.takeover" : "session.start",
             "transportMode": "sfu",
-            "transcriptModel": Self.transcriptModel,
-            "qaModel": Self.qaModel
-        ])
+            "transcriptModel": activeStartOptions.transcriptModel,
+            "qaModel": activeStartOptions.qaModel
+        ]
+        if let apiKey = activeStartOptions.apiKey {
+            payload["apiKey"] = apiKey
+        }
+        if let assistantApiKey = activeStartOptions.assistantApiKey {
+            payload["assistantApiKey"] = assistantApiKey
+        }
+        sendJSON(payload)
         pendingStartIsTakeover = false
     }
 
@@ -235,13 +325,22 @@ final class TranscriptService {
 
         switch type {
         case "snapshot":
+            applyProviderKeyAvailability(envelope)
             if let session = envelope["session"] as? [String: Any] {
                 applySession(session)
             }
             let finals = (envelope["segments"] as? [[String: Any]] ?? []).compactMap { Self.parseSegment($0) }
             let partials = (envelope["partials"] as? [[String: Any]] ?? []).compactMap { Self.parseSegment($0) }
             state.replaceSnapshot(finals: finals, partials: partials)
+            if let minutes = envelope["minutes"] as? [String: Any] {
+                state.applyMinutes(Self.parseMinutes(minutes, fallbackModel: state.sessionQaModel))
+            }
+            if let rawStatus = envelope["minutesStatus"] as? String,
+               let status = TranscriptMinutesStatus(rawValue: rawStatus) {
+                state.applyMinutesStatus(status)
+            }
         case "session.state", "handoff.requested":
+            applyProviderKeyAvailability(envelope)
             if let session = envelope["session"] as? [String: Any] {
                 applySession(session)
             }
@@ -257,6 +356,23 @@ final class TranscriptService {
             }
         case "partials.reset":
             state.resetPartials()
+        case "minutes.updated":
+            if let minutes = envelope["minutes"] as? [String: Any] {
+                state.applyMinutes(Self.parseMinutes(minutes, fallbackModel: state.sessionQaModel))
+            }
+        case "minutes.status":
+            if let rawStatus = envelope["status"] as? String,
+               let status = TranscriptMinutesStatus(rawValue: rawStatus) {
+                state.applyMinutesStatus(status)
+            }
+        case "qa.delta":
+            applyQuestionEnvelope(envelope, status: .streaming)
+        case "qa.final":
+            let rawStatus = (envelope["status"] as? String) ?? "done"
+            applyQuestionEnvelope(
+                envelope,
+                status: rawStatus == TranscriptQAStatus.error.rawValue ? .error : .done
+            )
         case "sfu.relayStartToken":
             handleRelayToken(envelope)
         case "error":
@@ -311,7 +427,7 @@ final class TranscriptService {
 
     private func applySession(_ session: [String: Any]) {
         if let status = session["status"] as? String, !status.isEmpty {
-            state.sessionStatus = status
+            if state.sessionStatus != status { state.sessionStatus = status }
             if status == "error" || status == "idle" {
                 pendingRelayStart = false
             }
@@ -329,22 +445,68 @@ final class TranscriptService {
                 startedByThisClient = false
             }
         }
-        if let controller = session["controller"] as? [String: Any] {
-            state.controllerName = (controller["displayName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else {
-            state.controllerName = nil
+        if let transcriptModel = session["transcriptModel"] as? String, !transcriptModel.isEmpty,
+           state.sessionTranscriptModel != transcriptModel {
+            state.sessionTranscriptModel = transcriptModel
         }
-        if let error = session["error"] as? String, !error.isEmpty {
-            state.errorMessage = error
+        if let qaModel = session["qaModel"] as? String, !qaModel.isEmpty,
+           state.sessionQaModel != qaModel {
+            state.sessionQaModel = qaModel
+        }
+        if let transportMode = session["transportMode"] as? String, !transportMode.isEmpty,
+           state.sessionTransportMode != transportMode {
+            state.sessionTransportMode = transportMode
+        }
+        let nextControllerName: String?
+        if let controller = session["controller"] as? [String: Any] {
+            let trimmed = (controller["displayName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            nextControllerName = trimmed?.isEmpty == false ? trimmed : nil
+        } else {
+            nextControllerName = nil
+        }
+        if state.controllerName != nextControllerName {
+            state.controllerName = nextControllerName
+        }
+        if session.keys.contains("error") {
+            let rawError = (session["error"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let nextError = rawError?.isEmpty == false ? rawError : nil
+            if state.errorMessage != nextError { state.errorMessage = nextError }
         }
     }
 
-    private func sendJSON(_ payload: [String: Any]) {
+    private func applyProviderKeyAvailability(_ envelope: [String: Any]) {
+        let providerKeys = envelope["globalProviderKeysAvailable"] as? [String: Any]
+        let legacyOpenAI = Self.boolValue(envelope["globalOpenAiKeyAvailable"])
+        guard providerKeys != nil || legacyOpenAI != nil else { return }
+        let openAI = Self.boolValue(providerKeys?["openai"]) ?? legacyOpenAI ?? false
+        let sarvam = Self.boolValue(providerKeys?["sarvam"]) ?? false
+        state.applyProviderKeyAvailability(openAI: openAI, sarvam: sarvam)
+    }
+
+    private func applyQuestionEnvelope(_ envelope: [String: Any], status: TranscriptQAStatus) {
+        guard let id = envelope["id"] as? String, !id.isEmpty else { return }
+        let question = (envelope["question"] as? String) ?? ""
+        let answer = (envelope["answer"] as? String) ?? ""
+        let error = envelope["error"] as? String
+        state.applyQuestionUpdate(
+            id: id,
+            question: question,
+            answer: answer,
+            status: status,
+            error: error,
+            timestamp: Date().timeIntervalSince1970 * 1000.0
+        )
+    }
+
+    @discardableResult
+    private func sendJSON(_ payload: [String: Any]) -> Bool {
+        guard state.connectionStatus == .connected, let webSocket else { return false }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let text = String(data: data, encoding: .utf8) else {
-            return
+            return false
         }
-        webSocket?.send(text)
+        webSocket.send(text)
+        return true
     }
 
     // MARK: - Parsing helpers
@@ -376,6 +538,38 @@ final class TranscriptService {
         )
     }
 
+    private static func parseMinutes(
+        _ dict: [String: Any],
+        fallbackModel: String
+    ) -> TranscriptMinutesSnapshotModel {
+        TranscriptMinutesSnapshotModel(
+            summary: (dict["summary"] as? String) ?? "",
+            topics: parseMinutesEntries(dict["topics"], prefix: "topic"),
+            decisions: parseMinutesEntries(dict["decisions"], prefix: "decision"),
+            actionItems: parseMinutesEntries(dict["actionItems"], prefix: "action"),
+            openQuestions: parseMinutesEntries(dict["openQuestions"], prefix: "question"),
+            followUps: parseMinutesEntries(dict["followUps"], prefix: "follow-up"),
+            updatedAt: doubleValue(dict["updatedAt"]) ?? 0.0,
+            model: (dict["model"] as? String) ?? fallbackModel
+        )
+    }
+
+    private static func parseMinutesEntries(_ value: Any?, prefix: String) -> [TranscriptMinutesEntryModel] {
+        guard let rows = value as? [[String: Any]] else { return [] }
+        return rows.enumerated().compactMap { index, row in
+            let text = ((row["text"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+            return TranscriptMinutesEntryModel(
+                id: (row["id"] as? String) ?? "\(prefix)-\(index)",
+                text: text,
+                speakerUserId: row["speakerUserId"] as? String,
+                speakerDisplayName: row["speakerDisplayName"] as? String,
+                owner: row["owner"] as? String,
+                due: row["due"] as? String
+            )
+        }
+    }
+
     private static func intValue(_ value: Any?) -> Int? {
         if let intValue = value as? Int { return intValue }
         if let doubleValue = value as? Double { return Int(doubleValue) }
@@ -387,6 +581,12 @@ final class TranscriptService {
         if let doubleValue = value as? Double { return doubleValue }
         if let intValue = value as? Int { return Double(intValue) }
         if let numberValue = value as? NSNumber { return numberValue.doubleValue }
+        return nil
+    }
+
+    private static func boolValue(_ value: Any?) -> Bool? {
+        if let boolValue = value as? Bool { return boolValue }
+        if let numberValue = value as? NSNumber { return numberValue.doubleValue != 0.0 }
         return nil
     }
 

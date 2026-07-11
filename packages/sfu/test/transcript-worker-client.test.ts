@@ -69,7 +69,7 @@ describe("TranscriptWorkerRelayClient recovery", () => {
     });
 
     const initialConnect = client.connect();
-    const initialSocket = FakeWebSocket.instances[0]!;
+    const initialSocket = FakeWebSocket.instances[0];
     initialSocket.open();
     await initialConnect;
 
@@ -79,12 +79,14 @@ describe("TranscriptWorkerRelayClient recovery", () => {
     expect(onClose).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(250);
-    const replacementSocket = FakeWebSocket.instances[1]!;
+    const replacementSocket = FakeWebSocket.instances[1];
     replacementSocket.open();
     await Promise.resolve();
 
     expect(
-      replacementSocket.sent.map((serialized) => JSON.parse(serialized)),
+      replacementSocket.sent.map(
+        (serialized): unknown => JSON.parse(serialized) as unknown,
+      ),
     ).toContainEqual({
       type: "audio.chunk",
       audio: "buffered",

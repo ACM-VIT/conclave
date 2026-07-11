@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CHESS_BOT_ID, chessModule } from "../server/games/modules/chess.js";
-import { pickBotMove } from "../server/games/modules/chessBot.js";
+import { pickBotMove } from "../server/games/chessBot.js";
 import { GameMoveError } from "../server/games/types.js";
 import type { GameConfig, GameContext, GamePlayer, GameRng } from "../server/games/types.js";
 import { Chess } from "chess.js";

@@ -9,7 +9,7 @@ import type {
 import { Admin } from "../../../config/classes/Admin.js";
 import { config } from "../../../config/config.js";
 import { Logger } from "../../../utilities/loggers.js";
-import type Room from "../../../config/classes/Room.js";
+import type { Room } from "../../../config/classes/Room.js";
 import type { ConnectionContext } from "../context.js";
 import { respond } from "./ack.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
@@ -35,6 +35,8 @@ const MAX_GIF_TITLE_LENGTH = 140;
 const MAX_GIF_URL_LENGTH = 2048;
 const MAX_REPLY_CONTENT_LENGTH = 280;
 const MAX_REPLY_NAME_LENGTH = 120;
+const MAX_TTS_VOICE_TOKEN_LENGTH = 2048;
+const TTS_VOICE_TOKEN_PATTERN = /^[A-Za-z0-9._~-]+$/;
 const KLIPY_MEDIA_HOSTS = new Set(["static.klipy.com"]);
 const KLIPY_PAGE_HOSTS = new Set(["klipy.com", "www.klipy.com"]);
 
@@ -43,6 +45,19 @@ const fallbackDisplayNameFromUserId = (userId: string): string =>
 
 const normalizeLookupToken = (value: string): string =>
   value.trim().toLowerCase().replace(/[^a-z0-9._-]/g, "");
+
+const normalizeTtsVoiceToken = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const token = value.trim();
+  if (
+    !token ||
+    token.length > MAX_TTS_VOICE_TOKEN_LENGTH ||
+    !TTS_VOICE_TOKEN_PATTERN.test(token)
+  ) {
+    return undefined;
+  }
+  return token;
+};
 
 const normalizeHttpsUrl = (
   value: unknown,
@@ -631,11 +646,11 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           messageContent = gif.title;
         }
 
-        if (
+        const isTtsMessage =
           !directMessageIntent &&
           (messageContent.toLowerCase().startsWith("/tts ") ||
-            messageContent.toLowerCase() === "/tts")
-        ) {
+            messageContent.toLowerCase() === "/tts");
+        if (isTtsMessage) {
           if (room.isTtsDisabled) {
             respond(callback, {
               error: "TTS is disabled by the host in this room.",
@@ -664,6 +679,9 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           timestamp: Date.now(),
           ...(gif ? { gif } : {}),
           ...(replyTo ? { replyTo } : {}),
+          ...(isTtsMessage
+            ? { ttsVoiceToken: normalizeTtsVoiceToken(data.ttsVoiceToken) }
+            : {}),
           isDirect: Boolean(dmTarget),
           dmTargetUserId: dmTarget?.userId,
           dmTargetDisplayName: dmTarget?.displayName,

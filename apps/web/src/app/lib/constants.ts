@@ -19,25 +19,25 @@ export const REACTION_LIFETIME_MS = 3800;
 export const MAX_REACTIONS = 30;
 export const EMOJI_REACTIONS = ["👍", "👏", "😂", "❤️", "🎉", "😮"] as const;
 
-export const STANDARD_QUALITY_CONSTRAINTS = {
+const STANDARD_QUALITY_CONSTRAINTS = {
   width: { ideal: 1280, max: 1280 },
   height: { ideal: 720, max: 720 },
   frameRate: { ideal: 30, max: 30 },
 };
 
-export const LOW_QUALITY_CONSTRAINTS = {
+const LOW_QUALITY_CONSTRAINTS = {
   width: { ideal: 640, max: 640 },
   height: { ideal: 360, max: 360 },
   frameRate: { ideal: 20, max: 20 },
 };
 
-export const POOR_QUALITY_CONSTRAINTS = {
+const POOR_QUALITY_CONSTRAINTS = {
   width: { ideal: 426, max: 426 },
   height: { ideal: 240, max: 240 },
   frameRate: { ideal: 15, max: 15 },
 };
 
-export const EMERGENCY_QUALITY_CONSTRAINTS = {
+const EMERGENCY_QUALITY_CONSTRAINTS = {
   width: { ideal: 320, max: 320 },
   height: { ideal: 180, max: 180 },
   frameRate: { ideal: 12, max: 12 },
@@ -82,8 +82,8 @@ export const STANDARD_VIDEO_MAX_BITRATE = 1500000;
 export const LOW_VIDEO_MAX_BITRATE = 260000;
 export const SCREEN_SHARE_MAX_BITRATE = 2500000;
 export const SCREEN_SHARE_MAX_FRAMERATE = 24;
-export const OPUS_MAX_AVERAGE_BITRATE = 96000;
-export const SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE = 96000;
+const OPUS_MAX_AVERAGE_BITRATE = 96000;
+const SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE = 96000;
 export type AudioProducerNetworkProfile =
   | "good"
   | "fair"
@@ -109,7 +109,7 @@ export const SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE: Record<
   poor: MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE.poor,
   emergency: MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE.emergency,
 };
-export const OPUS_PACKET_TIME_MS = 20;
+const OPUS_PACKET_TIME_MS = 20;
 export const buildMicrophoneOpusCodecOptions = (
   profile: AudioProducerNetworkProfile = "good",
 ): ProducerCodecOptions => ({
@@ -132,11 +132,6 @@ export const buildScreenShareAudioOpusCodecOptions = (
     SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE[profile],
   opusPtime: OPUS_PACKET_TIME_MS,
 });
-export const MICROPHONE_OPUS_CODEC_OPTIONS: ProducerCodecOptions =
-  buildMicrophoneOpusCodecOptions("good");
-export const SCREEN_SHARE_AUDIO_OPUS_CODEC_OPTIONS: ProducerCodecOptions =
-  buildScreenShareAudioOpusCodecOptions("good");
-
 const DEFAULT_PUBLIC_STUN_URLS = [
   "stun:stun.l.google.com:19302",
   "stun:stun1.l.google.com:19302",
@@ -149,7 +144,7 @@ const splitIceUrls = (value: string): string[] =>
     .map((entry) => entry.trim())
     .filter(Boolean);
 
-export const MEETS_STUN_ICE_SERVERS: RTCIceServer[] = (() => {
+const MEETS_STUN_ICE_SERVERS: RTCIceServer[] = (() => {
   const configuredStunUrls = splitIceUrls(
     process.env.NEXT_PUBLIC_STUN_URLS ?? process.env.NEXT_PUBLIC_STUN_URL ?? "",
   );

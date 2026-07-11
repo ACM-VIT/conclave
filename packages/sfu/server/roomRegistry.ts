@@ -13,7 +13,7 @@ export type RoomOwnerRecord = {
   expiresAt: number;
 };
 
-export type RoomOwnershipClaim =
+type RoomOwnershipClaim =
   | { ok: true; owner: RoomOwnerRecord }
   | { ok: false; owner: RoomOwnerRecord };
 

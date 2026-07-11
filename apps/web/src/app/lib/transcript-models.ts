@@ -4,5 +4,4 @@ export {
   getTranscriptTranscriptionProvider,
   LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS,
   TRANSCRIPT_QA_MODELS,
-  TRANSCRIPT_TRANSCRIPTION_MODELS,
 } from "@conclave/meeting-core/transcript-models";

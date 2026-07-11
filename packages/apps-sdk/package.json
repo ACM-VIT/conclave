@@ -6,7 +6,8 @@
   "scripts": {
     "new:app": "node ./scripts/create-app-integration.mjs",
     "check:apps": "node ./scripts/check-app-integrations.mjs",
-    "check:apps:fix": "node ./scripts/check-app-integrations.mjs --fix"
+    "check:apps:fix": "node ./scripts/check-app-integrations.mjs --fix",
+    "typecheck": "tsc --noEmit"
   },
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -17,11 +18,9 @@
     "./watch/core": "./src/apps/watch/core/index.ts",
     "./watch/web": "./src/apps/watch/web/index.ts",
     "./whiteboard/core": "./src/apps/whiteboard/core/index.ts",
-    "./whiteboard/native": "./src/apps/whiteboard/native/index.ts",
     "./whiteboard/web": "./src/apps/whiteboard/web/index.ts"
   },
   "dependencies": {
-    "lib0": "^0.2.117",
     "react-player": "^3.4.0",
     "y-protocols": "^1.0.7",
     "yjs": "^13.6.31"
@@ -30,14 +29,11 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "typescript": "^5.9.3"
   },
   "peerDependencies": {
-    "@shopify/react-native-skia": "*",
-    "lucide-react-native": "*",
     "react": "*",
-    "react-native": "*",
-    "react-native-svg": "*",
     "socket.io-client": "*"
   }
 }

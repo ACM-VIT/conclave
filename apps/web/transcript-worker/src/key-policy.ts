@@ -3,7 +3,7 @@ import type {
   TranscriptTranscriptionProvider,
 } from "@conclave/meeting-core/transcript-models";
 
-export type TranscriptOpenAiKeySource = "controller" | "global";
+type TranscriptOpenAiKeySource = "controller" | "global";
 
 export type TranscriptProviderKeyResolution =
   | {

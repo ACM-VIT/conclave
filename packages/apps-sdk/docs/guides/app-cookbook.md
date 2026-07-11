@@ -60,19 +60,27 @@ const canEdit = !locked || Boolean(isAdmin);
 if (!canEdit) return;
 ```
 
-### Pattern: Stable schema initialization
+### Pattern: Sync-safe lazy schema
 
 ```ts
 import * as Y from "yjs";
-import { createAppDoc, ensureAppArray, ensureAppMap, ensureAppText } from "@conclave/apps-sdk";
+import { createAppDoc, ensureAppArray, getAppRoot } from "@conclave/apps-sdk";
 
-export const createExampleDoc = () =>
-  createAppDoc("example", (root) => {
-    ensureAppText(root, "title");
-    ensureAppArray(root, "items");
-    ensureAppMap(root, "meta");
-  });
+export const createExampleDoc = () => createAppDoc("example");
+
+export const getItems = (doc: Y.Doc): string[] => {
+  const value = getAppRoot(doc, "example").get("items");
+  return value instanceof Y.Array ? value.toArray() : [];
+};
+
+export const addItem = (doc: Y.Doc, item: string): void => {
+  ensureAppArray(getAppRoot(doc, "example"), "items").push([item]);
+};
 ```
+
+Document factories must stay empty until the initial server sync. Normalize
+missing values in readers and call `ensureAppMap`, `ensureAppArray`, or
+`ensureAppText` only from real mutation paths.
 
 ### Pattern: Keep awareness ephemeral
 
@@ -234,13 +242,13 @@ export const createExampleDoc = () =>
 
 ```ts
 import * as Y from "yjs";
-import { createAppDoc, ensureAppArray, ensureAppMap } from "@conclave/apps-sdk";
+import { createAppDoc, ensureAppArray, getAppRoot } from "@conclave/apps-sdk";
 
-export const createChecklistDoc = () =>
-  createAppDoc("checklist", (root) => {
-    ensureAppArray(root, "items");
-    ensureAppMap(root, "meta");
-  });
+export const createChecklistDoc = () => createAppDoc("checklist");
+
+export const addChecklistItem = (doc: Y.Doc, item: string) => {
+  ensureAppArray(getAppRoot(doc, "checklist"), "items").push([item]);
+};
 ```
 
 `web/index.ts`:
@@ -259,15 +267,14 @@ export const checklistApp = defineApp({
 });
 ```
 
-`host registration`:
+`host app list`:
 
 ```ts
-import { registerApps } from "@conclave/apps-sdk";
 import { checklistApp } from "@conclave/apps-sdk/checklist/web";
 
-useEffect(() => {
-  registerApps([checklistApp]);
-}, []);
+const meetingApps = [whiteboardApp, watchApp, checklistApp];
+
+<AppsProvider apps={meetingApps} socket={socket} />;
 ```
 
 `meeting controls wiring`:
@@ -289,7 +296,7 @@ const toggleLock = () => setLocked(!state.locked);
 3. Cross-client Yjs sync converges.
 4. Awareness state appears and clears correctly.
 5. Reconnect restores app state (`refreshState` + sync).
-6. Exports + mobile aliases pass `check:apps`.
+6. Core and web exports pass `check:apps`.
 
 If any item fails, use [Troubleshooting](./troubleshooting.md) before expanding feature scope.
 

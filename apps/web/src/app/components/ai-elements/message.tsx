@@ -7,7 +7,7 @@
 import type { ComponentProps, HTMLAttributes } from "react";
 import { cn } from "./utils";
 
-export type MessageRole = "user" | "assistant" | "system";
+type MessageRole = "user" | "assistant" | "system";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: MessageRole;

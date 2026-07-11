@@ -41,9 +41,6 @@ RUN mkdir -p /opt/scripts
 COPY start.sh /opt/scripts/start.sh
 RUN chmod +x /opt/scripts/start.sh
 
-COPY run_chromium.sh /opt/scripts/run_chromium.sh
-RUN chmod +x /opt/scripts/run_chromium.sh
-
 COPY start-audio.sh /opt/scripts/start-audio.sh
 RUN chmod +x /opt/scripts/start-audio.sh
 

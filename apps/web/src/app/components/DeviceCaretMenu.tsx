@@ -27,8 +27,6 @@ const IN_USE_TOGGLE = "#4F86F7";
 
 type DeviceOption = { deviceId: string; label: string };
 
-export type DeviceOptionList = DeviceOption[];
-
 export function useEnumeratedDevices(active: boolean, refreshToken?: unknown) {
   const [audioInput, setAudioInput] = useState<DeviceOption[]>([]);
   const [audioOutput, setAudioOutput] = useState<DeviceOption[]>([]);

@@ -2,25 +2,21 @@
 
 The shared design-system tokens and primitives for Conclave: one flat,
 gradient-free visual language (solid surfaces, hairline borders, a single
-coral accent) consumed by both the web app and the native app.
+coral accent) consumed by the web app and server-rendered email surfaces.
 
 ## Entry points
 
 | Import | Contents |
 | --- | --- |
 | `@conclave/ui-tokens` | Platform-agnostic tokens (`color`, `font`, `radius`, …) + core helpers |
-| `@conclave/ui-tokens/web` | React DOM primitives (buttons, tile, panels, controls) |
-| `@conclave/ui-tokens/native` | React Native primitives (buttons, tile) |
-| `tailwind-tokens.cjs` | The same tokens as a Tailwind preset |
-| `src/tokens.css` | The same tokens as CSS custom properties |
+| `@conclave/ui-tokens/web` | React DOM primitives (controls, avatars, and tile labels) |
+| `src/tokens.css` | Tailwind v4 bridge kept aligned with `tokens.ts` |
 
-Import primitives from the platform-specific entry (`/web` or `/native`) so
-the wrong platform's React renderer is never pulled into a bundle — the root
-entry deliberately exports tokens and helpers only.
+Import React primitives from `/web`; the root entry deliberately exports only
+tokens and platform-agnostic helpers.
 
 ## Rules
 
 - No gradients, anywhere. Flat solid surfaces + border + the lone coral
   accent (`#F95F4A`).
-- Tokens are the single source of truth: web, native, Tailwind, and CSS all
-  read from `src/tokens.ts`.
+- Keep the small CSS bridge aligned with `tokens.ts` when changing a token.

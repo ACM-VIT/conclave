@@ -90,7 +90,7 @@ export const PromptInputTools = ({
   />
 );
 
-export type PromptInputStatus = "ready" | "submitted" | "streaming" | "error";
+type PromptInputStatus = "ready" | "submitted" | "streaming" | "error";
 
 export type PromptInputSubmitProps = ComponentProps<"button"> & {
   status?: PromptInputStatus;

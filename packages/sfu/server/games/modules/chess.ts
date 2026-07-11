@@ -8,7 +8,7 @@ import {
   type GamePlayer,
 } from "../types.js";
 import { payloadField, requireOneOf, requireString } from "../validation.js";
-import { pickBotMove, type BotLevel } from "./chessBot.js";
+import { pickBotMove, type BotLevel } from "../chessBot.js";
 
 type ChessPhase = "lobby" | "playing" | "results";
 type ChessMode = "duel" | "teams" | "computer";
@@ -224,7 +224,7 @@ const seatedTeams = (
 
 const legalMoves = (game: Chess): Record<string, string[]> => {
   const bySquare: Record<string, string[]> = {};
-  for (const move of game.moves({ verbose: true }) as ChessJsMove[]) {
+  for (const move of game.moves({ verbose: true })) {
     bySquare[move.from] = [...(bySquare[move.from] ?? []), move.to];
   }
   return bySquare;
@@ -352,8 +352,9 @@ const applyBoardMove = (
   const result = resultForGame(game);
   const moverSide = sideForTurn(state.turn);
   const clocks = resolveClocks(state, ctx.now);
-  if (state.timeControlMs != null && clocks[moverSide] != null && !result) {
-    clocks[moverSide] = (clocks[moverSide] as number) + state.incrementMs;
+  const moverClock = clocks[moverSide];
+  if (state.timeControlMs != null && moverClock != null && !result) {
+    clocks[moverSide] = moverClock + state.incrementMs;
   }
   const fen = game.fen();
   const next: ChessState = {
@@ -751,14 +752,21 @@ export const chessModule: GameModule<ChessState> = {
       ctx.now >= state.turnStartedAt + state.moveTimeMs
     ) {
       const game = new Chess(state.fen);
-      const legal = game.moves({ verbose: true }) as ChessJsMove[];
+      const legal = game.moves({ verbose: true });
       if (legal.length === 0) return state;
       const chosen = ctx.rng.pick(legal);
+      const promotion =
+        chosen.promotion === "q" ||
+        chosen.promotion === "r" ||
+        chosen.promotion === "b" ||
+        chosen.promotion === "n"
+          ? chosen.promotion
+          : undefined;
       const captainId = state.teams[turnSide].captainId;
       return applyBoardMove(
         state,
         ctx,
-        { from: chosen.from, to: chosen.to, promotion: chosen.promotion as Promotion | undefined },
+        { from: chosen.from, to: chosen.to, promotion },
         {
           id: captainId ?? "@auto",
           name: captainId ? playerName(ctx, captainId) : "Auto",

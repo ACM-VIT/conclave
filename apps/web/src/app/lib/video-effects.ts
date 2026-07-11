@@ -35,55 +35,26 @@ export type BackgroundEffectId =
   | "none"
   | "blur-light"
   | "blur-strong"
-  | "desk-motion"
-  | "loft-motion"
-  | "aurora-motion"
   | "office"
-  | "lounge"
   | "beach"
   | "forest"
   | "studio"
   | "bookshelf"
   | "coffee-shop"
   | "home-office-bookshelf"
-  | "home-office-living-room"
-  | "home-office-sofa"
-  | "living-room-close"
-  | "living-room-shelf"
   | "living-room-wide"
   | "modern-conference-room"
   | "modern-indian-living-room"
-  | "office-break-room"
   | "office-library"
-  | "office-meeting-space"
   | "office-green-space"
   | "shelf-with-plants"
-  | "stylish-home-office"
-  | "stylish-living-room-couch"
-  | "cyberpunk-penthouse"
-  | "tropical-beach"
   | "accessible-patio"
-  | "gaming-room"
-  | "rainy-conservatory"
-  | "rainy-cafe"
-  | "sunny-cafe"
-  | "rustic-cabin"
-  | "snowy-chalet"
-  | "underwater-sea-lab"
-  | "space-station"
-  | "japanese-courtyard"
-  | "parisian-skyline"
-  | "greenhouse"
-  | "italian-terrace-countryside"
-  | "physics-lab"
-  | "lakeside-tent"
   | "camper-vacation"
   | "dog-office"
   | "indian-balcony"
   | "arabian-cafe-terrace"
   | "ocean-terrace"
   | "snowy-cafe"
-  | "gradient"
   | "custom";
 
 export type FaceFilterId =
@@ -257,61 +228,27 @@ const BACKGROUND_EFFECT_IDS = new Set<BackgroundEffectId>([
   "none",
   "blur-light",
   "blur-strong",
-  "desk-motion",
-  "loft-motion",
-  "aurora-motion",
   "office",
-  "lounge",
   "beach",
   "forest",
   "studio",
   "bookshelf",
   "coffee-shop",
   "home-office-bookshelf",
-  "home-office-living-room",
-  "home-office-sofa",
-  "living-room-close",
-  "living-room-shelf",
   "living-room-wide",
   "modern-conference-room",
   "modern-indian-living-room",
-  "office-break-room",
   "office-library",
-  "office-meeting-space",
   "office-green-space",
   "shelf-with-plants",
-  "stylish-home-office",
-  "stylish-living-room-couch",
-  "cyberpunk-penthouse",
-  "tropical-beach",
   "accessible-patio",
-  "gaming-room",
-  "rainy-conservatory",
-  "rainy-cafe",
-  "sunny-cafe",
-  "rustic-cabin",
-  "snowy-chalet",
-  "underwater-sea-lab",
-  "space-station",
-  "japanese-courtyard",
-  "parisian-skyline",
-  "greenhouse",
-  "italian-terrace-countryside",
-  "physics-lab",
-  "lakeside-tent",
   "camper-vacation",
   "dog-office",
   "indian-balcony",
   "arabian-cafe-terrace",
   "ocean-terrace",
   "snowy-cafe",
-  "gradient",
   "custom",
-]);
-export const ANIMATED_BACKGROUND_EFFECT_IDS = new Set<BackgroundEffectId>([
-  "desk-motion",
-  "loft-motion",
-  "aurora-motion",
 ]);
 const FACE_FILTER_IDS = new Set<FaceFilterId>([
   "none",
@@ -1046,48 +983,6 @@ const isBackgroundEffectId = (value: unknown): value is BackgroundEffectId =>
   typeof value === "string" &&
   BACKGROUND_EFFECT_IDS.has(value as BackgroundEffectId);
 
-const HIDDEN_BACKGROUND_EFFECT_IDS = new Set<BackgroundEffectId>([
-  "desk-motion",
-  "loft-motion",
-  "aurora-motion",
-  "home-office-living-room",
-  "home-office-sofa",
-  "lounge",
-  "living-room-close",
-  "living-room-shelf",
-  "office-break-room",
-  "office-meeting-space",
-  "stylish-home-office",
-  "stylish-living-room-couch",
-  "cyberpunk-penthouse",
-  "tropical-beach",
-  "gaming-room",
-  "rainy-conservatory",
-  "rainy-cafe",
-  "sunny-cafe",
-  "rustic-cabin",
-  "snowy-chalet",
-  "underwater-sea-lab",
-  "space-station",
-  "japanese-courtyard",
-  "parisian-skyline",
-  "greenhouse",
-  "italian-terrace-countryside",
-  "physics-lab",
-  "lakeside-tent",
-  "gradient",
-]);
-
-const isSelectableBackgroundEffectId = (
-  value: unknown,
-): value is BackgroundEffectId =>
-  isBackgroundEffectId(value) &&
-  !HIDDEN_BACKGROUND_EFFECT_IDS.has(value);
-
-export const isAnimatedBackgroundEffect = (
-  value: BackgroundEffectId,
-): boolean => ANIMATED_BACKGROUND_EFFECT_IDS.has(value);
-
 const isFaceFilterId = (value: unknown): value is FaceFilterId =>
   typeof value === "string" && FACE_FILTER_IDS.has(value as FaceFilterId);
 
@@ -1215,7 +1110,7 @@ export function normalizeVideoEffectsState(value: unknown): VideoEffectsState {
     customBackgroundDataUrl || customBackgroundId,
   );
   const background =
-    isSelectableBackgroundEffectId(value.background) &&
+    isBackgroundEffectId(value.background) &&
     (value.background !== "custom" || hasCustomBackground)
       ? value.background
       : DEFAULT_VIDEO_EFFECTS.background;
@@ -1263,49 +1158,21 @@ export function normalizeVideoEffectsStateForStorage(
 
 export const BACKGROUND_ASSET_PATHS = {
   office: "/effects/backgrounds/office-shelf.webp",
-  lounge: "/effects/backgrounds/warm-lounge.webp",
   beach: "/effects/backgrounds/beach-pavilion.webp",
   forest: "/effects/backgrounds/forest-light.webp",
   studio: "/effects/backgrounds/conference-wall.webp",
   bookshelf: "/effects/backgrounds/bookshelf.webp",
   "coffee-shop": "/effects/backgrounds/coffee-shop.webp",
   "home-office-bookshelf": "/effects/backgrounds/home-office-bookshelf.webp",
-  "home-office-living-room":
-    "/effects/backgrounds/home-office-living-room.webp",
-  "home-office-sofa": "/effects/backgrounds/home-office-sofa.webp",
-  "living-room-close": "/effects/backgrounds/living-room-close.webp",
-  "living-room-shelf": "/effects/backgrounds/living-room-shelf.webp",
   "living-room-wide": "/effects/backgrounds/living-room-wide.webp",
   "modern-conference-room":
     "/effects/backgrounds/modern-conference-room.webp",
   "modern-indian-living-room":
     "/effects/backgrounds/modern-indian-living-room.webp",
-  "office-break-room": "/effects/backgrounds/office-break-room.webp",
   "office-library": "/effects/backgrounds/office-library.webp",
-  "office-meeting-space": "/effects/backgrounds/office-meeting-space.webp",
   "office-green-space": "/effects/backgrounds/office-green-space.webp",
   "shelf-with-plants": "/effects/backgrounds/shelf-with-plants.webp",
-  "stylish-home-office": "/effects/backgrounds/stylish-home-office.webp",
-  "stylish-living-room-couch":
-    "/effects/backgrounds/stylish-living-room-couch.webp",
-  "cyberpunk-penthouse": "/effects/backgrounds/cyberpunk-penthouse.webp",
-  "tropical-beach": "/effects/backgrounds/tropical-beach.webp",
   "accessible-patio": "/effects/backgrounds/accessible-patio.webp",
-  "gaming-room": "/effects/backgrounds/gaming-room.webp",
-  "rainy-conservatory": "/effects/backgrounds/rainy-conservatory.webp",
-  "rainy-cafe": "/effects/backgrounds/rainy-cafe.webp",
-  "sunny-cafe": "/effects/backgrounds/sunny-cafe.webp",
-  "rustic-cabin": "/effects/backgrounds/rustic-cabin.webp",
-  "snowy-chalet": "/effects/backgrounds/snowy-chalet.webp",
-  "underwater-sea-lab": "/effects/backgrounds/underwater-sea-lab.webp",
-  "space-station": "/effects/backgrounds/space-station.webp",
-  "japanese-courtyard": "/effects/backgrounds/japanese-courtyard.webp",
-  "parisian-skyline": "/effects/backgrounds/parisian-skyline.webp",
-  greenhouse: "/effects/backgrounds/greenhouse.webp",
-  "italian-terrace-countryside":
-    "/effects/backgrounds/italian-terrace-countryside.webp",
-  "physics-lab": "/effects/backgrounds/physics-lab.webp",
-  "lakeside-tent": "/effects/backgrounds/lakeside-tent.webp",
   "camper-vacation": "/effects/backgrounds/camper-vacation.webp",
   "dog-office": "/effects/backgrounds/dog-office.webp",
   "indian-balcony": "/effects/backgrounds/indian-balcony.webp",

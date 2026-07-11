@@ -36,7 +36,7 @@ export const GAME_CONTENT_TOPIC_OPTION: GameOptionSpec = {
   maxLength: sfuConfig.gameAi.topicMaxLength,
 };
 
-export const sanitizeTopic = (
+const sanitizeTopic = (
   topic: string,
   maxLength = sfuConfig.gameAi.topicMaxLength,
 ): string =>

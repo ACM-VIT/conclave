@@ -70,7 +70,7 @@ export const clampMeetViewTiles = (value: number) => {
   );
 };
 
-export const MEET_VIEW_STORAGE_KEY = "conclave:meet-view";
+const MEET_VIEW_STORAGE_KEY = "conclave:meet-view";
 
 export const readStoredMeetViewSettings = (): MeetViewSettings => {
   if (typeof window === "undefined") return DEFAULT_MEET_VIEW_SETTINGS;
@@ -93,7 +93,7 @@ export const writeStoredMeetViewSettings = (settings: MeetViewSettings) => {
   } catch {}
 };
 
-export function normalizeMeetViewSettings(value: unknown): MeetViewSettings {
+function normalizeMeetViewSettings(value: unknown): MeetViewSettings {
   if (!isRecord(value)) return DEFAULT_MEET_VIEW_SETTINGS;
 
   return {

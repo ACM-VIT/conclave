@@ -25,7 +25,12 @@ import type {
   MediaTrackQualityStats,
 } from "../hooks/useConnectionQuality";
 import { useMicTest, playSpeakerTestSound } from "../hooks/useMicTest";
+import type {
+  ClonedTtsVoice,
+  TtsSystemVoiceOption,
+} from "../hooks/useMeetTts";
 import { useEnumeratedDevices } from "./DeviceCaretMenu";
+import TtsVoiceSettings from "./TtsVoiceSettings";
 
 type SettingsTab = "video" | "audio" | "connection";
 
@@ -42,6 +47,14 @@ interface DeviceSettingsPanelProps {
   onToggleMirror?: () => void;
   selectedAudioInputDeviceId?: string;
   selectedAudioOutputDeviceId?: string;
+  ttsSystemVoices?: TtsSystemVoiceOption[];
+  selectedTtsSystemVoiceUri?: string | null;
+  onTtsSystemVoiceChange?: (voiceUri: string | null) => void;
+  clonedTtsVoice?: ClonedTtsVoice | null;
+  onClonedTtsVoiceChange?: (voice: ClonedTtsVoice) => void;
+  onClonedTtsVoiceClear?: () => void;
+  canCloneTtsVoice?: boolean;
+  ttsVoiceOwnerName?: string;
   selectedVideoInputDeviceId?: string;
   onAudioInputDeviceChange?: (deviceId: string) => void;
   onAudioOutputDeviceChange?: (deviceId: string) => void;
@@ -414,6 +427,14 @@ export default function DeviceSettingsPanel({
   onToggleMirror,
   selectedAudioInputDeviceId,
   selectedAudioOutputDeviceId,
+  ttsSystemVoices = [],
+  selectedTtsSystemVoiceUri,
+  onTtsSystemVoiceChange,
+  clonedTtsVoice,
+  onClonedTtsVoiceChange,
+  onClonedTtsVoiceClear,
+  canCloneTtsVoice = false,
+  ttsVoiceOwnerName = "My voice",
   selectedVideoInputDeviceId,
   onAudioInputDeviceChange,
   onAudioOutputDeviceChange,
@@ -523,7 +544,7 @@ export default function DeviceSettingsPanel({
         <div className="min-w-0">
           <h2 className="truncate text-[15px] font-semibold">Settings</h2>
           <p className="mt-0.5 text-[11.5px]" style={{ color: color.textFaint }}>
-            Nothing here is shared with the meeting.
+            Device choices stay local. Voice clones are shared only with /tts.
           </p>
         </div>
         <button
@@ -816,6 +837,20 @@ export default function DeviceSettingsPanel({
                 )}
                 {isPlayingTestSound ? "Playing" : "Play test sound"}
               </button>
+            </Section>
+
+            <Section label="Text to speech">
+              <TtsVoiceSettings
+                systemVoices={ttsSystemVoices}
+                selectedSystemVoiceUri={selectedTtsSystemVoiceUri}
+                onSystemVoiceChange={onTtsSystemVoiceChange}
+                clonedVoice={clonedTtsVoice}
+                onClonedVoiceChange={onClonedTtsVoiceChange}
+                onClonedVoiceClear={onClonedTtsVoiceClear}
+                getRecordingStream={micTest.getRecordingStream}
+                canCloneVoice={canCloneTtsVoice}
+                ownerName={ttsVoiceOwnerName}
+              />
             </Section>
           </div>
         ) : null}

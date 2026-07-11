@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "check:video-effect-assets": "node scripts/check-video-effect-assets.mjs",
-    "check:low-bandwidth-profiles": "node scripts/check-low-bandwidth-profiles.mjs",
+    "check:swift-events": "node packages/meeting-core/scripts/gen-swift-events.mjs --check",
     "debug:video-effects": "node scripts/debug-video-effects-headless.mjs",
     "debug:video-effects:face": "node scripts/debug-video-effects-face.mjs",
     "observe:meet-effects": "node scripts/observe-meet-effects-headless.mjs",
@@ -19,14 +19,14 @@
     "probe:low-bandwidth:receive-downshift": "CONCLAVE_LOW_BANDWIDTH_SCENARIO=receive-transition CONCLAVE_LOW_BANDWIDTH_PROFILE=good CONCLAVE_LOW_BANDWIDTH_TRANSITION_TARGET=emergency CONCLAVE_LOW_BANDWIDTH_SETTLE_MS=12000 CONCLAVE_LOW_BANDWIDTH_TRANSITION_SETTLE_MS=26000 node scripts/probe-low-bandwidth-meet.mjs",
     "probe:low-bandwidth:receive-recovery": "CONCLAVE_LOW_BANDWIDTH_SCENARIO=receive-transition CONCLAVE_LOW_BANDWIDTH_PROFILE=emergency CONCLAVE_LOW_BANDWIDTH_TRANSITION_TARGET=good CONCLAVE_LOW_BANDWIDTH_TRANSITION_SETTLE_MS=55000 node scripts/probe-low-bandwidth-meet.mjs",
     "build:conclave-skip:android": "bash scripts/build-conclave-skip-android-debug.sh",
-    "test": "pnpm -C packages/meeting-core test",
-    "typecheck:web": "pnpm -C apps/web exec tsc --noEmit",
-    "typecheck:sfu": "pnpm -C packages/sfu exec tsc --noEmit",
-    "typecheck": "pnpm run typecheck:web && pnpm run typecheck:sfu",
+    "build": "pnpm --filter conclave-web --filter @conclave/shared-browser run build",
+    "test": "pnpm --filter conclave-web --filter @conclave/meeting-core --filter @conclave/sfu run test",
+    "typecheck": "pnpm --filter conclave-web --filter @conclave/apps-sdk --filter @conclave/meeting-core --filter @conclave/sfu --filter @conclave/shared-browser run typecheck",
     "konsistent": "konsistent",
     "lint:packages": "eslint packages",
     "lint:web": "pnpm -C apps/web run lint",
-    "lint": "pnpm run lint:packages && pnpm run lint:web && pnpm run konsistent"
+    "lint": "pnpm run lint:packages && pnpm run lint:web && pnpm run konsistent",
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm -C packages/apps-sdk run check:apps && pnpm run check:video-effect-assets && pnpm run check:swift-events"
   },
   "devDependencies": {
     "eslint": "^10.6.0",

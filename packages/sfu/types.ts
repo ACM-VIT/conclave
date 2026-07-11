@@ -622,6 +622,8 @@ export interface ChatMessage {
   dmTargetUserId?: string;
   dmTargetDisplayName?: string;
   replyTo?: ChatReplyPreview;
+  /** Encrypted capability for the sender's consented cloned TTS voice. */
+  ttsVoiceToken?: string;
 }
 
 export interface ChatReplyPreview {
@@ -657,6 +659,7 @@ export interface SendChatData {
   content?: string;
   gif?: ChatGifAttachment;
   replyTo?: ChatReplyPreview;
+  ttsVoiceToken?: string;
 }
 
 export interface ChatMessageNotification extends ChatMessage {}

@@ -10,9 +10,7 @@ export default function SchedulePage() {
     <Suspense
       fallback={
         <RouteLoadingState
-          eyebrow="Schedule"
           title="Loading scheduler"
-          detail="Checking your account and calendar workspace."
         />
       }
     >

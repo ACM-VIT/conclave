@@ -94,6 +94,7 @@ export function DevPlaygroundWebApp() {
   const participants = useMemo(
     () =>
       states
+        .filter((state) => state.user?.id || state.user?.name)
         .map((state, index) => {
           const id = state.user?.id ?? `anon-${index + 1}`;
           const name = state.user?.name ?? id;

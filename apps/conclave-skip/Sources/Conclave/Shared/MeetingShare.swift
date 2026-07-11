@@ -47,6 +47,36 @@ enum MeetingShare {
         #endif
     }
 
+    @discardableResult
+    static func shareText(_ text: String, title: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        #if SKIP
+        return NativeMeetingShare.shareText(title: title, text: text)
+        #elseif canImport(UIKit)
+        guard let presenter = topViewController(from: rootViewController()),
+              let presenterView = presenter.view else {
+            UIPasteboard.general.string = text
+            HapticManager.shared.trigger(.success)
+            return true
+        }
+
+        let controller = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        controller.title = title
+        controller.popoverPresentationController?.sourceView = presenterView
+        controller.popoverPresentationController?.sourceRect = CGRect(
+            x: presenterView.bounds.midX,
+            y: presenterView.bounds.midY,
+            width: 1,
+            height: 1
+        )
+        presenter.present(controller, animated: true)
+        return true
+        #else
+        _ = title
+        return false
+        #endif
+    }
+
     #if canImport(UIKit) && !SKIP
     private static func topViewController(from base: UIViewController?) -> UIViewController? {
         if let navigationController = base as? UINavigationController {

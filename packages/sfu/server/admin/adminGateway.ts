@@ -32,7 +32,7 @@ const EVENTS_PER_TICK_MAX = 40;
 const FIND_MATCH_LIMIT = 20;
 const OWNERSHIP_RECONCILE_MS = 2_000;
 
-export type AdminRoomSummary = {
+type AdminRoomSummary = {
   channelId: string;
   roomId: string;
   clientId: string;
@@ -46,7 +46,7 @@ export type AdminRoomSummary = {
   activeGame: string | null;
 };
 
-export type AdminScheduledItem = {
+type AdminScheduledItem = {
   kind: "meeting" | "webinar";
   id: string;
   title: string;
@@ -60,14 +60,14 @@ export type AdminScheduledItem = {
   host: string;
 };
 
-export type AdminHistoryPoint = {
+type AdminHistoryPoint = {
   at: number;
   rooms: number;
   participants: number;
   producers: number;
 };
 
-export type AdminEventType =
+type AdminEventType =
   | "room-opened"
   | "room-closed"
   | "user-joined"
@@ -281,7 +281,7 @@ export const registerAdminGateway = (
       next(new Error("Unauthorized"));
       return;
     }
-    socket.data.subject = check.subject;
+    (socket.data as { subject?: string }).subject = check.subject;
     next();
   });
 
@@ -597,7 +597,9 @@ export const registerAdminGateway = (
 
   nsp.on("connection", (socket) => {
     Logger.info(
-      `[AdminGateway] operator connected: ${String(socket.data.subject)}`,
+      `[AdminGateway] operator connected: ${String(
+        (socket.data as { subject?: string }).subject,
+      )}`,
     );
     socket.emit("admin:hello", {
       instanceId,
@@ -631,13 +633,11 @@ export const registerAdminGateway = (
             : null;
 
         try {
-          const leaveTasks: Array<Promise<void> | void> = [];
           for (const key of socket.rooms) {
             if (typeof key === "string" && key.startsWith(WATCH_PREFIX)) {
-              leaveTasks.push(socket.leave(key));
+              await Promise.resolve(socket.leave(key));
             }
           }
-          await Promise.all(leaveTasks);
 
           if (!channelId) {
             ack?.({ ok: true });

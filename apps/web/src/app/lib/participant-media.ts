@@ -18,14 +18,6 @@ export function getRenderableParticipantVideoStream(
   return participant.videoStream;
 }
 
-export function hasRenderableParticipantVideo(
-  participant: ParticipantVideoState,
-): boolean {
-  const track = getRenderableParticipantVideoStream(participant)
-    ?.getVideoTracks()[0];
-  return Boolean(track && track.readyState === "live");
-}
-
 export function isRenderingParticipantScreenShare(
   participant: ParticipantVideoState,
   stream: MediaStream | null,

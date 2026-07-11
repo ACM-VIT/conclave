@@ -53,6 +53,14 @@ enum ChatComposerLayout {
     static func composerMinHeight(isAndroid: Bool) -> CGFloat {
         inputHeight(isAndroid: isAndroid) + (isAndroid ? 8.0 : 24.0)
     }
+
+    static func composerBottomPadding(isAndroid: Bool, contentInset: CGFloat) -> CGFloat {
+        composerVerticalPadding(isAndroid: isAndroid) + max(0.0, contentInset)
+    }
+
+    static func suggestionPopoverHeight(itemCount: Int, maxHeight: CGFloat) -> CGFloat {
+        min(max(0.0, maxHeight), CGFloat(max(0, itemCount)) * 49.0)
+    }
 }
 
 enum ChatFocusReportPolicy {
@@ -100,6 +108,7 @@ struct ChatLatestEntryChange: Equatable {
 
 struct ChatOverlayView: View {
     @Bindable var viewModel: MeetingViewModel
+    var bottomContentInset: CGFloat = 0.0
     var onFocusChanged: (Bool) -> Void = { _ in }
     @State private var replyTarget: ChatReplyPreview?
     @State private var lastReportedFocus = false
@@ -167,6 +176,7 @@ struct ChatOverlayView: View {
             ChatComposerView(
                 viewModel: viewModel,
                 replyTarget: $replyTarget,
+                bottomContentInset: bottomContentInset,
                 onFocusChanged: { focused in
                     if isComposerFocused != focused {
                         isComposerFocused = focused
@@ -250,6 +260,7 @@ struct ChatOverlayView: View {
 private struct ChatComposerView: View {
     @Bindable var viewModel: MeetingViewModel
     @Binding var replyTarget: ChatReplyPreview?
+    let bottomContentInset: CGFloat
     let onFocusChanged: (Bool) -> Void
     let onSuggestionCountsChanged: (Int, Int) -> Void
     @State private var messageText = ""
@@ -357,28 +368,20 @@ private struct ChatComposerView: View {
         let canSendMessage = !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isChatDisabled
         let visibleMentionSuggestions = mentionSuggestions
         let visibleCommandSuggestions = commandSuggestions
+        let suggestionPopoverHeight = ChatComposerLayout.suggestionPopoverHeight(
+            itemCount: visibleMentionSuggestions.isEmpty
+                ? visibleCommandSuggestions.count
+                : visibleMentionSuggestions.count,
+            maxHeight: visibleMentionSuggestions.isEmpty
+                ? commandSuggestionsMaxHeight
+                : mentionSuggestionsMaxHeight
+        )
         VStack(spacing: 10) {
             if let replyTarget {
                 ChatReplyComposerView(
                     replyTo: replyTarget,
                     isReplyFromCurrentUser: viewModel.state.isLocalIdentityUserId(replyTarget.userId),
                     onCancel: { self.replyTarget = nil }
-                )
-            }
-
-            if !visibleMentionSuggestions.isEmpty, let context = mentionContext {
-                ChatMentionSuggestionsView(
-                    suggestions: visibleMentionSuggestions,
-                    maxHeight: mentionSuggestionsMaxHeight,
-                    onSelect: { suggestion in
-                        applyMentionSuggestion(suggestion, context: context)
-                    }
-                )
-            } else if !visibleCommandSuggestions.isEmpty {
-                ChatCommandSuggestionsView(
-                    commands: visibleCommandSuggestions,
-                    maxHeight: commandSuggestionsMaxHeight,
-                    onSelect: applyCommandSuggestion
                 )
             }
 
@@ -468,8 +471,37 @@ private struct ChatComposerView: View {
             }
             .onTapGesture { markComposerActive() }
         }
+        // Suggestions are a popover anchored above the composer, not a VStack
+        // child. Appearing/disappearing must never move the input row or resize
+        // the timeline while somebody is typing.
+        .overlay(alignment: .topLeading) {
+            if !visibleMentionSuggestions.isEmpty, let context = mentionContext {
+                ChatMentionSuggestionsView(
+                    suggestions: visibleMentionSuggestions,
+                    maxHeight: mentionSuggestionsMaxHeight,
+                    onSelect: { suggestion in
+                        applyMentionSuggestion(suggestion, context: context)
+                    }
+                )
+                .frame(height: suggestionPopoverHeight)
+                .offset(y: -(suggestionPopoverHeight + 10.0))
+            } else if !visibleCommandSuggestions.isEmpty {
+                ChatCommandSuggestionsView(
+                    commands: visibleCommandSuggestions,
+                    maxHeight: commandSuggestionsMaxHeight,
+                    onSelect: applyCommandSuggestion
+                )
+                .frame(height: suggestionPopoverHeight)
+                .offset(y: -(suggestionPopoverHeight + 10.0))
+            }
+        }
+        .zIndex(2)
         .padding(.horizontal, composerHorizontalPadding)
-        .padding(.vertical, composerVerticalPadding)
+        .padding(.top, composerVerticalPadding)
+        .padding(.bottom, ChatComposerLayout.composerBottomPadding(
+            isAndroid: isAndroidComposerLayout,
+            contentInset: bottomContentInset
+        ))
         .overlay(alignment: .top) {
             Rectangle().fill(ACMColors.border).frame(height: 1)
         }
@@ -1188,6 +1220,10 @@ private struct ChatMentionSuggestionsView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    #if !SKIP
+                    .contentShape(Rectangle())
+                    #endif
                 }
                 .buttonStyle(.plain)
             }
@@ -1233,6 +1269,10 @@ private struct ChatCommandSuggestionsView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    #if !SKIP
+                    .contentShape(Rectangle())
+                    #endif
                 }
                 .buttonStyle(.plain)
             }
@@ -1249,6 +1289,7 @@ private struct ChatSuggestionsContainer<Content: View>: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 content
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxHeight: maxHeight)
         .acmColorBackground(ACMColors.bgAlt)
@@ -1339,7 +1380,6 @@ struct ChatActionMessageRow: View {
     private var directMessageLabel: String? {
         ChatMessagePresentation.directMessageLabel(for: message, isFromCurrentUser: isFromCurrentUser)
     }
-
     var body: some View {
         VStack(spacing: 3) {
             if let directMessageLabel {
@@ -1457,6 +1497,9 @@ struct ChatMessageRow: View {
     }
     private var directMessageLabel: String? {
         ChatMessagePresentation.directMessageLabel(for: message, isFromCurrentUser: isFromCurrentUser)
+    }
+    private var isConclaveAssistantMessage: Bool {
+        message.userId == ConclaveAssistantChatIdentity.userId
     }
 
     var body: some View {
@@ -1576,9 +1619,14 @@ struct ChatMessageRow: View {
                 .frame(maxWidth: 220, alignment: isFromCurrentUser ? .trailing : .leading)
         } else {
             ChatMessageTextBubble(
-                content: ChatMessagePresentation.content(for: message),
+                content: isConclaveAssistantMessage
+                    ? message.content
+                    : ChatMessagePresentation.content(for: message),
                 isFromCurrentUser: isFromCurrentUser,
-                isDirect: message.isDirect
+                isDirect: message.isDirect,
+                rendersMarkdown: isConclaveAssistantMessage,
+                showsShimmer: isConclaveAssistantMessage &&
+                    message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             )
             .frame(
                 maxWidth: ChatMessageLayout.maximumContentWidth(isFromCurrentUser: isFromCurrentUser),
@@ -1620,6 +1668,8 @@ struct ChatMessageTextBubble: View {
     let content: String
     let isFromCurrentUser: Bool
     let isDirect: Bool
+    var rendersMarkdown = false
+    var showsShimmer = false
 
     private var links: [ChatMessageLink] {
         Array(ChatMessageLinkParser.links(in: content).prefix(3))
@@ -1627,9 +1677,25 @@ struct ChatMessageTextBubble: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: links.isEmpty ? 0.0 : 8.0) {
-            Text(content)
-                .font(ACMFont.trial(14))
-                .foregroundStyle(isFromCurrentUser ? Color.white : ACMColors.text)
+            if showsShimmer {
+                NativeTextShimmer(
+                    text: "Thinking",
+                    font: ACMFont.trial(14),
+                    duration: 2.0,
+                    spread: 2.0
+                )
+            } else if rendersMarkdown {
+                NativeStreamingMarkdownView(
+                    markdown: content,
+                    isStreaming: false,
+                    fontSize: 14,
+                    blockSpacing: 7
+                )
+            } else {
+                Text(content)
+                    .font(ACMFont.trial(14))
+                    .foregroundStyle(isFromCurrentUser ? Color.white : ACMColors.text)
+            }
 
             if !links.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -1658,23 +1724,49 @@ private struct ChatMessageLinkChip: View {
     let isFromCurrentUser: Bool
 
     var body: some View {
-        Link(destination: link.url) {
-            HStack(spacing: 6) {
-                ACMSystemIcon.icon("link", android: "link", size: 12)
-                    .foregroundStyle(isFromCurrentUser ? Color.white.opacity(0.82) : ACMColors.primaryOrange)
-                Text(link.display)
-                    .font(ACMFont.trial(12, weight: .medium))
-                    .foregroundStyle(isFromCurrentUser ? Color.white : ACMColors.text)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+        Group {
+            #if SKIP
+            Button {
+                openAndroidLink()
+            } label: {
+                linkLabel
             }
-            .padding(.horizontal, 9.0)
-            .padding(.vertical, 6.0)
-            .acmColorBackground(isFromCurrentUser ? Color.black.opacity(0.16) : ACMColors.bgAlt)
-            .clipShape(Capsule())
+            #else
+            Link(destination: link.url) {
+                linkLabel
+            }
+            #endif
         }
         .buttonStyle(.plain)
     }
+
+    private var linkLabel: some View {
+        HStack(spacing: 6) {
+            ACMSystemIcon.icon("link", android: "link", size: 12)
+                .foregroundStyle(isFromCurrentUser ? Color.white.opacity(0.82) : ACMColors.primaryOrange)
+            Text(link.display)
+                .font(ACMFont.trial(12, weight: .medium))
+                .foregroundStyle(isFromCurrentUser ? Color.white : ACMColors.text)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.horizontal, 9.0)
+        .padding(.vertical, 6.0)
+        .acmColorBackground(isFromCurrentUser ? Color.black.opacity(0.16) : ACMColors.bgAlt)
+        .clipShape(Capsule())
+    }
+
+    #if SKIP
+    private func openAndroidLink() {
+        PipManager.suppressNextAutoEnter(reason: "chat_link")
+        Task {
+            let didOpen = await UIApplication.shared.open(link.url)
+            if !didOpen {
+                PipManager.restoreAutoEnterAfterExternalActivity()
+            }
+        }
+    }
+    #endif
 }
 
 struct ChatMessageLink: Identifiable, Equatable {

@@ -7,11 +7,9 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageDir = path.resolve(__dirname, "..");
-const repoRoot = path.resolve(packageDir, "..", "..");
 
 const APPS_SRC_DIR = path.join(packageDir, "src", "apps");
 const PACKAGE_JSON_PATH = path.join(packageDir, "package.json");
-const MOBILE_TSCONFIG_PATH = path.join(repoRoot, "apps", "mobile", "tsconfig.json");
 
 const args = new Set(process.argv.slice(2));
 const shouldFix = args.has("--fix");
@@ -23,7 +21,7 @@ const usage = () => {
   pnpm -C packages/apps-sdk run check:apps --fix
 
 Options:
-  --fix      Apply safe JSON fixes for package exports and mobile tsconfig aliases
+  --fix      Apply safe JSON fixes for package exports
   --help     Show this help
 `);
 };
@@ -61,8 +59,7 @@ const getApps = () => {
       const appDir = path.join(APPS_SRC_DIR, appId);
       const hasCore = fs.existsSync(path.join(appDir, "core", "index.ts"));
       const hasWeb = fs.existsSync(path.join(appDir, "web", "index.ts"));
-      const hasNative = fs.existsSync(path.join(appDir, "native", "index.ts"));
-      return hasCore || hasWeb || hasNative;
+      return hasCore || hasWeb;
     })
     .sort((a, b) => a.localeCompare(b));
 };
@@ -72,8 +69,7 @@ const appInfo = (appId) => {
   const core = fs.existsSync(path.join(appDir, "core", "index.ts"));
   const coreDoc = fs.existsSync(path.join(appDir, "core", "doc", "index.ts"));
   const web = fs.existsSync(path.join(appDir, "web", "index.ts"));
-  const native = fs.existsSync(path.join(appDir, "native", "index.ts"));
-  return { appId, core, coreDoc, web, native };
+  return { appId, core, coreDoc, web };
 };
 
 const apps = getApps().map(appInfo);
@@ -89,8 +85,8 @@ for (const app of apps) {
   if (!app.coreDoc) {
     warnings.push(`[${app.appId}] missing core/doc/index.ts`);
   }
-  if (!app.web && !app.native) {
-    errors.push(`[${app.appId}] missing web/native renderer entrypoint`);
+  if (!app.web) {
+    errors.push(`[${app.appId}] missing web/index.ts`);
   }
 }
 
@@ -105,9 +101,6 @@ for (const app of apps) {
   }
   if (app.web) {
     expectedExports[`./${app.appId}/web`] = `./src/apps/${app.appId}/web/index.ts`;
-  }
-  if (app.native) {
-    expectedExports[`./${app.appId}/native`] = `./src/apps/${app.appId}/native/index.ts`;
   }
 }
 
@@ -126,7 +119,7 @@ for (const [key, expected] of Object.entries(expectedExports)) {
 }
 
 for (const key of Object.keys(nextExports)) {
-  const match = key.match(/^\.\/([^/]+)\/(core|web|native)$/);
+  const match = key.match(/^\.\/([^/]+)\/(core|web)$/);
   if (!match) continue;
   const [, appId, part] = match;
   const app = apps.find((item) => item.appId === appId);
@@ -147,74 +140,6 @@ for (const key of Object.keys(nextExports)) {
   }
 }
 
-const mobileTsconfig = readJson(MOBILE_TSCONFIG_PATH);
-const compilerOptions = mobileTsconfig.compilerOptions ?? {};
-const mobilePaths = { ...(compilerOptions.paths ?? {}) };
-const nextMobilePaths = { ...mobilePaths };
-
-const expectedMobilePaths = {};
-for (const app of apps) {
-  if (app.core) {
-    expectedMobilePaths[`@conclave/apps-sdk/${app.appId}/core`] = [
-      `../../packages/apps-sdk/src/apps/${app.appId}/core/index.ts`,
-    ];
-  }
-  if (app.web) {
-    expectedMobilePaths[`@conclave/apps-sdk/${app.appId}/web`] = [
-      `../../packages/apps-sdk/src/apps/${app.appId}/web/index.ts`,
-    ];
-  }
-  if (app.native) {
-    expectedMobilePaths[`@conclave/apps-sdk/${app.appId}/native`] = [
-      `../../packages/apps-sdk/src/apps/${app.appId}/native/index.ts`,
-    ];
-  }
-}
-
-const sameArray = (a, b) =>
-  Array.isArray(a) &&
-  Array.isArray(b) &&
-  a.length === b.length &&
-  a.every((item, idx) => item === b[idx]);
-
-for (const [key, expected] of Object.entries(expectedMobilePaths)) {
-  const current = nextMobilePaths[key];
-  if (sameArray(current, expected)) continue;
-  if (typeof current === "undefined") {
-    errors.push(`apps/mobile/tsconfig.json missing paths["${key}"]`);
-  } else {
-    errors.push(
-      `apps/mobile/tsconfig.json mismatch for paths["${key}"]`
-    );
-  }
-  if (shouldFix) {
-    nextMobilePaths[key] = expected;
-    fixes.push(`apps/mobile/tsconfig.json: set paths["${key}"]`);
-  }
-}
-
-for (const key of Object.keys(nextMobilePaths)) {
-  const match = key.match(/^@conclave\/apps-sdk\/([^/]+)\/(core|web|native)$/);
-  if (!match) continue;
-  const [, appId, part] = match;
-  const app = apps.find((item) => item.appId === appId);
-  if (!app) {
-    warnings.push(`apps/mobile/tsconfig.json has stale alias ${key}`);
-    if (shouldFix) {
-      delete nextMobilePaths[key];
-      fixes.push(`apps/mobile/tsconfig.json: removed stale paths["${key}"]`);
-    }
-    continue;
-  }
-  if (!app[part]) {
-    warnings.push(`apps/mobile/tsconfig.json has ${key} but ${appId}/${part}/index.ts is missing`);
-    if (shouldFix) {
-      delete nextMobilePaths[key];
-      fixes.push(`apps/mobile/tsconfig.json: removed invalid paths["${key}"]`);
-    }
-  }
-}
-
 if (shouldFix) {
   const exportsChanged =
     JSON.stringify(sortObjectKeys(nextExports)) !==
@@ -222,15 +147,6 @@ if (shouldFix) {
   if (exportsChanged) {
     pkg.exports = sortObjectKeys(nextExports);
     writeJson(PACKAGE_JSON_PATH, pkg);
-  }
-
-  const pathsChanged =
-    JSON.stringify(sortObjectKeys(nextMobilePaths)) !==
-    JSON.stringify(sortObjectKeys(mobilePaths));
-  if (pathsChanged) {
-    mobileTsconfig.compilerOptions = compilerOptions;
-    mobileTsconfig.compilerOptions.paths = sortObjectKeys(nextMobilePaths);
-    writeJson(MOBILE_TSCONFIG_PATH, mobileTsconfig);
   }
 }
 

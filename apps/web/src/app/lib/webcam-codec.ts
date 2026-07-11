@@ -854,7 +854,7 @@ export async function applyScreenShareTrackNetworkProfile(
   }
 }
 
-export function buildScreenShareEncodingForNetworkProfile(
+function buildScreenShareEncodingForNetworkProfile(
   profile: WebcamProducerNetworkProfile,
   track?: MediaStreamTrack | null,
 ): ScreenShareEncoding {
@@ -1015,13 +1015,6 @@ export async function produceWebcamTrack({
       buildOptions([buildWebcamSingleLayerEncoding(quality)], undefined),
     ),
   );
-}
-
-export async function applyWebcamProducerQualityCap(
-  producer: Producer,
-  quality: VideoQuality,
-): Promise<void> {
-  return applyWebcamProducerNetworkProfile(producer, quality, "good");
 }
 
 export async function applyWebcamProducerNetworkProfile(

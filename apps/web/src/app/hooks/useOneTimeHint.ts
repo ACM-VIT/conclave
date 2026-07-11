@@ -47,5 +47,3 @@ export function useOneTimeHint(
 
   return { visible, dismiss };
 }
-
-export default useOneTimeHint;

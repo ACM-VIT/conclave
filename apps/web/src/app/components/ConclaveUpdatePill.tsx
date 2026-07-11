@@ -14,7 +14,7 @@ const VERSION_POLL_INTERVAL_MS = 30_000;
 const getVersionDismissalKey = (version: ConclaveSiteVersion): string =>
   [version.id, version.tag ?? "", version.timestamp ?? ""].join(":");
 
-export function ConclaveUpdatePill({
+function ConclaveUpdatePill({
   currentVersion,
 }: {
   currentVersion: ConclaveSiteVersion;

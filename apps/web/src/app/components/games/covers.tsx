@@ -1,7 +1,7 @@
 // Per-game identity: a single accent colour + display name. Used for the lobby
 // spotlight tint and overline. Deliberately minimal - no artwork, no glyphs.
 
-export const GAME_ACCENTS: Record<string, string> = {
+const GAME_ACCENTS: Record<string, string> = {
   trivia: "#3B8EE0",
   bluff: "#8B7BF0",
   "would-you-rather": "#22A578",
@@ -12,7 +12,7 @@ export const GAME_ACCENTS: Record<string, string> = {
   chess: "#C08552",
 };
 
-export const GAME_NAMES: Record<string, string> = {
+const GAME_NAMES: Record<string, string> = {
   trivia: "Trivia",
   bluff: "Bluff",
   "would-you-rather": "Would You Rather",

@@ -28,7 +28,7 @@ export type WatchVideoMetadata = {
   revalidateAfterMs: number | null;
 };
 
-export type WatchBroadcastStatus =
+type WatchBroadcastStatus =
   | "live"
   | "upcoming"
   | "none"

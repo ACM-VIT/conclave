@@ -59,7 +59,7 @@ export type SchedulingStore = {
   calendarByProfileId: Map<string, SchedulingCalendarConnection>;
 };
 
-export type SchedulingSnapshot = {
+type SchedulingSnapshot = {
   profiles: SchedulingProfile[];
   availability: Array<{ profileId: string; availability: WeeklyAvailability }>;
   eventTypes: SchedulingEventType[];
@@ -179,7 +179,7 @@ const normalizeTimeZone = (value: unknown, fallback = getDefaultTimeZone()): str
   }
 };
 
-export const defaultWeeklyAvailability = (
+const defaultWeeklyAvailability = (
   timeZone = getDefaultTimeZone(),
 ): WeeklyAvailability => ({
   timeZone,
@@ -237,7 +237,7 @@ const normalizeAvailabilityOverride = (
   return { date, windows, unavailable };
 };
 
-export const normalizeWeeklyAvailability = (
+const normalizeWeeklyAvailability = (
   value: unknown,
   fallbackTimeZone = getDefaultTimeZone(),
 ): WeeklyAvailability => {
@@ -1069,7 +1069,7 @@ const normalizeSnapshot = (
     : [],
 });
 
-export const createSqliteSchedulingPersistence = (
+const createSqliteSchedulingPersistence = (
   path: string = getSchedulingSqlitePath(),
 ): SchedulingPersistence => {
   const dir = dirname(path);
@@ -1206,7 +1206,7 @@ export const createSqliteSchedulingPersistence = (
   };
 };
 
-export const createFileSchedulingPersistence = (
+const createFileSchedulingPersistence = (
   path: string = getSchedulingJsonPath(),
 ): SchedulingPersistence => ({
   save: (snapshot) => {
@@ -1577,7 +1577,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
   }
 }
 
-export const createRedisSchedulingPersistence = (
+const createRedisSchedulingPersistence = (
   redisUrl: string = resolveRedisPersistenceUrl(),
   keyPrefix: string = resolveRedisPersistenceKeyPrefix(),
   fallback: SchedulingPersistence = createSqliteSchedulingPersistence(),
@@ -1625,7 +1625,7 @@ export const createSchedulingPersistence = (): SchedulingPersistence => {
   }
 };
 
-export const snapshotSchedulingStore = (
+const snapshotSchedulingStore = (
   store: SchedulingStore,
 ): SchedulingSnapshot => ({
   profiles: Array.from(store.profilesById.values()),

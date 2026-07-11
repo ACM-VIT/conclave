@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.CloseFullscreen
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.EmojiEmotions
 import androidx.compose.material.icons.rounded.FeaturedVideo
 import androidx.compose.material.icons.rounded.Forum
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.ListAlt
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Mic
@@ -49,15 +51,19 @@ import androidx.compose.material.icons.rounded.NorthWest
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.PanTool
 import androidx.compose.material.icons.rounded.PictureInPictureAlt
+import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.PersonRemove
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.ScreenShare
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.SouthEast
 import androidx.compose.material.icons.rounded.SouthWest
 import androidx.compose.material.icons.rounded.SportsEsports
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.StopScreenShare
 import androidx.compose.material.icons.rounded.Videocam
@@ -105,6 +111,8 @@ internal fun meetingIconVector(name: String): ImageVector = when (name) {
     "send"            -> Icons.AutoMirrored.Rounded.Send
     "close"           -> Icons.Rounded.Close
     "copy"            -> Icons.Rounded.ContentCopy
+    "description"     -> Icons.Rounded.Description
+    "list"            -> Icons.Rounded.ListAlt
     "delete"          -> Icons.Rounded.Delete
     "pin.off"         -> Icons.Outlined.PushPin
     "ghost"           -> Icons.Rounded.VisibilityOff
@@ -120,6 +128,10 @@ internal fun meetingIconVector(name: String): ImageVector = when (name) {
     "block"           -> Icons.Rounded.Block
     "forum"           -> Icons.Rounded.Forum
     "play"            -> Icons.Rounded.PlayArrow
+    "pause"           -> Icons.Rounded.Pause
+    "stop"            -> Icons.Rounded.Stop
+    "refresh"         -> Icons.Rounded.Refresh
+    "share"           -> Icons.Rounded.Share
     "sports_esports"  -> Icons.Rounded.SportsEsports
     "group"           -> Icons.Rounded.Groups
     "check"           -> Icons.Rounded.CheckCircle
@@ -173,7 +185,7 @@ fun warmMeetingIcons() {
             "hangup", "more", "chat", "chat.outline", "participants", "grid", "sidebar", "spotlight", "pip",
             "collapse", "settings",
             "raise.hand", "raise.hand.off", "reactions", "lock", "lock.open", "send", "reply",
-            "close", "copy", "delete", "pin.off", "ghost", "host", "person.add", "remove.person",
+            "close", "copy", "description", "list", "pause", "stop", "refresh", "share", "delete", "pin.off", "ghost", "host", "person.add", "remove.person",
             "key", "link", "public", "arrow.forward", "back", "account", "block", "forum", "play",
             "sports_esports", "group", "volume",
             "volume.off", "add", "remove", "minus", "info", "shield", "gif", "search", "closed_caption", "warning", "check", "open.in.full",

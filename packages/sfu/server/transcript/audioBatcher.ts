@@ -1,7 +1,7 @@
 import type { TranscriptSpeaker } from "../../types.js";
 import { pcm16LeToBase64 } from "./pcm.js";
 
-export const TRANSCRIPT_AUDIO_BATCH_TARGET_SAMPLES = 6000;
+const TRANSCRIPT_AUDIO_BATCH_TARGET_SAMPLES = 6000;
 export const TRANSCRIPT_AUDIO_COMMIT_INTERVAL_MS = 1200;
 
 const PCM16_BYTES_PER_SAMPLE = 2;

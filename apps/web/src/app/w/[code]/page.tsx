@@ -73,9 +73,7 @@ export default function WebinarRoomPage({ params }: WebinarRoomPageProps) {
     <Suspense
       fallback={
         <RouteLoadingState
-          eyebrow="Webinar"
           title="Opening webinar"
-          detail="Resolving the event details and attendee lobby."
         />
       }
     >

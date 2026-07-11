@@ -486,5 +486,3 @@ export const config = {
     announcedIp: plainTransportAnnouncedIp,
   },
 };
-
-export default config;

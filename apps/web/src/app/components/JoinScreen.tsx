@@ -41,7 +41,6 @@ import {
   sanitizeRoomCode,
 } from "../lib/utils";
 import RoomPresenceBadge from "./RoomPresenceBadge";
-// import ScheduledMeetingsPanel from "./ScheduledMeetingsPanel";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
 import {
   useBandwidthHeavyPreloadDeferred,
@@ -1468,9 +1467,6 @@ function JoinScreen({
                   </button>
               )}
 
-              {/* ScheduledMeetingsPanel disabled for now
-              <ScheduledMeetingsPanel isSignedIn={isSignedInUser} />
-              */}
 
               <div className="space-y-1.5">
                 <div className="flex min-h-[16px] items-center justify-between gap-3">

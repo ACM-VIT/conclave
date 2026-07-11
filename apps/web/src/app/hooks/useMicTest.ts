@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { DEFAULT_AUDIO_CONSTRAINTS } from "../lib/constants";
 import { createNoiseCancellationPipeline } from "../lib/noise-cancellation";
 
-export type MicLoopbackPhase = "idle" | "recording" | "playing";
+type MicLoopbackPhase = "idle" | "recording" | "playing";
 
 export interface MicTestController {
   /** Capture + analysis chain is live and metering. */
@@ -24,6 +24,8 @@ export interface MicTestController {
   loopbackSecondsLeft: number;
   /** idle → record a short clip; recording → stop early and play; playing → stop. */
   toggleLoopback: () => void;
+  /** Current private, post-gain microphone stream for explicit local tests. */
+  getRecordingStream: () => MediaStream | null;
 }
 
 const LOOPBACK_MAX_SECONDS = 5;
@@ -103,6 +105,11 @@ export function useMicTest({
     if (node) node.gain.value = clamped;
     setGainState(clamped);
   }, []);
+
+  const getRecordingStream = useCallback(
+    () => recorderStreamRef.current,
+    [],
+  );
 
   const clearRecorderTimers = useCallback(() => {
     if (recorderTimeoutRef.current !== null) {
@@ -452,6 +459,7 @@ export function useMicTest({
     loopbackPhase,
     loopbackSecondsLeft,
     toggleLoopback,
+    getRecordingStream,
   };
 }
 

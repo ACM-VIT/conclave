@@ -59,7 +59,7 @@ export type CollectPhase<S> = {
  *                sticky, advancing only when the host collapses the deadline via
  *                a "next" move (a manual reveal).
  */
-export type RevealPhase<S> = {
+type RevealPhase<S> = {
   name: string;
   onEnter: (state: S, ctx: GameContext) => S;
 };

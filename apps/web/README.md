@@ -23,7 +23,32 @@ main web Worker.
 - `OPENAI_API_KEY`: optional server-side key for room-wide assistant answers. If
   unset, the chat dock prompts the asking participant for their own OpenAI key
   and keeps it in browser memory for the current page session only.
+- `GITHUB_ISSUES_TOKEN`: optional server-side fine-grained GitHub token that lets
+  `@Conclave` create issues when a participant explicitly requests one. Grant it
+  Issues read/write access only for the target repository.
+- `GITHUB_ISSUES_REPOSITORY`: optional `owner/repository` target for assistant
+  issues. Defaults to `ACM-VIT/conclave`.
 - Set the production secret with `pnpm -C apps/web exec wrangler secret put OPENAI_API_KEY --config wrangler.jsonc`.
+- Enable issue creation in production with `pnpm -C apps/web exec wrangler secret put GITHUB_ISSUES_TOKEN --config wrangler.jsonc`.
+
+### Configurable text-to-speech and voice cloning
+
+The Audio settings panel lets participants choose a browser system voice and,
+when signed in, create an explicitly consented instant voice clone from a
+10–20 second microphone sample. `/tts <text>` messages carry an encrypted voice
+capability; the provider API key and raw provider voice ID are never exposed to
+the browser. Web clients synthesize the cloned voice and fall back to their
+selected system voice when cloning is unavailable. Native clients remain
+compatible and currently use their system TTS voice.
+
+- `ELEVENLABS_API_KEY`: required to create, synthesize, and delete cloned voices.
+- `TTS_VOICE_TOKEN_SECRET`: encrypts cloned-voice capabilities. Use a dedicated,
+  high-entropy production secret. `SFU_SECRET` is accepted as a fallback.
+- `ELEVENLABS_TTS_MODEL`: optional model override; defaults to
+  `eleven_multilingual_v2`.
+- Voice samples are sent to ElevenLabs only after the owner checks the consent
+  box. Clone metadata is stored in that browser's local storage; deleting the
+  clone removes it from ElevenLabs and the browser.
 
 ## Meeting transcript worker
 

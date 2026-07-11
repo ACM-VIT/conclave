@@ -7,8 +7,8 @@
  * packing that Meet/Jitsi/Daily all use), then reports last-row centering and
  * paging so the renderer can lay it out exactly like Meet.
  *
- * One source of truth: web (apps/web) and React-Native (apps/mobile) import
- * this; the Skip/SwiftUI app mirrors it 1:1 in Swift (GridLayout.swift).
+ * The web client imports this directly; the Skip/SwiftUI app mirrors it in
+ * Swift (GridLayout.swift) and verifies the same behavior in native tests.
  */
 
 export interface GridLayoutOptions {

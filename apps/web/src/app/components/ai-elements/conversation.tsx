@@ -39,47 +39,6 @@ export const ConversationContent = ({
   />
 );
 
-export type ConversationEmptyStateProps = ComponentProps<"div"> & {
-  title?: string;
-  description?: string;
-  icon?: React.ReactNode;
-};
-
-export const ConversationEmptyState = ({
-  className,
-  title = "No messages yet",
-  description = "Start a conversation to see messages here",
-  icon,
-  children,
-  ...props
-}: ConversationEmptyStateProps) => (
-  <div
-    className={cn(
-      "flex size-full flex-col items-center justify-center gap-3 px-8 py-12 text-center",
-      className,
-    )}
-    {...props}
-  >
-    {children ?? (
-      <>
-        {icon ? (
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] text-[#a1a1aa]">
-            {icon}
-          </div>
-        ) : null}
-        <div className="max-w-[16rem] space-y-1.5">
-          <p className="text-[14px] font-semibold text-[#fafafa]">{title}</p>
-          {description ? (
-            <p className="text-[12.5px] leading-relaxed text-[#a1a1aa]">
-              {description}
-            </p>
-          ) : null}
-        </div>
-      </>
-    )}
-  </div>
-);
-
 export type ConversationScrollButtonProps = ComponentProps<"button">;
 
 export const ConversationScrollButton = ({

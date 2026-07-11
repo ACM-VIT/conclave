@@ -4,39 +4,6 @@
  */
 import { color } from "../tokens.js";
 
-/* ------------------------------------------------------------------ avatars */
-
-/** Solid, on-brand avatar background palette (NO gradients). Cream text reads
- * on all of these. Index chosen deterministically from a stable id. */
-export const AVATAR_PALETTE = [
-  "#F95F4A", // orange
-  "#FF007A", // pink
-  "#7C5CFF", // violet
-  "#2DA8A8", // teal
-  "#4F86F7", // blue
-  "#3FA66A", // green
-  "#E0913A", // amber
-  "#C44ECF", // magenta
-] as const;
-
-/** Deterministic hash → palette color. Same id always yields the same color. */
-export function avatarColor(id: string | undefined | null): string {
-  const key = (id ?? "").trim();
-  if (!key) return AVATAR_PALETTE[0];
-  let hash = 0;
-  for (let i = 0; i < key.length; i++) {
-    hash = (hash << 5) - hash + key.charCodeAt(i);
-    hash |= 0; // force 32-bit
-  }
-  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
-}
-
-/** First letter of the first word, uppercased. Falls back to "?". */
-export function initials(name: string | undefined | null): string {
-  const parts = (name ?? "").trim().split(/\s+/).filter(Boolean);
-  return parts[0]?.[0]?.toUpperCase() || "?";
-}
-
 /* ----------------------------------------------------- control button states */
 
 export type ControlButtonVariant =
@@ -80,14 +47,4 @@ export function controlButtonColors(
       // Meet-style: subtle filled grey circle with a bright white icon
       return { bg: "rgba(255,255,255,0.1)", fg: "#ffffff", border: "transparent" };
   }
-}
-
-/* ------------------------------------------------------------------- shared */
-
-export type AppButtonVariant = "primary" | "ghost";
-
-/** Tile state used by the Tile primitive on both platforms. */
-export interface TileVisualState {
-  /** Active speaker → flat 2px solid accent border (never a glow). */
-  speaking?: boolean;
 }

@@ -1,6 +1,6 @@
 /**
  * @conclave/ui-tokens — THE single source of truth for color, spacing, radii,
- * type scale, border weights, and motion across apps/web and apps/mobile.
+ * type scale, border weights, and motion across the TypeScript surfaces.
  *
  * Design laws baked into the shape of this file:
  *  - ONE sans family (no `mono` key — monospace is gone).
@@ -13,7 +13,7 @@
  */
 
 /** Semantic color tokens. Solid hex where possible so Tailwind opacity
- * modifiers (e.g. `bg-accent/15`) and RN alpha both work. */
+ * modifiers (e.g. `bg-accent/15`) work. */
 export const color = {
   // Backgrounds & surfaces (dark theme only)
   bg: "#0a0a0b",
@@ -22,7 +22,7 @@ export const color = {
   surfaceRaised: "#232327",
   surfaceHover: "#2e2e33",
 
-  // Text (solid + pre-mixed alphas for RN where utilities can't apply opacity)
+  // Text (solid + pre-mixed alphas where utilities cannot apply opacity)
   text: "#fafafa",
   textMuted: "rgba(250, 250, 250, 0.74)",
   textFaint: "rgba(250, 250, 250, 0.56)",
@@ -47,8 +47,8 @@ export const color = {
   scrimSoft: "rgba(0, 0, 0, 0.45)",
 } as const;
 
-/** Spacing scale in px. RN consumers read these directly; web uses Tailwind's
- * own spacing scale (we do NOT override it to avoid clobbering existing utils). */
+/** Spacing scale in px. Web uses Tailwind's own spacing scale (we do not
+ * override it to avoid clobbering existing utilities). */
 export const space = {
   xs: 4,
   sm: 8,
@@ -75,15 +75,11 @@ export const radius = {
  * only expressive face, for headings only. NO mono key by design. */
 export const font = {
   sans: '"PolySans Trial", system-ui, -apple-system, sans-serif',
-  /** React Native family name (registered via expo-font). */
-  sansNative: "PolySans-Regular",
-  sansMediumNative: "PolySans-Median",
   display: '"PolySans Bulky Wide", sans-serif',
-  displayNative: "PolySans-BulkyWide",
 } as const;
 
 /** Type scale — platform-agnostic sizes/weights. Each surface composes these
- * into CSS classes (web) or RN text styles (native). All sans. */
+ * into CSS classes or inline styles. All sans. */
 export const text = {
   display: { fontSize: 28, fontWeight: "700", letterSpacing: -0.2 },
   heading: { fontSize: 18, fontWeight: "700", letterSpacing: 0 },
@@ -127,5 +123,3 @@ export const tokens = {
 
 export type Tokens = typeof tokens;
 export type ColorToken = keyof typeof color;
-
-export default tokens;

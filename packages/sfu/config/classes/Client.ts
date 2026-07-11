@@ -39,7 +39,7 @@ export type ConsumerTelemetrySnapshot = {
 
 type ConsumerState = ConsumerTelemetrySnapshot;
 
-export function createProducerKey(
+function createProducerKey(
   kind: MediaKind,
   type: ProducerType,
 ): ProducerKey {
@@ -318,5 +318,3 @@ export class Client {
     return { kind, type };
   }
 }
-
-export default Client;

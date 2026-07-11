@@ -25,7 +25,7 @@ const disabled = (value: string | undefined): boolean => {
   return normalized === "0" || normalized === "false" || normalized === "off";
 };
 
-export const resolveSchedulingReminderLeadMs = (): number => {
+const resolveSchedulingReminderLeadMs = (): number => {
   if (disabled(process.env.SCHEDULING_EMAIL_REMINDERS_ENABLED)) return 0;
   const configured = Number(process.env.SCHEDULING_EMAIL_REMINDER_MINUTES);
   const minutes =

@@ -11,10 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV PYTHON=/usr/bin/python3
 
-RUN corepack enable && corepack prepare pnpm@9.12.3 --activate
+RUN corepack enable && corepack prepare pnpm@11.7.0 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/sfu/package.json packages/sfu/package.json
+COPY packages/ui-tokens/package.json packages/ui-tokens/package.json
 RUN pnpm install --filter @conclave/sfu... --frozen-lockfile
 
 COPY . .

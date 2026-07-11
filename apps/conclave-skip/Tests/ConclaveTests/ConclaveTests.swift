@@ -145,6 +145,147 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(source.contains("for segment in state.orderedSegments"))
     }
 
+    func testTranscriptConfigurationMatchesWebModelCatalog() throws {
+        XCTAssertEqual(TranscriptConfiguration.defaultTranscriptModel, "gpt-realtime-whisper")
+        XCTAssertEqual(TranscriptConfiguration.defaultAssistantModel, "gpt-5.6-terra")
+        XCTAssertEqual(TranscriptConfiguration.providers.map(\.rawValue), ["openai", "sarvam"])
+        XCTAssertEqual(
+            TranscriptConfiguration.assistantModels.map(\.id),
+            ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol"]
+        )
+        XCTAssertEqual(TranscriptConfiguration.provider(for: "saaras:v3"), TranscriptProvider.sarvam)
+        XCTAssertEqual(TranscriptConfiguration.provider(for: "custom-openai-model"), TranscriptProvider.openAI)
+
+        let options = TranscriptStartOptions(
+            apiKey: "  provider-key  ",
+            assistantApiKey: "   ",
+            transcriptModel: "saaras:v3",
+            qaModel: "unknown-model"
+        )
+        XCTAssertEqual(options.apiKey, "provider-key")
+        XCTAssertNil(options.assistantApiKey)
+        XCTAssertEqual(options.transcriptModel, "saaras:v3")
+        XCTAssertEqual(options.qaModel, TranscriptConfiguration.defaultAssistantModel)
+    }
+
+    @MainActor
+    func testTranscriptStateCachesCapabilitiesMinutesAndStreamingQuestions() throws {
+        let state = TranscriptState()
+        state.applyCapabilities(start: true, takeover: false, stop: true, ask: true)
+        state.applyProviderKeyAvailability(openAI: true, sarvam: false)
+
+        XCTAssertTrue(state.capabilitiesKnown)
+        XCTAssertTrue(state.canStart)
+        XCTAssertTrue(state.canStop)
+        XCTAssertTrue(state.canAsk)
+        XCTAssertEqual(state.globalKeyAvailable(for: TranscriptProvider.openAI), true)
+        XCTAssertEqual(state.globalKeyAvailable(for: TranscriptProvider.sarvam), false)
+
+        let decision = TranscriptMinutesEntryModel(
+            id: "decision-1",
+            text: "Ship the native transcript parity pass",
+            speakerUserId: "host",
+            speakerDisplayName: "Host",
+            owner: "Ishaan",
+            due: "Friday"
+        )
+        let minutes = TranscriptMinutesSnapshotModel(
+            summary: "The team agreed on the native rollout.",
+            topics: [],
+            decisions: [decision],
+            actionItems: [],
+            openQuestions: [],
+            followUps: [],
+            updatedAt: 1_000,
+            model: "gpt-5.6-terra"
+        )
+        state.applyMinutes(minutes)
+        state.applyMinutesStatus(TranscriptMinutesStatus.live)
+        XCTAssertTrue(state.minutes.hasContent)
+        XCTAssertEqual(state.minutes.decisions.map(\.id), ["decision-1"])
+        XCTAssertEqual(state.minutesStatus, TranscriptMinutesStatus.live)
+
+        state.beginQuestion(id: "qa-1", question: "What did we decide?", timestamp: 1_000)
+        state.applyQuestionUpdate(
+            id: "qa-1",
+            question: "What did we decide?",
+            answer: "Ship the native transcript parity pass.",
+            status: TranscriptQAStatus.done,
+            error: nil,
+            timestamp: 2_000
+        )
+        XCTAssertEqual(
+            state.qaMessages.map(\.role),
+            [TranscriptQARole.user, TranscriptQARole.assistant]
+        )
+        XCTAssertEqual(state.qaMessages.last?.content, "Ship the native transcript parity pass.")
+        XCTAssertEqual(state.qaMessages.last?.status, TranscriptQAStatus.done)
+    }
+
+    func testTranscriptExportIncludesMinutesAndTranscript() throws {
+        let segment = TranscriptSegmentModel(
+            itemId: "segment-1",
+            sequence: 1,
+            speakerUserId: "host",
+            speakerDisplayName: "Host",
+            text: "We should ship this.",
+            startMs: 1_000,
+            isFinal: true
+        )
+        let action = TranscriptMinutesEntryModel(
+            id: "action-1",
+            text: "Publish the build",
+            speakerUserId: nil,
+            speakerDisplayName: nil,
+            owner: "Ishaan",
+            due: "Friday"
+        )
+        let minutes = TranscriptMinutesSnapshotModel(
+            summary: "A release was planned.",
+            topics: [],
+            decisions: [],
+            actionItems: [action],
+            openQuestions: [],
+            followUps: [],
+            updatedAt: 2_000,
+            model: "gpt-5.6-terra"
+        )
+
+        let markdown = TranscriptPresentationPolicy.exportMarkdown(
+            roomId: "room-a",
+            segments: [segment],
+            minutes: minutes
+        )
+        XCTAssertTrue(markdown.contains("# Meeting Transcript - room-a"))
+        XCTAssertTrue(markdown.contains("## Summary"))
+        XCTAssertTrue(markdown.contains("## Action Items"))
+        XCTAssertTrue(markdown.contains("- Publish the build (Ishaan - Friday)"))
+        XCTAssertTrue(markdown.contains("## Transcript"))
+        XCTAssertTrue(markdown.contains("Host: We should ship this."))
+    }
+
+    func testTranscriptPanelParityAndFixedRegionsStayInPlace() throws {
+        let panel = try sourceFileContents("Sources/Conclave/Features/Meeting/TranscriptPanelView.swift")
+        let service = try sourceFileContents("Sources/Conclave/Core/Networking/TranscriptService.swift")
+        let meeting = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingView.swift")
+
+        XCTAssertTrue(panel.contains("TranscriptAskTab"))
+        XCTAssertTrue(panel.contains("TranscriptMinutesTab"))
+        XCTAssertTrue(panel.contains("TranscriptConfiguration.assistantModels"))
+        XCTAssertTrue(panel.contains(".frame(height: 44)"))
+        XCTAssertTrue(panel.contains(".frame(height: 62)"))
+        XCTAssertTrue(panel.contains(".acmColorBackground(ACMColors.surface)"))
+        XCTAssertTrue(panel.contains("@State private var navigation = TranscriptPanelNavigationState()"))
+        XCTAssertFalse(panel.contains("@State private var activeTab"))
+        XCTAssertTrue(panel.contains("Text(\"Stop\")"))
+        XCTAssertTrue(panel.contains("ACMColors.error.opacity(0.12)"))
+        XCTAssertTrue(service.contains("case \"minutes.updated\":"))
+        XCTAssertTrue(service.contains("case \"qa.delta\":"))
+        XCTAssertTrue(service.contains("[\"type\": \"session.pause\"]"))
+        XCTAssertTrue(meeting.contains(".padding(.leading, geometry.safeAreaInsets.leading)"))
+        XCTAssertFalse(meeting.contains(".padding(.leading, max(6.0, geometry.safeAreaInsets.leading))"))
+    }
+
     func testNativeGameWireModelsDecodeServerShapes() throws {
         let json = """
         {
@@ -445,13 +586,81 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(viewModel.state.isCameraOff)
     }
 
-    func testMeetingBannerPoliciesKeepTheStageSlotStableAndDismissalQuiet() throws {
-        XCTAssertGreaterThanOrEqual(MeetingBannerSlotLayout.reservedHeight, 58.0)
+    func testMeetingBannerPoliciesOverlayWithoutReservingStageSpace() throws {
+        XCTAssertEqual(MeetingBannerSlotLayout.overlayHeight, 58.0)
+        XCTAssertEqual(MeetingHeaderLayout.barHeight, 56.0)
         XCTAssertEqual(MeetingQualityBannerPolicy.severity(ConnectionQuality.poor), 2)
         XCTAssertEqual(MeetingQualityBannerPolicy.severity(ConnectionQuality.emergency), 3)
         XCTAssertTrue(MeetingQualityBannerPolicy.shouldResetDismissal(for: ConnectionQuality.good))
         XCTAssertFalse(MeetingQualityBannerPolicy.shouldResetDismissal(for: ConnectionQuality.fair))
         XCTAssertFalse(MeetingQualityBannerPolicy.shouldResetDismissal(for: ConnectionQuality.unknown))
+
+        let meetingSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingView.swift")
+        let bannerSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingBannerOverlay.swift")
+        XCTAssertTrue(meetingSource.contains("banners float over the stage"))
+        XCTAssertTrue(meetingSource.contains(".padding(.top, MeetingHeaderLayout.barHeight)"))
+        XCTAssertFalse(bannerSource.contains("MeetingBannerSlotLayout.reservedHeight"))
+    }
+
+    func testStreamingMarkdownParsesNativeBlocksAndIncompleteInlineMarkup() throws {
+        let blocks = StreamingMarkdownParser.blocks(
+            in: "# Summary\n\n- **Decision** made\n1. Follow up\n\n> Keep this visible\n\n```swift\nlet value = 1\n```",
+            startingAt: 0,
+            isStreamingTail: false
+        )
+        XCTAssertEqual(
+            blocks.map(\.kind),
+            [.heading, .unorderedListItem, .orderedListItem, .quote, .codeFence]
+        )
+        XCTAssertEqual(blocks.last?.language, "swift")
+
+        let streamingRuns = StreamingMarkdownInlineParser.runs(
+            in: "Writing **the answer",
+            isStreaming: true
+        )
+        XCTAssertEqual(streamingRuns.map(\.text).joined(), "Writing the answer")
+        XCTAssertTrue(streamingRuns.last?.style.isStrong == true)
+
+        let finalizedRuns = StreamingMarkdownInlineParser.runs(
+            in: "Writing **the answer",
+            isStreaming: false
+        )
+        XCTAssertEqual(finalizedRuns.map(\.text).joined(), "Writing **the answer")
+        XCTAssertFalse(finalizedRuns.last?.style.isStrong == true)
+    }
+
+    func testStreamingMarkdownCommitsStablePrefixAndReparsesOnlyLiveTail() throws {
+        let initial = "# Heading\n\nFirst stable paragraph.\n\nOpen tail"
+        let state = StreamingMarkdownRenderState(markdown: initial, isStreaming: true)
+        let stableIds = Array(state.blocks.prefix(2).map(\.id))
+        XCTAssertGreaterThan(state.committedCharacterCount, 0)
+
+        let next = initial + " keeps growing"
+        state.update(markdown: next, isStreaming: true)
+
+        XCTAssertEqual(Array(state.blocks.prefix(2).map(\.id)), stableIds)
+        XCTAssertLessThan(state.lastParsedCharacterCount, next.count)
+
+        state.update(markdown: next, isStreaming: false)
+        XCTAssertEqual(state.committedCharacterCount, next.count)
+        XCTAssertFalse(state.blocks.contains(where: { $0.isStreamingTail }))
+    }
+
+    func testNativeShimmerMatchesWebDynamicSpreadWithoutUnboundedBands() throws {
+        XCTAssertEqual(
+            NativeTextShimmerLayout.highlightWidth(textLength: 8, spread: 2, containerWidth: 120),
+            28
+        )
+        XCTAssertEqual(
+            NativeTextShimmerLayout.highlightWidth(textLength: 40, spread: 2, containerWidth: 100),
+            58
+        )
+
+        let chatSource = try sourceFileContents("Sources/Conclave/Features/Meeting/ChatViews.swift")
+        let transcriptSource = try sourceFileContents("Sources/Conclave/Features/Meeting/TranscriptPanelView.swift")
+        XCTAssertTrue(chatSource.contains("NativeStreamingMarkdownView("))
+        XCTAssertTrue(chatSource.contains("NativeTextShimmer("))
+        XCTAssertTrue(transcriptSource.contains("isStreaming: message.status == .streaming"))
     }
 
     func testAndroidNetworkReachabilityQualityPolicyUsesBandwidthOnlyForValidatedQuality() throws {
@@ -1859,13 +2068,13 @@ final class ConclaveTests: XCTestCase {
     }
 
     @MainActor
-    func testRemoteDisplayNameCollapsesRepeatedWhitespace() throws {
+    func testRemoteDisplayNameCollapsesWhitespaceAndUsesTwoWords() throws {
         let state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         state.sfuUserId = "local@example.com"
         let remoteId = "nikhil@example.com#web-session"
         state.displayNames[remoteId] = "  Nikhil   Rao \n Web  "
 
-        XCTAssertEqual(state.displayName(for: remoteId), "Nikhil Rao Web")
+        XCTAssertEqual(state.displayName(for: remoteId), "Nikhil Rao")
     }
 
     @MainActor
@@ -6067,7 +6276,41 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(ChatComposerLayout.inputHeight(isAndroid: true), 44)
         XCTAssertEqual(ChatComposerLayout.inputVerticalPadding(isAndroid: true), 0)
         XCTAssertEqual(ChatComposerLayout.composerVerticalPadding(isAndroid: true), 6)
+        XCTAssertEqual(
+            ChatComposerLayout.composerBottomPadding(isAndroid: true, contentInset: 0),
+            6
+        )
         XCTAssertGreaterThanOrEqual(ChatComposerLayout.inputHeight(isAndroid: true), 44)
+    }
+
+    func testIOSChatComposerOwnsSafeAreaAndKeyboardClearance() throws {
+        XCTAssertEqual(
+            ChatComposerLayout.composerBottomPadding(isAndroid: false, contentInset: 34),
+            48
+        )
+        XCTAssertEqual(
+            ChatComposerLayout.composerBottomPadding(isAndroid: false, contentInset: -20),
+            14
+        )
+    }
+
+    func testChatSuggestionsUseBoundedPopoverHeightWithoutMovingComposer() throws {
+        XCTAssertEqual(
+            ChatComposerLayout.suggestionPopoverHeight(itemCount: 0, maxHeight: 154),
+            0
+        )
+        XCTAssertEqual(
+            ChatComposerLayout.suggestionPopoverHeight(itemCount: 2, maxHeight: 154),
+            98
+        )
+        XCTAssertEqual(
+            ChatComposerLayout.suggestionPopoverHeight(itemCount: 20, maxHeight: 154),
+            154
+        )
+
+        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/ChatViews.swift")
+        XCTAssertTrue(source.contains("Suggestions are a popover anchored above the composer"))
+        XCTAssertTrue(source.contains(".offset(y: -(suggestionPopoverHeight + 10.0))"))
     }
 
     func testCompactControlsBarFitsNarrowPhoneWidth() throws {
@@ -6105,38 +6348,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(ChatFocusReportPolicy.shouldReport(next: true, lastReported: true))
         XCTAssertTrue(ChatFocusReportPolicy.shouldReport(next: false, lastReported: true))
         XCTAssertFalse(ChatFocusReportPolicy.shouldReport(next: false, lastReported: false))
-    }
-
-    func testMeetingKeyboardLayoutUsesContainerBoundsForOverlap() throws {
-        XCTAssertEqual(
-            MeetingKeyboardLayout.visibleHeight(keyboardMinY: 620, containerMaxY: 760),
-            140
-        )
-        XCTAssertEqual(
-            MeetingKeyboardLayout.visibleHeight(keyboardMinY: 900, containerMaxY: 760),
-            0
-        )
-    }
-
-    func testMeetingKeyboardLayoutAvoidsGlobalScreenFallback() throws {
-        XCTAssertEqual(
-            MeetingKeyboardLayout.containerMaxY(activeWindowMaxY: 760, keyboardFrameMaxY: 844),
-            760
-        )
-        XCTAssertEqual(
-            MeetingKeyboardLayout.containerMaxY(activeWindowMaxY: nil, keyboardFrameMaxY: 844),
-            844
-        )
-        XCTAssertEqual(
-            MeetingKeyboardLayout.containerMaxY(activeWindowMaxY: 0, keyboardFrameMaxY: -20),
-            0
-        )
-    }
-
-    func testMeetingKeyboardLayoutIgnoresTinyDuplicateHeightChanges() throws {
-        XCTAssertFalse(MeetingKeyboardLayout.shouldUpdateVisibleHeight(current: 280, next: 280.25))
-        XCTAssertTrue(MeetingKeyboardLayout.shouldUpdateVisibleHeight(current: 280, next: 280.5))
-        XCTAssertTrue(MeetingKeyboardLayout.shouldUpdateVisibleHeight(current: 280, next: 0))
     }
 
     func testChatTimelineScrollPolicyOnlySchedulesForVisibleEntries() throws {
@@ -6508,6 +6719,75 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(source.contains("val wasInPip = PipController.inPipMode"))
         XCTAssertTrue(source.contains("if (wasInPip) {\n            CallActionDispatcher.pictureInPictureContentRefresh()\n        }"))
         XCTAssertTrue(source.contains("if (!inPip) {\n            cancelPendingEnterPip()\n            CallActionDispatcher.pictureInPictureContentRefresh()\n            return\n        }"))
+    }
+
+    func testAndroidCallSurvivesExternalActivitiesAndScreenLock() throws {
+        let activitySource = try sourceFileContents("Android/app/src/main/kotlin/Main.kt")
+        let pipSource = try sourceFileContents("Sources/Conclave/Skip/PipManager.kt")
+        let shareSource = try sourceFileContents("Sources/Conclave/Skip/NativeMeetingShare.kt")
+        let serviceSource = try sourceFileContents("Sources/Conclave/Skip/CallForegroundService.kt")
+        let chatSource = try sourceFileContents("Sources/Conclave/Features/Meeting/ChatViews.swift")
+
+        XCTAssertTrue(activitySource.contains("PipManager.consumeAutoEnterSuppression()"))
+        XCTAssertTrue(activitySource.contains("Build.VERSION_CODES.S"))
+        XCTAssertTrue(pipSource.contains("fun configureForActiveCall(active: Boolean, muted: Boolean)"))
+        XCTAssertTrue(pipSource.contains("configureForActiveCall(active = false, muted = PipController.muted)"))
+        XCTAssertTrue(pipSource.contains("builder.setAutoEnterEnabled(autoEnter)"))
+        XCTAssertTrue(shareSource.contains("PipManager.suppressNextAutoEnter(\"meeting_share\")"))
+        XCTAssertTrue(shareSource.contains("PipManager.restoreAutoEnterAfterExternalActivity()"))
+        XCTAssertTrue(chatSource.contains("PipManager.suppressNextAutoEnter(reason: \"chat_link\")"))
+        XCTAssertTrue(serviceSource.contains("PowerManager.PARTIAL_WAKE_LOCK"))
+        XCTAssertTrue(serviceSource.contains("setReferenceCounted(false)"))
+        XCTAssertTrue(serviceSource.contains("return START_STICKY"))
+        XCTAssertTrue(serviceSource.contains("releaseCallWakeLock()"))
+    }
+
+    func testAndroidReactionAndGifSurfacesUseCompactAnimatedHosts() throws {
+        let reactionSource = try sourceFileContents("Sources/Conclave/Skip/AnimatedReactionAsset.kt")
+        let moreSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MoreSheetView.swift")
+        let chatSource = try sourceFileContents("Sources/Conclave/Features/Meeting/ChatViews.swift")
+        let gifHostSource = try sourceFileContents("Sources/Conclave/Skip/FlexibleGifPickerSheetHost.kt")
+
+        XCTAssertTrue(reactionSource.contains("ImageDecoder.decodeDrawable"))
+        XCTAssertTrue(reactionSource.contains("(currentDrawable as? Animatable)?.start()"))
+        XCTAssertTrue(moreSource.contains("ReactionAssetThumbnailView("))
+        XCTAssertTrue(chatSource.contains("FlexibleGifPickerSheetHost("))
+        XCTAssertTrue(chatSource.contains("detentFraction: 0.58"))
+        XCTAssertTrue(gifHostSource.contains("fullyExpanded = expandedFraction"))
+        XCTAssertTrue(gifHostSource.contains("allowNestedScroll = true"))
+    }
+
+    func testSoloStageAndChatComposerAvoidBroadLayoutInvalidation() throws {
+        let gridSource = try sourceFileContents("Sources/Conclave/Features/Meeting/GridLayoutView.swift")
+        let soloStart = try XCTUnwrap(gridSource.range(of: "if count <= 1 {"))
+        let soloTail = gridSource[soloStart.lowerBound...]
+        let soloEnd = try XCTUnwrap(soloTail.range(of: "} else if !shouldScrollGrid {"))
+        let soloBranch = String(soloTail[..<soloEnd.lowerBound])
+        let chatSource = try sourceFileContents("Sources/Conclave/Features/Meeting/ChatViews.swift")
+        let overlayStart = try XCTUnwrap(chatSource.range(of: "struct ChatOverlayView: View"))
+        let composerStart = try XCTUnwrap(chatSource.range(of: "private struct ChatComposerView: View"))
+        let overlayDeclaration = String(chatSource[overlayStart.lowerBound..<composerStart.lowerBound])
+        let meetingSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingView.swift")
+        let reactionLayerStart = try XCTUnwrap(meetingSource.range(of: "private struct MeetingReactionOverlayLayer: View"))
+        let reactionStateRead = try XCTUnwrap(meetingSource.range(of: "viewModel.state.activeReactions"))
+
+        XCTAssertFalse(soloBranch.contains(".padding(.horizontal"))
+        XCTAssertTrue(soloBranch.contains(".frame(maxWidth: .infinity, maxHeight: .infinity)"))
+        XCTAssertTrue(chatSource.contains("@State private var messageText = \"\""))
+        XCTAssertFalse(overlayDeclaration.contains("@State private var messageText"))
+        XCTAssertTrue(chatSource.contains("ChatTimelineView("))
+        XCTAssertTrue(chatSource.contains(".equatable()"))
+        XCTAssertTrue(meetingSource.contains("HStack(spacing: 0)"))
+        XCTAssertTrue(meetingSource.contains("Spacer(minLength: 0)"))
+        XCTAssertFalse(meetingSource.contains("chatInputFocused ? Alignment.bottomTrailing"))
+        XCTAssertTrue(meetingSource.contains("let chatAlignment = Alignment.topTrailing"))
+        XCTAssertFalse(meetingSource.contains("keyboardWillChangeFrameNotification"))
+        XCTAssertTrue(meetingSource.contains("allowsSystemAvoidance: viewModel.state.isChatOpen"))
+        XCTAssertTrue(meetingSource.contains("let chatSafeAreaBottom = chatInputFocused && !isAndroidChatLayout"))
+        XCTAssertTrue(meetingSource.contains("bottomContentInset: isAndroidChatLayout ? 0.0 : effectiveChatBottomPadding"))
+        XCTAssertFalse(meetingSource.contains(".padding(.bottom, effectiveChatBottomPadding)"))
+        XCTAssertGreaterThan(reactionStateRead.lowerBound, reactionLayerStart.lowerBound)
+        XCTAssertEqual(meetingSource.components(separatedBy: "viewModel.state.activeReactions").count - 1, 1)
     }
 
     func testAndroidPipRendererKeyTracksTargetAndTrackIdentity() throws {
@@ -7426,7 +7706,17 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(source.contains(".readTimeout(120, TimeUnit.SECONDS)"))
         XCTAssertTrue(source.contains(".callTimeout(150, TimeUnit.SECONDS)"))
         XCTAssertTrue(source.contains("fun requestAssistant("))
+        XCTAssertTrue(source.contains("authorization: String?"))
+        XCTAssertTrue(source.contains("authorization = authorization"))
+        XCTAssertTrue(source.contains("requestBuilder.header(\"Authorization\", normalizedAuthorization)"))
         XCTAssertTrue(source.contains("httpClient = assistantClient"))
+
+        let serviceSource = try sourceFileContents(
+            "Sources/Conclave/Core/Networking/NativeConclaveAssistantService.swift"
+        )
+        XCTAssertTrue(serviceSource.contains(
+            "authorization: request.value(forHTTPHeaderField: \"Authorization\")"
+        ))
     }
 
     func testTerminalRoomEventsAllowMissingRoomIdOnlyDuringKnownCall() throws {
@@ -7930,6 +8220,181 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(project.contains("\"$(SRCROOT)/PrivacyManifests/MediasoupFramework.xcprivacy\""))
     }
 #endif
+
+    func testMeetingDisplayNamesHideTrailingRegistrationIdentifiers() throws {
+        XCTAssertEqual(
+            MeetingDisplayNamePresentation.formatted("Ishaan Samdani 23BME0453"),
+            "Ishaan Samdani"
+        )
+        XCTAssertEqual(
+            MeetingDisplayNamePresentation.formatted("  Ishaan   Samdani\n23BME0453  "),
+            "Ishaan Samdani"
+        )
+        XCTAssertEqual(MeetingDisplayNamePresentation.formatted("Ishaan"), "Ishaan")
+        XCTAssertEqual(MeetingDisplayNamePresentation.formatted("   "), "")
+    }
+
+    func testAtMentionSuggestionsAlwaysIncludeConclaveAIAndLocalUser() throws {
+        let context = try XCTUnwrap(ChatMentionContextPolicy.context(
+            for: "@",
+            isChatDisabled: false,
+            isDmEnabled: false
+        ))
+        let suggestions = ChatMentionSuggestionPolicy.suggestions(
+            context: context,
+            localUserId: "ishaan@example.com#native",
+            localDisplayName: "Ishaan Samdani 23BME0453",
+            remoteCandidates: []
+        )
+
+        XCTAssertEqual(context.mode, .at)
+        XCTAssertEqual(suggestions.map(\.userId), [
+            ConclaveAssistantChatIdentity.userId,
+            "ishaan@example.com#native",
+        ])
+        XCTAssertEqual(suggestions[0].displayName, "Conclave AI")
+        XCTAssertEqual(suggestions[0].mentionToken, "conclave")
+        XCTAssertEqual(suggestions[1].displayName, "Ishaan Samdani")
+    }
+
+    func testDirectMessageSuggestionsDoNotInventLocalOrAssistantRecipients() throws {
+        let suggestions = ChatMentionSuggestionPolicy.suggestions(
+            context: ChatMentionContext(mode: ChatMentionMode.dm, query: ""),
+            localUserId: "ishaan@example.com#native",
+            localDisplayName: "Ishaan Samdani",
+            remoteCandidates: []
+        )
+
+        XCTAssertTrue(suggestions.isEmpty)
+    }
+
+    func testChatTimestampsOmitSeconds() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let morning = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 7,
+            day: 11,
+            hour: 11,
+            minute: 32,
+            second: 16
+        )))
+        let evening = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 7,
+            day: 11,
+            hour: 23,
+            minute: 7,
+            second: 59
+        )))
+
+        XCTAssertEqual(ChatTimestampPresentation.text(for: morning, calendar: calendar), "11:32 AM")
+        XCTAssertEqual(ChatTimestampPresentation.text(for: evening, calendar: calendar), "11:07 PM")
+    }
+
+    func testRemoteChatContentLeavesRoomForAvatarColumn() throws {
+        XCTAssertEqual(ChatMessageLayout.maximumContentWidth(isFromCurrentUser: false), 250.0)
+        XCTAssertEqual(ChatMessageLayout.maximumContentWidth(isFromCurrentUser: true), 280.0)
+        XCTAssertLessThan(
+            ChatMessageLayout.maximumContentWidth(isFromCurrentUser: false),
+            ChatMessageLayout.maximumContentWidth(isFromCurrentUser: true)
+        )
+    }
+
+    func testReactionFlightPolicyUsesVisibleResponsiveMotion() throws {
+        XCTAssertGreaterThan(MeetingReactionFlightPolicy.durationSeconds, 3.0)
+        XCTAssertNotEqual(MeetingReactionFlightPolicy.horizontalDrift(for: 0), 0.0)
+        XCTAssertEqual(MeetingReactionFlightPolicy.horizontalDrift(for: 0),
+                       MeetingReactionFlightPolicy.horizontalDrift(for: 5))
+        XCTAssertEqual(MeetingReactionFlightPolicy.verticalTravel(availableHeight: 200.0), 150.0)
+        XCTAssertEqual(MeetingReactionFlightPolicy.verticalTravel(availableHeight: 1_000.0), 280.0)
+    }
+
+    func testAssistantErrorsNeverExposeGeneratedAndroidClassNames() throws {
+        let prefixedError = NSError(
+            domain: "test",
+            code: 1,
+            userInfo: [
+                NSLocalizedDescriptionKey:
+                    "conclave.module.NativeConclaveAssistantError: Network unavailable.",
+            ]
+        )
+        let expiredError = NSError(
+            domain: "test",
+            code: 2,
+            userInfo: [
+                NSLocalizedDescriptionKey:
+                    "conclave.module.NativeConclaveAssistantError: Conclave assistant authorization is invalid or expired.",
+            ]
+        )
+
+        XCTAssertEqual(
+            NativeConclaveAssistantService.presentationMessage(for: prefixedError),
+            "Network unavailable."
+        )
+        XCTAssertEqual(
+            NativeConclaveAssistantService.presentationMessage(for: expiredError),
+            "Conclave AI authorization expired. Please try again."
+        )
+    }
+
+    func testMeetingResumePolicyRestoresOnlyFreshDisconnectedCalls() throws {
+        let savedAt = Date(timeIntervalSince1970: 1_000)
+        let snapshot = MeetingResumeSnapshot(
+            joinContext: MeetingResumeJoinContext(
+                roomId: "hazel-topaz-aloe",
+                displayName: "Ishaan Samdani",
+                socketDisplayName: nil,
+                isHost: false,
+                joinMode: JoinMode.meeting,
+                meetingInviteCode: nil,
+                webinarInviteCode: nil,
+                clientId: "native-client",
+                allowRoomCreation: false,
+                user: SfuJoinUser(
+                    id: "ishaan@example.com",
+                    email: "ishaan@example.com",
+                    name: "Ishaan Samdani"
+                )
+            ),
+            sessionId: "native-session",
+            isMuted: true,
+            isCameraOff: true,
+            savedAt: savedAt
+        )
+        let freshNow = Date(
+            timeInterval: MeetingResumePolicy.maximumAge - 1.0,
+            since: savedAt
+        )
+        let staleNow = Date(
+            timeInterval: MeetingResumePolicy.maximumAge + 1.0,
+            since: savedAt
+        )
+
+        XCTAssertTrue(MeetingResumePolicy.isFresh(snapshot, now: freshNow))
+        XCTAssertFalse(MeetingResumePolicy.isFresh(snapshot, now: staleNow))
+        XCTAssertTrue(MeetingResumePolicy.shouldRestore(
+            connectionState: ConnectionState.disconnected,
+            hasLiveJoinContext: false,
+            alreadyAttempted: false,
+            snapshot: snapshot,
+            now: freshNow
+        ))
+        XCTAssertFalse(MeetingResumePolicy.shouldRestore(
+            connectionState: ConnectionState.joining,
+            hasLiveJoinContext: false,
+            alreadyAttempted: false,
+            snapshot: snapshot,
+            now: freshNow
+        ))
+        XCTAssertFalse(MeetingResumePolicy.shouldRestore(
+            connectionState: ConnectionState.disconnected,
+            hasLiveJoinContext: false,
+            alreadyAttempted: true,
+            snapshot: snapshot,
+            now: freshNow
+        ))
+    }
 
     func testLocalVideoMirrorPolicyMirrorsOnlyFrontCamera() throws {
         XCTAssertTrue(LocalCameraFacing.front.shouldMirrorLocalVideo)

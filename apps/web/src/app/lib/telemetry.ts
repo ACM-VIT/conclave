@@ -21,25 +21,12 @@
  * `telemetry.capture(...)`.
  */
 
-export type TelemetryProps = Record<string, unknown>;
+type TelemetryProps = Record<string, unknown>;
 
-export type TelemetrySink = (
+type TelemetrySink = (
   event: string,
   props?: TelemetryProps,
 ) => void;
-
-/**
- * Known meeting-reliability events. Kept as a union so call sites stay
- * consistent and a future PostHog dashboard has a stable event taxonomy.
- */
-export type TelemetryEvent =
-  | "meet_join_attempt"
-  | "meet_join_success"
-  | "meet_join_failure"
-  | "meet_reconnect_attempt"
-  | "meet_reconnect_success"
-  | "meet_reconnect_give_up"
-  | "meet_turn_relay_activated";
 
 let sink: TelemetrySink | null = null;
 
@@ -51,19 +38,11 @@ export function setTelemetrySink(next: TelemetrySink | null): void {
   sink = next;
 }
 
-/** Whether a real sink is currently configured. */
-export function isTelemetryConfigured(): boolean {
-  return sink !== null;
-}
-
 /**
  * Capture an event. No-ops (and swallows any sink error) when telemetry is
  * unconfigured or the sink throws — callers must never have to guard this.
  */
-export function capture(
-  event: TelemetryEvent | string,
-  props?: TelemetryProps,
-): void {
+function capture(event: string, props?: TelemetryProps): void {
   if (!sink) return;
   try {
     sink(event, props);
@@ -74,8 +53,4 @@ export function capture(
 
 export const telemetry = {
   capture,
-  setSink: setTelemetrySink,
-  isConfigured: isTelemetryConfigured,
 };
-
-export default telemetry;

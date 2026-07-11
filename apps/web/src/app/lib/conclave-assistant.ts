@@ -1,4 +1,8 @@
 import type { ChatMessage, TranscriptSegment } from "./types";
+import {
+  DEFAULT_TRANSCRIPT_QA_MODEL,
+  TRANSCRIPT_QA_MODELS,
+} from "@conclave/meeting-core/transcript-models";
 
 // Identity of the in-meeting "@Conclave" AI assistant. The SFU validates signed
 // assistant packets before broadcasting them with this stable bot identity.
@@ -7,30 +11,13 @@ export const CONCLAVE_ASSISTANT_NAME = "Conclave";
 export const CONCLAVE_MENTION_TOKEN = "Conclave";
 
 export type ConclaveAssistantStatus = "streaming" | "done" | "error";
-export type ConclaveAssistantPartStatus = "streaming" | "done";
+type ConclaveAssistantPartStatus = "streaming" | "done";
 
-export const CONCLAVE_ASSISTANT_GLOBAL_MODEL = "gpt-5.6-terra";
-
-export const CONCLAVE_ASSISTANT_BYOK_MODELS = [
-  {
-    id: "gpt-5.6-luna",
-    label: "GPT-5.6 Luna",
-    description: "Fast default",
-  },
-  {
-    id: "gpt-5.6-terra",
-    label: "GPT-5.6 Terra",
-    description: "Higher quality",
-  },
-  {
-    id: "gpt-5.6-sol",
-    label: "GPT-5.6 Sol",
-    description: "Frontier intelligence",
-  }
-] as const;
+export const CONCLAVE_ASSISTANT_GLOBAL_MODEL = DEFAULT_TRANSCRIPT_QA_MODEL;
+export const CONCLAVE_ASSISTANT_BYOK_MODELS = TRANSCRIPT_QA_MODELS;
 
 export type ConclaveAssistantModel =
-  (typeof CONCLAVE_ASSISTANT_BYOK_MODELS)[number]["id"];
+  (typeof TRANSCRIPT_QA_MODELS)[number]["id"];
 
 export const isConclaveAssistantModel = (
   value: string,
@@ -58,10 +45,11 @@ export class ConclaveAssistantApiKeyRequiredError extends Error {
 }
 
 // A single streamed assistant step shown in the process timeline.
-export type AssistantTaskKind =
+type AssistantTaskKind =
   | "reasoning"
   | "web_search"
   | "transcript"
+  | "github_issue"
   | "answer";
 
 export interface AssistantTask {
@@ -78,7 +66,8 @@ export interface AssistantChatMessage extends ChatMessage {
   reasoningStatus?: ConclaveAssistantPartStatus;
   // The model's streamed reasoning summary, rendered as a collapsible trace.
   reasoning?: string;
-  // Tool activity (web search, transcript lookup) shown as chain-of-thought.
+  // Tool activity (web search, transcript lookup, issue creation) shown as a
+  // compact action timeline.
   tasks?: AssistantTask[];
 }
 
@@ -136,12 +125,6 @@ export const parseConclaveMention = (content: string): string | null => {
     .replace(/\s+/g, " ")
     .trim();
 };
-
-export const isAssistantChatMessage = (
-  message: ChatMessage,
-): message is AssistantChatMessage =>
-  (message as AssistantChatMessage).isAssistant === true ||
-  message.userId === CONCLAVE_ASSISTANT_USER_ID;
 
 // Renders transcript segments as `[HH:MM:SS] Speaker: text` lines for the
 // assistant's context, matching the format the transcript Q&A uses.

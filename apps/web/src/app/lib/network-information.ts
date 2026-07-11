@@ -1,4 +1,4 @@
-export type BrowserNetworkQuality = "good" | "fair" | "poor" | "unknown";
+type BrowserNetworkQuality = "good" | "fair" | "poor" | "unknown";
 
 export type BrowserNetworkInformation = {
   effectiveType?: string;
@@ -73,7 +73,7 @@ export function getBrowserNetworkInformation():
   );
 }
 
-export function classifyBrowserNetworkQuality(
+function classifyBrowserNetworkQuality(
   connection = getBrowserNetworkInformation(),
 ): BrowserNetworkQuality {
   if (!connection) {
@@ -120,7 +120,7 @@ export function classifyBrowserNetworkQuality(
   return quality;
 }
 
-export function getBrowserNetworkStartupQuality(
+function getBrowserNetworkStartupQuality(
   connection = getBrowserNetworkInformation(),
 ): BrowserNetworkQuality {
   const quality = classifyBrowserNetworkQuality(connection);
@@ -134,7 +134,7 @@ export function getBrowserNetworkStartupQuality(
   return "unknown";
 }
 
-export function isEmergencyBrowserNetwork(
+function isEmergencyBrowserNetwork(
   connection = getBrowserNetworkInformation(),
 ): boolean {
   if (!connection) return false;

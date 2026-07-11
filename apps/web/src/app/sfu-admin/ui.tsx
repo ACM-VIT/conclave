@@ -1,15 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { color, font, radius } from "@conclave/ui-tokens";
+import { color, radius } from "@conclave/ui-tokens";
 
 /**
  * Small flat primitives for the operator dashboard, composed straight from
  * @conclave/ui-tokens so the panel speaks the same language as the meeting
  * surface: one sans, hairline borders, a single coral accent, no shadows.
  */
-
-export const SANS = font.sans;
 
 export const inputClass =
   "w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[13px] text-[#fafafa] outline-none transition-colors placeholder:text-[#fafafa]/35 focus:border-[#F95F4A]/60";

@@ -275,6 +275,12 @@ export function useMeetingTranscript({
   const [qaMessages, setQaMessages] = useState<TranscriptQaMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isStreamingAudio, setIsStreamingAudio] = useState(false);
+  const isStreamingAudioRef = useRef(false);
+  const updateIsStreamingAudio = useCallback((next: boolean): void => {
+    if (isStreamingAudioRef.current === next) return;
+    isStreamingAudioRef.current = next;
+    setIsStreamingAudio(next);
+  }, []);
   const [tokenInfo, setTokenInfo] = useState<TranscriptTokenResponse | null>(
     null,
   );
@@ -1013,14 +1019,14 @@ export function useMeetingTranscript({
     socketRef.current = null;
     connectPromiseRef.current = null;
     setViewerConnectionId(null);
-    setIsStreamingAudio(false);
+    updateIsStreamingAudio(false);
     setAvailableServiceVersion(null);
     if (relay) await relay.stop();
     try {
       socket?.close();
     } catch {}
     return connect();
-  }, [connect]);
+  }, [connect, updateIsStreamingAudio]);
 
   const hasGlobalKeysForTranscriptModel = useCallback(
     (transcriptModel: string): boolean => {
@@ -1457,7 +1463,7 @@ export function useMeetingTranscript({
     if (!shouldStream) {
       void relayRef.current?.stop();
       relayRef.current = null;
-      setIsStreamingAudio(
+      updateIsStreamingAudio(
         session.transportMode === "sfu" &&
           session.status === "live" &&
           session.controller?.userId === currentUserId &&
@@ -1481,9 +1487,9 @@ export function useMeetingTranscript({
     }
     relayRef.current
       .start(transcriptSources)
-      .then(() => setIsStreamingAudio(true))
+      .then(() => updateIsStreamingAudio(true))
       .catch((startError: unknown) => {
-        setIsStreamingAudio(false);
+        updateIsStreamingAudio(false);
         setError(
           startError instanceof Error
             ? startError.message
@@ -1494,9 +1500,13 @@ export function useMeetingTranscript({
     currentUserId,
     isViewOnly,
     send,
-    session,
+    session.controller?.connectionId,
+    session.controller?.userId,
+    session.status,
+    session.transportMode,
     sfuRelayStatus?.available,
     transcriptSources,
+    updateIsStreamingAudio,
     viewerConnectionId,
   ]);
 

@@ -3,9 +3,11 @@ import * as Y from "yjs";
 import {
   addPage,
   createId,
+  DEFAULT_WHITEBOARD_PAGE_ID,
+  DEFAULT_WHITEBOARD_PAGE_NAME,
   ensureDefaultPage,
   getActivePageId,
-  getPageOrder,
+  getOrderedPageIds,
   getPagesMap,
   removePage,
   setActivePageId,
@@ -23,12 +25,18 @@ export const useWhiteboardPages = (doc: Y.Doc, options?: WhiteboardPagesOptions)
   const [activePageId, setActivePage] = useState<string | null>(null);
 
   const rebuild = useCallback(() => {
-    ensureDefaultPage(doc);
     const pagesMap = getPagesMap(doc);
-    const order = getPageOrder(doc).toArray();
+    const order = getOrderedPageIds(doc);
     const list: WhiteboardPage[] = order
       .map((pageId) => {
-        const page = pagesMap.get(pageId);
+        const page = pagesMap?.get(pageId);
+        if (!page && pageId === DEFAULT_WHITEBOARD_PAGE_ID) {
+          return {
+            id: DEFAULT_WHITEBOARD_PAGE_ID,
+            name: DEFAULT_WHITEBOARD_PAGE_NAME,
+            elements: [],
+          };
+        }
         if (!(page instanceof Y.Map)) return null;
         const rawName = page.get("name");
         const rawElements = page.get("elements");
@@ -63,7 +71,7 @@ export const useWhiteboardPages = (doc: Y.Doc, options?: WhiteboardPagesOptions)
       if (readOnly) return;
       const id = createId();
       ensureDefaultPage(doc);
-      const index = getPagesMap(doc).size + 1;
+      const index = (getPagesMap(doc)?.size ?? 0) + 1;
       addPage(doc, { id, name: name ?? `Page ${index}` });
       setActivePageId(doc, id);
     },

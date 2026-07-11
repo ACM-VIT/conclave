@@ -40,11 +40,6 @@ export function storeVoiceAgentKey(key: string, remember: boolean): void {
   writeSession(remember ? key : null);
 }
 
-/** Whether the current key came with "remember for this session" opted in. */
-export function isVoiceAgentKeyRemembered(): boolean {
-  return readSession() !== null;
-}
-
 export function clearStoredVoiceAgentKey(): void {
   inMemoryKey = null;
   writeSession(null);

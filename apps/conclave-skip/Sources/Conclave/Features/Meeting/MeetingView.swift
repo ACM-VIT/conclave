@@ -1,8 +1,5 @@
 import SwiftUI
 import Observation
-#if canImport(UIKit) && !SKIP
-import UIKit
-#endif
 #if SKIP
 import androidx.compose.foundation.layout.__
 #endif
@@ -43,30 +40,10 @@ enum MeetingChatOverlayLayout {
     }
 }
 
-enum MeetingKeyboardLayout {
-    static func visibleHeight(keyboardMinY: CGFloat, containerMaxY: CGFloat) -> CGFloat {
-        max(0.0, containerMaxY - keyboardMinY)
-    }
-
-    static func containerMaxY(activeWindowMaxY: CGFloat?, keyboardFrameMaxY: CGFloat) -> CGFloat {
-        if let activeWindowMaxY, activeWindowMaxY > 0.0 {
-            return activeWindowMaxY
-        }
-        return max(0.0, keyboardFrameMaxY)
-    }
-
-    static func shouldUpdateVisibleHeight(current: CGFloat, next: CGFloat) -> Bool {
-        abs(current - next) >= 0.5
-    }
-}
-
 struct MeetingView: View {
     @Bindable var viewModel: MeetingViewModel
     @State private var sheetCoordinator = MeetingSheetCoordinator()
     @State private var chatInputFocused = false
-    #if canImport(UIKit) && !SKIP
-    @State private var keyboardHeight: CGFloat = 0.0
-    #endif
 
     private func updateStageObscured(sheetPresented: Bool) {
         viewModel.setStageObscuredByOverlay(
@@ -156,11 +133,6 @@ struct MeetingView: View {
                             onParticipantsPressed: { openMeetingSheet(.participants) }
                         )
 
-                        MeetingBannerOverlay(
-                            viewModel: viewModel,
-                            onShowParticipants: { openMeetingSheet(.participants) }
-                        )
-
                         // Cross-fade when the stage changes KIND (grid to
                         // spotlight, game takeover, share start/stop). The
                         // value scoping keeps ambient withAnimation calls and
@@ -193,12 +165,23 @@ struct MeetingView: View {
                         .padding(.top, 8)
                         .padding(.bottom, max(12.0, geometry.safeAreaInsets.bottom))
                     }
-                    // Side insets belong to the meeting column only. When they
-                    // sat on the shared ZStack, the chat dock inherited a left
-                    // margin while its width math pushed the right rounded
-                    // corner off-screen - the panel read as clipped.
-                    .padding(.leading, max(6.0, geometry.safeAreaInsets.leading))
-                    .padding(.trailing, max(6.0, geometry.safeAreaInsets.trailing))
+                    // The stage is edge-to-edge in portrait. Header and controls
+                    // own their internal spacing; a hard 6pt column inset left
+                    // the solo tile visibly floating inside a black gutter.
+                    // Preserve only real landscape/notch safe-area insets.
+                    .padding(.leading, geometry.safeAreaInsets.leading)
+                    .padding(.trailing, geometry.safeAreaInsets.trailing)
+
+                    // Connection and moderation notices float over the stage
+                    // immediately below the header. Keeping this out of the
+                    // VStack removes the old 58pt empty slot while preserving a
+                    // stable video layout when a notice appears or disappears.
+                    MeetingBannerOverlay(
+                        viewModel: viewModel,
+                        onShowParticipants: { openMeetingSheet(.participants) }
+                    )
+                    .padding(.top, MeetingHeaderLayout.barHeight)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
                     if viewModel.state.isChatOpen && !viewModel.state.isWebinarAttendee {
                         // This container already sits inside the top safe area
@@ -206,71 +189,67 @@ struct MeetingView: View {
                         // header (~58pt); adding the inset doubled the gap and
                         // on Android the inset read 0 and buried the header.
                         let chatTopPadding = 60.0
-                        #if SKIP
-                        let chatAlignment = Alignment.bottomTrailing
-                        #else
-                        let chatAlignment = chatInputFocused ? Alignment.bottomTrailing : Alignment.topTrailing
-                        #endif
-                        #if SKIP
+                        // Keep the dock anchored below the meeting header while
+                        // the keyboard animates. Moving a fixed-height dock from
+                        // top to bottom alignment on focus places its header
+                        // halfway down the screen and clips the mention row.
+                        let chatAlignment = Alignment.topTrailing
                         let chatKeyboardInset = 0.0
-                        #elseif canImport(UIKit)
-                        // Clamp the tracked keyboard height: a corrupted frame
-                        // (foreign overlay windows, stage manager, split view)
-                        // must never crush the panel into a sliver.
-                        let rawChatKeyboardInset = chatInputFocused ? max(0.0, keyboardHeight - geometry.safeAreaInsets.bottom) : 0.0
-                        let chatKeyboardInset = min(rawChatKeyboardInset, geometry.size.height * 0.5)
-                        #else
-                        let chatKeyboardInset = 0.0
-                        #endif
+                        // Once iOS shortens this GeometryReader to the keyboard
+                        // top, safeAreaInsets.bottom represents that keyboard
+                        // region rather than the physical home indicator. Do
+                        // not feed it back into the composer as a second inset.
+                        let chatSafeAreaBottom = chatInputFocused && !isAndroidChatLayout
+                            ? 0.0
+                            : geometry.safeAreaInsets.bottom
                         let effectiveChatBottomPadding = MeetingChatOverlayLayout.bottomPadding(
                             inputFocused: chatInputFocused,
-                            safeAreaBottom: geometry.safeAreaInsets.bottom,
+                            safeAreaBottom: chatSafeAreaBottom,
                             keyboardInset: chatKeyboardInset,
                             isAndroid: isAndroidChatLayout
                         )
+                        // Keep the dock itself full-height. The composer owns
+                        // the safe-area / keyboard inset so the opaque panel
+                        // continues covering the meeting controls while its
+                        // input stays immediately above the keyboard.
                         let chatMaxHeight = chatOverlayMaxHeight(
-                            for: geometry.size.height - chatTopPadding - effectiveChatBottomPadding,
+                            for: geometry.size.height - chatTopPadding,
                             inputFocused: chatInputFocused
                         )
 
-                        HStack {
-                            Spacer()
+                        HStack(spacing: 0) {
+                            Spacer(minLength: 0)
 
                             ChatOverlayView(
                                 viewModel: viewModel,
+                                bottomContentInset: isAndroidChatLayout ? 0.0 : effectiveChatBottomPadding,
                                 onFocusChanged: { focused in
                                     chatInputFocused = focused
                                 }
                             )
-                                .frame(width: chatOverlayWidth(for: geometry.size.width))
-                                #if SKIP
-                                // No computed height on Android: the panel
-                                // fills whatever the Compose insets leave, so
-                                // the keyboard resizes it instead of clipping
-                                // the composer (Jetchat inset pattern).
-                                .frame(maxHeight: .infinity)
-                                #else
-                                .frame(height: chatMaxHeight)
-                                #endif
-                                .transition(AnyTransition.move(edge: Edge.trailing).combined(with: AnyTransition.opacity))
+                            .frame(width: chatOverlayWidth(for: geometry.size.width))
+                            #if SKIP
+                            // No computed height on Android: the panel fills
+                            // whatever the Compose insets leave, so the
+                            // keyboard resizes it instead of clipping the
+                            // composer (Jetchat inset pattern).
+                            .frame(maxHeight: .infinity)
+                            #else
+                            .frame(height: chatMaxHeight)
+                            #endif
+                            .transition(AnyTransition.move(edge: Edge.trailing).combined(with: AnyTransition.opacity))
                         }
-                        #if SKIP
                         .frame(
                             maxWidth: .infinity,
                             maxHeight: .infinity,
                             alignment: chatAlignment
                         )
-                        #else
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: chatAlignment)
-                        #endif
                         .padding(.top, chatTopPadding)
                         #if SKIP
                         // navigationBars BEFORE ime: the reverse order re-adds
                         // the nav inset on top of the keyboard (the classic
                         // Compose double-padding bug).
                         .composeModifier { $0.navigationBarsPadding().imePadding() }
-                        #else
-                        .padding(.bottom, effectiveChatBottomPadding)
                         #endif
                     }
 
@@ -297,26 +276,10 @@ struct MeetingView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
 
-                    if !viewModel.state.isWebinarAttendee {
-                        ReactionOverlayView(
-                            reactions: viewModel.state.activeReactions,
-                            displayNameForUser: { userId in
-                                viewModel.displayNameForUser(userId)
-                            }
-                        )
-                    }
+                    MeetingReactionOverlayLayer(viewModel: viewModel)
                 }
             }
             .ignoresSafeArea(.container, edges: .bottom)
-#if !SKIP
-            // A call UI never compresses for the keyboard. With this on the
-            // whole meeting container, geometry.size stays full-height; the
-            // two text-input hosts lift themselves instead - the chat overlay
-            // via its tracked keyboardHeight inset (chatKeyboardInset above),
-            // the game card via KeyboardOverlapAvoidance. Before this, typing
-            // collapsed the stage and floated the controls bar over the game.
-            .ignoresSafeArea(.keyboard)
-#endif
             .overlay {
                 MeetingSheetPresenter(
                     viewModel: viewModel,
@@ -337,6 +300,11 @@ struct MeetingView: View {
                 TranscriptPanelView(viewModel: viewModel)
             }
         }
+        #if canImport(UIKit) && !SKIP
+        .modifier(MeetingKeyboardSafeAreaPolicy(
+            allowsSystemAvoidance: viewModel.state.isChatOpen
+        ))
+        #endif
         .preferredColorScheme(.dark)
         #if SKIP
         // Use the zero-parameter onChange overload on Android. SkipUI backs
@@ -376,50 +344,7 @@ struct MeetingView: View {
             }
         }
         #endif
-        #if canImport(UIKit) && !SKIP
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
-            let nextHeight = keyboardVisibleHeight(from: notification)
-            guard MeetingKeyboardLayout.shouldUpdateVisibleHeight(current: keyboardHeight, next: nextHeight) else {
-                return
-            }
-            withAnimation(.easeInOut(duration: 0.16)) {
-                keyboardHeight = nextHeight
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            guard MeetingKeyboardLayout.shouldUpdateVisibleHeight(current: keyboardHeight, next: 0.0) else {
-                return
-            }
-            withAnimation(.easeInOut(duration: 0.16)) {
-                keyboardHeight = 0.0
-            }
-        }
-        #endif
     }
-
-    #if canImport(UIKit) && !SKIP
-    private func keyboardVisibleHeight(from notification: Notification) -> CGFloat {
-        guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
-            return 0.0
-        }
-        let containerMaxY = MeetingKeyboardLayout.containerMaxY(
-            activeWindowMaxY: activeWindowMaxY(),
-            keyboardFrameMaxY: frame.maxY
-        )
-        return MeetingKeyboardLayout.visibleHeight(
-            keyboardMinY: frame.minY,
-            containerMaxY: containerMaxY
-        )
-    }
-
-    private func activeWindowMaxY() -> CGFloat? {
-        let windows = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-        return windows.first(where: \.isKeyWindow)?.frame.maxY
-            ?? windows.first(where: { !$0.isHidden })?.frame.maxY
-    }
-    #endif
 
     /// Discrete stage surface identity - mirrors the meetingStage branch
     /// order. The cross-fade animation is keyed to this so it fires only on
@@ -504,6 +429,44 @@ struct MeetingView: View {
         }
     }
 }
+
+/// Isolates the short-lived reaction collection from the meeting root. A
+/// reaction arrives and expires on a timer; observing that hot state directly
+/// in `MeetingView` needlessly rebuilt the full stage, controls, and open-sheet
+/// underlay twice for every reaction.
+private struct MeetingReactionOverlayLayer: View {
+    @Bindable var viewModel: MeetingViewModel
+
+    @ViewBuilder
+    var body: some View {
+        if !viewModel.state.isWebinarAttendee {
+            ReactionOverlayView(
+                reactions: viewModel.state.activeReactions,
+                displayNameForUser: { userId in
+                    viewModel.displayNameForUser(userId)
+                }
+            )
+        }
+    }
+}
+
+#if canImport(UIKit) && !SKIP
+/// Chat is already a full dock and should use SwiftUI's keyboard-reduced
+/// proposal. Other meeting inputs manage overlap locally and keep the call
+/// canvas full-height so opening a keyboard never collapses the stage.
+private struct MeetingKeyboardSafeAreaPolicy: ViewModifier {
+    let allowsSystemAvoidance: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if allowsSystemAvoidance {
+            content
+        } else {
+            content.ignoresSafeArea(.keyboard, edges: .bottom)
+        }
+    }
+}
+#endif
 
 @Observable
 final class MeetingSheetCoordinator {

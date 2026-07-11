@@ -1592,5 +1592,3 @@ export class Room {
     return this.blockedUsers.has(userKey);
   }
 }
-
-export default Room;

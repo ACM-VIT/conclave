@@ -59,9 +59,6 @@
 /og.png
   Cache-Control: public, max-age=31536000, immutable
 
-/og.svg
-  Cache-Control: public, max-age=31536000, immutable
-
 /pow-by-klipy.svg
   Cache-Control: public, max-age=31536000, immutable
 

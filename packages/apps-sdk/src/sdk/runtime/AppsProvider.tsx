@@ -2,8 +2,8 @@ import React, { createContext, useCallback, useEffect, useMemo, useRef, useState
 import type { Socket } from "socket.io-client";
 import * as Y from "yjs";
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
-import { getAppById, getRegisteredApps, subscribeRegistry } from "../registry/index";
 import type {
+  ConclaveApp,
   AppsAwarenessPayload,
   AppsCloseResponse,
   AppsContextValue,
@@ -15,7 +15,6 @@ import type {
   AppsSyncPayload,
   AppsSyncResponse,
   AppsUpdatePayload,
-  AssetUploadHandler,
   AppUser,
 } from "../types/index";
 
@@ -23,10 +22,10 @@ export const AppsContext = createContext<AppsContextValue | null>(null);
 
 export type AppsProviderProps = {
   socket: Socket | null;
+  apps: ConclaveApp[];
   user?: AppUser;
   isAdmin?: boolean;
   isReadOnly?: boolean;
-  uploadAsset?: AssetUploadHandler;
   children: React.ReactNode;
 };
 
@@ -113,14 +112,13 @@ const toUint8Array = (value: unknown): Uint8Array | null => {
 
 export function AppsProvider({
   socket,
+  apps,
   user,
   isAdmin,
   isReadOnly = false,
-  uploadAsset,
   children,
 }: AppsProviderProps) {
   const [state, setState] = useState<AppsState>({ activeAppId: null, locked: false });
-  const [registryVersion, setRegistryVersion] = useState(0);
 
   const docsRef = useRef<Map<string, Y.Doc>>(new Map());
   const awarenessRef = useRef<Map<string, Awareness>>(new Map());
@@ -175,12 +173,6 @@ export function AppsProvider({
     }
     socketRef.current = socket;
   }, [socket, resetLocalData]);
-
-  useEffect(() => {
-    return subscribeRegistry(() => {
-      setRegistryVersion((version) => version + 1);
-    });
-  }, []);
 
   const registerDocHandlers = useCallback((appId: string, doc: Y.Doc) => {
     if (docHandlersRef.current.has(appId)) return;
@@ -247,14 +239,14 @@ export function AppsProvider({
       const existing = docsRef.current.get(appId);
       if (existing) return existing;
 
-      const app = getAppById(appId);
+      const app = apps.find((candidate) => candidate.id === appId);
       const doc = app?.createDoc ? app.createDoc() : new Y.Doc();
       docsRef.current.set(appId, doc);
       registerDocHandlers(appId, doc);
       queueInitialUpdate(appId, doc);
       return doc;
     },
-    [registerDocHandlers, queueInitialUpdate]
+    [apps, registerDocHandlers, queueInitialUpdate]
   );
 
   const getAwareness = useCallback(
@@ -404,7 +396,7 @@ export function AppsProvider({
     const currentSocket = socketRef.current;
     if (!currentSocket) return false;
     if (isReadOnlyRef.current) return false;
-    if (!getAppById(appId)) {
+    if (!apps.some((app) => app.id === appId)) {
       console.warn(`[Apps] Attempted to open unregistered app: ${appId}`);
       return false;
     }
@@ -425,7 +417,7 @@ export function AppsProvider({
         resolve(Boolean(response?.success));
       });
     });
-  }, []);
+  }, [apps]);
 
   const closeApp = useCallback(async () => {
     const currentSocket = socketRef.current;
@@ -475,7 +467,7 @@ export function AppsProvider({
   const contextValue = useMemo<AppsContextValue>(
     () => ({
       state,
-      apps: getRegisteredApps(),
+      apps,
       openApp,
       closeApp,
       setLocked,
@@ -485,11 +477,10 @@ export function AppsProvider({
       user,
       isAdmin,
       isReadOnly,
-      uploadAsset,
     }),
     [
       state,
-      registryVersion,
+      apps,
       openApp,
       closeApp,
       setLocked,
@@ -499,7 +490,6 @@ export function AppsProvider({
       user,
       isAdmin,
       isReadOnly,
-      uploadAsset,
     ]
   );
 

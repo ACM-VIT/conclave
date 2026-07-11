@@ -9,7 +9,6 @@
     ".": "./src/index.ts",
     "./core": "./src/core/index.ts",
     "./web": "./src/web/index.ts",
-    "./native": "./src/native/index.ts",
     "./tokens.css": "./src/tokens.css"
   },
   "dependencies": {
@@ -23,13 +22,9 @@
   },
   "peerDependencies": {
     "lucide-react": "*",
-    "lucide-react-native": "*",
-    "react": "*",
-    "react-native": "*"
+    "react": "*"
   },
   "peerDependenciesMeta": {
-    "lucide-react": { "optional": true },
-    "lucide-react-native": { "optional": true },
-    "react-native": { "optional": true }
+    "lucide-react": { "optional": true }
   }
 }

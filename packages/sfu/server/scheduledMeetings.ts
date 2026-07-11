@@ -468,7 +468,7 @@ export type ScheduledMeetingPersistence = {
   flush?: () => Promise<void>;
 };
 
-export type BookingSlotReservation = {
+type BookingSlotReservation = {
   clientId: string;
   hostEmail: string;
   startAt: number;
@@ -479,7 +479,7 @@ export type BookingSlotLease = {
   release: () => MaybePromise<void>;
 };
 
-export type EmailReminderClaim = {
+type EmailReminderClaim = {
   meetingId: string;
   now: number;
   leadMs: number;
@@ -627,7 +627,7 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
   };
 };
 
-export const createSqliteScheduledMeetingPersistence = (
+const createSqliteScheduledMeetingPersistence = (
   path: string = scheduledMeetingsSqlitePath(),
 ): ScheduledMeetingPersistence => {
   const dir = dirname(path);
@@ -769,7 +769,7 @@ export const createSqliteScheduledMeetingPersistence = (
   };
 };
 
-export const createFileScheduledMeetingPersistence = (
+const createFileScheduledMeetingPersistence = (
   path: string = scheduledMeetingsPath(),
 ): ScheduledMeetingPersistence => ({
   save: (snapshot) => {
@@ -1079,7 +1079,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
   }
 }
 
-export const createRedisScheduledMeetingPersistence = (
+const createRedisScheduledMeetingPersistence = (
   redisUrl: string = resolveRedisPersistenceUrl(),
   keyPrefix: string = resolveRedisPersistenceKeyPrefix(),
   fallback: ScheduledMeetingPersistence = createSqliteScheduledMeetingPersistence(),
@@ -1166,7 +1166,7 @@ export const loadPersistedMeetings = (
   return meetings.length;
 });
 
-export const persistScheduledMeetings = (
+const persistScheduledMeetings = (
   store: ScheduledMeetingStore,
   persistence: ScheduledMeetingPersistence,
 ): Promise<void> =>

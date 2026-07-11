@@ -7,11 +7,9 @@ It exists to answer one question quickly: "How do I build a real app on top of t
 ## Where It Lives
 
 - SDK app files: `packages/apps-sdk/src/apps/dev-playground`
-- Web layout wrapper: `apps/web/src/app/components/DevPlaygroundLayout.tsx`
+- Shared web app layout: `apps/web/src/app/components/MeetingAppLayout.tsx`
 - Host registration: `apps/web/src/app/meets-client.tsx`
-- Meeting controls wiring:
-  - `apps/web/src/app/components/ControlsBar.tsx`
-  - `apps/web/src/app/components/mobile/MobileControlsBar.tsx`
+- Meeting controls wiring: `apps/web/src/app/components/ControlsBar.tsx`
 
 ## Why It Is Dev-Only
 
@@ -29,7 +27,7 @@ Use this app as a safe scratchpad for:
 ## What It Demonstrates
 
 1. `defineApp` with a stable `id` (`dev-playground`)
-2. Yjs document initialization via `createAppDoc`
+2. Empty-on-join Yjs document creation via `createAppDoc`
 3. Shared primitives in one doc (`Map`, `Text`, `Array`)
 4. Presence state with `useAppPresence`
 5. App lock behavior using `locked` and `isAdmin`
@@ -46,12 +44,17 @@ The app stores this shape in Yjs:
 
 Source: `packages/apps-sdk/src/apps/dev-playground/core/doc/index.ts`.
 
+The factory intentionally leaves those keys absent. Read helpers expose `0`,
+`""`, and `[]` without mutating Yjs; the first counter, note, or item edit
+creates the corresponding shared type and metadata. This keeps reconnecting
+clients from publishing defaults before their initial room sync.
+
 ## Run It
 
 1. Start web host in dev: `pnpm -C apps/web dev`
 2. Join a meeting as admin
-3. Open `Apps` menu
-4. Toggle `Dev Playground`
+3. Open `More options`
+4. Select `Open dev playground`
 
 ## Suggested Debug Flow
 
@@ -65,8 +68,7 @@ Source: `packages/apps-sdk/src/apps/dev-playground/core/doc/index.ts`.
 
 1. Add a second shared list (for example, "decisions")
 2. Add cursor/selection awareness metadata
-3. Add an optional file upload action using `useAppAssets`
-4. Add a native renderer (`native/index.ts`) and wire mobile host registration
+3. Add another lock-aware collaborative control
 
 Use this app as a safe scratchpad before creating a production app integration.
 

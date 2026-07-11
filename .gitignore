@@ -52,9 +52,11 @@ next-env.d.ts
 .next
 apps/web/node_modules
 packages/*/node_modules
+packages/*/dist/
+packages/shared-browser/package-lock.json
 .build
 .swiftpm
- # Xcode
+# Xcode
 DerivedData
 *.xcuserstate
 xcuserdata
@@ -67,5 +69,4 @@ apps/mobile/config/GoogleOAuth.plist
 .wrangler
 apps/conclave-skip/MISSION.md
 apps/conclave-skip/STORE-READINESS.md
-.gitignore
 apps/conclave-skip/Android/fastlane/metadata/android/data-safety-form.md

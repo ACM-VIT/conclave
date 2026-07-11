@@ -7,10 +7,10 @@ This page explains the conceptual model behind `@conclave/apps-sdk`: what an app
 An app is a collaborative in-meeting surface with:
 
 - stable app id (for example `whiteboard`, `polls`)
-- at least one renderer (`web` and/or `native`)
-- optional shared Yjs doc initializer (`createDoc`)
+- a web renderer
+- optional empty-on-join shared Yjs doc factory (`createDoc`)
 
-Apps are defined with `defineApp(...)` and registered with `registerApps(...)`.
+Apps are defined with `defineApp(...)` and passed to `AppsProvider`.
 
 ## Collaborative Apps and Games
 
@@ -38,10 +38,10 @@ Think of the system in four layers:
    - `defineApp` shape validation
    - app metadata and renderer entrypoints
 2. Host runtime layer:
-   - app registry (`registerApp`, `registerApps`)
+   - explicit app list passed to `AppsProvider`
    - `AppsProvider` context for state + sync
 3. App UI layer:
-   - hooks (`useApps`, `useAppDoc`, `useAppPresence`, `useAppAssets`)
+   - hooks (`useApps`, `useAppDoc`, `useAppPresence`)
    - mutation/read logic with lock-aware behavior
 4. SFU server layer:
    - socket handlers enforce permissions
@@ -55,17 +55,12 @@ Think of the system in four layers:
 
 - `id` required
 - `name` required
-- at least one renderer required (`web` or `native`)
+- web renderer required
 
-### 2. Registry
+### 2. Host App List
 
-`registerApp` / `registerApps` stores app definitions in a process-local map.
-
-Key behaviors:
-
-- repeated registration is safe
-- registry updates are observable (`subscribeRegistry`)
-- host process controls what apps are available
+The host passes a stable array of definitions to `AppsProvider`. This keeps the
+available apps explicit and avoids mutable process-global registration state.
 
 ### 3. Runtime Provider
 
@@ -86,7 +81,9 @@ Use Yjs for:
 - state that must survive reconnects
 - state all participants should converge on
 
-Use `createAppDoc` + helper initializers for deterministic schema setup.
+Create an empty doc with `createAppDoc`, return local defaults from readers, and
+lazily create shared types from real mutation paths. Writing defaults before
+the initial server sync can overwrite live state during Yjs conflict resolution.
 
 ### 5. Awareness / Presence
 
@@ -139,7 +136,7 @@ Implication for app code:
 
 ## Host Responsibilities
 
-- register correct app definitions for the platform
+- register the app definitions available in the meeting
 - mount `AppsProvider` with socket + identity + role context
 - expose app controls only where appropriate (usually admin-only)
 - visibly communicate lock/read-only mode

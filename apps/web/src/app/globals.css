@@ -56,39 +56,6 @@
   font-display: swap;
 }
 
-@font-face {
-  font-family: "PolySans Wide";
-  src: url("/assets/fonts/PolySans-trial/PolySans-trial/Wide/PolySansTrial-NeutralWide.otf") format("opentype");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "PolySans Wide";
-  src: url("/assets/fonts/PolySans-trial/PolySans-trial/Wide/PolySansTrial-MedianWide.otf") format("opentype");
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "PolySans Wide";
-  src: url("/assets/fonts/PolySans-trial/PolySans-trial/Wide/PolySansTrial-BulkyWide.otf") format("opentype");
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
-
-@theme {
-  --color-primary-orange: #F95F4A;
-  --color-primary-pink: #FF007A;
-  --color-acm-cream: #fafafa;
-  --color-acm-dark: #0a0a0b;
-  --color-acm-dark-alt: #131316;
-  --color-acm-surface: #18181b;
-  --color-acm-surface-light: #232327;
-  --color-acm-surface-hover: #2e2e33;
-}
-
 :root {
   color-scheme: dark;
   --font-polysans: "PolySans Trial", system-ui, sans-serif;
@@ -122,13 +89,6 @@ textarea:focus,
 select:focus {
   border-color: #F95F4A !important;
   outline: none;
-}
-
-.acm-pill {
-  border-radius: 41px;
-  border: 1px solid #fafafa;
-  background: rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(4px);
 }
 
 @keyframes blink {
@@ -173,114 +133,6 @@ select:focus {
 
 .animate-participant-leave {
   animation: meets-participant-leave 120ms ease-in;
-}
-
-.acm-header-pill {
-  height: 50px;
-  border-radius: 41px;
-  border: 1px solid #fafafa;
-  background: rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 2rem;
-}
-
-.acm-pill {
-  border-radius: 41px;
-  border: 1px solid #fafafa;
-  background: rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(4px);
-}
-
-.acm-btn-primary {
-  background: #F95F4A;
-  color: white;
-  font-family: "PolySans Trial", sans-serif;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  border-radius: 41px;
-  padding: 0.75rem 2rem;
-  transition: all 0.25s ease;
-  border: none;
-  cursor: pointer;
-}
-
-.acm-btn-primary:hover {
-  background: #e8553f;
-  transform: translateY(-2px);
-}
-
-.acm-btn-primary:active {
-  transform: translateY(0);
-}
-
-.acm-btn-secondary {
-  background: transparent;
-  color: #fafafa;
-  font-family: "PolySans Trial", sans-serif;
-  font-weight: 400;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  border-radius: 41px;
-  padding: 0.75rem 2rem;
-  transition: all 0.25s ease;
-  border: 1px solid rgba(250, 250, 250, 0.3);
-  cursor: pointer;
-}
-
-.acm-btn-secondary:hover {
-  background: rgba(250, 250, 250, 0.1);
-  border-color: #fafafa;
-}
-
-.acm-control-btn {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  transition: all 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(250, 250, 250, 0.15);
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(8px);
-  color: #fafafa;
-  cursor: pointer;
-}
-
-.acm-control-btn:hover {
-  background: rgba(26, 26, 26, 0.9);
-  border-color: rgba(250, 250, 250, 0.3);
-  transform: scale(1.08);
-}
-
-.acm-control-btn.active {
-  background: #F95F4A;
-  border: 2px solid #F95F4A;
-  color: white;
-}
-
-.acm-control-btn.danger {
-  background: rgba(234, 67, 53, 0.15);
-  border-color: rgba(234, 67, 53, 0.4);
-  color: #f87171;
-}
-
-.acm-control-btn.danger:hover {
-  background: #ea4335;
-  border-color: #ea4335;
-  color: white;
-}
-
-.acm-control-btn:disabled {
-  background: rgba(26, 26, 26, 0.3);
-  border-color: rgba(250, 250, 250, 0.05);
-  color: rgba(250, 250, 250, 0.2);
-  cursor: not-allowed;
-  transform: none;
 }
 
 .animate-reaction-float {
@@ -331,135 +183,6 @@ select:focus {
       forwards;
   }
 }
-.acm-input {
-  background: rgba(0, 0, 0, 0.5);
-  border: 1px solid rgba(250, 250, 250, 0.15);
-  border-radius: 12px;
-  padding: 0.875rem 1rem;
-  color: #fafafa;
-  font-family: "PolySans Trial", sans-serif;
-  font-size: 0.9375rem;
-  transition: all 0.25s ease;
-}
-
-.acm-input::placeholder {
-  color: rgba(250, 250, 250, 0.4);
-}
-
-.acm-input:focus {
-  outline: none;
-  border-color: #F95F4A;
-  box-shadow: 0 0 0 3px rgba(249, 95, 74, 0.15);
-}
-
-.acm-heading-display {
-  font-family: "PolySans Bulky Wide", sans-serif;
-  font-weight: 700;
-  text-transform: lowercase;
-  line-height: 1.1;
-}
-
-.acm-heading {
-  font-family: "PolySans Trial", sans-serif;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.acm-label {
-  font-family: "PolySans Trial", sans-serif;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: rgba(250, 250, 250, 0.6);
-}
-
-.acm-text-body {
-  font-family: "PolySans Trial", sans-serif;
-  font-weight: 400;
-  line-height: 1.6;
-}
-
-.acm-bg-pattern {
-  background-image: url("/assets/background_pattern.svg");
-  background-repeat: repeat;
-  background-size: 40px 40px;
-  opacity: 0.03;
-}
-
-.acm-bg-dot-grid {
-  background-image:
-    radial-gradient(circle, rgba(250, 250, 250, 0.12) 1px, transparent 1px),
-    url("/assets/background_pattern.svg");
-  background-repeat: repeat;
-  background-size: 26px 26px, auto;
-  opacity: 0.22;
-}
-
-.acm-bg-radial {
-  background: radial-gradient(ellipse at 30% 20%,
-      rgba(249, 95, 74, 0.12) 0%,
-      transparent 50%),
-    radial-gradient(ellipse at 70% 80%,
-      rgba(255, 0, 122, 0.09) 0%,
-      transparent 50%);
-}
-
-.lobby-bg {
-  background-color: #08080a;
-  isolation: isolate;
-}
-
-.lobby-aurora::before {
-  content: none;
-}
-
-.lobby-grain::after {
-  content: none;
-}
-
-.lobby-cta {
-  background-color: #f95f4a;
-  transition: background-color 0.12s ease, filter 0.12s ease;
-}
-.lobby-cta:hover:not(:disabled) {
-  filter: brightness(1.08);
-}
-.lobby-cta:active:not(:disabled) {
-  filter: brightness(0.95);
-}
-.lobby-cta:disabled {
-  background-color: #232327;
-  color: rgba(250, 250, 250, 0.35);
-  cursor: not-allowed;
-}
-
-.lobby-glass {
-  background-color: #161619;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-@keyframes lobby-rise {
-  from {
-    opacity: 0;
-    transform: translateY(18px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-.lobby-rise {
-  opacity: 0;
-  animation: lobby-rise 100ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-@media (prefers-reduced-motion: reduce) {
-  .lobby-rise {
-    animation: none;
-    opacity: 1;
-  }
-}
-
 .acm-video-tile {
   position: relative;
   background: #131316;
@@ -736,14 +459,6 @@ select:focus {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-.safe-area-pl {
-  padding-left: env(safe-area-inset-left, 0px);
-}
-
-.safe-area-pr {
-  padding-right: env(safe-area-inset-right, 0px);
-}
-
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
@@ -767,18 +482,6 @@ select:focus {
 
   to {
     opacity: 1;
-  }
-}
-
-@keyframes acm-slide-up {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
   }
 }
 
@@ -862,11 +565,6 @@ select:focus {
   animation: acm-fade-in 0.4s ease-out forwards;
 }
 
-.animate-slide-up {
-  opacity: 0;
-  animation: acm-slide-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
 .animate-scale-in {
   opacity: 0;
   animation: acm-scale-in 0.4s ease-out forwards;
@@ -908,18 +606,6 @@ select:focus {
   }
 }
 
-@keyframes web-chat-meta-fade {
-  from {
-    opacity: 0;
-    transform: translateY(-2px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @keyframes web-chat-send-tap {
   0% {
     transform: scale(1);
@@ -946,10 +632,6 @@ select:focus {
 
 .web-chat-action-new {
   animation: web-chat-action-fade 0.11s ease-out both;
-}
-
-.web-chat-meta-new {
-  animation: web-chat-meta-fade 0.11s ease-out both;
 }
 
 .web-chat-send-active {
@@ -1053,7 +735,6 @@ select:focus {
   .web-chat-message-new-peer,
   .web-chat-message-new-self,
   .web-chat-action-new,
-  .web-chat-meta-new,
   .web-chat-send-active,
   .web-chat-typing-dot,
   .web-chat-message-highlight,
@@ -1061,26 +742,6 @@ select:focus {
   .web-collapsible[data-state="closed"] {
     animation: none;
   }
-}
-
-.animate-delay-75 {
-  animation-delay: 75ms;
-}
-
-.animate-delay-100 {
-  animation-delay: 100ms;
-}
-
-.animate-delay-150 {
-  animation-delay: 150ms;
-}
-
-.animate-delay-200 {
-  animation-delay: 200ms;
-}
-
-.animate-delay-300 {
-  animation-delay: 300ms;
 }
 
 :root {

@@ -24,7 +24,6 @@ import {
   getFaceFilterEffectGraph,
   hasActiveVideoEffects,
   isMeetVideoPipeRuntimeEnabled,
-  isAnimatedBackgroundEffect,
   requiresMeetVideoPipeFaceFilter,
   type AppearanceStyleId,
   type BackgroundEffectId,
@@ -911,11 +910,6 @@ type SourceMotionStats = {
   reason: string;
   maskActive: boolean;
 };
-type ProceduralBackgroundLayerCache = {
-  canvas: HTMLCanvasElement;
-  ctx: CanvasRenderingContext2D | null;
-  key: string;
-};
 type LowLightRenderStats = {
   enabled: boolean;
   foregroundBrightness: number;
@@ -1456,10 +1450,7 @@ const VIDEO_EFFECTS_ADAPTATION_TIER_CONFIG: Record<
 
 const getVideoEffectsComplexityScore = (effects: VideoEffectsState) => {
   let score = 0;
-  if (
-    effects.background !== "none" &&
-    effects.background !== "gradient"
-  ) {
+  if (effects.background !== "none") {
     const imageBackedBackground = Boolean(
       BACKGROUND_ASSET_PATHS[
         effects.background as keyof typeof BACKGROUND_ASSET_PATHS
@@ -1467,10 +1458,7 @@ const getVideoEffectsComplexityScore = (effects: VideoEffectsState) => {
     );
     if (effects.background === "custom") {
       score += 4;
-    } else if (
-      isAnimatedBackgroundEffect(effects.background) ||
-      imageBackedBackground
-    ) {
+    } else if (imageBackedBackground) {
       score += 2;
     } else {
       score += 3;
@@ -6633,715 +6621,6 @@ const toCanvasBounds = (
   };
 };
 
-type ProceduralRoomScene = {
-  wall: [string, string];
-  floor: string;
-  trim: string;
-  accent: string;
-  furniture: string;
-  shelf?: "wide" | "left" | "right" | "library";
-  books?: number;
-  sofa?: "left" | "center" | "wide";
-  table?: boolean;
-  plants?: number;
-  window?: "left" | "right" | "wide";
-  conference?: boolean;
-  cafe?: boolean;
-  lamp?: boolean;
-  art?: boolean;
-};
-
-const PROCEDURAL_ROOM_SCENES: Partial<
-  Record<BackgroundEffectId, ProceduralRoomScene>
-> = {
-  bookshelf: {
-    wall: ["#78350f", "#292524"],
-    floor: "#1c1917",
-    trim: "#f59e0b",
-    accent: "#fbbf24",
-    furniture: "#451a03",
-    shelf: "wide",
-    books: 20,
-    lamp: true,
-  },
-  "coffee-shop": {
-    wall: ["#92400e", "#431407"],
-    floor: "#1f2937",
-    trim: "#fed7aa",
-    accent: "#f97316",
-    furniture: "#3f2412",
-    cafe: true,
-    plants: 2,
-    window: "left",
-  },
-  "home-office-bookshelf": {
-    wall: ["#a16207", "#44403c"],
-    floor: "#292524",
-    trim: "#fef3c7",
-    accent: "#84cc16",
-    furniture: "#57534e",
-    shelf: "right",
-    books: 14,
-    table: true,
-    lamp: true,
-    plants: 1,
-  },
-  "home-office-sofa": {
-    wall: ["#7c2d12", "#1c1917"],
-    floor: "#27272a",
-    trim: "#fdba74",
-    accent: "#f97316",
-    furniture: "#44403c",
-    sofa: "center",
-    shelf: "left",
-    books: 8,
-    plants: 1,
-  },
-  "living-room-shelf": {
-    wall: ["#854d0e", "#292524"],
-    floor: "#1c1917",
-    trim: "#fde68a",
-    accent: "#ea580c",
-    furniture: "#3f3f46",
-    sofa: "left",
-    shelf: "right",
-    books: 10,
-    art: true,
-    plants: 2,
-  },
-  "modern-conference-room": {
-    wall: ["#cbd5e1", "#64748b"],
-    floor: "#334155",
-    trim: "#e2e8f0",
-    accent: "#38bdf8",
-    furniture: "#1e293b",
-    conference: true,
-    window: "wide",
-    plants: 1,
-  },
-  "office-library": {
-    wall: ["#365314", "#1c1917"],
-    floor: "#292524",
-    trim: "#bef264",
-    accent: "#65a30d",
-    furniture: "#3f3f46",
-    shelf: "library",
-    books: 24,
-    table: true,
-  },
-  "office-meeting-space": {
-    wall: ["#0f766e", "#134e4a"],
-    floor: "#164e63",
-    trim: "#ccfbf1",
-    accent: "#2dd4bf",
-    furniture: "#1f2937",
-    conference: true,
-    shelf: "left",
-    books: 8,
-  },
-  "office-green-space": {
-    wall: ["#bbf7d0", "#166534"],
-    floor: "#14532d",
-    trim: "#dcfce7",
-    accent: "#22c55e",
-    furniture: "#365314",
-    window: "right",
-    plants: 5,
-    table: true,
-  },
-  "shelf-with-plants": {
-    wall: ["#d6d3d1", "#78716c"],
-    floor: "#292524",
-    trim: "#f5f5f4",
-    accent: "#16a34a",
-    furniture: "#44403c",
-    shelf: "wide",
-    books: 6,
-    plants: 4,
-  },
-  "stylish-home-office": {
-    wall: ["#e7e5e4", "#57534e"],
-    floor: "#1c1917",
-    trim: "#fafaf9",
-    accent: "#a3e635",
-    furniture: "#3f3f46",
-    table: true,
-    lamp: true,
-    art: true,
-    plants: 2,
-  },
-  "stylish-living-room-couch": {
-    wall: ["#991b1b", "#1c1917"],
-    floor: "#292524",
-    trim: "#fecaca",
-    accent: "#f87171",
-    furniture: "#3f3f46",
-    sofa: "wide",
-    art: true,
-    plants: 2,
-  },
-};
-
-const drawShelf = (
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  scene: ProceduralRoomScene,
-) => {
-  ctx.fillStyle = "rgba(28,25,23,0.36)";
-  fillRoundRect(ctx, x, y, width, height, Math.max(8, height * 0.04));
-  const shelfCount = scene.shelf === "library" ? 4 : 3;
-  const bookCount = scene.books ?? 10;
-  for (let shelf = 0; shelf < shelfCount; shelf += 1) {
-    const shelfY = y + height * (0.18 + shelf * (0.68 / shelfCount));
-    ctx.fillStyle = "rgba(250,250,249,0.28)";
-    fillRoundRect(ctx, x + width * 0.08, shelfY, width * 0.84, height * 0.025, 4);
-    for (let item = 0; item < bookCount / shelfCount; item += 1) {
-      const bookX = x + width * 0.12 + item * width * 0.065;
-      const bookHeight = height * (0.1 + ((item + shelf) % 3) * 0.025);
-      ctx.fillStyle =
-        (item + shelf) % 3 === 0
-          ? scene.accent
-          : (item + shelf) % 3 === 1
-            ? scene.trim
-            : "#f8fafc";
-      fillRoundRect(ctx, bookX, shelfY - bookHeight, width * 0.035, bookHeight, 3);
-    }
-  }
-};
-
-const drawPlant = (
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  scale: number,
-  accent: string,
-) => {
-  ctx.fillStyle = "#292524";
-  fillRoundRect(ctx, x - 10 * scale, y, 20 * scale, 18 * scale, 4 * scale);
-  ctx.strokeStyle = "#166534";
-  ctx.lineWidth = Math.max(1, 2 * scale);
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-  ctx.lineTo(x, y - 54 * scale);
-  ctx.stroke();
-  ctx.fillStyle = accent;
-  for (let leaf = 0; leaf < 5; leaf += 1) {
-    const angle = -1.25 + leaf * 0.55;
-    ctx.beginPath();
-    ctx.ellipse(
-      x + Math.cos(angle) * 22 * scale,
-      y - 44 * scale + Math.sin(angle) * 14 * scale,
-      18 * scale,
-      8 * scale,
-      angle,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
-  }
-};
-
-const drawSofa = (
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  color: string,
-) => {
-  ctx.fillStyle = "rgba(0,0,0,0.18)";
-  fillRoundRect(ctx, x + width * 0.04, y + height * 0.18, width, height, 20);
-  ctx.fillStyle = color;
-  fillRoundRect(ctx, x, y, width, height * 0.68, 24);
-  ctx.fillStyle = "rgba(255,255,255,0.14)";
-  fillRoundRect(ctx, x + width * 0.08, y + height * 0.12, width * 0.36, height * 0.32, 14);
-  fillRoundRect(ctx, x + width * 0.56, y + height * 0.12, width * 0.36, height * 0.32, 14);
-};
-
-const drawWindow = (
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  trim: string,
-) => {
-  const glass = ctx.createLinearGradient(x, y, x + width, y + height);
-  glass.addColorStop(0, "rgba(224,242,254,0.74)");
-  glass.addColorStop(1, "rgba(14,116,144,0.42)");
-  ctx.fillStyle = glass;
-  fillRoundRect(ctx, x, y, width, height, 12);
-  ctx.strokeStyle = trim;
-  ctx.lineWidth = Math.max(2, width * 0.015);
-  ctx.strokeRect(x + width * 0.08, y + height * 0.1, width * 0.84, height * 0.8);
-  ctx.beginPath();
-  ctx.moveTo(x + width * 0.5, y + height * 0.1);
-  ctx.lineTo(x + width * 0.5, y + height * 0.9);
-  ctx.moveTo(x + width * 0.08, y + height * 0.52);
-  ctx.lineTo(x + width * 0.92, y + height * 0.52);
-  ctx.stroke();
-};
-
-const drawProceduralRoomBackground = (
-  ctx: CanvasRenderingContext2D,
-  background: BackgroundEffectId,
-  width: number,
-  height: number,
-) => {
-  const scene = PROCEDURAL_ROOM_SCENES[background];
-  if (!scene) return false;
-
-  const wall = ctx.createLinearGradient(0, 0, width, height);
-  wall.addColorStop(0, scene.wall[0]);
-  wall.addColorStop(1, scene.wall[1]);
-  ctx.fillStyle = wall;
-  ctx.fillRect(0, 0, width, height);
-
-  ctx.fillStyle = "rgba(255,255,255,0.08)";
-  fillRoundRect(ctx, width * 0.08, height * 0.09, width * 0.84, height * 0.12, 18);
-  ctx.fillStyle = scene.floor;
-  ctx.fillRect(0, height * 0.72, width, height * 0.28);
-  ctx.fillStyle = "rgba(0,0,0,0.18)";
-  ctx.fillRect(0, height * 0.7, width, height * 0.04);
-  ctx.fillStyle = scene.trim;
-  ctx.fillRect(0, height * 0.7, width, Math.max(4, height * 0.012));
-
-  if (scene.window === "wide") {
-    drawWindow(ctx, width * 0.23, height * 0.16, width * 0.54, height * 0.26, scene.trim);
-  } else if (scene.window === "left") {
-    drawWindow(ctx, width * 0.1, height * 0.16, width * 0.28, height * 0.34, scene.trim);
-  } else if (scene.window === "right") {
-    drawWindow(ctx, width * 0.62, height * 0.16, width * 0.28, height * 0.34, scene.trim);
-  }
-
-  if (scene.art) {
-    ctx.fillStyle = "rgba(250,250,249,0.18)";
-    fillRoundRect(ctx, width * 0.42, height * 0.18, width * 0.18, height * 0.18, 10);
-    ctx.fillStyle = scene.accent;
-    fillRoundRect(ctx, width * 0.46, height * 0.22, width * 0.1, height * 0.1, 8);
-  }
-
-  if (scene.shelf) {
-    const shelfWidth =
-      scene.shelf === "wide" || scene.shelf === "library"
-        ? width * 0.72
-        : width * 0.3;
-    const shelfX =
-      scene.shelf === "right"
-        ? width * 0.62
-        : scene.shelf === "left"
-          ? width * 0.08
-          : width * 0.14;
-    drawShelf(ctx, shelfX, height * 0.2, shelfWidth, height * 0.38, scene);
-  }
-
-  if (scene.table) {
-    ctx.fillStyle = scene.furniture;
-    fillRoundRect(ctx, width * 0.34, height * 0.58, width * 0.32, height * 0.08, 14);
-    ctx.fillStyle = "rgba(0,0,0,0.24)";
-    ctx.fillRect(width * 0.39, height * 0.66, width * 0.035, height * 0.14);
-    ctx.fillRect(width * 0.58, height * 0.66, width * 0.035, height * 0.14);
-  }
-
-  if (scene.conference) {
-    ctx.fillStyle = scene.furniture;
-    fillRoundRect(ctx, width * 0.18, height * 0.58, width * 0.64, height * 0.12, 24);
-    ctx.fillStyle = "rgba(255,255,255,0.2)";
-    fillRoundRect(ctx, width * 0.29, height * 0.56, width * 0.42, height * 0.035, 10);
-    ctx.fillStyle = "rgba(15,23,42,0.52)";
-    for (let chair = 0; chair < 4; chair += 1) {
-      fillRoundRect(
-        ctx,
-        width * (0.22 + chair * 0.16),
-        height * 0.72,
-        width * 0.08,
-        height * 0.07,
-        10,
-      );
-    }
-  }
-
-  if (scene.cafe) {
-    ctx.fillStyle = scene.furniture;
-    fillRoundRect(ctx, width * 0.48, height * 0.48, width * 0.4, height * 0.16, 18);
-    ctx.fillStyle = scene.trim;
-    fillRoundRect(ctx, width * 0.54, height * 0.34, width * 0.24, height * 0.08, 12);
-    ctx.fillStyle = "rgba(255,255,255,0.4)";
-    for (let cup = 0; cup < 5; cup += 1) {
-      fillRoundRect(
-        ctx,
-        width * (0.54 + cup * 0.055),
-        height * 0.52,
-        width * 0.025,
-        height * 0.05,
-        4,
-      );
-    }
-  }
-
-  if (scene.sofa) {
-    const sofaWidth = scene.sofa === "wide" ? width * 0.76 : width * 0.55;
-    const sofaX =
-      scene.sofa === "left"
-        ? width * 0.08
-        : scene.sofa === "wide"
-          ? width * 0.12
-          : width * 0.23;
-    drawSofa(ctx, sofaX, height * 0.62, sofaWidth, height * 0.18, scene.furniture);
-  }
-
-  if (scene.lamp) {
-    ctx.fillStyle = "rgba(250,204,21,0.24)";
-    ctx.beginPath();
-    ctx.arc(width * 0.78, height * 0.32, width * 0.1, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = scene.trim;
-    fillRoundRect(ctx, width * 0.76, height * 0.28, width * 0.04, height * 0.08, 8);
-    ctx.fillStyle = scene.furniture;
-    ctx.fillRect(width * 0.78, height * 0.36, width * 0.012, height * 0.22);
-  }
-
-  for (let plant = 0; plant < (scene.plants ?? 0); plant += 1) {
-    const x = plant % 2 === 0 ? width * (0.12 + plant * 0.08) : width * (0.88 - plant * 0.05);
-    const y = height * (0.65 + (plant % 3) * 0.04);
-    drawPlant(ctx, x, y, Math.max(0.7, Math.min(width, height) / 700), scene.accent);
-  }
-
-  return true;
-};
-
-const drawCachedProceduralLayer = (
-  targetCtx: CanvasRenderingContext2D,
-  cache: ProceduralBackgroundLayerCache | null | undefined,
-  key: string,
-  width: number,
-  height: number,
-  draw: (ctx: CanvasRenderingContext2D) => void,
-) => {
-  if (!cache?.ctx) {
-    draw(targetCtx);
-    return;
-  }
-  if (
-    cache.key !== key ||
-    cache.canvas.width !== width ||
-    cache.canvas.height !== height
-  ) {
-    cache.canvas.width = width;
-    cache.canvas.height = height;
-    cache.ctx.clearRect(0, 0, width, height);
-    draw(cache.ctx);
-    cache.key = key;
-  }
-  targetCtx.drawImage(cache.canvas, 0, 0, width, height);
-};
-
-const drawMotionDeskBase = (
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-) => {
-  const wall = ctx.createLinearGradient(0, 0, width, height);
-  wall.addColorStop(0, "#dbeafe");
-  wall.addColorStop(0.45, "#64748b");
-  wall.addColorStop(1, "#172554");
-  ctx.fillStyle = wall;
-  ctx.fillRect(0, 0, width, height);
-  ctx.fillStyle = "#0f172a";
-  ctx.fillRect(0, height * 0.72, width, height * 0.28);
-  drawWindow(ctx, width * 0.09, height * 0.14, width * 0.32, height * 0.32, "#e0f2fe");
-  ctx.fillStyle = "rgba(15,23,42,0.38)";
-  fillRoundRect(ctx, width * 0.58, height * 0.14, width * 0.27, height * 0.34, 18);
-  ctx.fillStyle = "#1e293b";
-  fillRoundRect(ctx, width * 0.2, height * 0.58, width * 0.62, height * 0.095, 16);
-  ctx.fillStyle = "#0f172a";
-  ctx.fillRect(width * 0.28, height * 0.67, width * 0.035, height * 0.18);
-  ctx.fillRect(width * 0.7, height * 0.67, width * 0.035, height * 0.18);
-  ctx.fillStyle = "rgba(241,245,249,0.28)";
-  fillRoundRect(ctx, width * 0.36, height * 0.52, width * 0.16, height * 0.08, 12);
-  drawPlant(ctx, width * 0.78, height * 0.62, Math.max(0.8, Math.min(width, height) / 760), "#22c55e");
-};
-
-const drawMotionDeskOverlay = (
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  seconds: number,
-) => {
-  const cloudOffset = (seconds * width * 0.035) % (width * 0.36);
-  ctx.save();
-  ctx.globalCompositeOperation = "screen";
-  ctx.fillStyle = "rgba(255,255,255,0.16)";
-  fillRoundRect(
-    ctx,
-    width * 0.11 + cloudOffset,
-    height * 0.24,
-    width * 0.13,
-    height * 0.035,
-    999,
-  );
-  fillRoundRect(
-    ctx,
-    width * 0.2 + cloudOffset * 0.6,
-    height * 0.31,
-    width * 0.1,
-    height * 0.028,
-    999,
-  );
-  const pulse = 0.16 + Math.sin(seconds * 1.4) * 0.035;
-  const light = ctx.createRadialGradient(
-    width * 0.72,
-    height * 0.3,
-    0,
-    width * 0.72,
-    height * 0.3,
-    width * 0.36,
-  );
-  light.addColorStop(0, `rgba(251,191,36,${pulse})`);
-  light.addColorStop(1, "rgba(251,191,36,0)");
-  ctx.fillStyle = light;
-  ctx.fillRect(0, 0, width, height);
-  ctx.restore();
-};
-
-const drawMotionLoftBase = (
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-) => {
-  const wall = ctx.createLinearGradient(0, 0, width, height);
-  wall.addColorStop(0, "#fed7aa");
-  wall.addColorStop(0.46, "#92400e");
-  wall.addColorStop(1, "#1c1917");
-  ctx.fillStyle = wall;
-  ctx.fillRect(0, 0, width, height);
-  ctx.fillStyle = "#292524";
-  ctx.fillRect(0, height * 0.72, width, height * 0.28);
-  drawWindow(ctx, width * 0.6, height * 0.13, width * 0.28, height * 0.34, "#fed7aa");
-  drawShelf(ctx, width * 0.08, height * 0.18, width * 0.34, height * 0.38, {
-    wall: ["#fed7aa", "#92400e"],
-    floor: "#292524",
-    trim: "#fde68a",
-    accent: "#f97316",
-    furniture: "#3f2412",
-    shelf: "left",
-    books: 12,
-  });
-  drawSofa(ctx, width * 0.24, height * 0.62, width * 0.52, height * 0.17, "#3f3f46");
-  drawPlant(ctx, width * 0.83, height * 0.65, Math.max(0.8, Math.min(width, height) / 760), "#84cc16");
-};
-
-const drawMotionLoftOverlay = (
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  seconds: number,
-) => {
-  const sweep = (Math.sin(seconds * 0.65) + 1) / 2;
-  ctx.save();
-  ctx.globalCompositeOperation = "screen";
-  const light = ctx.createLinearGradient(
-    width * (0.56 + sweep * 0.08),
-    height * 0.16,
-    width * (0.32 + sweep * 0.08),
-    height,
-  );
-  light.addColorStop(0, "rgba(253,186,116,0.24)");
-  light.addColorStop(0.48, "rgba(253,186,116,0.08)");
-  light.addColorStop(1, "rgba(253,186,116,0)");
-  ctx.fillStyle = light;
-  ctx.beginPath();
-  ctx.moveTo(width * 0.62, height * 0.36);
-  ctx.lineTo(width * (0.18 + sweep * 0.12), height);
-  ctx.lineTo(width * (0.55 + sweep * 0.08), height);
-  ctx.lineTo(width * 0.88, height * 0.36);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-};
-
-const drawMotionAuroraBase = (
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-) => {
-  const sky = ctx.createLinearGradient(0, 0, 0, height);
-  sky.addColorStop(0, "#020617");
-  sky.addColorStop(0.6, "#0f172a");
-  sky.addColorStop(1, "#164e63");
-  ctx.fillStyle = sky;
-  ctx.fillRect(0, 0, width, height);
-  ctx.fillStyle = "rgba(255,255,255,0.5)";
-  for (let index = 0; index < 24; index += 1) {
-    const x = ((index * 97) % 1000) / 1000 * width;
-    const y = ((index * 53) % 360) / 1000 * height;
-    ctx.fillRect(x, y, 1.5, 1.5);
-  }
-  ctx.fillStyle = "rgba(2,6,23,0.34)";
-  ctx.beginPath();
-  ctx.moveTo(0, height * 0.78);
-  ctx.lineTo(width * 0.22, height * 0.58);
-  ctx.lineTo(width * 0.42, height * 0.75);
-  ctx.lineTo(width * 0.62, height * 0.54);
-  ctx.lineTo(width, height * 0.76);
-  ctx.lineTo(width, height);
-  ctx.lineTo(0, height);
-  ctx.closePath();
-  ctx.fill();
-};
-
-const drawAuroraBand = (
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  seconds: number,
-  phase: number,
-  color: string,
-) => {
-  const yBase = height * (0.24 + phase * 0.1);
-  const amplitude = height * (0.055 + phase * 0.018);
-  ctx.beginPath();
-  ctx.moveTo(0, yBase);
-  for (let point = 0; point <= 5; point += 1) {
-    const x = (width / 5) * point;
-    const y = yBase + Math.sin(seconds * 0.7 + phase * 2.2 + point * 1.1) * amplitude;
-    ctx.lineTo(x, y);
-  }
-  ctx.lineTo(width, yBase + height * 0.24);
-  ctx.lineTo(0, yBase + height * 0.2);
-  ctx.closePath();
-  ctx.fillStyle = color;
-  ctx.fill();
-};
-
-const drawMotionAuroraOverlay = (
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  seconds: number,
-) => {
-  ctx.save();
-  ctx.globalCompositeOperation = "screen";
-  drawAuroraBand(ctx, width, height, seconds, 0.15, "rgba(20,184,166,0.26)");
-  drawAuroraBand(ctx, width, height, seconds + 1.6, 0.45, "rgba(34,197,94,0.2)");
-  drawAuroraBand(ctx, width, height, seconds + 2.4, 0.75, "rgba(96,165,250,0.2)");
-  ctx.restore();
-};
-
-const drawMotionBackground = (
-  ctx: CanvasRenderingContext2D,
-  background: BackgroundEffectId,
-  width: number,
-  height: number,
-  now: number,
-  cache?: ProceduralBackgroundLayerCache | null,
-) => {
-  const seconds = now / 1000;
-  if (background === "desk-motion") {
-    drawCachedProceduralLayer(ctx, cache, `${background}:base`, width, height, (baseCtx) =>
-      drawMotionDeskBase(baseCtx, width, height),
-    );
-    drawMotionDeskOverlay(ctx, width, height, seconds);
-    return true;
-  }
-  if (background === "loft-motion") {
-    drawCachedProceduralLayer(ctx, cache, `${background}:base`, width, height, (baseCtx) =>
-      drawMotionLoftBase(baseCtx, width, height),
-    );
-    drawMotionLoftOverlay(ctx, width, height, seconds);
-    return true;
-  }
-  if (background === "aurora-motion") {
-    drawCachedProceduralLayer(ctx, cache, `${background}:base`, width, height, (baseCtx) =>
-      drawMotionAuroraBase(baseCtx, width, height),
-    );
-    drawMotionAuroraOverlay(ctx, width, height, seconds);
-    return true;
-  }
-  return false;
-};
-
-const drawProceduralBackgroundDirect = (
-  ctx: CanvasRenderingContext2D,
-  background: BackgroundEffectId,
-  width: number,
-  height: number,
-) => {
-  if (drawProceduralRoomBackground(ctx, background, width, height)) return;
-
-  if (background === "office" || background === "studio") {
-    const wall = ctx.createLinearGradient(0, 0, width, height);
-    wall.addColorStop(0, background === "office" ? "#d6d3d1" : "#cbd5e1");
-    wall.addColorStop(1, background === "office" ? "#a8a29e" : "#64748b");
-    ctx.fillStyle = wall;
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = "rgba(63,63,70,0.22)";
-    ctx.fillRect(0, height * 0.72, width, height * 0.28);
-    ctx.fillStyle = "rgba(24,24,27,0.2)";
-    fillRoundRect(ctx, width * 0.12, height * 0.22, width * 0.76, 16, 8);
-    for (let i = 0; i < 10; i += 1) {
-      ctx.fillStyle = i % 2 ? "#57534e" : "#f8fafc";
-      fillRoundRect(
-        ctx,
-        width * 0.16 + i * width * 0.06,
-        height * 0.25,
-        width * 0.035,
-        height * 0.18,
-        4,
-      );
-    }
-    return;
-  }
-
-  if (background === "lounge") {
-    const wall = ctx.createLinearGradient(0, 0, width, height);
-    wall.addColorStop(0, "#7c2d12");
-    wall.addColorStop(1, "#1c1917");
-    ctx.fillStyle = wall;
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = "rgba(253,186,116,0.18)";
-    ctx.beginPath();
-    ctx.arc(width * 0.78, height * 0.2, width * 0.22, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#3f3f46";
-    fillRoundRect(ctx, width * 0.12, height * 0.66, width * 0.76, height * 0.16, 22);
-    return;
-  }
-
-  const gradient = ctx.createLinearGradient(0, 0, width, height);
-  gradient.addColorStop(0, "#1d4ed8");
-  gradient.addColorStop(0.42, "#7c3aed");
-  gradient.addColorStop(1, "#f97316");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, width, height);
-};
-
-const drawProceduralBackground = (
-  ctx: CanvasRenderingContext2D,
-  background: BackgroundEffectId,
-  width: number,
-  height: number,
-  now: number,
-  cache?: ProceduralBackgroundLayerCache | null,
-) => {
-  if (isAnimatedBackgroundEffect(background)) {
-    if (drawMotionBackground(ctx, background, width, height, now, cache)) return;
-  }
-
-  drawCachedProceduralLayer(
-    ctx,
-    cache,
-    `${background}:static`,
-    width,
-    height,
-    (backgroundCtx) =>
-      drawProceduralBackgroundDirect(backgroundCtx, background, width, height),
-  );
-};
-
 const applyLighting = (
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -9834,7 +9113,6 @@ const renderFrame = (
   backgroundImage: HTMLImageElement | null,
   backgroundBlurScratch: BackgroundBlurScratch,
   foregroundCompositeScratch: ForegroundCompositeScratch,
-  proceduralBackgroundCache: ProceduralBackgroundLayerCache | null,
   crop: CropRect,
   sourceProbe: CanvasVisibilityProbe,
   lowLightSourceStats: LowLightSourceStats,
@@ -9870,9 +9148,7 @@ const renderFrame = (
   const customBackgroundReady =
     effects.background !== "custom" || Boolean(backgroundImage);
   const needsSegmentation =
-    customBackgroundReady &&
-    effects.background !== "none" &&
-    effects.background !== "gradient";
+    customBackgroundReady && effects.background !== "none";
   const hasBackgroundEffect =
     customBackgroundReady && effects.background !== "none";
   const hasSegmentationMask = Boolean(segmentationMask);
@@ -10045,15 +9321,6 @@ const renderFrame = (
       );
     } else if (hasImageBackedBackground) {
       drawVideo(ctx, source, crop, width, height, sourceFilter);
-    } else {
-      drawProceduralBackground(
-        ctx,
-        effects.background,
-        width,
-        height,
-        now,
-        proceduralBackgroundCache,
-      );
     }
   };
 
@@ -10174,19 +9441,6 @@ const renderFrame = (
       drawReplacementBackground();
       ctx.restore();
     }
-  } else if (effects.background === "gradient") {
-    drawProceduralBackground(
-      ctx,
-      effects.background,
-      width,
-      height,
-      now,
-      proceduralBackgroundCache,
-    );
-    ctx.save();
-    ctx.globalAlpha = 0.94;
-    drawVideo(ctx, source, crop, width, height, sourceFilter);
-    ctx.restore();
   } else {
     drawVideo(ctx, source, crop, width, height, sourceFilter);
   }
@@ -11475,16 +10729,6 @@ export function useVideoEffects({
       alpha: true,
       desynchronized: true,
     });
-    const proceduralBackgroundCanvas = document.createElement("canvas");
-    const proceduralBackgroundCtx = proceduralBackgroundCanvas.getContext("2d", {
-      alpha: false,
-      desynchronized: true,
-    });
-    const proceduralBackgroundCache: ProceduralBackgroundLayerCache = {
-      canvas: proceduralBackgroundCanvas,
-      ctx: proceduralBackgroundCtx,
-      key: "",
-    };
     const visualTransition = createVisualEffectTransitionState(
       visualTransitionCanvas,
       visualTransitionCtx,
@@ -12753,9 +11997,7 @@ export function useVideoEffects({
         Boolean(currentEffects.customBackgroundDataUrl);
       return {
         needsSegmentation:
-          customBackgroundReady &&
-          currentEffects.background !== "none" &&
-          currentEffects.background !== "gradient",
+          customBackgroundReady && currentEffects.background !== "none",
         needsFace: currentEffects.filter !== "none" || currentEffects.framing,
       };
     };
@@ -15661,8 +14903,7 @@ export function useVideoEffects({
       const hasRoomTilingMetadata =
         currentEffects.framing ||
         currentEffects.filter !== "none" ||
-        (currentEffects.background !== "none" &&
-          currentEffects.background !== "gradient");
+        currentEffects.background !== "none";
       const tilesStable =
         trackedHumans.length > 0 &&
         lastRoomTilingTrackSignature === trackSignature;
@@ -16870,7 +16111,6 @@ export function useVideoEffects({
         backgroundImage,
         { canvas: backgroundBlurCanvas, ctx: backgroundBlurCtx },
         { canvas: foregroundCompositeCanvas, ctx: foregroundCompositeCtx },
-        proceduralBackgroundCache,
         currentCrop,
         sourceProbe,
         lowLightSourceStats,

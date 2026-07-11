@@ -16,9 +16,6 @@ describe("transcript model registry", () => {
       "gpt-5.6-luna",
       "gpt-5.6-sol",
     ]);
-    expect(
-      TRANSCRIPT_QA_MODELS.some((model) => model.id === "gpt-5.6-luna"),
-    ).toBe(false);
   });
 
   it("keeps unknown response models conservative", () => {

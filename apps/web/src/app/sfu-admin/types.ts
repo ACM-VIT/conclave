@@ -8,16 +8,16 @@ export type AdminUser = {
   name: string | null;
 };
 
-export type ParticipantRole = "host" | "admin" | "participant" | "attendee";
+type ParticipantRole = "host" | "admin" | "participant" | "attendee";
 
-export type ParticipantProducer = {
+type ParticipantProducer = {
   producerId: string;
   kind: "audio" | "video";
   type: "webcam" | "screen";
   paused: boolean;
 };
 
-export type ConsumerTelemetry = {
+type ConsumerTelemetry = {
   consumerId: string;
   producerId: string;
   producerUserId?: string;
@@ -204,7 +204,7 @@ export type AdminEventType =
   | "room-unlocked"
   | "waiting";
 
-export type AdminEvent = {
+type AdminEvent = {
   at: number;
   type: AdminEventType;
   roomId: string;
@@ -212,7 +212,7 @@ export type AdminEvent = {
   message: string;
 };
 
-export type AdminAuditEntry = {
+type AdminAuditEntry = {
   at: number;
   operator: string;
   method: string;
@@ -220,7 +220,7 @@ export type AdminAuditEntry = {
   ok: boolean;
 };
 
-export type FindUserMatch = {
+type FindUserMatch = {
   channelId: string;
   roomId: string;
   clientId: string;

@@ -20,11 +20,9 @@ import MeetSettingsPanel from "./MeetSettingsPanel";
 import MeetViewPanel from "./MeetViewPanel";
 import ReactionOverlay from "./ReactionOverlay";
 import BrowserLayout from "./BrowserLayout";
-import DevPlaygroundLayout from "./DevPlaygroundLayout";
+import MeetingAppLayout from "./MeetingAppLayout";
 import ScreenShareAudioPlayers from "./ScreenShareAudioPlayers";
 import SystemAudioPlayers from "./SystemAudioPlayers";
-import WhiteboardLayout from "./WhiteboardLayout";
-import WatchLayout from "./WatchLayout";
 import ParticipantVideo from "./ParticipantVideo";
 import ToastQueue from "./ToastQueue";
 import TranscriptPanel from "./TranscriptPanel";
@@ -85,6 +83,10 @@ import {
   type VideoEffectsState,
 } from "../lib/video-effects";
 import type { MeetViewSettings } from "../lib/meet-view";
+import type {
+  ClonedTtsVoice,
+  TtsSystemVoiceOption,
+} from "../hooks/useMeetTts";
 import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 
@@ -166,6 +168,14 @@ interface MeetsMainContentProps {
   onToggleMirror?: () => void;
   selectedAudioInputDeviceId?: string;
   selectedAudioOutputDeviceId?: string;
+  ttsSystemVoices?: TtsSystemVoiceOption[];
+  selectedTtsSystemVoiceUri?: string | null;
+  onTtsSystemVoiceChange?: (voiceUri: string | null) => void;
+  clonedTtsVoice?: ClonedTtsVoice | null;
+  onClonedTtsVoiceChange?: (voice: ClonedTtsVoice) => void;
+  onClonedTtsVoiceClear?: () => void;
+  canCloneTtsVoice?: boolean;
+  ttsVoiceOwnerName?: string;
   selectedVideoInputDeviceId?: string;
   onAudioInputDeviceChange?: (deviceId: string) => void;
   onAudioOutputDeviceChange?: (deviceId: string) => void;
@@ -404,6 +414,14 @@ export default function MeetsMainContent({
   onToggleMirror,
   selectedAudioInputDeviceId,
   selectedAudioOutputDeviceId,
+  ttsSystemVoices,
+  selectedTtsSystemVoiceUri,
+  onTtsSystemVoiceChange,
+  clonedTtsVoice,
+  onClonedTtsVoiceChange,
+  onClonedTtsVoiceClear,
+  canCloneTtsVoice,
+  ttsVoiceOwnerName,
   selectedVideoInputDeviceId,
   onAudioInputDeviceChange,
   onAudioOutputDeviceChange,
@@ -509,6 +527,7 @@ export default function MeetsMainContent({
 }: MeetsMainContentProps) {
   const {
     state: appsState,
+    apps,
     openApp,
     closeApp,
     setLocked,
@@ -521,6 +540,10 @@ export default function MeetsMainContent({
   const isWhiteboardActive = appsState.activeAppId === "whiteboard";
   const isWatchActive = appsState.activeAppId === "watch";
   const isDevPlaygroundActive = appsState.activeAppId === "dev-playground";
+  const ActiveMeetingApp = useMemo(
+    () => apps.find((app) => app.id === appsState.activeAppId)?.web ?? null,
+    [apps, appsState.activeAppId],
+  );
   const handleOpenWhiteboard = useCallback(
     () => openApp("whiteboard"),
     [openApp],
@@ -2005,36 +2028,11 @@ export default function MeetsMainContent({
             </div>
           )}
         </div>
-      ) : isWhiteboardActive ? (
-        <WhiteboardLayout
-          localStream={localStream}
-          isCameraOff={isCameraOff}
-          isMuted={isMuted}
-          isHandRaised={isHandRaised}
-          participants={participants}
-          userEmail={userEmail}
-          isMirrorCamera={mirrorLocalPreview}
-          activeSpeakerId={activeSpeakerId}
-          currentUserId={currentUserId}
-          audioOutputDeviceId={audioOutputDeviceId}
-          getDisplayName={resolveDisplayName}
-        />
-      ) : isWatchActive ? (
-        <WatchLayout
-          localStream={localStream}
-          isCameraOff={isCameraOff}
-          isMuted={isMuted}
-          isHandRaised={isHandRaised}
-          participants={participants}
-          userEmail={userEmail}
-          isMirrorCamera={mirrorLocalPreview}
-          activeSpeakerId={activeSpeakerId}
-          currentUserId={currentUserId}
-          audioOutputDeviceId={audioOutputDeviceId}
-          getDisplayName={resolveDisplayName}
-        />
-      ) : isDevPlaygroundEnabled && isDevPlaygroundActive ? (
-        <DevPlaygroundLayout
+      ) : ActiveMeetingApp &&
+        (!isDevPlaygroundActive || isDevPlaygroundEnabled) ? (
+        <MeetingAppLayout
+          app={ActiveMeetingApp}
+          frameContent={!isDevPlaygroundActive}
           localStream={localStream}
           isCameraOff={isCameraOff}
           isMuted={isMuted}
@@ -2294,6 +2292,14 @@ export default function MeetsMainContent({
           onToggleMirror={onToggleMirror}
           selectedAudioInputDeviceId={selectedAudioInputDeviceId}
           selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
+          ttsSystemVoices={ttsSystemVoices}
+          selectedTtsSystemVoiceUri={selectedTtsSystemVoiceUri}
+          onTtsSystemVoiceChange={onTtsSystemVoiceChange}
+          clonedTtsVoice={clonedTtsVoice}
+          onClonedTtsVoiceChange={onClonedTtsVoiceChange}
+          onClonedTtsVoiceClear={onClonedTtsVoiceClear}
+          canCloneTtsVoice={canCloneTtsVoice}
+          ttsVoiceOwnerName={ttsVoiceOwnerName}
           selectedVideoInputDeviceId={selectedVideoInputDeviceId}
           onAudioInputDeviceChange={onAudioInputDeviceChange}
           onAudioOutputDeviceChange={onAudioOutputDeviceChange}

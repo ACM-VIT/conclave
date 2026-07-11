@@ -31,6 +31,12 @@ object PipManager {
     /** Prevent an app-launched chooser/browser from being mistaken for Home. */
     fun suppressNextAutoEnter(reason: String) {
         suppressNextAutoEnter = true
+        // Android 12+ can auto-enter PiP without consulting
+        // onUserLeaveHint. Disarm that system path before launching an
+        // intentional external Activity; handleActivityResumed restores it.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            configureForActiveCall(active = false, muted = PipController.muted)
+        }
         suppressionResetRunnable?.let { mainHandler.removeCallbacks(it) }
         val reset = Runnable {
             suppressNextAutoEnter = false
@@ -43,10 +49,22 @@ object PipManager {
 
     fun consumeAutoEnterSuppression(): Boolean {
         if (!suppressNextAutoEnter) return false
+        clearAutoEnterSuppression()
+        return true
+    }
+
+    /** Restore normal Home-gesture PiP if an external launch fails. */
+    fun restoreAutoEnterAfterExternalActivity() {
+        clearAutoEnterSuppression()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            configureForActiveCall(PipController.isInCall, PipController.muted)
+        }
+    }
+
+    private fun clearAutoEnterSuppression() {
         suppressNextAutoEnter = false
         suppressionResetRunnable?.let { mainHandler.removeCallbacks(it) }
         suppressionResetRunnable = null
-        return true
     }
 
     /** Configure Android 12+'s system Home-gesture auto-enter. */
@@ -170,6 +188,7 @@ object PipManager {
     @RequiresApi(Build.VERSION_CODES.O)
     fun handleActivityResumed(activity: Activity) {
         if (activity.isInPictureInPictureMode) return
+        clearAutoEnterSuppression()
         val wasInPip = PipController.inPipMode
         cancelPendingEnterPip()
         PipController.inPipMode = false

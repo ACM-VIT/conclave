@@ -1,7 +1,7 @@
 export * from "@conclave/meeting-core/types";
 export * from "@conclave/meeting-core/transcript-types";
 
-export type ReconnectRecoveryPhase =
+type ReconnectRecoveryPhase =
   | "waiting"
   | "connecting"
   | "joining"

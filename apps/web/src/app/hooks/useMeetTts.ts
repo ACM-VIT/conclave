@@ -7,6 +7,18 @@ interface TtsPayload {
   userId: string;
   displayName: string;
   text: string;
+  ttsVoiceToken?: string;
+}
+
+export interface TtsSystemVoiceOption {
+  voiceURI: string;
+  name: string;
+  lang: string;
+}
+
+export interface ClonedTtsVoice {
+  token: string;
+  name: string;
 }
 
 const TTS_RATE = 0.94;
@@ -22,6 +34,29 @@ const VOICE_QUALITY_KEYWORDS = [
   "siri",
 ];
 const MOBILE_USER_AGENT = /android|iphone|ipad|ipod|mobile/i;
+const SYSTEM_VOICE_STORAGE_KEY = "conclave:tts:system-voice";
+const CLONED_VOICE_STORAGE_KEY = "conclave:tts:cloned-voice";
+
+const readStoredValue = (key: string): string | null => {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const readStoredClonedVoice = (): ClonedTtsVoice | null => {
+  const stored = readStoredValue(CLONED_VOICE_STORAGE_KEY);
+  if (!stored) return null;
+  try {
+    const value = JSON.parse(stored) as Partial<ClonedTtsVoice>;
+    if (typeof value.token === "string" && typeof value.name === "string") {
+      return { token: value.token, name: value.name };
+    }
+  } catch {}
+  return null;
+};
 
 function getPreferredLanguage(): string {
   if (typeof navigator === "undefined") return "en-US";
@@ -83,21 +118,52 @@ function pickBestVoice(
 
 interface UseMeetTtsOptions {
   meetVolume?: number;
+  audioOutputDeviceId?: string;
 }
 
 export function useMeetTts({
   meetVolume = DEFAULT_MEET_VOLUME,
+  audioOutputDeviceId,
 }: UseMeetTtsOptions = {}) {
   const [ttsSpeakerId, setTtsSpeakerId] = useState<string | null>(null);
+  const [availableSystemVoices, setAvailableSystemVoices] = useState<
+    TtsSystemVoiceOption[]
+  >([]);
+  const [selectedSystemVoiceUri, setSelectedSystemVoiceUriState] = useState<
+    string | null
+  >(() => readStoredValue(SYSTEM_VOICE_STORAGE_KEY));
+  const [clonedVoice, setClonedVoiceState] = useState<ClonedTtsVoice | null>(
+    readStoredClonedVoice,
+  );
   const activeTokenRef = useRef<number | null>(null);
   const fallbackTimeoutRef = useRef<number | null>(null);
   const unlockTimeoutRef = useRef<number | null>(null);
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const pendingPayloadRef = useRef<TtsPayload | null>(null);
+  const clonedSpeechAbortRef = useRef<AbortController | null>(null);
+  const clonedSpeechAudioRef = useRef<HTMLAudioElement | null>(null);
+  const clonedSpeechUrlRef = useRef<string | null>(null);
   const isSpeechUnlockedRef = useRef(false);
   const shouldGateSpeechRef = useRef(false);
   const preferredLanguageRef = useRef<string>(getPreferredLanguage());
   const ttsVolume = clampMeetVolume(meetVolume);
+
+  const stopClonedSpeech = useCallback(() => {
+    clonedSpeechAbortRef.current?.abort();
+    clonedSpeechAbortRef.current = null;
+    const audio = clonedSpeechAudioRef.current;
+    clonedSpeechAudioRef.current = null;
+    if (audio) {
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
+      audio.src = "";
+    }
+    if (clonedSpeechUrlRef.current) {
+      URL.revokeObjectURL(clonedSpeechUrlRef.current);
+      clonedSpeechUrlRef.current = null;
+    }
+  }, []);
 
   const clearHighlight = useCallback((token: number) => {
     if (activeTokenRef.current !== token) return;
@@ -108,42 +174,60 @@ export function useMeetTts({
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     const voices = window.speechSynthesis.getVoices();
     if (!voices.length) return;
-    voiceRef.current = pickBestVoice(voices, preferredLanguageRef.current);
+    setAvailableSystemVoices(
+      voices.map((voice) => ({
+        voiceURI: voice.voiceURI,
+        name: voice.name,
+        lang: voice.lang,
+      })),
+    );
+    voiceRef.current =
+      voices.find((voice) => voice.voiceURI === selectedSystemVoiceUri) ??
+      pickBestVoice(voices, preferredLanguageRef.current);
+  }, [selectedSystemVoiceUri]);
+
+  const setSelectedSystemVoiceUri = useCallback((voiceUri: string | null) => {
+    const normalized = voiceUri?.trim() || null;
+    setSelectedSystemVoiceUriState(normalized);
+    try {
+      if (normalized) {
+        window.localStorage.setItem(SYSTEM_VOICE_STORAGE_KEY, normalized);
+      } else {
+        window.localStorage.removeItem(SYSTEM_VOICE_STORAGE_KEY);
+      }
+    } catch {}
   }, []);
 
-  const speakPayload = useCallback((payload: TtsPayload) => {
-    const text = payload.text?.trim();
-    if (!text) return;
+  const saveClonedVoice = useCallback((voice: ClonedTtsVoice) => {
+    setClonedVoiceState(voice);
+    try {
+      window.localStorage.setItem(CLONED_VOICE_STORAGE_KEY, JSON.stringify(voice));
+    } catch {}
+  }, []);
 
-    const token = Date.now();
-    activeTokenRef.current = token;
-    setTtsSpeakerId(payload.userId);
+  const clearClonedVoice = useCallback(() => {
+    setClonedVoiceState(null);
+    try {
+      window.localStorage.removeItem(CLONED_VOICE_STORAGE_KEY);
+    } catch {}
+  }, []);
 
-    if (fallbackTimeoutRef.current) {
-      window.clearTimeout(fallbackTimeoutRef.current);
-    }
-
-    const words = text.split(/\s+/).filter(Boolean).length;
-    const estimatedMs = Math.min(15000, Math.max(2000, Math.ceil(words * 420)));
-    fallbackTimeoutRef.current = window.setTimeout(() => {
-      clearHighlight(token);
-    }, estimatedMs);
-
+  const speakWithSystemVoice = useCallback((
+    payload: TtsPayload,
+    token: number,
+  ) => {
+    if (activeTokenRef.current !== token) return;
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
       return;
     }
 
     try {
       const synth = window.speechSynthesis;
-      if (synth.speaking || synth.pending) {
-        synth.cancel();
-      }
+      if (synth.speaking || synth.pending) synth.cancel();
       synth.resume();
-      if (!voiceRef.current) {
-        refreshPreferredVoice();
-      }
+      if (!voiceRef.current) refreshPreferredVoice();
 
-      const utterance = new SpeechSynthesisUtterance(text);
+      const utterance = new SpeechSynthesisUtterance(payload.text.trim());
       utterance.rate = TTS_RATE;
       utterance.pitch = TTS_PITCH;
       utterance.volume = ttsVolume;
@@ -159,12 +243,94 @@ export function useMeetTts({
       };
       utterance.onend = () => clearHighlight(token);
       utterance.onerror = () => clearHighlight(token);
-
       synth.speak(utterance);
-    } catch (_err) {
+    } catch {
       clearHighlight(token);
     }
   }, [clearHighlight, refreshPreferredVoice, ttsVolume]);
+
+  const speakWithClonedVoice = useCallback(async (
+    payload: TtsPayload,
+    token: number,
+  ) => {
+    const voiceToken = payload.ttsVoiceToken;
+    if (!voiceToken) {
+      speakWithSystemVoice(payload, token);
+      return;
+    }
+
+    const controller = new AbortController();
+    clonedSpeechAbortRef.current = controller;
+    try {
+      const response = await fetch("/api/tts/speech", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: voiceToken, text: payload.text.trim() }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error("Cloned speech was unavailable.");
+      const blob = await response.blob();
+      if (activeTokenRef.current !== token || controller.signal.aborted) return;
+
+      const url = URL.createObjectURL(blob);
+      clonedSpeechUrlRef.current = url;
+      const audio = new Audio(url);
+      clonedSpeechAudioRef.current = audio;
+      audio.volume = ttsVolume;
+      const sinkCapable = audio as HTMLAudioElement & {
+        setSinkId?: (sinkId: string) => Promise<void>;
+      };
+      if (audioOutputDeviceId && sinkCapable.setSinkId) {
+        await sinkCapable.setSinkId(audioOutputDeviceId).catch(() => {});
+      }
+      audio.onended = () => {
+        stopClonedSpeech();
+        clearHighlight(token);
+      };
+      audio.onerror = () => {
+        stopClonedSpeech();
+        speakWithSystemVoice(payload, token);
+      };
+      isSpeechUnlockedRef.current = true;
+      await audio.play();
+    } catch {
+      if (controller.signal.aborted || activeTokenRef.current !== token) return;
+      stopClonedSpeech();
+      speakWithSystemVoice(payload, token);
+    }
+  }, [
+    audioOutputDeviceId,
+    clearHighlight,
+    speakWithSystemVoice,
+    stopClonedSpeech,
+    ttsVolume,
+  ]);
+
+  const speakPayload = useCallback((payload: TtsPayload) => {
+    const text = payload.text?.trim();
+    if (!text) return;
+
+    const token = Date.now();
+    activeTokenRef.current = token;
+    setTtsSpeakerId(payload.userId);
+    stopClonedSpeech();
+
+    if (fallbackTimeoutRef.current) {
+      window.clearTimeout(fallbackTimeoutRef.current);
+    }
+
+    const words = text.split(/\s+/).filter(Boolean).length;
+    const estimatedMs = Math.min(15000, Math.max(2000, Math.ceil(words * 420)));
+    fallbackTimeoutRef.current = window.setTimeout(() => {
+      clearHighlight(token);
+    }, estimatedMs);
+
+    if (payload.ttsVoiceToken) {
+      void speakWithClonedVoice(payload, token);
+    } else {
+      speakWithSystemVoice(payload, token);
+    }
+  }, [clearHighlight, speakWithClonedVoice, speakWithSystemVoice, stopClonedSpeech]);
 
   const flushPendingPayload = useCallback(() => {
     const pendingPayload = pendingPayloadRef.current;
@@ -247,6 +413,7 @@ export function useMeetTts({
         window.removeEventListener("keydown", handleUserGesture);
         synth.removeEventListener("voiceschanged", refreshPreferredVoice);
         synth.cancel();
+        stopClonedSpeech();
       };
     }
 
@@ -257,8 +424,19 @@ export function useMeetTts({
       if (unlockTimeoutRef.current) {
         window.clearTimeout(unlockTimeoutRef.current);
       }
+      stopClonedSpeech();
     };
-  }, [refreshPreferredVoice, unlockSpeech]);
+  }, [refreshPreferredVoice, stopClonedSpeech, unlockSpeech]);
 
-  return { ttsSpeakerId, handleTtsMessage };
+  return {
+    ttsSpeakerId,
+    handleTtsMessage,
+    availableSystemVoices,
+    selectedSystemVoiceUri,
+    setSelectedSystemVoiceUri,
+    clonedVoice,
+    saveClonedVoice,
+    clearClonedVoice,
+    outgoingTtsVoiceToken: clonedVoice?.token,
+  };
 }

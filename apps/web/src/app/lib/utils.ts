@@ -29,7 +29,7 @@ export const readResponseError = async (
   return response.statusText || fallback;
 };
 
-export const ROOM_WORDS = [
+const ROOM_WORDS = [
   "aloe",
   "aster",
   "bloom",
@@ -93,8 +93,7 @@ export const ROOM_WORDS = [
 const ROOM_WORDS_PER_CODE = 3;
 const ROOM_WORD_SEPARATOR = "-";
 export const ROOM_CODE_MAX_LENGTH = 64;
-export const ROOM_CODE_MIN_LENGTH = 3;
-export const WEBINAR_LINK_CODE_MAX_LENGTH = 32;
+const WEBINAR_LINK_CODE_MAX_LENGTH = 32;
 
 export function generateRoomCode(): string {
   const words: string[] = [];
@@ -130,19 +129,6 @@ export function sanitizeWebinarLinkCode(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "")
     .slice(0, WEBINAR_LINK_CODE_MAX_LENGTH);
-}
-
-export function getRoomWordSuggestions(
-  prefix: string,
-  exclude: string[] = [],
-  limit = 5
-): string[] {
-  const normalized = prefix.trim().toLowerCase();
-  if (!normalized) return [];
-  const excludeSet = new Set(exclude);
-  return ROOM_WORDS.filter(
-    (word) => !excludeSet.has(word) && word.startsWith(normalized)
-  ).slice(0, limit);
 }
 
 export function extractRoomCode(input: string): string {
@@ -356,24 +342,6 @@ export function isValidAssetPath(value: string): boolean {
   return value.startsWith("/reactions/") && !value.includes("..");
 }
 
-export function prioritizeActiveSpeaker<T extends { userId: string }>(
-  participants: readonly T[],
-  activeSpeakerId: string | null
-): T[] {
-  if (!activeSpeakerId) return [...participants];
-  const activeIndex = participants.findIndex(
-    (participant) => participant.userId === activeSpeakerId
-  );
-  if (activeIndex <= 0) return [...participants];
-
-  const ordered = [...participants];
-  const [activeParticipant] = ordered.splice(activeIndex, 1);
-  if (activeParticipant) {
-    ordered.unshift(activeParticipant);
-  }
-  return ordered;
-}
-
 export function normalizeBrowserUrl(
   raw: string
 ): { url?: string; error?: string } {
@@ -411,10 +379,6 @@ export function isSystemUserId(userId: string): boolean {
 
 export function isBrowserVideoUserId(userId: string): boolean {
   return userId.startsWith(SYSTEM_USER_VIDEO_PREFIX);
-}
-
-export function isBrowserAudioUserId(userId: string): boolean {
-  return userId.startsWith(SYSTEM_USER_AUDIO_PREFIX);
 }
 
 export function resolveNoVncUrl(noVncUrl: string): string {

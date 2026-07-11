@@ -101,7 +101,7 @@ export const buildScheduledWebinarHeaders = (
   return headers;
 };
 
-export const resolveScheduledWebinarsBase = (): string => {
+const resolveScheduledWebinarsBase = (): string => {
   const base = resolveSfuUrl().replace(/\/$/, "");
   return `${base}/scheduled-webinars`;
 };

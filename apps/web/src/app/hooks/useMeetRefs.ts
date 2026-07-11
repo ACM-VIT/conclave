@@ -16,7 +16,7 @@ import type {
 import type { CaptureControllerLike } from "../lib/captured-surface-control";
 import { getOrCreateSessionId } from "../lib/utils";
 
-export type ConsumerTelemetryLayerPreference = {
+type ConsumerTelemetryLayerPreference = {
   spatialLayer: number;
   temporalLayer?: number;
 };

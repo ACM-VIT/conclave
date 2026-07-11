@@ -220,7 +220,7 @@ export const useRemaining = (
   return remaining;
 };
 
-export const initialsOf = (name: string): string =>
+const initialsOf = (name: string): string =>
   name
     .trim()
     .split(/\s+/)

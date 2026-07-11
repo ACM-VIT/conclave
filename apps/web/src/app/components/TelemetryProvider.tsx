@@ -13,7 +13,7 @@ import { setTelemetrySink } from "../lib/telemetry";
  * and only emit the explicit meeting-reliability events (join/reconnect/TURN)
  * the app captures via `telemetry.capture(...)`.
  */
-export function TelemetryProvider({ children }: { children: ReactNode }) {
+function TelemetryProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
     if (!key) return; // opt-in only — no key, no tracking

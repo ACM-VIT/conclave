@@ -8,12 +8,9 @@ import { HOTKEYS } from "./lib/hotkeys";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import { useSession } from "@/lib/auth-client";
-import type { AssetUploadHandler } from "@conclave/apps-sdk";
 import {
   AppsProvider,
   GameProvider,
-  createAssetUploadHandler,
-  registerApps,
 } from "@conclave/apps-sdk";
 import { devPlaygroundApp } from "@conclave/apps-sdk/dev-playground/web";
 import { watchApp } from "@conclave/apps-sdk/watch/web";
@@ -23,6 +20,11 @@ import MeetsHeader from "./components/MeetsHeader";
 import MeetsMainContent from "./components/MeetsMainContent";
 import MeetsWaitingScreen from "./components/MeetsWaitingScreen";
 import MeetingEnterOverlay from "./components/MeetingEnterOverlay";
+
+const MEETING_APPS =
+  process.env.NODE_ENV === "development"
+    ? [whiteboardApp, watchApp, devPlaygroundApp]
+    : [whiteboardApp, watchApp];
 
 import { useMeetAudioActivity } from "./hooks/useMeetAudioActivity";
 import { useMeetChat, type ConclaveAssistantContext } from "./hooks/useMeetChat";
@@ -418,11 +420,6 @@ export default function MeetsClient({
   );
   const effectiveDataSaverMode =
     viewSettings.dataSaverMode || browserSaveDataMode;
-  const uploadAsset: AssetUploadHandler = useMemo(
-    () => createAssetUploadHandler(),
-    [],
-  );
-
   useEffect(() => {
     writeStoredMeetViewSettings(viewSettings);
   }, [viewSettings]);
@@ -514,14 +511,6 @@ export default function MeetsClient({
     clearGuestStorage,
     isAdmin,
   ]);
-
-  useEffect(() => {
-    if (process.env.NODE_ENV === "development") {
-      registerApps([whiteboardApp, watchApp, devPlaygroundApp]);
-      return;
-    }
-    registerApps([whiteboardApp, watchApp]);
-  }, []);
 
   const prewarm = usePrewarmSocket();
 
@@ -800,7 +789,6 @@ export default function MeetsClient({
     restoredVideoEffectsPrewarmDoneRef.current = true;
     const backgroundNeedsSegmentation =
       videoEffects.background !== "none" &&
-      videoEffects.background !== "gradient" &&
       (videoEffects.background !== "custom" ||
         Boolean(videoEffects.customBackgroundDataUrl));
     const backgrounds: BackgroundEffectId[] =
@@ -1041,7 +1029,20 @@ export default function MeetsClient({
     reactionAssets,
   });
 
-  const { ttsSpeakerId, handleTtsMessage } = useMeetTts({ meetVolume });
+  const {
+    ttsSpeakerId,
+    handleTtsMessage,
+    availableSystemVoices,
+    selectedSystemVoiceUri,
+    setSelectedSystemVoiceUri,
+    clonedVoice,
+    saveClonedVoice,
+    clearClonedVoice,
+    outgoingTtsVoiceToken,
+  } = useMeetTts({
+    meetVolume,
+    audioOutputDeviceId: selectedAudioOutputDeviceId,
+  });
   const effectiveActiveSpeakerId = ttsSpeakerId ?? activeSpeakerId;
 
   // Latest transcript snapshot for the "@Conclave" assistant. Updated from the
@@ -1092,6 +1093,7 @@ export default function MeetsClient({
     onSetHandRaised: handleSetHandRaisedCommand,
     onLeaveRoom: handleLeaveCommand,
     onTtsMessage: handleTtsMessage,
+    outgoingTtsVoiceToken,
     isTtsDisabled,
     getAssistantContext: getAssistantContextRef.current,
   });
@@ -2886,10 +2888,10 @@ export default function MeetsClient({
       ) : null}
       <AppsProvider
         socket={appsSocket}
+        apps={MEETING_APPS}
         user={appsUser}
         isAdmin={canModerateMeeting}
         isReadOnly={isReadOnlyObserver}
-        uploadAsset={uploadAsset}
       >
         <GameProvider
           socket={appsSocket}
@@ -3099,6 +3101,16 @@ export default function MeetsClient({
         onToggleMirror={() => setIsMirrorCamera((prev) => !prev)}
         selectedAudioInputDeviceId={selectedAudioInputDeviceId}
         selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
+        ttsSystemVoices={availableSystemVoices}
+        selectedTtsSystemVoiceUri={selectedSystemVoiceUri}
+        onTtsSystemVoiceChange={setSelectedSystemVoiceUri}
+        clonedTtsVoice={clonedVoice}
+        onClonedTtsVoiceChange={saveClonedVoice}
+        onClonedTtsVoiceClear={clearClonedVoice}
+        canCloneTtsVoice={Boolean(currentUser?.id && currentUser?.email)}
+        ttsVoiceOwnerName={
+          normalizedCurrentUserName || currentUser?.email || displayNameInput || "My voice"
+        }
         selectedVideoInputDeviceId={selectedVideoInputDeviceId}
         onAudioInputDeviceChange={handleAudioInputDeviceChange}
         onAudioOutputDeviceChange={handleAudioOutputDeviceChange}

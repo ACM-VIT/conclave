@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState, type MutableRefObject } from "react";
 
-export type Viewport = {
+type Viewport = {
   /** X translation in CSS pixels */
   translateX: number;
   /** Y translation in CSS pixels */
@@ -9,8 +9,8 @@ export type Viewport = {
   scale: number;
 };
 
-export const MIN_SCALE = 0.1;
-export const MAX_SCALE = 5;
+const MIN_SCALE = 0.1;
+const MAX_SCALE = 5;
 
 export type ViewportControls = {
   viewport: Viewport;

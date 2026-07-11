@@ -221,7 +221,7 @@ export default function DevVideoEffectsDiagnostic() {
 
       {enabled ? (
         <>
-          <div className="mt-2 grid grid-cols-6 gap-1.5">
+          <div className="mt-2 grid grid-cols-5 gap-1.5">
             <button
               type="button"
               data-testid="video-effects-diagnostic-blur"
@@ -245,14 +245,6 @@ export default function DevVideoEffectsDiagnostic() {
               className={diagnosticButtonClass}
             >
               Beach
-            </button>
-            <button
-              type="button"
-              data-testid="video-effects-diagnostic-gradient"
-              onClick={() => setDiagnosticBackground("gradient")}
-              className={diagnosticButtonClass}
-            >
-              Gradient
             </button>
             <button
               type="button"

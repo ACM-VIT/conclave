@@ -28,7 +28,7 @@ export interface MediaTrackQualityStats {
   cpuLimited: boolean;
 }
 
-export interface DirectionMediaQualityStats {
+interface DirectionMediaQualityStats {
   audio: MediaTrackQualityStats;
   video: MediaTrackQualityStats;
 }

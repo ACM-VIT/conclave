@@ -2,7 +2,7 @@
 
 This page is the practical API reference for host and app contributors.
 
-## Registry APIs
+## App Definition
 
 ### `defineApp(app)`
 
@@ -12,40 +12,13 @@ Required:
 
 - `id`
 - `name`
-- at least one renderer (`web` or `native`)
+- `web` renderer
 
 Optional:
 
 - `description`
 - `icon`
 - `createDoc`
-
-### `registerApp(app): boolean`
-
-Registers one app in the process-local registry.
-
-- returns `true` when registry changed
-- returns `false` when same app reference was already registered
-
-### `registerApps(apps): number`
-
-Registers multiple apps and returns count of changed entries.
-
-Common host pattern:
-
-```ts
-useEffect(() => {
-  registerApps([whiteboardApp, pollsApp]);
-}, []);
-```
-
-### `getRegisteredApps()`, `getAppById(appId)`
-
-Read-only helpers for registry consumers.
-
-### `clearRegisteredApps()`
-
-Clears registry map and notifies subscribers. Useful for test isolation.
 
 ## Provider
 
@@ -56,9 +29,9 @@ Wraps meeting UI and provides app runtime context.
 Props:
 
 - `socket`: connected room socket (or `null`)
+- `apps`: stable array of app definitions available in the host
 - `user`: stable user identity object
 - `isAdmin`: role flag used by app UI guard logic
-- `uploadAsset` (optional): created via `createAssetUploadHandler`
 
 Provider responsibilities:
 
@@ -76,14 +49,14 @@ If provider is missing, SDK hooks throw immediately.
 Returns the full runtime context:
 
 - `state`: `{ activeAppId: string | null, locked: boolean }`
-- `apps`: current registered app definitions
+- `apps`: app definitions supplied by the host
 - `openApp(appId, options?) => Promise<boolean>`
 - `closeApp() => Promise<boolean>`
 - `setLocked(locked) => Promise<boolean>`
 - `refreshState() => void`
 - `getDoc(appId) => Y.Doc`
 - `getAwareness(appId) => Awareness`
-- `user`, `isAdmin`, `uploadAsset`
+- `user`, `isAdmin`, `isReadOnly`
 
 Ack behavior:
 
@@ -114,22 +87,6 @@ Designed for ephemeral presence:
 - cursor
 - selection
 - participant metadata
-
-### `useRegisteredApps(platform?)`
-
-Returns registered apps, optionally filtered by `platform`, plus derived fields:
-
-- `isActive`
-- `supportsWeb`
-- `supportsNative`
-
-### `useAppAssets()`
-
-Returns:
-
-- `uploadAsset(input)`
-
-If provider has no upload handler, calling `uploadAsset` throws with a clear runtime error.
 
 ## Game Runtime APIs
 
@@ -258,9 +215,9 @@ Generated-content games use the same `startGame(gameId, options?)` path. The cli
 
 ## Doc Helpers
 
-Use these helpers for predictable schema setup:
+Use these helpers for sync-safe shared state:
 
-- `createAppDoc(rootKey, initializer?)`
+- `createAppDoc(rootKey)`
 - `getAppRoot(doc, rootKey)`
 - `ensureAppMap(root, key)`
 - `ensureAppArray(root, key)`
@@ -269,33 +226,21 @@ Use these helpers for predictable schema setup:
 Pattern:
 
 ```ts
-const createChecklistDoc = () =>
-  createAppDoc("checklist", (root) => {
-    ensureAppArray(root, "items");
-    ensureAppMap(root, "meta");
-  });
+const createChecklistDoc = () => createAppDoc("checklist");
+
+const getItems = (doc: Y.Doc) => {
+  const value = getAppRoot(doc, "checklist").get("items");
+  return value instanceof Y.Array ? value.toArray() : [];
+};
+
+const addItem = (doc: Y.Doc, item: string) => {
+  ensureAppArray(getAppRoot(doc, "checklist"), "items").push([item]);
+};
 ```
 
-## Asset Upload Helper
-
-### `createAssetUploadHandler(options?)`
-
-Creates a cross-platform upload function that accepts:
-
-- browser `File`
-- browser `Blob`
-- native asset object `{ uri, name, type? }`
-
-Options:
-
-- `endpoint` (default `/api/apps`)
-- `baseUrl`
-- `fetchImpl`
-- `formFieldName` (default `"file"`)
-- `headers`
-- `mapError`
-
-For native/non-web hosts, set `baseUrl` so relative endpoint resolves correctly.
+`createAppDoc` intentionally has no initializer callback. A joining document
+must remain empty until server sync; readers return non-mutating UI defaults,
+and mutation helpers lazily create the shared types they write.
 
 ## Usage Guidelines
 

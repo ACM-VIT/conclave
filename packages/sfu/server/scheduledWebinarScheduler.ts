@@ -3,7 +3,6 @@ import { Logger } from "../utilities/loggers.js";
 import { getRoomChannelId } from "./rooms.js";
 import type { ScheduledWebinar } from "../types.js";
 import {
-  getScheduledWebinarById,
   hasWebinarEnded,
   isWithinEarlyEntryWindow,
   persistScheduledWebinarChanges,
@@ -82,7 +81,7 @@ export const ensureWebinarRoomConfig = (
 ): WebinarRoomConfig =>
   applyScheduledWebinarToConfig(state, webinar, inviteCodeHash);
 
-export const advanceScheduledWebinars = (
+const advanceScheduledWebinars = (
   state: SfuState,
   io: SocketIOServer | null,
   now = Date.now(),
@@ -151,13 +150,4 @@ export const stopScheduledWebinarTimer = (state: SfuState): void => {
   if (!state.scheduledWebinarTimer) return;
   clearInterval(state.scheduledWebinarTimer);
   state.scheduledWebinarTimer = null;
-};
-
-export const getScheduledWebinarFromConfig = (
-  state: SfuState,
-  channelId: string,
-): ScheduledWebinar | null => {
-  const cfg = state.webinarConfigs.get(channelId);
-  if (!cfg?.scheduledWebinarId) return null;
-  return getScheduledWebinarById(state.scheduledWebinars, cfg.scheduledWebinarId);
 };

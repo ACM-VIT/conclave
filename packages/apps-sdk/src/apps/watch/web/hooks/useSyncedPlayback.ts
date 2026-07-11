@@ -37,7 +37,7 @@ export type GestureNeed = "none" | "sound" | "sync";
  * (assigning seeks), `play`/`pause` are promises, `paused`/`muted`/`duration`
  * read live state. That is the whole surface this hook needs.
  */
-export type WatchMediaElement = Pick<
+type WatchMediaElement = Pick<
   HTMLVideoElement,
   | "currentTime"
   | "duration"

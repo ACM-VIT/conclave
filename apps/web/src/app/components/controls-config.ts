@@ -191,13 +191,13 @@ export const BROWSER_APPS: { id: string; name: string; description: string; url:
   { id: "loom", name: "Loom", description: "Quick demo", url: "https://www.loom.com", icon: StickyNote },
 ];
 
-export function canManageWhiteboard(p: ControlsBarProps): boolean {
+function canManageWhiteboard(p: ControlsBarProps): boolean {
   return Boolean(p.isAdmin && (p.onOpenWhiteboard || p.onCloseWhiteboard));
 }
-export function canManageWatch(p: ControlsBarProps): boolean {
+function canManageWatch(p: ControlsBarProps): boolean {
   return Boolean(p.isAdmin && (p.onOpenWatch || p.onCloseWatch));
 }
-export function canManageDevPlayground(p: ControlsBarProps): boolean {
+function canManageDevPlayground(p: ControlsBarProps): boolean {
   return Boolean(
     p.isAdmin &&
       p.isDevPlaygroundEnabled &&

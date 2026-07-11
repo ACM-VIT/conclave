@@ -38,11 +38,26 @@ type QueueArray = Y.Array<QueueItem>;
 
 const getRoot = (doc: Y.Doc): WatchRoot => getAppRoot(doc, ROOT_KEY);
 
-const getPlaybackMap = (doc: Y.Doc): PlaybackMap =>
+const readPlaybackMap = (doc: Y.Doc): PlaybackMap | null => {
+  const value = getRoot(doc).get(PLAYBACK_KEY);
+  return value instanceof Y.Map ? (value as PlaybackMap) : null;
+};
+
+const ensurePlaybackMap = (doc: Y.Doc): PlaybackMap =>
   ensureAppMap(getRoot(doc), PLAYBACK_KEY);
 
-const getQueueArray = (doc: Y.Doc): QueueArray =>
+const readQueueArray = (doc: Y.Doc): QueueArray | null => {
+  const value = getRoot(doc).get(QUEUE_KEY);
+  return value instanceof Y.Array ? (value as QueueArray) : null;
+};
+
+const ensureQueueArray = (doc: Y.Doc): QueueArray =>
   ensureAppArray(getRoot(doc), QUEUE_KEY) as QueueArray;
+
+const readResolutionsMap = (doc: Y.Doc): Y.Map<unknown> | null => {
+  const value = getRoot(doc).get(REQUEST_RESOLUTIONS_KEY);
+  return value instanceof Y.Map ? (value as Y.Map<unknown>) : null;
+};
 
 const normalizeState = (value: unknown): PlaybackState =>
   value === "playing" ? "playing" : "paused";
@@ -58,22 +73,11 @@ const normalizeRate = (value: unknown): number =>
 const normalizeUpdatedAt = (value: unknown): number =>
   typeof value === "number" && Number.isFinite(value) ? value : 0;
 
-/**
- * Build the shared Watch doc with a deterministic schema:
- * - `videoId`: the video everyone is watching, or null when idle.
- * - `playback`: a map holding one playback record (state/position/updatedAt/rate).
- * - `queue`: an array of up-next items.
- */
-export const createWatchDoc = (): Y.Doc => {
-  return createAppDoc(ROOT_KEY, (root) => {
-    if (typeof root.get(VIDEO_ID_KEY) !== "string") {
-      root.set(VIDEO_ID_KEY, null);
-    }
-    ensureAppMap(root, PLAYBACK_KEY);
-    ensureAppArray(root, QUEUE_KEY);
-    ensureAppMap(root, REQUEST_RESOLUTIONS_KEY);
-  });
-};
+// A joining client must not author defaults before receiving the room state:
+// Yjs map conflicts can otherwise let those defaults replace live content.
+// Readers below normalize an empty document, and real actions create shared
+// structures only when they have something to write.
+export const createWatchDoc = (): Y.Doc => createAppDoc(ROOT_KEY);
 
 /* ---- Queue requests ------------------------------------------------------
  * When the room is locked, non-admin doc writes are dropped server-side, so a
@@ -86,7 +90,7 @@ export const createWatchDoc = (): Y.Doc => {
 
 export type WatchRequestResolution = "added" | "declined";
 
-const getResolutionsMap = (doc: Y.Doc): Y.Map<unknown> =>
+const ensureResolutionsMap = (doc: Y.Doc): Y.Map<unknown> =>
   ensureAppMap(getRoot(doc), REQUEST_RESOLUTIONS_KEY);
 
 /** Record the host's decision on a request (admin write). */
@@ -95,7 +99,7 @@ export const resolveWatchRequest = (
   requestId: string,
   resolution: WatchRequestResolution,
 ): void => {
-  getResolutionsMap(doc).set(requestId, resolution);
+  ensureResolutionsMap(doc).set(requestId, resolution);
 };
 
 /** Read the decision for a request id, if the host has made one. */
@@ -103,7 +107,7 @@ export const getWatchRequestResolution = (
   doc: Y.Doc,
   requestId: string,
 ): WatchRequestResolution | null => {
-  const value = getResolutionsMap(doc).get(requestId);
+  const value = readResolutionsMap(doc)?.get(requestId);
   return value === "added" || value === "declined" ? value : null;
 };
 
@@ -144,7 +148,8 @@ export const setQueueItemTitle = (
   itemId: string,
   title: string,
 ): void => {
-  const queue = getQueueArray(doc);
+  const queue = readQueueArray(doc);
+  if (!queue) return;
   doc.transact(() => {
     const list = queue.toArray();
     const index = list.findIndex((item) => item?.id === itemId);
@@ -160,20 +165,19 @@ export const setQueueItemTitle = (
  * never have to defend against a partially-initialized Yjs map.
  */
 export const getPlayback = (doc: Y.Doc): PlaybackRecord => {
-  const playback = getPlaybackMap(doc);
+  const playback = readPlaybackMap(doc);
   return {
-    state: normalizeState(playback.get(PB_STATE)),
-    positionSeconds: normalizePosition(playback.get(PB_POSITION)),
-    updatedAt: normalizeUpdatedAt(playback.get(PB_UPDATED_AT)),
-    rate: normalizeRate(playback.get(PB_RATE)),
-    liveEdge: playback.get(PB_LIVE_EDGE) === true,
+    state: normalizeState(playback?.get(PB_STATE)),
+    positionSeconds: normalizePosition(playback?.get(PB_POSITION)),
+    updatedAt: normalizeUpdatedAt(playback?.get(PB_UPDATED_AT)),
+    rate: normalizeRate(playback?.get(PB_RATE)),
+    liveEdge: playback?.get(PB_LIVE_EDGE) === true,
   };
 };
 
 /** The full up-next queue, normalized to typed items. */
 export const getQueue = (doc: Y.Doc): QueueItem[] => {
-  return getQueueArray(doc)
-    .toArray()
+  return (readQueueArray(doc)?.toArray() ?? [])
     .filter(
       (item): item is QueueItem =>
         Boolean(item) &&
@@ -197,8 +201,8 @@ export const writePlayback = (
     liveEdge?: boolean;
   },
 ): void => {
-  const playback = getPlaybackMap(doc);
   doc.transact(() => {
+    const playback = ensurePlaybackMap(doc);
     playback.set(PB_STATE, normalizeState(next.state));
     playback.set(PB_POSITION, normalizePosition(next.positionSeconds));
     playback.set(PB_RATE, normalizeRate(next.rate ?? DEFAULT_RATE));
@@ -223,8 +227,8 @@ export const setVideo = (
   },
 ): void => {
   const root = getRoot(doc);
-  const playback = getPlaybackMap(doc);
   doc.transact(() => {
+    const playback = ensurePlaybackMap(doc);
     root.set(VIDEO_ID_KEY, videoId);
     root.set(VIDEO_TITLE_KEY, options?.title ?? null);
     playback.set(PB_STATE, options?.play === false ? "paused" : "playing");
@@ -251,13 +255,14 @@ export const enqueue = (
     addedById: ctx?.userId ?? null,
     addedByName: ctx?.userName ?? null,
   };
-  getQueueArray(doc).push([item]);
+  ensureQueueArray(doc).push([item]);
   return item;
 };
 
 /** Remove a queue item by its stable id. */
 export const removeQueueItem = (doc: Y.Doc, itemId: string): void => {
-  const queue = getQueueArray(doc);
+  const queue = readQueueArray(doc);
+  if (!queue) return;
   const list = queue.toArray();
   const index = list.findIndex((item) => item?.id === itemId);
   if (index === -1) return;
@@ -270,7 +275,8 @@ export const moveQueueItem = (
   itemId: string,
   direction: -1 | 1,
 ): void => {
-  const queue = getQueueArray(doc);
+  const queue = readQueueArray(doc);
+  if (!queue) return;
   doc.transact(() => {
     const list = queue.toArray();
     const index = list.findIndex((item) => item?.id === itemId);
@@ -288,7 +294,8 @@ export const moveQueueItem = (
  * and becomes the current video with a fresh playing record in one transaction.
  */
 export const playQueueItemNow = (doc: Y.Doc, itemId: string): void => {
-  const queue = getQueueArray(doc);
+  const queue = readQueueArray(doc);
+  if (!queue) return;
   doc.transact(() => {
     const list = queue.toArray();
     const index = list.findIndex((item) => item?.id === itemId);
@@ -297,7 +304,7 @@ export const playQueueItemNow = (doc: Y.Doc, itemId: string): void => {
     if (!item || typeof item.videoId !== "string") return;
     queue.delete(index, 1);
     const root = getRoot(doc);
-    const playback = getPlaybackMap(doc);
+    const playback = ensurePlaybackMap(doc);
     root.set(VIDEO_ID_KEY, item.videoId);
     root.set(VIDEO_TITLE_KEY, item.title ?? null);
     playback.set(PB_STATE, "playing");
@@ -327,7 +334,10 @@ export const advanceQueue = (
     if (getVideoId(doc) !== expectedCurrentVideoId) {
       return;
     }
-    const queue = getQueueArray(doc);
+    const queue = readQueueArray(doc);
+    if (!queue) {
+      return;
+    }
     if (queue.length === 0) {
       return;
     }
@@ -338,7 +348,7 @@ export const advanceQueue = (
     }
     queue.delete(0, 1);
     const root = getRoot(doc);
-    const playback = getPlaybackMap(doc);
+    const playback = ensurePlaybackMap(doc);
     root.set(VIDEO_ID_KEY, next.videoId);
     root.set(VIDEO_TITLE_KEY, next.title ?? null);
     playback.set(PB_STATE, "playing");

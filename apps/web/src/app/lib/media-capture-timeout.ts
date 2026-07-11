@@ -6,7 +6,7 @@ type GetUserMediaWithTimeoutOptions = {
   timeoutMs: number;
 };
 
-export const createMediaCaptureTimeoutError = (
+const createMediaCaptureTimeoutError = (
   label: string,
   timeoutMs: number,
 ) => {
@@ -27,7 +27,7 @@ export const isMediaCaptureTimeoutError = (error: unknown): boolean => {
   );
 };
 
-export const stopMediaStreamTracks = (stream: MediaStream) => {
+const stopMediaStreamTracks = (stream: MediaStream) => {
   stream.getTracks().forEach((track) => {
     track.onended = null;
     track.stop();

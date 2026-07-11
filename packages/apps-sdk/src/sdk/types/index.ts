@@ -2,8 +2,6 @@ import type React from "react";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 
-export type AppPlatform = "web" | "native";
-
 export type AppUser = {
   id: string;
   name?: string | null;
@@ -75,14 +73,6 @@ export type AppsContextValue = {
   user?: AppUser;
   isAdmin?: boolean;
   isReadOnly?: boolean;
-  uploadAsset?: AssetUploadHandler;
-};
-
-export type AppComponentProps = {
-  doc: Y.Doc;
-  awareness: Awareness;
-  locked: boolean;
-  user?: AppUser;
 };
 
 export type ConclaveApp = {
@@ -91,24 +81,5 @@ export type ConclaveApp = {
   description?: string;
   icon?: React.ReactNode;
   createDoc?: () => Y.Doc;
-  web?: React.ComponentType<AppComponentProps>;
-  native?: React.ComponentType<AppComponentProps>;
+  web: React.ComponentType;
 };
-
-export type AssetUploadResult = {
-  url: string;
-  name?: string;
-  size?: number;
-  contentType?: string;
-};
-
-export type AssetUploadInput =
-  | File
-  | Blob
-  | {
-      uri: string;
-      name: string;
-      type?: string;
-    };
-
-export type AssetUploadHandler = (input: AssetUploadInput) => Promise<AssetUploadResult>;

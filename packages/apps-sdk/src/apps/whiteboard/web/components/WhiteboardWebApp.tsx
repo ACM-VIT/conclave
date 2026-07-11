@@ -7,7 +7,7 @@ import { useToolState } from "../../shared/hooks/useToolState";
 import { useViewport } from "../../shared/hooks/useViewport";
 import { useWhiteboardElements } from "../../shared/hooks/useWhiteboardElements";
 import { useWhiteboardPages } from "../../shared/hooks/useWhiteboardPages";
-import { getPagesMap } from "../../core/doc/index";
+import { getWhiteboardRoot } from "../../core/doc/index";
 import { getBoundsForElement } from "../../core/model/geometry";
 import { WhiteboardContextBar, WhiteboardToolbar } from "./WhiteboardToolbar";
 import { WhiteboardCanvas, type WhiteboardStressResult } from "./WhiteboardCanvas";
@@ -73,7 +73,9 @@ export function WhiteboardWebApp() {
   // Per-user history: remote updates arrive with origin "remote", so the default
   // tracked origin (null, our local transactions) only ever undoes your own work.
   useEffect(() => {
-    const manager = new Y.UndoManager(getPagesMap(doc), { captureTimeout: 400 });
+    const manager = new Y.UndoManager(getWhiteboardRoot(doc), {
+      captureTimeout: 400,
+    });
     setUndoManager(manager);
     const refresh = () => {
       setCanUndo(manager.canUndo());

@@ -41,10 +41,9 @@ import {
 } from "../../webinar.js";
 import {
   getScheduledWebinarForRoom,
-  getScheduledWebinarBySlug,
-  isWithinEarlyEntryWindow,
   persistScheduledWebinarChanges,
   recordWebinarJoin,
+  resolveScheduledWebinarAttendeeEntry,
 } from "../../scheduledWebinars.js";
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
 import { getSocketAuthUser } from "../auth.js";
@@ -126,31 +125,32 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
         const clientId = canonicalizeClientId(tokenClientId);
         let roomId = requestedRoomId;
+        let scheduledWebinarForAttendee: ReturnType<
+          typeof resolveScheduledWebinarAttendeeEntry
+        >["webinar"] = null;
         if (isWebinarAttendeeJoin) {
+          const scheduledEntry = resolveScheduledWebinarAttendeeEntry(
+            state.scheduledWebinars,
+            requestedRoomId,
+            clientId,
+          );
+          if (scheduledEntry.kind === "closed") {
+            respond(callback, { error: "Webinar is not live." });
+            return;
+          }
+          scheduledWebinarForAttendee = scheduledEntry.webinar;
           let webinarTarget = resolveWebinarLinkTarget(
             state.webinarLinks,
             requestedRoomId,
             clientId,
           );
-          if (!webinarTarget) {
-            const scheduledWebinar = getScheduledWebinarBySlug(
-              state.scheduledWebinars,
+          if (!webinarTarget && scheduledWebinarForAttendee) {
+            ensureWebinarRoomConfig(state, scheduledWebinarForAttendee, null);
+            webinarTarget = resolveWebinarLinkTarget(
+              state.webinarLinks,
               requestedRoomId,
+              clientId,
             );
-            const canRebindScheduledLink =
-              scheduledWebinar &&
-              scheduledWebinar.clientId === clientId &&
-              scheduledWebinar.status !== "ended" &&
-              scheduledWebinar.status !== "cancelled" &&
-              isWithinEarlyEntryWindow(scheduledWebinar);
-            if (canRebindScheduledLink) {
-              ensureWebinarRoomConfig(state, scheduledWebinar, null);
-              webinarTarget = resolveWebinarLinkTarget(
-                state.webinarLinks,
-                requestedRoomId,
-                clientId,
-              );
-            }
           }
           if (!webinarTarget) {
             respond(callback, { error: "Webinar is not live." });
@@ -294,7 +294,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             return;
           }
 
-          if (isWebinarAttendeeJoin) {
+          if (isWebinarAttendeeJoin && !scheduledWebinarForAttendee) {
             respond(callback, { error: "Webinar is not live." });
             return;
           }
@@ -305,6 +305,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             return;
           }
           if (
+            !scheduledWebinarForAttendee &&
             !hostRequested &&
             !allowRoomCreation &&
             !clientPolicy.allowNonHostRoomCreation

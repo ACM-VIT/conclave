@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
 import ConclaveUpdatePill from "./components/ConclaveUpdatePill";
-import IconHoverStyles from "./components/IconHoverStyles";
 import TelemetryProvider from "./components/TelemetryProvider";
 import { getConclaveClientVersion } from "./lib/site-version.server";
 import { getPublicSiteUrl } from "@/lib/site-url";
@@ -65,7 +64,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body suppressHydrationWarning>
-        <IconHoverStyles />
         <TelemetryProvider>
           {children}
           <ConclaveUpdatePill currentVersion={clientVersion} />

@@ -44,7 +44,7 @@ export type WebinarLinkTarget = {
   clientId: string;
 };
 
-export const createDefaultWebinarRoomConfig = (): WebinarRoomConfig => ({
+const createDefaultWebinarRoomConfig = (): WebinarRoomConfig => ({
   enabled: false,
   publicAccess: false,
   maxAttendees: DEFAULT_WEBINAR_MAX_ATTENDEES,
@@ -73,7 +73,7 @@ export const getOrCreateWebinarRoomConfig = (
   return created;
 };
 
-export const normalizeWebinarMaxAttendees = (value: number): number => {
+const normalizeWebinarMaxAttendees = (value: number): number => {
   if (!Number.isFinite(value)) {
     throw new Error("Invalid webinar attendee cap");
   }

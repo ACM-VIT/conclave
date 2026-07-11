@@ -79,9 +79,7 @@ export default function MeetRoomPage({
     <Suspense
       fallback={
         <RouteLoadingState
-          eyebrow="Meeting"
           title="Joining room"
-          detail="Checking room details before the call opens."
         />
       }
     >

@@ -1,14 +1,8 @@
 import * as Y from "yjs";
 
-export type AppDocInitializer = (root: Y.Map<unknown>, doc: Y.Doc) => void;
-
-export const createAppDoc = (
-  rootKey: string,
-  initializer?: AppDocInitializer
-): Y.Doc => {
+export const createAppDoc = (rootKey: string): Y.Doc => {
   const doc = new Y.Doc();
-  const root = doc.getMap<unknown>(rootKey);
-  initializer?.(root, doc);
+  doc.getMap<unknown>(rootKey);
   return doc;
 };
 

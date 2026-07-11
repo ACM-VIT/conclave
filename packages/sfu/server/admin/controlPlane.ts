@@ -21,7 +21,7 @@ import { registerAdminHandlers } from "../socket/handlers/adminHandlers.js";
 
 type ParticipantRole = "host" | "admin" | "participant" | "attendee";
 
-export type ParticipantSnapshot = {
+type ParticipantSnapshot = {
   userId: string;
   userKey: string | null;
   displayName: string;
@@ -256,7 +256,7 @@ const toDisplayName = (room: Room, userId: string): string => {
   return room.getDisplayNameForUser(userId) || userId;
 };
 
-export const toParticipantSnapshot = (
+const toParticipantSnapshot = (
   room: Room,
   client: Client,
 ): ParticipantSnapshot => {

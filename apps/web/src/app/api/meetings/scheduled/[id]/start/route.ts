@@ -6,12 +6,10 @@ import {
 } from "@/lib/scheduled-meetings";
 import { requireSfuSessionUser } from "@/lib/sfu-user-auth";
 
-
-type RouteContext = {
-  params: Promise<{ id: string }>;
-};
-
-export async function POST(request: Request, context: RouteContext) {
+export async function POST(
+  request: Request,
+  context: RouteContext<"/api/meetings/scheduled/[id]/start">,
+) {
   const authResult = await requireSfuSessionUser(request);
   if (!authResult.ok) {
     return NextResponse.json(

@@ -10,6 +10,147 @@ enum TranscriptConnectionStatus: String {
     case error
 }
 
+enum TranscriptProvider: String, CaseIterable, Identifiable {
+    case openAI = "openai"
+    case sarvam
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .openAI: return "OpenAI"
+        case .sarvam: return "Sarvam"
+        }
+    }
+
+    var transcriptModel: String {
+        switch self {
+        case .openAI: return "gpt-realtime-whisper"
+        case .sarvam: return "saaras:v3"
+        }
+    }
+}
+
+struct TranscriptAssistantModel: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let shortLabel: String
+}
+
+enum TranscriptConfiguration {
+    static let defaultTranscriptModel = TranscriptProvider.openAI.transcriptModel
+    static let defaultAssistantModel = "gpt-5.6-terra"
+    static let providers: [TranscriptProvider] = [.openAI, .sarvam]
+    static let assistantModels: [TranscriptAssistantModel] = [
+        TranscriptAssistantModel(id: "gpt-5.6-terra", label: "GPT-5.6 Terra", shortLabel: "Terra"),
+        TranscriptAssistantModel(id: "gpt-5.6-luna", label: "GPT-5.6 Luna", shortLabel: "Luna"),
+        TranscriptAssistantModel(id: "gpt-5.6-sol", label: "GPT-5.6 Sol", shortLabel: "Sol")
+    ]
+
+    static func provider(for transcriptModel: String) -> TranscriptProvider {
+        transcriptModel == TranscriptProvider.sarvam.transcriptModel ? .sarvam : .openAI
+    }
+
+    static func normalizedAssistantModel(_ model: String) -> String {
+        assistantModels.contains { $0.id == model } ? model : defaultAssistantModel
+    }
+}
+
+struct TranscriptStartOptions: Equatable {
+    let apiKey: String?
+    let assistantApiKey: String?
+    let transcriptModel: String
+    let qaModel: String
+
+    init(
+        apiKey: String? = nil,
+        assistantApiKey: String? = nil,
+        transcriptModel: String = TranscriptConfiguration.defaultTranscriptModel,
+        qaModel: String = TranscriptConfiguration.defaultAssistantModel
+    ) {
+        self.apiKey = Self.nonEmptySecret(apiKey)
+        self.assistantApiKey = Self.nonEmptySecret(assistantApiKey)
+        self.transcriptModel = TranscriptConfiguration.provider(for: transcriptModel).transcriptModel
+        self.qaModel = TranscriptConfiguration.normalizedAssistantModel(qaModel)
+    }
+
+    private static func nonEmptySecret(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+enum TranscriptMinutesStatus: String {
+    case idle
+    case pending
+    case generating
+    case live
+}
+
+struct TranscriptMinutesEntryModel: Identifiable, Equatable {
+    let id: String
+    let text: String
+    let speakerUserId: String?
+    let speakerDisplayName: String?
+    let owner: String?
+    let due: String?
+}
+
+struct TranscriptMinutesSnapshotModel: Equatable {
+    let summary: String
+    let topics: [TranscriptMinutesEntryModel]
+    let decisions: [TranscriptMinutesEntryModel]
+    let actionItems: [TranscriptMinutesEntryModel]
+    let openQuestions: [TranscriptMinutesEntryModel]
+    let followUps: [TranscriptMinutesEntryModel]
+    let updatedAt: Double
+    let model: String
+
+    static func empty(model: String = TranscriptConfiguration.defaultAssistantModel) -> TranscriptMinutesSnapshotModel {
+        TranscriptMinutesSnapshotModel(
+            summary: "",
+            topics: [],
+            decisions: [],
+            actionItems: [],
+            openQuestions: [],
+            followUps: [],
+            updatedAt: 0.0,
+            model: model
+        )
+    }
+
+    var hasContent: Bool {
+        !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            !topics.isEmpty ||
+            !decisions.isEmpty ||
+            !actionItems.isEmpty ||
+            !openQuestions.isEmpty ||
+            !followUps.isEmpty
+    }
+}
+
+enum TranscriptQARole: String {
+    case user
+    case assistant
+}
+
+enum TranscriptQAStatus: String {
+    case streaming
+    case done
+    case error
+}
+
+struct TranscriptQAMessageModel: Identifiable, Equatable {
+    let id: String
+    let role: TranscriptQARole
+    let content: String
+    let status: TranscriptQAStatus
+    let createdAt: Double
+    let updatedAt: Double
+    let error: String?
+}
+
 /// A single transcript line. `itemId` is the stable identity used to merge
 /// streaming deltas and finalized segments, matching the web client.
 struct TranscriptSegmentModel: Identifiable, Equatable {
@@ -129,14 +270,51 @@ enum TranscriptPresentationPolicy {
 
     /// Markdown export of everything currently on screen, matching the web's
     /// `exportTranscriptMarkdown` line shape.
-    static func exportMarkdown(roomId: String, segments: [TranscriptSegmentModel]) -> String {
-        var lines: [String] = ["# Conclave transcript - \(roomId)", ""]
+    static func exportMarkdown(
+        roomId: String,
+        segments: [TranscriptSegmentModel],
+        minutes: TranscriptMinutesSnapshotModel = .empty()
+    ) -> String {
+        var lines: [String] = ["# Meeting Transcript - \(roomId)", ""]
+
+        let summary = minutes.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !summary.isEmpty {
+            lines.append(contentsOf: ["## Summary", "", summary, ""])
+        }
+
+        appendMinutesSection(title: "Topics", entries: minutes.topics, to: &lines)
+        appendMinutesSection(title: "Decisions", entries: minutes.decisions, to: &lines)
+        appendMinutesSection(title: "Action Items", entries: minutes.actionItems, to: &lines)
+        appendMinutesSection(title: "Open Questions", entries: minutes.openQuestions, to: &lines)
+        appendMinutesSection(title: "Follow-Ups", entries: minutes.followUps, to: &lines)
+
+        lines.append(contentsOf: ["## Transcript", ""])
         for segment in segments {
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if text.isEmpty { continue }
             lines.append("- \(clockTimestamp(fromMs: segment.startMs)) \(segment.speakerDisplayName): \(text)")
         }
         return lines.joined(separator: "\n")
+    }
+
+    private static func appendMinutesSection(
+        title: String,
+        entries: [TranscriptMinutesEntryModel],
+        to lines: inout [String]
+    ) {
+        guard !entries.isEmpty else { return }
+        lines.append(contentsOf: ["## \(title)", ""])
+        for entry in entries {
+            let metadata = [entry.owner, entry.due]
+                .compactMap { value in
+                    guard let value else { return nil }
+                    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return trimmed.isEmpty ? nil : trimmed
+                }
+                .joined(separator: " - ")
+            lines.append("- \(entry.text)\(metadata.isEmpty ? "" : " (\(metadata))")")
+        }
+        lines.append("")
     }
 }
 
@@ -149,8 +327,17 @@ final class TranscriptState {
     var sessionStatus: String = "idle"           // idle/starting/live/paused/stopping/error/takeover_needed
     var errorMessage: String?
     var controllerName: String?
-    var canStart: Bool = false
-    var canStop: Bool = false
+    var sessionTranscriptModel = TranscriptConfiguration.defaultTranscriptModel
+    var sessionQaModel = TranscriptConfiguration.defaultAssistantModel
+    var sessionTransportMode = "sfu"
+    private(set) var capabilitiesKnown = false
+    private(set) var canStart: Bool = false
+    private(set) var canTakeover: Bool = false
+    private(set) var canStop: Bool = false
+    private(set) var canAsk: Bool = false
+    private(set) var providerKeyAvailabilityKnown = false
+    private(set) var globalOpenAIKeyAvailable = false
+    private(set) var globalSarvamKeyAvailable = false
 
     private(set) var finals: [TranscriptSegmentModel] = []
     private(set) var partials: [String: TranscriptSegmentModel] = [:]
@@ -158,9 +345,101 @@ final class TranscriptState {
     private(set) var groupedSegments: [TranscriptGroup] = []
     private(set) var pauseMarkerIds: Set<String> = []
     private(set) var scrollTrigger: String = "0"
+    private(set) var minutes = TranscriptMinutesSnapshotModel.empty()
+    private(set) var minutesStatus: TranscriptMinutesStatus = .idle
+    private(set) var qaMessages: [TranscriptQAMessageModel] = []
 
     var isLive: Bool { sessionStatus == "live" }
     var isBusy: Bool { sessionStatus == "starting" || sessionStatus == "stopping" }
+    var isRunning: Bool {
+        sessionStatus == "starting" ||
+            sessionStatus == "live" ||
+            sessionStatus == "paused" ||
+            sessionStatus == "stopping"
+    }
+    var canPause: Bool { canStop && (sessionStatus == "live" || sessionStatus == "paused") }
+    var hasExportContent: Bool { !orderedSegments.isEmpty || minutes.hasContent }
+
+    func globalKeyAvailable(for provider: TranscriptProvider) -> Bool? {
+        guard providerKeyAvailabilityKnown else { return nil }
+        switch provider {
+        case .openAI: return globalOpenAIKeyAvailable
+        case .sarvam: return globalSarvamKeyAvailable
+        }
+    }
+
+    func applyCapabilities(start: Bool, takeover: Bool, stop: Bool, ask: Bool) {
+        if !capabilitiesKnown { capabilitiesKnown = true }
+        if canStart != start { canStart = start }
+        if canTakeover != takeover { canTakeover = takeover }
+        if canStop != stop { canStop = stop }
+        if canAsk != ask { canAsk = ask }
+    }
+
+    func applyProviderKeyAvailability(openAI: Bool, sarvam: Bool) {
+        if !providerKeyAvailabilityKnown { providerKeyAvailabilityKnown = true }
+        if globalOpenAIKeyAvailable != openAI { globalOpenAIKeyAvailable = openAI }
+        if globalSarvamKeyAvailable != sarvam { globalSarvamKeyAvailable = sarvam }
+    }
+
+    func applyMinutes(_ snapshot: TranscriptMinutesSnapshotModel) {
+        guard minutes != snapshot else { return }
+        minutes = snapshot
+    }
+
+    func applyMinutesStatus(_ status: TranscriptMinutesStatus) {
+        guard minutesStatus != status else { return }
+        minutesStatus = status
+    }
+
+    func beginQuestion(id: String, question: String, timestamp: Double) {
+        guard !qaMessages.contains(where: { $0.id == id }) else { return }
+        qaMessages.append(TranscriptQAMessageModel(
+            id: id,
+            role: .user,
+            content: question,
+            status: .done,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            error: nil
+        ))
+        qaMessages.append(TranscriptQAMessageModel(
+            id: "\(id):assistant",
+            role: .assistant,
+            content: "",
+            status: .streaming,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            error: nil
+        ))
+    }
+
+    func applyQuestionUpdate(
+        id: String,
+        question: String,
+        answer: String,
+        status: TranscriptQAStatus,
+        error: String?,
+        timestamp: Double
+    ) {
+        if !qaMessages.contains(where: { $0.id == id }) {
+            beginQuestion(id: id, question: question, timestamp: timestamp)
+        }
+        let assistantId = "\(id):assistant"
+        guard let index = qaMessages.firstIndex(where: { $0.id == assistantId }) else { return }
+        let current = qaMessages[index]
+        let next = TranscriptQAMessageModel(
+            id: assistantId,
+            role: .assistant,
+            content: answer,
+            status: status,
+            createdAt: current.createdAt,
+            updatedAt: timestamp,
+            error: error
+        )
+        guard current != next else { return }
+        qaMessages[index] = next
+    }
 
     func applyPartial(_ segment: TranscriptSegmentModel) {
         if partials[segment.itemId] == segment { return }
@@ -213,8 +492,20 @@ final class TranscriptState {
         sessionStatus = "idle"
         errorMessage = nil
         controllerName = nil
+        sessionTranscriptModel = TranscriptConfiguration.defaultTranscriptModel
+        sessionQaModel = TranscriptConfiguration.defaultAssistantModel
+        sessionTransportMode = "sfu"
+        capabilitiesKnown = false
         canStart = false
+        canTakeover = false
         canStop = false
+        canAsk = false
+        providerKeyAvailabilityKnown = false
+        globalOpenAIKeyAvailable = false
+        globalSarvamKeyAvailable = false
+        minutes = TranscriptMinutesSnapshotModel.empty()
+        minutesStatus = .idle
+        qaMessages = []
     }
 
     private func rebuildPresentation() {

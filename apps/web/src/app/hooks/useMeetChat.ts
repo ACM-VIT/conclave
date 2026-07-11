@@ -70,7 +70,9 @@ interface UseMeetChatOptions {
     userId: string;
     displayName: string;
     text: string;
+    ttsVoiceToken?: string;
   }) => void;
+  outgoingTtsVoiceToken?: string;
   isTtsDisabled?: boolean;
   assistantEnabled?: boolean;
   getAssistantContext?: () => ConclaveAssistantContext;
@@ -91,6 +93,7 @@ export function useMeetChat({
   onSetHandRaised,
   onLeaveRoom,
   onTtsMessage,
+  outgoingTtsVoiceToken,
   isTtsDisabled,
   assistantEnabled = true,
   getAssistantContext,
@@ -482,6 +485,7 @@ export function useMeetChat({
       }
 
       const messageContent = trimmedContent || gif?.title || "GIF";
+      const isTtsMessage = /^\/tts(?:\s|$)/i.test(messageContent);
       const optimisticMessage = buildOptimisticMessage(
         messageContent,
         gif,
@@ -496,6 +500,9 @@ export function useMeetChat({
             content: messageContent,
             ...(gif ? { gif } : {}),
             ...(replyTo ? { replyTo } : {}),
+            ...(isTtsMessage && outgoingTtsVoiceToken
+              ? { ttsVoiceToken: outgoingTtsVoiceToken }
+              : {}),
           },
           (
             response:
@@ -536,6 +543,7 @@ export function useMeetChat({
                   userId: message.userId,
                   displayName: message.displayName,
                   text: ttsText,
+                  ttsVoiceToken: message.ttsVoiceToken,
                 });
               }
               resolve(message);
@@ -555,6 +563,7 @@ export function useMeetChat({
       isTtsDisabled,
       appendLocalMessage,
       buildOptimisticMessage,
+      outgoingTtsVoiceToken,
     ],
   );
 

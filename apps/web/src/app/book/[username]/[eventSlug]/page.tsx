@@ -11,9 +11,7 @@ export default function BookingPage({ params }: BookingPageProps) {
     <Suspense
       fallback={
         <RouteLoadingState
-          eyebrow="Booking"
           title="Loading scheduler"
-          detail="Preparing the public booking page."
         />
       }
     >

@@ -7,9 +7,7 @@ export default function HomePage() {
     <Suspense
       fallback={
         <RouteLoadingState
-          eyebrow="Lobby"
           title="Opening Conclave"
-          detail="Preparing meeting controls and account state."
         />
       }
     >

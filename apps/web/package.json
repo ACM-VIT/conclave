@@ -19,6 +19,8 @@
     "analyze": "next experimental-analyze --output",
     "analyze:serve": "next experimental-analyze --serve",
     "test:unit": "vitest run --dir test",
+    "test": "pnpm run test:unit",
+    "typecheck": "next typegen && tsc --noEmit && pnpm run scheduling-email:typecheck && pnpm run transcript:typecheck",
     "sync:noise-suppressor": "node scripts/sync-noise-suppressor-assets.mjs",
     "start": "next start",
     "lint": "eslint \"src/**/*.{ts,tsx}\""
@@ -63,7 +65,6 @@
     "@types/node": "^20.19.43",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@typescript-eslint/parser": "^8.62.0",
     "babel-plugin-react-compiler": "^1.0.0",
     "eslint": "^10.6.0",
     "eslint-plugin-react-hooks": "^7.1.1",
@@ -71,6 +72,7 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.62.1",
     "vitest": "^3.2.6",
-    "wrangler": "^4.105.0"
+    "wrangler": "^4.105.0",
+    "yjs": "^13.6.31"
   }
 }

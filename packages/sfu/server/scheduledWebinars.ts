@@ -155,7 +155,7 @@ const resolveLinkSlug = (
   throw new Error("Could not generate a unique webinar link.");
 };
 
-export const buildWebinarLink = (slug: string): string => {
+const buildWebinarLink = (slug: string): string => {
   const base = getWebinarBaseUrl().replace(/\/$/, "");
   return `${base}/w/${encodeURIComponent(slug)}`;
 };
@@ -299,7 +299,7 @@ const writeJsonAtomic = (path: string, data: string): void => {
   renameSync(tmp, path);
 };
 
-export const createFileScheduledWebinarPersistence = (
+const createFileScheduledWebinarPersistence = (
   path: string = scheduledWebinarsPath(),
 ): ScheduledWebinarPersistence => ({
   save: (snapshot) => {
@@ -343,7 +343,7 @@ const loadNodeSqlite = (): { DatabaseSync: new (path: string) => SqliteDatabase 
   };
 };
 
-export const createSqliteScheduledWebinarPersistence = (
+const createSqliteScheduledWebinarPersistence = (
   path: string = scheduledWebinarsSqlitePath(),
 ): ScheduledWebinarPersistence => {
   const dir = dirname(path);
@@ -611,7 +611,7 @@ export const loadPersistedSchedules = (
   return snapshot.length;
 };
 
-export const persistScheduledWebinars = (
+const persistScheduledWebinars = (
   store: ScheduledWebinarStore,
   persistence: ScheduledWebinarPersistence,
 ): void => {
@@ -1007,21 +1007,32 @@ export const isWithinEarlyEntryWindow = (
   return now >= webinar.scheduledStartAt - earlyMs;
 };
 
+export type ScheduledWebinarAttendeeEntry =
+  | { kind: "unscheduled"; webinar: null }
+  | { kind: "open" | "closed"; webinar: ScheduledWebinar };
+
+export const resolveScheduledWebinarAttendeeEntry = (
+  store: ScheduledWebinarStore,
+  slug: string,
+  clientId: string,
+  now = Date.now(),
+): ScheduledWebinarAttendeeEntry => {
+  const webinar = getScheduledWebinarBySlug(store, slug);
+  if (!webinar) {
+    return { kind: "unscheduled", webinar: null };
+  }
+  const isOpen =
+    canonicalizeClientId(webinar.clientId) === canonicalizeClientId(clientId) &&
+    webinar.status !== "ended" &&
+    webinar.status !== "cancelled" &&
+    (webinar.status === "live" || isWithinEarlyEntryWindow(webinar, now));
+  return { kind: isOpen ? "open" : "closed", webinar };
+};
+
 export const hasWebinarEnded = (
   webinar: ScheduledWebinar,
   now = Date.now(),
 ): boolean => {
   if (webinar.status === "ended" || webinar.status === "cancelled") return true;
   return now > webinar.scheduledEndAt + 30 * 60 * 1000;
-};
-
-export const isUserScheduledHost = (
-  webinar: ScheduledWebinar,
-  email: string | null | undefined,
-): boolean => {
-  if (!email) return false;
-  const normalized = normalizeHostEmail(email);
-  if (!normalized) return false;
-  if (webinar.hostEmail === normalized) return true;
-  return webinar.coHosts.some((entry) => entry.email === normalized);
 };

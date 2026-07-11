@@ -35,7 +35,7 @@ export type GameRng = {
  * values (e.g. chess's "Computer level" only when mode is "computer").
  * Clients that predate the field simply always show the option.
  */
-export type GameOptionCondition = {
+type GameOptionCondition = {
   id: string;
   equals: string[];
 };
@@ -90,7 +90,7 @@ export type GameContext = {
   isAdmin(playerId: string): boolean;
 };
 
-export type GameContentContext = {
+type GameContentContext = {
   players: GamePlayer[];
   /** Host-chosen configuration (validated, with defaults filled in). */
   config: GameConfig;
@@ -222,12 +222,6 @@ export type GamePublicState = {
   canJoinLate: boolean;
   /** Public-safe rematch settings. Text options are omitted. */
   config: GameConfig;
-};
-
-/** Emitted privately to a single player. */
-export type GamePlayerView = {
-  gameId: string;
-  view: unknown;
 };
 
 export type GameStateResponse = {

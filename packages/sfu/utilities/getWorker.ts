@@ -1,6 +1,6 @@
 import type { Worker } from "mediasoup/types";
 
-export type WorkerLoadOptions = {
+type WorkerLoadOptions = {
   loadScoresByPid?: Map<number, number>;
 };
 

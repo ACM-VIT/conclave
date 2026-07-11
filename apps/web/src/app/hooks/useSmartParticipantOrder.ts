@@ -46,7 +46,7 @@ const getMediaPriority = (participant: ParticipantWithMediaHints): number => {
 
 const DEFAULT_MIN_PARTICIPANTS_FOR_REORDER = 4;
 
-export function useSmartParticipantOrderWithMetadata<
+function useSmartParticipantOrderWithMetadata<
   T extends ParticipantWithMediaHints,
 >(
   participants: readonly T[],

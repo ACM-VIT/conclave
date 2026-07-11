@@ -1,6 +1,6 @@
 export type CapturedDisplaySurface = "browser" | "window" | "monitor" | string;
 
-export type CaptureFocusBehavior =
+type CaptureFocusBehavior =
   | "focus-captured-surface"
   | "focus-capturing-application"
   | "no-focus-change";
@@ -28,13 +28,13 @@ export type CapturedSurfaceControlState = {
   displaySurface: CapturedDisplaySurface | null;
 };
 
-export const getCaptureControllerConstructor =
+const getCaptureControllerConstructor =
   (): CaptureControllerConstructor | null => {
     if (typeof window === "undefined") return null;
     return (window as WindowWithCaptureController).CaptureController ?? null;
   };
 
-export const supportsCapturedSurfaceControl = (
+const supportsCapturedSurfaceControl = (
   controller?: CaptureControllerLike | null,
 ) => {
   const prototype = (getCaptureControllerConstructor()?.prototype ??

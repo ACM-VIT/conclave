@@ -1,11 +1,11 @@
 import type { WebcamProducerNetworkProfile } from "./webcam-codec";
 import type { BrowserNetworkSnapshot } from "./network-information";
 
-export const SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000;
-export const SCREEN_SHARE_OUTGOING_POOR_BPS = 550000;
-export const SCREEN_SHARE_OUTGOING_EMERGENCY_BPS = 280000;
-export const SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000;
-export const SCREEN_SHARE_RECEIVE_POOR_BPS = 550000;
+const SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000;
+const SCREEN_SHARE_OUTGOING_POOR_BPS = 550000;
+const SCREEN_SHARE_OUTGOING_EMERGENCY_BPS = 280000;
+const SCREEN_SHARE_RECEIVE_FAIR_BPS = 1500000;
+const SCREEN_SHARE_RECEIVE_POOR_BPS = 550000;
 export const SCREEN_SHARE_RECEIVE_EMERGENCY_BPS = 300000;
 
 const networkProfileRank: Record<WebcamProducerNetworkProfile, number> = {
@@ -50,7 +50,7 @@ export const getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate = (
   return "good";
 };
 
-export type ScreenShareObservedPublishQuality =
+type ScreenShareObservedPublishQuality =
   | WebcamProducerNetworkProfile
   | "unknown";
 

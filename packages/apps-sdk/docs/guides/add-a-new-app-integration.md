@@ -1,10 +1,9 @@
-# Add a New App Integration
+# Add a New Meeting App
 
-This guide shows how to add a new in-meeting app to the Conclave Apps SDK integration (web + native), using the current whiteboard wiring as the reference pattern.
+Meeting apps have three pieces: a shared Yjs document, a web renderer, and a
+definition passed to `AppsProvider` by the meeting host.
 
-## Fast path: scaffold first
-
-Instead of creating files manually, scaffold an app shell:
+## 1. Scaffold the app
 
 ```bash
 pnpm -C packages/apps-sdk run new:app polls
@@ -12,261 +11,119 @@ pnpm -C packages/apps-sdk run new:app polls
 
 Useful options:
 
-- `--name "Polls"` to set display name
-- `--description "Live polls"` to set app description
-- `--no-native` or `--no-web` for platform-specific apps
-- `--dry-run` to preview changes without writing files
+```bash
+pnpm -C packages/apps-sdk run new:app polls --name "Quick Polls"
+pnpm -C packages/apps-sdk run new:app polls --dry-run
+```
 
-The scaffold command creates core/web/native files (as requested), updates `packages/apps-sdk/package.json` exports, and adds explicit aliases to `apps/mobile/tsconfig.json`.
-
-## What "integration" means in this repo
-
-You need to wire the app in five places:
-
-1. `@conclave/apps-sdk`: define the app and its CRDT doc model.
-2. Web host (`apps/web`): register app + render UI + expose uploads (optional).
-3. Native host (`apps/mobile`): register app + render UI.
-4. Meeting controls/layouts: open, close, and lock the app via `useApps()`.
-5. SFU socket handlers (`packages/sfu`): already generic, usually no per-app code needed.
-
-Before starting, confirm your app id and keep it unchanged. Most integration bugs are id mismatch issues.
-
-## 1. Add app files in `packages/apps-sdk`
-
-Follow the same structure whiteboard uses:
+The command creates:
 
 ```text
-packages/apps-sdk/src/apps/polls/
+src/apps/polls/
   core/
-    doc/
-      index.ts
+    doc/index.ts
+    index.ts
   web/
     components/PollsWebApp.tsx
     index.ts
-  native/
-    components/PollsNativeApp.tsx
-    index.ts
 ```
 
-Create a Yjs doc factory in `core/doc/index.ts`:
+It also adds the `polls/core` and `polls/web` package exports.
+
+## 2. Define shared state
+
+Keep durable collaborative data in the Yjs document. Keep cursors and other
+ephemeral presence in awareness.
 
 ```ts
 import * as Y from "yjs";
+import {
+  createAppDoc,
+  ensureAppArray,
+  getAppRoot,
+} from "../../../../sdk/doc/createAppDoc";
 
-export const createPollsDoc = () => {
-  const doc = new Y.Doc();
-  const root = doc.getMap("polls");
-  if (!root.has("items")) {
-    root.set("items", new Y.Array());
-  }
-  return doc;
+const ROOT_KEY = "polls";
+
+export const createPollsDoc = (): Y.Doc =>
+  createAppDoc(ROOT_KEY);
+
+export const getPollsRoot = (doc: Y.Doc) => getAppRoot(doc, ROOT_KEY);
+
+export const getOptions = (doc: Y.Doc): string[] => {
+  const value = getPollsRoot(doc).get("options");
+  return value instanceof Y.Array
+    ? value.toArray().filter((item): item is string => typeof item === "string")
+    : [];
+};
+
+export const addOption = (doc: Y.Doc, option: string): void => {
+  ensureAppArray(getPollsRoot(doc), "options").push([option]);
 };
 ```
 
-Or use the built-in helper:
+`createPollsDoc` deliberately authors no shared defaults before the server sync
+arrives. Reads return local UI defaults such as `[]`; the first real mutation
+lazily creates its shared type. This prevents a reconnecting client's defaults
+from winning a Yjs map conflict and replacing live room state.
 
-```ts
-import { createAppDoc, ensureAppMap } from "@conclave/apps-sdk";
+## 3. Implement the renderer
 
-export const createPollsDoc = () =>
-  createAppDoc("polls", (root) => {
-    ensureAppMap(root, "meta");
-  });
+Use `useAppDoc("polls")` for the document and lock state. Do not write when the
+room is locked unless the current user is an admin.
+
+```tsx
+import { useAppDoc, useApps } from "@conclave/apps-sdk";
+
+export function PollsWebApp() {
+  const { doc, locked } = useAppDoc("polls");
+  const { isAdmin } = useApps();
+  const canEdit = !locked || Boolean(isAdmin);
+
+  return <section>{canEdit ? "Poll editor" : "Poll results"}</section>;
+}
 ```
 
-Define app entries (web and native) with the same `id`:
+The app entry point binds metadata, document creation, and the renderer:
 
 ```ts
-// packages/apps-sdk/src/apps/polls/web/index.ts
-import { defineApp } from "../../../sdk/registry/index";
-import { createPollsDoc } from "../core/doc/index";
-import { PollsWebApp } from "./components/PollsWebApp";
-
 export const pollsApp = defineApp({
   id: "polls",
   name: "Polls",
-  description: "Live polls",
   createDoc: createPollsDoc,
   web: PollsWebApp,
 });
-
-export { PollsWebApp };
 ```
+
+## 4. Add it to the meeting host
+
+Import the definition in `apps/web/src/app/meets-client.tsx` and append it to
+the stable `MEETING_APPS` array. `AppsProvider` exposes that array, and
+`MeetingAppLayout` renders the active definition's `web` component.
+
+Use `useApps()` from an admin control to open, close, or lock it:
 
 ```ts
-// packages/apps-sdk/src/apps/polls/native/index.ts
-import { defineApp } from "../../../sdk/registry/index";
-import { createPollsDoc } from "../core/doc/index";
-import { PollsNativeApp } from "./components/PollsNativeApp";
+const { openApp, closeApp, setLocked } = useApps();
 
-export const pollsApp = defineApp({
-  id: "polls",
-  name: "Polls",
-  description: "Live polls",
-  createDoc: createPollsDoc,
-  native: PollsNativeApp,
-});
-
-export { PollsNativeApp };
+await openApp("polls");
+await setLocked(true);
+await closeApp();
 ```
 
-Inside app UIs, use SDK hooks:
+## 5. Verify it
 
-- `useAppDoc(appId)` for `doc`, `awareness`, and `locked`.
-- `useAppPresence(appId)` for participant presence/cursors.
-- `useAppAssets()` for uploads when needed.
-
-## 2. Export new subpaths from the package
-
-Update `packages/apps-sdk/package.json`:
-
-```json
-{
-  "exports": {
-    ".": "./src/index.ts",
-    "./polls/web": "./src/apps/polls/web/index.ts",
-    "./polls/native": "./src/apps/polls/native/index.ts",
-    "./polls/core": "./src/apps/polls/core/index.ts"
-  }
-}
+```bash
+pnpm -C packages/apps-sdk run check:apps
+pnpm -C packages/apps-sdk run typecheck
+pnpm -C apps/web run typecheck
+pnpm -C apps/web run lint
+pnpm -C apps/web run test
 ```
 
-If you add a `core/index.ts`, export your doc/model APIs there.
+Runtime smoke test two browser participants: open the app, edit from both,
+reload one participant, lock/unlock it, close it, and reconnect. Confirm the
+document converges and non-admin writes are blocked while locked.
 
-## 3. Register app in web and mobile hosts
-
-Web: `apps/web/src/app/meets-client.tsx`
-
-```ts
-import { registerApps } from "@conclave/apps-sdk";
-import { pollsApp } from "@conclave/apps-sdk/polls/web";
-
-useEffect(() => {
-  registerApps([pollsApp]);
-}, []);
-```
-
-Mobile: `apps/mobile/src/features/meets/components/meet-screen.tsx`
-
-```ts
-import { registerApps } from "@conclave/apps-sdk";
-import { pollsApp } from "@conclave/apps-sdk/polls/native";
-
-useEffect(() => {
-  registerApps([pollsApp]);
-}, []);
-```
-
-For Expo TypeScript path resolution, add explicit aliases in `apps/mobile/tsconfig.json` (same pattern as whiteboard):
-
-```json
-{
-  "compilerOptions": {
-    "paths": {
-      "@conclave/apps-sdk/polls/native": [
-        "../../packages/apps-sdk/src/apps/polls/native/index.ts"
-      ],
-      "@conclave/apps-sdk/polls/web": [
-        "../../packages/apps-sdk/src/apps/polls/web/index.ts"
-      ],
-      "@conclave/apps-sdk/polls/core": [
-        "../../packages/apps-sdk/src/apps/polls/core/index.ts"
-      ]
-    }
-  }
-}
-```
-
-## 4. Keep `AppsProvider` wrapping meeting UI
-
-Both web and mobile already do this. Keep it in place and ensure these props are set:
-
-- `socket`: connected room socket.
-- `user`: stable user identity.
-- `isAdmin`: used for lock/open permissions.
-- `uploadAsset`: from `createAssetUploadHandler(...)` if your app uploads files.
-
-Without `AppsProvider`, `useApps()` and app hooks will throw.
-
-## 5. Add controls to open/close/lock the app
-
-In meeting UI components (web/mobile), wire through `useApps()`:
-
-```ts
-const { state, openApp, closeApp, setLocked } = useApps();
-const isPollsActive = state.activeAppId === "polls";
-
-const togglePolls = () => (isPollsActive ? closeApp() : openApp("polls"));
-const toggleAppLock = () => setLocked(!state.locked);
-```
-
-Use the same app id (`"polls"`) everywhere.
-
-## 6. Render app when active
-
-Add your app layout/component where active app rendering is decided:
-
-- Web meeting content/layout components.
-- Native call screen/settings flow.
-
-Pattern:
-
-```ts
-if (appsState.activeAppId === "polls") {
-  return <PollsWebApp />; // or <PollsNativeApp />
-}
-```
-
-## 7. Optional: asset uploads
-
-If your app uploads files:
-
-1. Pass `uploadAsset={createAssetUploadHandler(...)}` into `AppsProvider`.
-2. Use `const { uploadAsset } = useAppAssets()` in app UI.
-3. Ensure upload endpoints exist.
-
-Web host already has the default endpoints:
-
-- `POST /api/apps` (`apps/web/src/app/api/apps/route.ts`)
-- `GET /api/apps/[id]` (`apps/web/src/app/api/apps/[id]/route.ts`)
-
-For native/non-web hosts, pass `baseUrl` to `createAssetUploadHandler`.
-
-## 8. Server-side requirements
-
-No app-specific SFU handler is typically required. The handlers in `packages/sfu/server/socket/handlers/appsHandlers.ts` already route by dynamic `appId`.
-
-Keep `registerAppsHandlers(context)` wired in `packages/sfu/server/socket/registerConnectionHandlers.ts`.
-
-You only need server customization if your app requires behavior beyond generic state/sync/awareness relay (for example, custom media control arbitration).
-
-## 9. Verification checklist
-
-1. Admin can open and close the new app on web and mobile.
-2. Non-admin cannot open/close/lock but receives state updates.
-3. Yjs document changes replicate across clients.
-4. Awareness/presence updates show correctly.
-5. Lock mode prevents edits for non-admins.
-6. Reconnect preserves current app state (`refreshState` + sync path).
-7. Asset upload path works (if used).
-8. `pnpm -C packages/apps-sdk run check:apps` passes.
-
-If exports/paths drift, run `pnpm -C packages/apps-sdk run check:apps:fix`.
-
-## Common pitfalls
-
-- App id mismatch between registration, open call, and `useAppDoc`.
-- Forgetting mobile TS path aliases for new package subpaths.
-- Using `useApps`/`useAppDoc` outside `AppsProvider`.
-- Registering app only on one platform and expecting it on both.
-- Treating awareness as persistent data.
-
-## Related docs
-
-- [Docs Home](../README.md)
-- [Core Concepts](../reference/core-concepts.md)
-- [Runtime APIs and Hooks](../reference/runtime-apis.md)
-- [Permissions and Locking](../reference/permissions-and-locking.md)
-- [Socket Events and Sync](../reference/socket-events-and-sync.md)
-- [Troubleshooting](./troubleshooting.md)
-- [App Cookbook](./app-cookbook.md)
+The active native app in `apps/conclave-skip` implements the same SFU protocol
+directly in Swift/Kotlin; it does not consume this React package.

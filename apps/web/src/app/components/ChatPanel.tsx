@@ -10,13 +10,12 @@ import {
   Send,
   X,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import type { ConclaveAssistantApiKeyPromptState } from "../hooks/useMeetChat";
 import type { ChatGifAttachment, ChatMessage, ChatReplyPreview } from "../lib/types";
 import { getActionText, getCommandSuggestions } from "../lib/chat-commands";
 import {
-  type AssistantTask,
   type AssistantChatMessage,
   type ConclaveAssistantModel,
   CONCLAVE_ASSISTANT_BYOK_MODELS,
@@ -73,210 +72,6 @@ type LocalRenderChatMessage = ChatMessage & {
 
 const getMessageRenderKey = (message: ChatMessage): string =>
   (message as LocalRenderChatMessage).clientRenderKey ?? message.id;
-
-const areGifsEqual = (
-  previousGif?: ChatGifAttachment,
-  nextGif?: ChatGifAttachment,
-): boolean => {
-  if (previousGif === nextGif) return true;
-  if (!previousGif || !nextGif) return false;
-  return (
-    previousGif.id === nextGif.id &&
-    previousGif.title === nextGif.title &&
-    previousGif.url === nextGif.url &&
-    (previousGif.previewUrl ?? "") === (nextGif.previewUrl ?? "") &&
-    (previousGif.pageUrl ?? "") === (nextGif.pageUrl ?? "") &&
-    (previousGif.width ?? 0) === (nextGif.width ?? 0) &&
-    (previousGif.height ?? 0) === (nextGif.height ?? 0) &&
-    previousGif.source === nextGif.source
-  );
-};
-
-const isAssistantMessageLike = (message: ChatMessage): boolean =>
-  (message as AssistantChatMessage).isAssistant === true ||
-  message.userId === CONCLAVE_ASSISTANT_USER_ID;
-
-const areAssistantTasksEqual = (
-  previousTasks?: AssistantTask[],
-  nextTasks?: AssistantTask[],
-): boolean => {
-  if (previousTasks === nextTasks) return true;
-  const previousList = previousTasks ?? [];
-  const nextList = nextTasks ?? [];
-  if (previousList.length !== nextList.length) return false;
-
-  for (let index = 0; index < previousList.length; index += 1) {
-    const previousTask = previousList[index];
-    const nextTask = nextList[index];
-    if (
-      previousTask.id !== nextTask.id ||
-      previousTask.kind !== nextTask.kind ||
-      previousTask.status !== nextTask.status ||
-      (previousTask.query ?? "") !== (nextTask.query ?? "")
-    ) {
-      return false;
-    }
-  }
-
-  return true;
-};
-
-const areAssistantFieldsEqual = (
-  previousMessage: ChatMessage,
-  nextMessage: ChatMessage,
-): boolean => {
-  const previousIsAssistant = isAssistantMessageLike(previousMessage);
-  const nextIsAssistant = isAssistantMessageLike(nextMessage);
-  if (previousIsAssistant !== nextIsAssistant) return false;
-  if (!previousIsAssistant && !nextIsAssistant) return true;
-
-  const previousAssistant = previousMessage as AssistantChatMessage;
-  const nextAssistant = nextMessage as AssistantChatMessage;
-  return (
-    previousAssistant.assistantStatus === nextAssistant.assistantStatus &&
-    previousAssistant.reasoningStatus === nextAssistant.reasoningStatus &&
-    (previousAssistant.reasoning ?? "") ===
-      (nextAssistant.reasoning ?? "") &&
-    areAssistantTasksEqual(previousAssistant.tasks, nextAssistant.tasks)
-  );
-};
-
-const areMessagesEqual = (
-  previousMessages: ChatMessage[],
-  nextMessages: ChatMessage[],
-): boolean => {
-  if (previousMessages === nextMessages) return true;
-  if (previousMessages.length !== nextMessages.length) return false;
-
-  for (let index = 0; index < previousMessages.length; index += 1) {
-    const previousMessage = previousMessages[index];
-    const nextMessage = nextMessages[index];
-    if (previousMessage === nextMessage) continue;
-
-    if (
-      previousMessage.id !== nextMessage.id ||
-      previousMessage.userId !== nextMessage.userId ||
-      previousMessage.displayName !== nextMessage.displayName ||
-      previousMessage.content !== nextMessage.content ||
-      previousMessage.timestamp !== nextMessage.timestamp ||
-      !areGifsEqual(previousMessage.gif, nextMessage.gif) ||
-      !areAssistantFieldsEqual(previousMessage, nextMessage) ||
-      (previousMessage.isDirect ?? false) !== (nextMessage.isDirect ?? false) ||
-      (previousMessage.dmTargetUserId ?? "") !==
-        (nextMessage.dmTargetUserId ?? "") ||
-      (previousMessage.dmTargetDisplayName ?? "") !==
-        (nextMessage.dmTargetDisplayName ?? "") ||
-      (previousMessage.replyTo?.id ?? "") !== (nextMessage.replyTo?.id ?? "")
-    ) {
-      return false;
-    }
-  }
-
-  return true;
-};
-
-const areReplyTargetsEqual = (
-  previous?: ChatReplyPreview | null,
-  next?: ChatReplyPreview | null,
-): boolean => {
-  if (previous === next) return true;
-  if (!previous || !next) return false;
-  return (
-    previous.id === next.id &&
-    previous.userId === next.userId &&
-    previous.displayName === next.displayName &&
-    previous.content === next.content &&
-    Boolean(previous.hasGif) === Boolean(next.hasGif) &&
-    Boolean(previous.isDirect) === Boolean(next.isDirect)
-  );
-};
-
-const areMentionableParticipantsEqual = (
-  previousParticipants: MentionableParticipant[],
-  nextParticipants: MentionableParticipant[],
-): boolean => {
-  if (previousParticipants === nextParticipants) return true;
-  if (previousParticipants.length !== nextParticipants.length) return false;
-
-  for (let index = 0; index < previousParticipants.length; index += 1) {
-    const previousParticipant = previousParticipants[index];
-    const nextParticipant = nextParticipants[index];
-    if (previousParticipant === nextParticipant) continue;
-
-    if (
-      previousParticipant.userId !== nextParticipant.userId ||
-      previousParticipant.displayName !== nextParticipant.displayName ||
-      previousParticipant.mentionToken !== nextParticipant.mentionToken
-    ) {
-      return false;
-    }
-  }
-
-  return true;
-};
-
-const areChatPanelPropsEqual = (
-  previousProps: ChatPanelProps,
-  nextProps: ChatPanelProps,
-): boolean => {
-  const previousIsChatLocked = previousProps.isChatLocked ?? false;
-  const nextIsChatLocked = nextProps.isChatLocked ?? false;
-  const previousIsDmEnabled = previousProps.isDmEnabled ?? true;
-  const nextIsDmEnabled = nextProps.isDmEnabled ?? true;
-  const previousIsAdmin = previousProps.isAdmin ?? false;
-  const nextIsAdmin = nextProps.isAdmin ?? false;
-  const previousAssistantEnabled = previousProps.assistantEnabled ?? true;
-  const nextAssistantEnabled = nextProps.assistantEnabled ?? true;
-  const previousAssistantApiKeyPrompt = previousProps.assistantApiKeyPrompt ?? {
-    visible: false,
-    error: null,
-    model: "gpt-5.6-terra" as ConclaveAssistantModel,
-  };
-  const nextAssistantApiKeyPrompt = nextProps.assistantApiKeyPrompt ?? {
-    visible: false,
-    error: null,
-    model: "gpt-5.6-terra" as ConclaveAssistantModel,
-  };
-
-  if (
-    previousProps.chatInput !== nextProps.chatInput ||
-    previousProps.currentUserId !== nextProps.currentUserId ||
-    previousIsChatLocked !== nextIsChatLocked ||
-    previousIsDmEnabled !== nextIsDmEnabled ||
-    previousIsAdmin !== nextIsAdmin ||
-    previousAssistantEnabled !== nextAssistantEnabled ||
-    previousAssistantApiKeyPrompt.visible !==
-      nextAssistantApiKeyPrompt.visible ||
-    previousAssistantApiKeyPrompt.error !== nextAssistantApiKeyPrompt.error ||
-    previousAssistantApiKeyPrompt.model !== nextAssistantApiKeyPrompt.model ||
-    previousProps.onInputChange !== nextProps.onInputChange ||
-    previousProps.onSend !== nextProps.onSend ||
-    previousProps.onSendGif !== nextProps.onSendGif ||
-    previousProps.onClose !== nextProps.onClose ||
-    previousProps.onReply !== nextProps.onReply ||
-    previousProps.onCancelReply !== nextProps.onCancelReply ||
-    previousProps.onSubmitAssistantApiKey !==
-      nextProps.onSubmitAssistantApiKey ||
-    previousProps.onCancelAssistantApiKey !== nextProps.onCancelAssistantApiKey
-  ) {
-    return false;
-  }
-
-  if (!areMessagesEqual(previousProps.messages, nextProps.messages)) {
-    return false;
-  }
-
-  if (
-    !areReplyTargetsEqual(previousProps.replyTarget, nextProps.replyTarget)
-  ) {
-    return false;
-  }
-
-  return areMentionableParticipantsEqual(
-    previousProps.mentionableParticipants ?? [],
-    nextProps.mentionableParticipants ?? [],
-  );
-};
 
 function ChatPanel({
   messages,
@@ -1271,4 +1066,4 @@ function ChatPanel({
   );
 }
 
-export default memo(ChatPanel, areChatPanelPropsEqual);
+export default ChatPanel;

@@ -268,7 +268,7 @@ export async function* streamQuestionAnswer(options: {
   }
 }
 
-export const TRANSCRIPTION_PROMPT = [
+const TRANSCRIPTION_PROMPT = [
   "This is a live Conclave meeting transcript.",
   "Preserve participant names, project names, acronyms, technical terms, code identifiers, and URLs exactly when audible.",
   "Use readable punctuation and sentence casing. Do not add commentary or infer inaudible words.",

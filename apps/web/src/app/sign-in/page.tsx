@@ -24,9 +24,7 @@ export default function SignInPage({ searchParams }: SignInPageProps) {
     <Suspense
       fallback={
         <RouteLoadingState
-          eyebrow="Authentication"
           title="Preparing sign-in"
-          detail="Loading the available identity providers."
         />
       }
     >

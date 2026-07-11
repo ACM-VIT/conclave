@@ -29,7 +29,7 @@ import {
   type ControlsBarProps,
 } from "./controls-config";
 
-export interface PaletteDevice {
+interface PaletteDevice {
   deviceId: string;
   label: string;
 }

@@ -1,6 +1,6 @@
 /* Ad-hoc strength harness for the chess bot (not wired into CI). */
 import { Chess, type Move } from "chess.js";
-import { pickBotMove, type BotLevel } from "../server/games/modules/chessBot.js";
+import { pickBotMove, type BotLevel } from "../server/games/chessBot.js";
 import type { GameRng } from "../server/games/types.js";
 
 const mkRng = (seed: number): GameRng => {

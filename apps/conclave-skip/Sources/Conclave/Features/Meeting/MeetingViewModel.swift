@@ -135,7 +135,7 @@ struct MeetingResumeJoinContext: Codable, Equatable {
 }
 
 struct MeetingResumeSnapshot: Codable, Equatable {
-    let context: MeetingResumeJoinContext
+    let joinContext: MeetingResumeJoinContext
     let sessionId: String
     let isMuted: Bool
     let isCameraOff: Bool
@@ -143,7 +143,7 @@ struct MeetingResumeSnapshot: Codable, Equatable {
 }
 
 enum MeetingResumePolicy {
-    static let maximumAge: TimeInterval = 12 * 60 * 60
+    static let maximumAge: TimeInterval = 43_200.0
 
     static func isFresh(
         _ snapshot: MeetingResumeSnapshot,
@@ -816,7 +816,7 @@ final class MeetingViewModel {
             return
         }
         MeetingResumeStore.save(MeetingResumeSnapshot(
-            context: MeetingResumeJoinContext(
+            joinContext: MeetingResumeJoinContext(
                 roomId: context.roomId,
                 displayName: context.displayName,
                 socketDisplayName: context.socketDisplayName,
@@ -851,7 +851,7 @@ final class MeetingViewModel {
         didAttemptPersistedMeetingResume = true
         guard shouldRestore, let snapshot else { return false }
 
-        let context = snapshot.context
+        let context = snapshot.joinContext
         let restoredSessionId = snapshot.sessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         if !restoredSessionId.isEmpty {
             state.sessionId = restoredSessionId
@@ -1016,12 +1016,29 @@ final class MeetingViewModel {
         transcriptService?.close()
     }
 
-    func startTranscription() {
-        transcriptService?.startTranscription()
+    func startTranscription(options: TranscriptStartOptions = TranscriptStartOptions()) {
+        transcriptService?.startTranscription(options: options)
     }
 
     func stopTranscription() {
         transcriptService?.stopTranscription()
+    }
+
+    func pauseTranscription() {
+        transcriptService?.pauseTranscription()
+    }
+
+    func resumeTranscription() {
+        transcriptService?.resumeTranscription()
+    }
+
+    @discardableResult
+    func askTranscript(_ question: String) -> Bool {
+        transcriptService?.ask(question) ?? false
+    }
+
+    func refreshTranscriptMinutes() {
+        transcriptService?.refreshMinutes()
     }
 
     private func setupNetworkBindings() {

@@ -9,51 +9,6 @@ import {
   CONCLAVE_SFU_CLIENT_ID,
 } from "@/lib/sfu-client-id";
 
-export type ScheduledMeetingStatus =
-  | "scheduled"
-  | "live"
-  | "ended"
-  | "cancelled";
-
-export type ScheduledMeetingEmailNotificationStatus =
-  | "not_configured"
-  | "pending"
-  | "sent"
-  | "failed";
-
-export interface ScheduledMeeting {
-  id: string;
-  clientId: string;
-  roomCode: string;
-  title: string;
-  hostEmail: string;
-  hostName: string;
-  hostUserId: string | null;
-  scheduledStartAt: number;
-  scheduledEndAt: number;
-  status: ScheduledMeetingStatus;
-  startedAt: number | null;
-  endedAt: number | null;
-  createdAt: number;
-  createdBy: string;
-  updatedAt: number;
-  emailNotificationStatus?: ScheduledMeetingEmailNotificationStatus;
-  emailNotificationError?: string | null;
-  emailNotificationSentAt?: number | null;
-  emailReminderStatus?: ScheduledMeetingEmailNotificationStatus;
-  emailReminderError?: string | null;
-  emailReminderSentAt?: number | null;
-}
-
-export interface CreateScheduledMeetingPayload {
-  title: string;
-  scheduledStartAt: number;
-  scheduledEndAt?: number;
-  roomCode?: string;
-  hostEmail?: string;
-  hostName?: string;
-}
-
 export interface PublicScheduledMeeting {
   id: string;
   roomCode: string;
@@ -61,7 +16,7 @@ export interface PublicScheduledMeeting {
   hostName: string;
   scheduledStartAt: number;
   scheduledEndAt: number;
-  status: ScheduledMeetingStatus;
+  status: "scheduled" | "live" | "ended" | "cancelled";
   startedAt: number | null;
   endedAt: number | null;
 }

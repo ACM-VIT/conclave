@@ -141,5 +141,3 @@ export const auth = betterAuth({
     useSecureCookies: process.env.NODE_ENV === "production",
   },
 });
-
-export type Session = typeof auth.$Infer.Session;

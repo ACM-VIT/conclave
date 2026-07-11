@@ -43,7 +43,7 @@ export const normalizeConclaveSiteVersion = (
   };
 };
 
-export const isConclaveSiteVersion = (
+const isConclaveSiteVersion = (
   value: unknown,
 ): value is ConclaveSiteVersion => {
   if (!isRecord(value)) return false;

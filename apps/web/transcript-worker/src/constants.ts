@@ -14,12 +14,11 @@ export const DEFAULT_TRANSCRIPTION_LOCALIZATION_PROMPT =
 export const DEFAULT_IDLE_TTL_MS = 20 * 60 * 1000;
 export const DEFAULT_RECOVERY_RETENTION_MS = 6 * 60 * 60 * 1000;
 export const DEFAULT_MAX_SEGMENTS = 500;
-export const TRANSCRIPT_PCM_SAMPLE_RATE = 24_000;
-export const MIN_OPENAI_COMMIT_AUDIO_MS = 100;
+const TRANSCRIPT_PCM_SAMPLE_RATE = 24_000;
+const MIN_OPENAI_COMMIT_AUDIO_MS = 100;
 export const MIN_OPENAI_COMMIT_AUDIO_SAMPLES = Math.ceil(
   (TRANSCRIPT_PCM_SAMPLE_RATE * MIN_OPENAI_COMMIT_AUDIO_MS) / 1000,
 );
-export const MIN_MINUTES_REFRESH_MS = 18_000;
 // Auto-minutes debounce: regenerate once the room has been quiet for this long
 // after the last finalized segment, so we never rewrite minutes mid-sentence.
 export const MINUTES_QUIET_DEBOUNCE_MS = 7_000;
@@ -53,4 +52,3 @@ export const TRANSCRIPTION_RECOVERY_DELAYS_MS = [
 ] as const;
 export const OPENAI_REALTIME_URL = "https://api.openai.com/v1/realtime";
 export const OPENAI_REALTIME_TRANSCRIPTION_INTENT = "transcription";
-export const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";

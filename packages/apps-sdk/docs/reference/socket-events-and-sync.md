@@ -155,7 +155,7 @@ Runtime accepts multiple binary-like payload forms:
 - Node-style `{ type: "Buffer", data: number[] }`
 - base64 string (validated before decode)
 
-This helps keep sync stable across browser, React Native, and server runtimes.
+This keeps sync stable across browser, native, and server runtimes.
 
 ## Client Ack Timeout Behavior
 

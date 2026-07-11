@@ -31,7 +31,7 @@ gradle --no-daemon --max-workers=1 -Dorg.gradle.jvmargs='-Xmx1536m -XX:MaxMetasp
 iOS simulator build:
 
 ```sh
-xcodebuild -project Darwin/Conclave.xcodeproj -scheme "Conclave App" -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO build
+xcodebuild -skipPackagePluginValidation -project Darwin/Conclave.xcodeproj -scheme "Conclave App" -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO build
 ```
 
 Use `Darwin/fastlane` and `Android/fastlane` for release automation. Release builds should use the production Conclave host from `Skip.env`, not emulator loopback URLs.

@@ -30,7 +30,6 @@ overrides:
   mediasoup-client: "3.20.0"
   yjs: "13.6.31"
 allowBuilds:
-  '@shopify/react-native-skia': true
   core-js: true
   cpu-features: true
   esbuild: true

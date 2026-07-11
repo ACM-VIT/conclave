@@ -5,6 +5,10 @@
 !packages/
 !packages/sfu/
 !packages/sfu/**
+!packages/ui-tokens/
+!packages/ui-tokens/package.json
+!packages/ui-tokens/src/
+!packages/ui-tokens/src/**
 packages/sfu/node_modules
 packages/sfu/dist
 packages/sfu/.env

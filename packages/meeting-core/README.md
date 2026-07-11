@@ -1,10 +1,10 @@
 # @conclave/meeting-core
 
-Shared meeting domain logic for both `apps/web` and `apps/mobile`.
+Shared meeting domain logic for `apps/web` and mirrored native behavior.
 
 ## What belongs here
 
-- Data contracts shared by both surfaces (`types.ts`, `sfu-types.ts`)
+- Data contracts shared by the web client and SFU (`types.ts`, `sfu-types.ts`)
 - Pure meeting domain reducers and command parsing
 - Configurable media encoding helpers
 
@@ -16,6 +16,6 @@ Shared meeting domain logic for both `apps/web` and `apps/mobile`.
 
 ## Why this exists
 
-The web and mobile meeting implementations were duplicating core domain files.
-This package keeps those shared primitives in one place so feature changes can
-land once, then be consumed by both apps through thin wrappers.
+The web client and SFU were duplicating core domain files. This package keeps
+those TypeScript primitives in one place. The active Skip client mirrors the
+small pure algorithms it needs in Swift and verifies them with native tests.
