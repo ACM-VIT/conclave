@@ -88,6 +88,11 @@ import {
   selectScreenSharePublishNetworkProfile,
 } from "../lib/screen-share-network-profile";
 import { getBrowserNetworkSnapshot } from "../lib/network-information";
+import {
+  getConsumerResumeEffectiveAttempt,
+  isConsumerResumeSettlementCurrent,
+  type ConsumerResumeRetryState,
+} from "../lib/consumer-resume-retry";
 import type {
   ConsumerTelemetrySnapshot,
   MeetRefs,
@@ -884,11 +889,11 @@ export function useMeetSocket({
   const consumeRetryAttemptsRef = useRef<Map<string, number>>(new Map());
   // One retry chain per producer for acked resumeConsumer delivery; a lost
   // resume means one silent speaker for this attendee only (#177). The entry
-  // keeps the attempt count so overlapping triggers (sync tick, unmute event)
-  // adopt the running chain's progress instead of resetting it — otherwise
-  // the escalation to a full re-consume could be starved forever.
+  // owns a specific consumer generation and keeps its attempt count, so stale
+  // acknowledgements from a displaced consumer cannot cancel the replacement
+  // consumer's chain while overlapping triggers still adopt current progress.
   const consumerResumeRetryStateRef = useRef<
-    Map<string, { timeoutId: number | null; attempt: number }>
+    Map<string, ConsumerResumeRetryState>
   >(new Map());
   const videoStallRecoveryTimeoutsRef = useRef<Map<string, number>>(new Map());
   const participantConnectionStatusTimeoutsRef = useRef<Map<string, number>>(
@@ -2091,14 +2096,23 @@ export function useMeetSocket({
     [],
   );
 
-  const clearConsumerResumeRetry = useCallback((producerId: string) => {
-    const entry = consumerResumeRetryStateRef.current.get(producerId);
-    if (!entry) return;
-    if (entry.timeoutId != null) {
-      window.clearTimeout(entry.timeoutId);
-    }
-    consumerResumeRetryStateRef.current.delete(producerId);
-  }, []);
+  const clearConsumerResumeRetry = useCallback(
+    (producerId: string, expectedConsumerId?: string) => {
+      const entry = consumerResumeRetryStateRef.current.get(producerId);
+      if (!entry) return;
+      if (
+        expectedConsumerId !== undefined &&
+        entry.consumerId !== expectedConsumerId
+      ) {
+        return;
+      }
+      if (entry.timeoutId != null) {
+        window.clearTimeout(entry.timeoutId);
+      }
+      consumerResumeRetryStateRef.current.delete(producerId);
+    },
+    [],
+  );
 
   // resumeConsumer used to be fire-and-forget: a single dropped request (rate
   // limit, disconnect blip, lost ack) left the server-side consumer paused
@@ -2128,14 +2142,23 @@ export function useMeetSocket({
       if (existingRetryState?.timeoutId != null) {
         window.clearTimeout(existingRetryState.timeoutId);
       }
-      const effectiveAttempt = Math.max(
+      const effectiveAttempt = getConsumerResumeEffectiveAttempt(
+        existingRetryState,
+        consumerId,
         attempt,
-        existingRetryState?.attempt ?? 0,
       );
       consumerResumeRetryStateRef.current.set(producerId, {
+        consumerId,
         timeoutId: null,
         attempt: effectiveAttempt,
       });
+
+      const ownsCurrentResumeState = () =>
+        isConsumerResumeSettlementCurrent(
+          consumersRef.current.get(producerId)?.id,
+          consumerResumeRetryStateRef.current.get(producerId),
+          consumerId,
+        );
 
       const buildProducerInfoForRecovery = (): ProducerInfo | null => {
         const entry = producerMapRef.current.get(producerId);
@@ -2149,9 +2172,10 @@ export function useMeetSocket({
       };
 
       const scheduleRetry = (reason: string) => {
+        if (!ownsCurrentResumeState()) return;
         const nextAttempt = effectiveAttempt + 1;
         if (nextAttempt >= RESUME_CONSUMER_MAX_ATTEMPTS) {
-          clearConsumerResumeRetry(producerId);
+          clearConsumerResumeRetry(producerId, consumerId);
           console.warn(
             `[Meets] resumeConsumer retries exhausted for producer ${producerId}: ${reason}`,
           );
@@ -2169,15 +2193,24 @@ export function useMeetSocket({
           }
           return;
         }
-        clearConsumerResumeRetry(producerId);
+        clearConsumerResumeRetry(producerId, consumerId);
         const timeoutId = window.setTimeout(() => {
           const entry = consumerResumeRetryStateRef.current.get(producerId);
-          if (entry) {
-            entry.timeoutId = null;
+          if (
+            !entry ||
+            !isConsumerResumeSettlementCurrent(
+              consumersRef.current.get(producerId)?.id,
+              entry,
+              consumerId,
+            )
+          ) {
+            return;
           }
+          entry.timeoutId = null;
           resumeConsumerReliablyRef.current(producerId, options, nextAttempt);
         }, getResumeConsumerRetryDelayMs(effectiveAttempt));
         consumerResumeRetryStateRef.current.set(producerId, {
+          consumerId,
           timeoutId,
           attempt: nextAttempt,
         });
@@ -2196,6 +2229,7 @@ export function useMeetSocket({
         },
         (response?: { success?: boolean; error?: string; code?: string }) => {
           if (!settleResume()) return;
+          if (!ownsCurrentResumeState()) return;
           const error =
             response && typeof response.error === "string"
               ? response.error
@@ -2211,7 +2245,7 @@ export function useMeetSocket({
             if (code === "not_found") {
               // The server no longer tracks this consumer (displaced or torn
               // down); retrying the resume can never succeed. Re-consume.
-              clearConsumerResumeRetry(producerId);
+              clearConsumerResumeRetry(producerId, consumerId);
               const producerInfo = buildProducerInfoForRecovery();
               if (producerInfo) {
                 void recoverStaleConsumerRef.current(
@@ -2224,7 +2258,7 @@ export function useMeetSocket({
             scheduleRetry(code ?? error);
             return;
           }
-          clearConsumerResumeRetry(producerId);
+          clearConsumerResumeRetry(producerId, consumerId);
           if (effectiveAttempt > 0) {
             telemetry.capture("meet_consumer_resume_recovered", {
               kind: consumer.kind,

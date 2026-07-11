@@ -1513,11 +1513,14 @@ export default function MeetsMainContent({
     ? { paddingRight: `calc(1rem + ${dockedPanelReserve}px)` }
     : undefined;
   // When docked panels eat into the stage, the full controls bar (clock +
-  // center + side cluster) gets cramped. Fold it to its compact layout once the
-  // remaining width is tight so it stays comfortable instead of squeezing.
+  // center + side cluster) gets cramped. Degrade in two steps: first demote
+  // the least-used center controls (hand, screen share) into More so the bar
+  // keeps air, then fold to the compact layout once the stage is truly tight.
   const stageWidth = viewportWidth - dockedPanelReserve;
   const isControlsBarTight = !isMobile && isJoined && stageWidth < 900;
   const useCompactControls = isMobile || isControlsBarTight;
+  const useSlimControls =
+    !useCompactControls && isJoined && !isMobile && stageWidth < 1080;
   const isRecoveringMeeting = isJoined && connectionState !== "joined";
   const isTerminalMeetingError =
     Boolean(meetError) && meetError?.recoverable === false;
@@ -1609,6 +1612,7 @@ export default function MeetsMainContent({
   // search and run.
   const controlsBarProps: ControlsBarProps = {
     compact: useCompactControls,
+    slim: useSlimControls,
     coachAvatars,
     roomId,
     isMuted,

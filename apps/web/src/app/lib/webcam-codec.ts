@@ -917,8 +917,22 @@ export async function produceScreenShareTrack({
     }
 
     console.warn(
-      "[Meets] Preferred screen-share codec failed, retrying router default codec:",
+      "[Meets] Preferred screen-share codec with temporal scalability failed, retrying the same codec without scalability mode:",
       primaryError,
+    );
+  }
+
+  try {
+    return await transport.produce(
+      buildOptions(
+        withoutScreenShareScalabilityMode(encoding),
+        preferredCodec,
+      ),
+    );
+  } catch (preferredCodecError) {
+    console.warn(
+      "[Meets] Preferred screen-share codec failed without temporal scalability, retrying router default codec:",
+      preferredCodecError,
     );
   }
 
