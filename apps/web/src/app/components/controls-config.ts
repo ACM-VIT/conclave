@@ -1,5 +1,6 @@
 import {
   AudioLines,
+  Blocks,
   Gamepad2,
   FileText,
   Globe,
@@ -118,6 +119,9 @@ export interface ControlsBarProps {
   isWatchActive?: boolean;
   onOpenWatch?: () => void;
   onCloseWatch?: () => void;
+  isAppsOpen?: boolean;
+  hasActiveApp?: boolean;
+  onToggleApps?: () => void;
   isDevPlaygroundEnabled?: boolean;
   isDevPlaygroundActive?: boolean;
   onOpenDevPlayground?: () => void;
@@ -229,6 +233,16 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       showTooltipWithoutHotkey: true,
       variant: p.isGamesOpen || p.hasActiveGame ? "active" : "default",
       onPress: p.onToggleGames,
+    });
+  }
+  if (p.onToggleApps) {
+    sideControls.push({
+      id: "apps",
+      icon: Blocks,
+      label: p.hasActiveApp ? "App in use" : "Apps",
+      showTooltipWithoutHotkey: true,
+      variant: p.isAppsOpen || p.hasActiveApp ? "active" : "default",
+      onPress: p.onToggleApps,
     });
   }
   if (p.onToggleTranscript) {
