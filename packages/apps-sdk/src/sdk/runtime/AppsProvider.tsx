@@ -24,6 +24,12 @@ export type AppsProviderProps = {
   socket: Socket | null;
   apps: ConclaveApp[];
   user?: AppUser;
+  /**
+   * Meeting roster (self included). Callers may rebuild this array every
+   * render; the provider only forwards a new identity when the contents
+   * actually change.
+   */
+  participants?: AppUser[];
   isAdmin?: boolean;
   isReadOnly?: boolean;
   children: React.ReactNode;
@@ -38,6 +44,11 @@ type AwarenessUpdateEvent = {
   updated: number[];
   removed: number[];
 };
+
+const rosterSignature = (roster: AppUser[]): string =>
+  roster
+    .map((member) => `${member.id}\u0001${member.name ?? ""}\u0001${member.email ?? ""}`)
+    .join("\u0000");
 
 const isAppsState = (value: unknown): value is AppsState => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -114,11 +125,20 @@ export function AppsProvider({
   socket,
   apps,
   user,
+  participants,
   isAdmin,
   isReadOnly = false,
   children,
 }: AppsProviderProps) {
   const [state, setState] = useState<AppsState>({ activeAppId: null, locked: false });
+  const [roster, setRoster] = useState<AppUser[]>(() => participants ?? []);
+
+  useEffect(() => {
+    const next = participants ?? [];
+    setRoster((previous) =>
+      rosterSignature(previous) === rosterSignature(next) ? previous : next
+    );
+  }, [participants]);
 
   const docsRef = useRef<Map<string, Y.Doc>>(new Map());
   const awarenessRef = useRef<Map<string, Awareness>>(new Map());
@@ -475,6 +495,7 @@ export function AppsProvider({
       getDoc,
       getAwareness,
       user,
+      participants: roster,
       isAdmin,
       isReadOnly,
     }),
@@ -488,6 +509,7 @@ export function AppsProvider({
       getDoc,
       getAwareness,
       user,
+      roster,
       isAdmin,
       isReadOnly,
     ]

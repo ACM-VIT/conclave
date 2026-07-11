@@ -71,6 +71,8 @@ export type AppsContextValue = {
   getDoc: (appId: string) => Y.Doc;
   getAwareness: (appId: string) => Awareness;
   user?: AppUser;
+  /** Meeting roster (self included) for apps that act on everyone present. */
+  participants?: AppUser[];
   isAdmin?: boolean;
   isReadOnly?: boolean;
 };

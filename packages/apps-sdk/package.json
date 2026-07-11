@@ -17,6 +17,8 @@
     "./dev-playground/web": "./src/apps/dev-playground/web/index.ts",
     "./watch/core": "./src/apps/watch/core/index.ts",
     "./watch/web": "./src/apps/watch/web/index.ts",
+    "./wheel/core": "./src/apps/wheel/core/index.ts",
+    "./wheel/web": "./src/apps/wheel/web/index.ts",
     "./whiteboard/core": "./src/apps/whiteboard/core/index.ts",
     "./whiteboard/web": "./src/apps/whiteboard/web/index.ts"
   },

@@ -73,6 +73,7 @@ import {
 import { useApps, useGame } from "@conclave/apps-sdk";
 import { GamePanel } from "./games/GamePanel";
 import { GamesPanel } from "./games/GamesPanel";
+import { AppsPanel } from "./apps/AppsPanel";
 import {
   GAME_DOCK_DEFAULT_WIDTH,
   GAME_DOCK_MAX_WIDTH,
@@ -541,6 +542,7 @@ export default function MeetsMainContent({
   } = useApps();
   const { isActive: isGameActive, refresh: refreshGameState } = useGame();
   const [isGamesOpen, setIsGamesOpen] = useState(false);
+  const [isAppsOpen, setIsAppsOpen] = useState(false);
   const isDevToolsEnabled = process.env.NODE_ENV === "development";
   const isDevPlaygroundEnabled = isDevToolsEnabled;
   const isWhiteboardActive = appsState.activeAppId === "whiteboard";
@@ -1080,14 +1082,28 @@ export default function MeetsMainContent({
   // The game dock (launcher / active game) is independent of the chat &
   // participants panels: on wide screens it docks side-by-side with them, so
   // you can chat while a game runs. Toggling it does NOT close the others.
+  // The apps launcher shares that dock slot, so games and apps are mutually
+  // exclusive (side effects outside the updater for StrictMode, mirroring
+  // handleToggleHostControls).
   const handleToggleGames = useCallback(() => {
-    setIsGamesOpen((open) => !open);
-  }, []);
+    const opening = !isGamesOpen;
+    if (opening) setIsAppsOpen(false);
+    setIsGamesOpen(opening);
+  }, [isGamesOpen]);
+
+  const handleToggleApps = useCallback(() => {
+    const opening = !isAppsOpen;
+    if (opening) setIsGamesOpen(false);
+    setIsAppsOpen(opening);
+  }, [isAppsOpen]);
 
   // Once a game is actually running, the active GamePanel takes the dock slot,
-  // so collapse the (now-redundant) launcher.
+  // so collapse the (now-redundant) launchers.
   useEffect(() => {
-    if (isGameActive) setIsGamesOpen(false);
+    if (isGameActive) {
+      setIsGamesOpen(false);
+      setIsAppsOpen(false);
+    }
   }, [isGameActive]);
 
   // Secondary right-dock panels (chat, participants, etc). The game dock sits to
@@ -1100,7 +1116,7 @@ export default function MeetsMainContent({
     isViewPanelOpen ||
     isDeviceSettingsOpen ||
     isTranscriptOpen;
-  const isGameDockPresent = isGameActive || isGamesOpen;
+  const isGameDockPresent = isGameActive || isGamesOpen || isAppsOpen;
   const gameDockOffset =
     canReserveDockedPanel && isSecondaryPanelOpen ? DOCKED_PANEL_WIDTH : 0;
   const gameDockMaxWidth = useMemo(
@@ -1639,6 +1655,9 @@ export default function MeetsMainContent({
     isWatchActive,
     onOpenWatch: isAdmin ? openWatch : undefined,
     onCloseWatch: isAdmin ? closeWatch : undefined,
+    isAppsOpen,
+    hasActiveApp: Boolean(appsState.activeAppId),
+    onToggleApps: handleToggleApps,
     isDevPlaygroundEnabled,
     isDevPlaygroundActive,
     onOpenDevPlayground: isAdmin ? openDevPlayground : undefined,
@@ -2219,6 +2238,16 @@ export default function MeetsMainContent({
           maxDockWidth={gameDockMaxWidth}
           onDockWidthChange={handleGameDockWidthChange}
           onClose={() => setIsGamesOpen(false)}
+        />
+      )}
+
+      {isJoined && !isWebinarAttendee && isAppsOpen && !isGameActive && (
+        <AppsPanel
+          rightOffset={gameDockOffset}
+          dockWidth={gameDockPanelWidth}
+          maxDockWidth={gameDockMaxWidth}
+          onDockWidthChange={handleGameDockWidthChange}
+          onClose={() => setIsAppsOpen(false)}
         />
       )}
 

@@ -14,6 +14,7 @@ import {
 } from "@conclave/apps-sdk";
 import { devPlaygroundApp } from "@conclave/apps-sdk/dev-playground/web";
 import { watchApp } from "@conclave/apps-sdk/watch/web";
+import { wheelApp } from "@conclave/apps-sdk/wheel/web";
 import { whiteboardApp } from "@conclave/apps-sdk/whiteboard/web";
 import MeetsErrorBanner from "./components/MeetsErrorBanner";
 import MeetsHeader from "./components/MeetsHeader";
@@ -23,8 +24,8 @@ import MeetingEnterOverlay from "./components/MeetingEnterOverlay";
 
 const MEETING_APPS =
   process.env.NODE_ENV === "development"
-    ? [whiteboardApp, watchApp, devPlaygroundApp]
-    : [whiteboardApp, watchApp];
+    ? [whiteboardApp, watchApp, wheelApp, devPlaygroundApp]
+    : [whiteboardApp, watchApp, wheelApp];
 
 import { useMeetAudioActivity } from "./hooks/useMeetAudioActivity";
 import { useMeetChat, type ConclaveAssistantContext } from "./hooks/useMeetChat";
@@ -1211,6 +1212,27 @@ export default function MeetsClient({
     });
     return count;
   }, [participants, userId]);
+
+  // Meeting roster (self first) for apps that act on everyone present, e.g.
+  // the wheel's "add everyone" action. AppsProvider drops no-op identity
+  // changes, so rebuilding on participant churn is fine.
+  const appsParticipants = useMemo(() => {
+    const roster = [appsUser];
+    participants.forEach((participant) => {
+      if (
+        participant.userId === userId ||
+        isSystemUserId(participant.userId)
+      ) {
+        return;
+      }
+      roster.push({
+        id: participant.userId,
+        name: resolveDisplayName(participant.userId),
+        email: null,
+      });
+    });
+    return roster;
+  }, [appsUser, participants, userId, resolveDisplayName]);
 
   const participantCountRef = useRef(participantCount);
   useEffect(() => {
@@ -2891,6 +2913,7 @@ export default function MeetsClient({
         socket={appsSocket}
         apps={MEETING_APPS}
         user={appsUser}
+        participants={appsParticipants}
         isAdmin={canModerateMeeting}
         isReadOnly={isReadOnlyObserver}
       >
