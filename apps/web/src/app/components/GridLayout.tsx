@@ -67,6 +67,8 @@ import {
   type CapturedSurfaceControlState,
   type CaptureControllerLike,
 } from "../lib/captured-surface-control";
+import { useElementSize } from "../hooks/useElementSize";
+import { computeTileChrome } from "../lib/tile-chrome";
 
 interface GridLayoutProps {
   localStream: MediaStream | null;
@@ -79,6 +81,9 @@ interface GridLayoutProps {
   activeSpeakerId: string | null;
   currentUserId: string;
   audioOutputDeviceId?: string;
+  onAudioAutoplayBlocked?: () => void;
+  onAudioPlaybackStarted?: () => void;
+  audioPlaybackAttemptToken?: number;
   isAdmin?: boolean;
   onParticipantClick?: (userId: string) => void;
   onOpenParticipantsPanel?: () => void;
@@ -123,6 +128,10 @@ const PRESENTATION_PRIORITY_WARM_BUFFER_TILES = 2;
 // inter-tile gap fed to the Meet packer so it reserves the same gutters we draw.
 const GRID_PADDING = 16;
 const GRID_GAP = 12;
+// Desktop column FLOOR for the packer's cap — the real cap grows with the
+// measured stage width (see computeGridMaxCols) so big calls on wide screens
+// spread across the full stage instead of packing into a narrow centered
+// block with dead gutters on both sides.
 const GRID_MAX_COLS = 6;
 const STAGE_RAIL_TILE_HEIGHT = 112;
 const SIDE_BY_SIDE_RAIL_HEIGHT_RATIO = 0.35;
@@ -144,12 +153,29 @@ const MOBILE_PORTRAIT_MAX_TILE_ASPECT = 1.5; // height up to 1.5× width
 const MOBILE_LANDSCAPE_MAX_COLS = 4;
 
 /**
+ * Column cap for the packer. A fixed desktop cap of 6 made big calls on wide
+ * screens height-limited: tiles shrank to fit 8+ rows while the 6-wide block
+ * sat centered between huge empty gutters. Allow as many min-width columns as
+ * the measured stage actually fits (never fewer than the old cap) — the packer
+ * still picks the tile-size-maximising arrangement, so small calls where fewer
+ * columns give bigger tiles are unaffected.
+ */
+const computeGridMaxCols = (isMobile: boolean, usableWidth: number) => {
+  if (isMobile) return MOBILE_LANDSCAPE_MAX_COLS;
+  if (!Number.isFinite(usableWidth) || usableWidth <= 0) return GRID_MAX_COLS;
+  return Math.max(
+    GRID_MAX_COLS,
+    Math.floor((usableWidth + GRID_GAP) / (AUTO_GRID_MIN_TILE_WIDTH + GRID_GAP)),
+  );
+};
+
+/**
  * Device-/orientation-aware packing parameters for the desktop/landscape Meet
  * grid (the 16:9 optimal packer). Portrait phones bypass this entirely and use
  * computeMobilePortraitGridLayout instead.
  */
-const getGridPackingParams = (isMobile: boolean) => ({
-  maxCols: isMobile ? MOBILE_LANDSCAPE_MAX_COLS : GRID_MAX_COLS,
+const getGridPackingParams = (isMobile: boolean, usableWidth: number) => ({
+  maxCols: computeGridMaxCols(isMobile, usableWidth),
   targetAspect: 16 / 9,
   minTileWidth: AUTO_GRID_MIN_TILE_WIDTH,
   minTileHeight: AUTO_GRID_MIN_TILE_HEIGHT,
@@ -769,7 +795,7 @@ const computeMeetAutoTileLimit = (
   }
 
   const { maxCols, targetAspect, minTileWidth, minTileHeight } =
-    getGridPackingParams(isMobile);
+    getGridPackingParams(isMobile, usableWidth);
 
   for (
     let tileCount = requestedMaxTiles;
@@ -957,6 +983,9 @@ function GridLayout({
   activeSpeakerId,
   currentUserId,
   audioOutputDeviceId,
+  onAudioAutoplayBlocked,
+  onAudioPlaybackStarted,
+  audioPlaybackAttemptToken,
   isAdmin = false,
   onParticipantClick,
   onOpenParticipantsPanel,
@@ -976,6 +1005,12 @@ function GridLayout({
 }: GridLayoutProps) {
   const stageRootRef = useRef<HTMLDivElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  // The packer shrinks grid tiles well below the fixed chrome sizes in big
+  // calls — measure the local tile and scale its face/pill/badges like
+  // ParticipantVideo does for remote tiles.
+  const localGridTileRef = useRef<HTMLDivElement>(null);
+  const localGridTileSize = useElementSize(localGridTileRef);
+  const localTileChrome = computeTileChrome(localGridTileSize);
   const [isOverflowOpen, setIsOverflowOpen] = useState(false);
   const [selfViewDragPoint, setSelfViewDragPoint] = useState<{
     x: number;
@@ -1126,24 +1161,36 @@ function GridLayout({
     );
   }, [activeVideoEffectsCount, isCameraOff, localStream]);
 
-  // Memoize the filtered input so it only changes identity when `participants`
-  // actually changes — otherwise a fresh array every render defeats
-  // useSmartParticipantOrder's internal memoization (new sorted array each tick).
-  const remoteInput = useMemo(
+  // Every remote participant, regardless of view filters. The hidden audio
+  // layer MUST render from this list: audio playback can never depend on tile
+  // visibility (issue #177 — "hide tiles without video" silenced camera-off
+  // speakers for viewers with that setting enabled).
+  const allRemoteParticipants = useMemo(
     () =>
       Array.from(participants.values()).filter(
         (participant) =>
           !isSystemUserId(participant.userId) &&
-          participant.userId !== currentUserId &&
-          (!viewSettings.hideTilesWithoutVideo ||
-            participantHasLiveVideo(participant) ||
-            participant.userId === activeSpeakerId ||
-            participant.userId === pinnedId)
+          participant.userId !== currentUserId
+      ),
+    [currentUserId, participants]
+  );
+
+  // Memoize the filtered input so it only changes identity when `participants`
+  // actually changes — otherwise a fresh array every render defeats
+  // useSmartParticipantOrder's internal memoization (new sorted array each tick).
+  // This list drives TILES only; audio uses allRemoteParticipants above.
+  const remoteInput = useMemo(
+    () =>
+      allRemoteParticipants.filter(
+        (participant) =>
+          !viewSettings.hideTilesWithoutVideo ||
+          participantHasLiveVideo(participant) ||
+          participant.userId === activeSpeakerId ||
+          participant.userId === pinnedId
       ),
     [
       activeSpeakerId,
-      currentUserId,
-      participants,
+      allRemoteParticipants,
       pinnedId,
       viewSettings.hideTilesWithoutVideo,
     ]
@@ -1999,7 +2046,7 @@ function GridLayout({
         maxGridTiles,
       );
     }
-    const { maxCols, targetAspect } = getGridPackingParams(isMobile);
+    const { maxCols, targetAspect } = getGridPackingParams(isMobile, usableWidth);
     return computeGridLayout(totalParticipants, usableWidth, usableHeight, {
       gap: GRID_GAP,
       maxCols,
@@ -2551,11 +2598,14 @@ function GridLayout({
         className="pointer-events-none h-0 w-0 overflow-hidden"
         aria-hidden={true}
       >
-        {orderedRemoteParticipants.map((participant) => (
+        {allRemoteParticipants.map((participant) => (
           <ParticipantAudio
             key={`audio-${participant.userId}`}
             participant={participant}
             audioOutputDeviceId={audioOutputDeviceId}
+            onAudioAutoplayBlocked={onAudioAutoplayBlocked}
+            onAudioPlaybackStarted={onAudioPlaybackStarted}
+            audioPlaybackAttemptToken={audioPlaybackAttemptToken}
           />
         ))}
       </div>
@@ -3006,6 +3056,7 @@ function GridLayout({
             style={getTiledGridTileStyle("local")}
           >
             <div
+              ref={localGridTileRef}
               className={`acm-video-tile group h-full w-full ${localSpeakerHighlight} ${localHandRaisedHighlight}`}
             >
               <video
@@ -3034,12 +3085,22 @@ function GridLayout({
                   data-meet-local-camera-placeholder="true"
                   className="absolute inset-0 flex items-center justify-center bg-[#18181b]"
                 >
-                  <Avatar
-                    className="text-3xl"
-                    id={userEmail}
-                    name={localDisplayName || userEmail}
-                    size={80}
-                  />
+                  <div
+                    style={
+                      localTileChrome.avatarLift > 0
+                        ? {
+                            transform: `translateY(-${localTileChrome.avatarLift}px)`,
+                          }
+                        : undefined
+                    }
+                  >
+                    <Avatar
+                      className="text-3xl"
+                      id={userEmail}
+                      name={localDisplayName || userEmail}
+                      size={localTileChrome.avatarSize}
+                    />
+                  </div>
                 </div>
               )}
               <button
@@ -3048,7 +3109,11 @@ function GridLayout({
                   event.stopPropagation();
                   toggleLocalPin();
                 }}
-                className={`absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#fafafa]/10 bg-black/60 text-[#fafafa]/82 transition-[border-color,color,opacity] duration-[120ms] hover:border-[#F95F4A]/40 hover:text-[#fafafa] focus-visible:opacity-100 ${
+                className={`absolute inline-flex items-center justify-center rounded-full border border-[#fafafa]/10 bg-black/60 text-[#fafafa]/82 transition-[border-color,color,opacity] duration-[120ms] hover:border-[#F95F4A]/40 hover:text-[#fafafa] focus-visible:opacity-100 ${
+                  localTileChrome.dense
+                    ? "right-1.5 top-1.5 h-7 w-7"
+                    : "right-3 top-3 h-9 w-9"
+                } ${
                   isLocalPinned ? "opacity-100" : "opacity-0 group-hover:opacity-100"
                 }`}
                 title={isLocalPinned ? "Unpin" : "Pin to spotlight"}
@@ -3056,9 +3121,9 @@ function GridLayout({
                 aria-pressed={isLocalPinned}
               >
                 {isLocalPinned ? (
-                  <PinOff size={18} strokeWidth={1.75} />
+                  <PinOff size={localTileChrome.dense ? 14 : 18} strokeWidth={1.75} />
                 ) : (
-                  <Pin size={18} strokeWidth={1.75} />
+                  <Pin size={localTileChrome.dense ? 14 : 18} strokeWidth={1.75} />
                 )}
               </button>
               {usesAutoDynamicCrop && !isCameraOff && hasLiveVideo(localStream) ? (
@@ -3072,32 +3137,56 @@ function GridLayout({
                   data-meet-tile-crop-state={
                     isLocalFullVideoShown ? "full" : "cropped"
                   }
-                  className="absolute right-14 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#fafafa]/10 bg-black/60 text-[#fafafa]/82 opacity-0 transition-[border-color,color,opacity] duration-[120ms] hover:border-[#F95F4A]/40 hover:text-[#fafafa] group-hover:opacity-100 focus-visible:opacity-100"
+                  className={`absolute inline-flex items-center justify-center rounded-full border border-[#fafafa]/10 bg-black/60 text-[#fafafa]/82 opacity-0 transition-[border-color,color,opacity] duration-[120ms] hover:border-[#F95F4A]/40 hover:text-[#fafafa] group-hover:opacity-100 focus-visible:opacity-100 ${
+                    localTileChrome.dense
+                      ? "right-[2.5rem] top-1.5 h-7 w-7"
+                      : "right-14 top-3 h-9 w-9"
+                  }`}
                   title={localFullVideoToggleLabel}
                   aria-label={localFullVideoToggleLabel}
                   aria-pressed={isLocalFullVideoShown}
                 >
                   {isLocalFullVideoShown ? (
-                    <Crop size={18} strokeWidth={1.75} />
+                    <Crop size={localTileChrome.dense ? 14 : 18} strokeWidth={1.75} />
                   ) : (
-                    <Maximize2 size={18} strokeWidth={1.75} />
+                    <Maximize2 size={localTileChrome.dense ? 14 : 18} strokeWidth={1.75} />
                   )}
                 </button>
               ) : null}
               {isHandRaised && (
                 <div
-                  className="absolute left-3 top-3 flex h-8 w-8 items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-300"
+                  className={`absolute flex items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-300 ${
+                    localTileChrome.dense
+                      ? "left-1.5 top-1.5 h-6 w-6"
+                      : "left-3 top-3 h-8 w-8"
+                  }`}
                   title="Hand raised"
                   aria-label="Hand raised"
                 >
-                  <Hand size={18} strokeWidth={1.75} />
+                  <Hand size={localTileChrome.dense ? 14 : 18} strokeWidth={1.75} />
                 </div>
               )}
-              <div className="absolute bottom-3 left-3 flex max-w-[80%] items-center gap-1.5 rounded-full border border-[#fafafa]/10 bg-[#0a0a0b]/70 px-3 py-1.5">
-                <span className="truncate text-[13px] font-medium text-[#fafafa]">
+              <div
+                className={`absolute flex max-w-[80%] items-center rounded-full border border-[#fafafa]/10 bg-[#0a0a0b]/70 ${
+                  localTileChrome.dense
+                    ? "bottom-1.5 left-1.5 gap-1 px-2 py-0.5"
+                    : "bottom-3 left-3 gap-1.5 px-3 py-1.5"
+                }`}
+              >
+                <span
+                  className={`truncate font-medium text-[#fafafa] ${
+                    localTileChrome.dense ? "text-[10px]" : "text-[13px]"
+                  }`}
+                >
                   {localDisplayName}
                 </span>
-                <span className="text-[11px] font-medium text-[#F95F4A]">You</span>
+                <span
+                  className={`font-medium text-[#F95F4A] ${
+                    localTileChrome.dense ? "text-[9px]" : "text-[11px]"
+                  }`}
+                >
+                  You
+                </span>
                 {isLocalActiveSpeaker && !isMuted ? (
                   <span className="acm-voice-activity" aria-label="Speaking">
                     <span />
@@ -3106,7 +3195,11 @@ function GridLayout({
                   </span>
                 ) : null}
                 {isMuted && (
-                  <MicOff size={14} strokeWidth={1.75} className="shrink-0 text-[#F95F4A]" />
+                  <MicOff
+                    size={localTileChrome.dense ? 11 : 14}
+                    strokeWidth={1.75}
+                    className="shrink-0 text-[#F95F4A]"
+                  />
                 )}
               </div>
               {isSolo && (isMobile || !isCameraOff) ? (
@@ -3413,11 +3506,18 @@ const OverflowPreviewTile = memo(function OverflowPreviewTile({
   participant: Participant;
   displayName: string;
 }) {
+  const cellRef = useRef<HTMLDivElement>(null);
+  const cellSize = useElementSize(cellRef);
+  const { avatarSize } = computeTileChrome(cellSize, {
+    maxAvatar: 48,
+    hasLabel: false,
+  });
   return (
     <div
+      ref={cellRef}
       className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-lg border border-[#fafafa]/10 text-[13px] font-semibold text-white"
     >
-      <Avatar id={participant.userId} name={displayName} size={48} />
+      <Avatar id={participant.userId} name={displayName} size={avatarSize} />
     </div>
   );
 });
