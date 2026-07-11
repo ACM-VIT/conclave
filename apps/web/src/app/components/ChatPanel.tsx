@@ -230,12 +230,12 @@ const areChatPanelPropsEqual = (
   const previousAssistantApiKeyPrompt = previousProps.assistantApiKeyPrompt ?? {
     visible: false,
     error: null,
-    model: "gpt-5.4-mini" as ConclaveAssistantModel,
+    model: "gpt-5.6-terra" as ConclaveAssistantModel,
   };
   const nextAssistantApiKeyPrompt = nextProps.assistantApiKeyPrompt ?? {
     visible: false,
     error: null,
-    model: "gpt-5.4-mini" as ConclaveAssistantModel,
+    model: "gpt-5.6-terra" as ConclaveAssistantModel,
   };
 
   if (
@@ -293,7 +293,7 @@ function ChatPanel({
   assistantApiKeyPrompt = {
     visible: false,
     error: null,
-    model: "gpt-5.4-mini",
+    model: "gpt-5.6-terra",
   },
   onSubmitAssistantApiKey,
   onCancelAssistantApiKey,
