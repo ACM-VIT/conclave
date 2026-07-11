@@ -561,6 +561,8 @@ export default function MeetsClient({
     setIsTtsDisabled,
     isDmEnabled,
     setIsDmEnabled,
+    areImageAttachmentsEnabled,
+    setAreImageAttachmentsEnabled,
     isReactionsDisabled,
     setIsReactionsDisabled,
     isBrowserAudioMuted,
@@ -1067,6 +1069,7 @@ export default function MeetsClient({
     toggleChat,
     sendChat,
     sendChatGif,
+    sendChatImage,
     isChatOpenRef,
     replyTarget,
     startReply,
@@ -1088,6 +1091,7 @@ export default function MeetsClient({
     isChatLocked,
     isAdmin: isAdminFlag,
     isDmEnabled,
+    areImageAttachmentsEnabled,
     isMuted,
     isCameraOff,
     onToggleMute: handleToggleMuteCommand,
@@ -2247,6 +2251,7 @@ export default function MeetsClient({
     isTtsDisabled,
     setIsTtsDisabled,
     setIsDmEnabled,
+    setAreImageAttachmentsEnabled,
     setIsReactionsDisabled,
     setActiveScreenShareId,
     setActiveSpeakerId,
@@ -3174,6 +3179,7 @@ export default function MeetsClient({
         setChatInput={setChatInput}
         sendChat={sendChat}
         sendChatGif={sendChatGif}
+        sendChatImage={sendChatImage}
         chatOverlayMessages={chatOverlayMessages}
         setChatOverlayMessages={setChatOverlayMessages}
         replyTarget={replyTarget}
@@ -3199,6 +3205,7 @@ export default function MeetsClient({
         isRoomLocked={isRoomLocked}
         isTtsDisabled={isTtsDisabled}
         isDmEnabled={isDmEnabled}
+        areImageAttachmentsEnabled={areImageAttachmentsEnabled}
         isReactionsDisabled={isReactionsDisabled}
         onToggleLock={() => {
           if (canModerateMeeting) void socket.toggleRoomLock(!isRoomLocked);

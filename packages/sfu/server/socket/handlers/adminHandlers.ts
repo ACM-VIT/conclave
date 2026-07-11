@@ -1361,6 +1361,28 @@ export const registerAdminHandlers = (
     });
   });
 
+  socket.on(
+    "setImageAttachmentsEnabled",
+    ({ enabled }: { enabled: boolean }, cb) => {
+      const guard = ensureAdminRoom(context);
+      if ("error" in guard) {
+        respond(cb, guard);
+        return;
+      }
+      if (typeof enabled !== "boolean") {
+        respond(cb, { error: "Invalid image attachment state" });
+        return;
+      }
+      applyRoomPolicyUpdate(io, guard.room, {
+        imageAttachmentsEnabled: enabled,
+      });
+      respond(cb, {
+        success: true,
+        enabled: guard.room.areImageAttachmentsEnabled,
+      });
+    },
+  );
+
   socket.on("getDmEnabledStatus", (cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
@@ -1407,6 +1429,7 @@ export const registerAdminHandlers = (
         chatLocked?: boolean;
         ttsDisabled?: boolean;
         dmEnabled?: boolean;
+        imageAttachmentsEnabled?: boolean;
         reactionsDisabled?: boolean;
       },
       cb,
@@ -1428,6 +1451,10 @@ export const registerAdminHandlers = (
           typeof data?.ttsDisabled === "boolean" ? data.ttsDisabled : undefined,
         dmEnabled:
           typeof data?.dmEnabled === "boolean" ? data.dmEnabled : undefined,
+        imageAttachmentsEnabled:
+          typeof data?.imageAttachmentsEnabled === "boolean"
+            ? data.imageAttachmentsEnabled
+            : undefined,
         reactionsDisabled:
           typeof data?.reactionsDisabled === "boolean" ? data.reactionsDisabled : undefined,
       });
@@ -1441,6 +1468,7 @@ export const registerAdminHandlers = (
           chatLocked: guard.room.isChatLocked,
           ttsDisabled: guard.room.isTtsDisabled,
           dmEnabled: guard.room.isDmEnabled,
+          imageAttachmentsEnabled: guard.room.areImageAttachmentsEnabled,
           reactionsDisabled: guard.room.isReactionsDisabled,
         },
       });

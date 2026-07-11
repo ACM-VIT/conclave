@@ -6,6 +6,7 @@ import {
   ExternalLink,
   Image as ImageIcon,
   Lock,
+  Paperclip,
   Reply,
   Send,
   X,
@@ -15,6 +16,15 @@ import { Avatar } from "@conclave/ui-tokens/web";
 import type { ConclaveAssistantApiKeyPromptState } from "../hooks/useMeetChat";
 import type { ChatGifAttachment, ChatMessage, ChatReplyPreview } from "../lib/types";
 import { getActionText, getCommandSuggestions } from "../lib/chat-commands";
+import {
+  CHAT_IMAGE_ACCEPT,
+  CHAT_IMAGE_SIZE_MESSAGE,
+  CHAT_IMAGE_TYPE_MESSAGE,
+  MAX_CHAT_IMAGE_BYTES,
+  chatImageCaption,
+  formatChatImageSize,
+  isSupportedChatImageType,
+} from "../lib/chat-images";
 import {
   type AssistantChatMessage,
   type AssistantToolApprovalDecision,
@@ -32,6 +42,7 @@ import {
   ConversationScrollButton,
 } from "./ai-elements/conversation";
 import ChatGifAttachmentView from "./ChatGifAttachmentView";
+import ChatImageAttachmentView from "./ChatImageAttachmentView";
 import ConclaveMessage from "./ConclaveMessage";
 import GifPicker from "./GifPicker";
 
@@ -49,10 +60,16 @@ interface ChatPanelProps {
   onInputChange: (value: string) => void;
   onSend: (content: string) => void;
   onSendGif: (gif: ChatGifAttachment) => void;
+  onSendImage: (
+    file: File,
+    caption: string,
+    onProgress?: (progress: number) => void,
+  ) => Promise<boolean>;
   onClose: () => void;
   currentUserId: string;
   isChatLocked?: boolean;
   isDmEnabled?: boolean;
+  areImageAttachmentsEnabled?: boolean;
   isAdmin?: boolean;
   assistantEnabled?: boolean;
   assistantApiKeyPrompt?: ConclaveAssistantApiKeyPromptState;
@@ -84,10 +101,12 @@ function ChatPanel({
   onInputChange,
   onSend,
   onSendGif,
+  onSendImage,
   onClose,
   currentUserId,
   isChatLocked = false,
   isDmEnabled = true,
+  areImageAttachmentsEnabled = true,
   isAdmin = false,
   assistantEnabled = true,
   assistantApiKeyPrompt = {
@@ -104,6 +123,8 @@ function ChatPanel({
   onCancelReply,
 }: ChatPanelProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const pendingImageUrlRef = useRef<string | null>(null);
   const sendAnimationTimeoutRef = useRef<number | null>(null);
   const prevMessageIdsRef = useRef<Set<string>>(new Set());
   const hasInitializedRef = useRef(false);
@@ -112,6 +133,13 @@ function ChatPanel({
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [isSendAnimating, setIsSendAnimating] = useState(false);
+  const [pendingImage, setPendingImage] = useState<{
+    file: File;
+    previewUrl: string;
+  } | null>(null);
+  const [imageUploadProgress, setImageUploadProgress] = useState(0);
+  const [imageUploadError, setImageUploadError] = useState<string | null>(null);
+  const [isImageUploading, setIsImageUploading] = useState(false);
   const [assistantApiKeyInput, setAssistantApiKeyInput] = useState("");
   const [assistantModel, setAssistantModel] =
     useState<ConclaveAssistantModel>(assistantApiKeyPrompt.model);
@@ -122,6 +150,11 @@ function ChatPanel({
     string | null
   >(null);
   const isChatDisabled = isChatLocked && !isAdmin;
+  const isImagePickerDisabled =
+    isChatDisabled || !areImageAttachmentsEnabled || isImageUploading;
+  const imagePickerLabel = areImageAttachmentsEnabled
+    ? "Attach image"
+    : "Image attachments disabled by host";
   const selectedAssistantModel =
     CONCLAVE_ASSISTANT_BYOK_MODELS.find(
       (model) => model.id === assistantModel,
@@ -300,10 +333,65 @@ function ChatPanel({
     textarea.style.height = `${Math.min(textarea.scrollHeight, 112)}px`;
   }, [chatInput]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const clearPendingImage = useCallback(() => {
+    if (pendingImageUrlRef.current) {
+      URL.revokeObjectURL(pendingImageUrlRef.current);
+      pendingImageUrlRef.current = null;
+    }
+    setPendingImage(null);
+    setImageUploadProgress(0);
+    setImageUploadError(null);
+    if (imageInputRef.current) imageInputRef.current.value = "";
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (pendingImageUrlRef.current) {
+        URL.revokeObjectURL(pendingImageUrlRef.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!areImageAttachmentsEnabled && pendingImage && !isImageUploading) {
+      clearPendingImage();
+    }
+  }, [
+    areImageAttachmentsEnabled,
+    clearPendingImage,
+    isImageUploading,
+    pendingImage,
+  ]);
+
+  const handleImageSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImageUploadError(null);
+    if (!isSupportedChatImageType(file.type)) {
+      setImageUploadError(CHAT_IMAGE_TYPE_MESSAGE);
+      event.target.value = "";
+      return;
+    }
+    if (file.size > MAX_CHAT_IMAGE_BYTES) {
+      setImageUploadError(CHAT_IMAGE_SIZE_MESSAGE);
+      event.target.value = "";
+      return;
+    }
+    if (pendingImageUrlRef.current) {
+      URL.revokeObjectURL(pendingImageUrlRef.current);
+    }
+    const previewUrl = URL.createObjectURL(file);
+    pendingImageUrlRef.current = previewUrl;
+    setPendingImage({ file, previewUrl });
+    setImageUploadProgress(0);
+    textareaRef.current?.focus();
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isChatDisabled) return;
-    if (chatInput.trim()) {
+    if (isChatDisabled || isImageUploading) return;
+    if (chatInput.trim() || pendingImage) {
       setIsSendAnimating(true);
       if (sendAnimationTimeoutRef.current !== null) {
         window.clearTimeout(sendAnimationTimeoutRef.current);
@@ -311,6 +399,24 @@ function ChatPanel({
       sendAnimationTimeoutRef.current = window.setTimeout(() => {
         setIsSendAnimating(false);
       }, 240);
+      if (pendingImage) {
+        setIsImageUploading(true);
+        setImageUploadProgress(1);
+        setImageUploadError(null);
+        const sent = await onSendImage(
+          pendingImage.file,
+          chatInput.trim(),
+          setImageUploadProgress,
+        );
+        setIsImageUploading(false);
+        if (sent) {
+          clearPendingImage();
+          onInputChange("");
+        } else {
+          setImageUploadError("Couldn’t send this image. Try again.");
+        }
+        return;
+      }
       onSend(chatInput);
       onInputChange("");
     }
@@ -403,7 +509,7 @@ function ChatPanel({
 
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSubmit(e);
+      void handleSubmit(e);
     }
   };
 
@@ -569,10 +675,13 @@ function ChatPanel({
                 );
               }
 
-              const actionText = getActionText(msg.content);
+              const actionText =
+                msg.gif || msg.image ? null : getActionText(msg.content);
               const previousMessage = index > 0 ? messages[index - 1] : null;
               const previousActionText = previousMessage
-                ? getActionText(previousMessage.content)
+                ? previousMessage.gif || previousMessage.image
+                  ? null
+                  : getActionText(previousMessage.content)
                 : null;
               const groupedWithPrevious = Boolean(
                 previousMessage &&
@@ -643,7 +752,7 @@ function ChatPanel({
                         isOwn ? "text-white/75" : "text-[#fafafa]/70"
                       }`}
                     >
-                      {msg.replyTo.hasGif ? (
+                      {msg.replyTo.hasGif || msg.replyTo.hasImage ? (
                         <ImageIcon
                           size={11}
                           strokeWidth={1.75}
@@ -651,7 +760,11 @@ function ChatPanel({
                         />
                       ) : null}
                       <span className="min-w-0 flex-1 truncate">
-                        {msg.replyTo.hasGif ? "GIF" : msg.replyTo.content}
+                        {msg.replyTo.hasGif
+                          ? "GIF"
+                          : msg.replyTo.hasImage
+                            ? "Image"
+                            : msg.replyTo.content}
                       </span>
                     </span>
                   </span>
@@ -734,7 +847,7 @@ function ChatPanel({
                     >
                       <div
                         className={`inline-block min-w-0 max-w-full overflow-hidden rounded-[18px] ${
-                          msg.gif
+                          msg.gif || msg.image
                             ? "text-white"
                             : isOwn
                               ? "bg-[#F95F4A] text-white"
@@ -746,7 +859,7 @@ function ChatPanel({
                         } ${
                           msg.isDirect ? "ring-1 ring-amber-300/30" : ""
                         } ${
-                          msg.gif && !isOwn && !msg.isDirect
+                          (msg.gif || msg.image) && !isOwn && !msg.isDirect
                             ? "ring-1 ring-white/10"
                             : ""
                         }`}
@@ -754,6 +867,11 @@ function ChatPanel({
                         {nestedReplyQuote}
                         {msg.gif ? (
                           <ChatGifAttachmentView gif={msg.gif} />
+                        ) : msg.image ? (
+                          <ChatImageAttachmentView
+                            image={msg.image}
+                            caption={chatImageCaption(msg.content, msg.image)}
+                          />
                         ) : (
                           <div
                             className={`px-3.5 py-2 text-[13.5px] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap ${
@@ -778,7 +896,7 @@ function ChatPanel({
       )}
 
       <form
-        onSubmit={handleSubmit}
+        onSubmit={(e) => void handleSubmit(e)}
         className="shrink-0 border-t border-white/10 px-3 py-3"
       >
         <div className="relative">
@@ -1019,11 +1137,15 @@ function ChatPanel({
                   </span>
                 </p>
                 <p className="flex min-w-0 items-center gap-1 truncate text-[12.5px] text-[#fafafa]/70">
-                  {replyTarget.hasGif ? (
+                  {replyTarget.hasGif || replyTarget.hasImage ? (
                     <ImageIcon size={12} strokeWidth={1.75} className="shrink-0" />
                   ) : null}
                   <span className="min-w-0 flex-1 truncate">
-                    {replyTarget.hasGif ? "GIF" : replyTarget.content}
+                    {replyTarget.hasGif
+                      ? "GIF"
+                      : replyTarget.hasImage
+                        ? "Image"
+                        : replyTarget.content}
                   </span>
                 </p>
               </div>
@@ -1038,7 +1160,69 @@ function ChatPanel({
               </button>
             </div>
           )}
+          {pendingImage && !isChatDisabled ? (
+            <div className="mb-2 overflow-hidden rounded-xl border border-white/10 bg-white/[0.04]">
+              <div className="flex items-center gap-3 p-2">
+                <img
+                  src={pendingImage.previewUrl}
+                  alt="Selected attachment preview"
+                  className="h-14 w-14 shrink-0 rounded-lg bg-black/30 object-cover"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[12.5px] font-medium text-[#fafafa]">
+                    {pendingImage.file.name}
+                  </p>
+                  <p role="status" className="mt-0.5 text-[11px] text-[#a1a1aa]">
+                    {formatChatImageSize(pendingImage.file.size)}
+                    {isImageUploading
+                      ? ` · Uploading ${imageUploadProgress}%`
+                      : " · Ready to send"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={clearPendingImage}
+                  disabled={isImageUploading}
+                  aria-label="Remove selected image"
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[#a1a1aa] transition-colors hover:bg-white/[0.08] hover:text-white disabled:opacity-40"
+                >
+                  <X size={15} strokeWidth={1.9} />
+                </button>
+              </div>
+              {isImageUploading ? (
+                <div className="h-0.5 bg-white/[0.06]">
+                  <div
+                    className="h-full bg-[#F95F4A] transition-[width] duration-150"
+                    style={{ width: `${Math.max(2, imageUploadProgress)}%` }}
+                  />
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {imageUploadError ? (
+            <p role="alert" className="mb-2 px-1 text-[11.5px] text-red-300">
+              {imageUploadError}
+            </p>
+          ) : null}
           <div className="flex items-end gap-2 rounded-2xl border border-white/10 bg-white/[0.04] py-2 pl-3 pr-2 transition-colors focus-within:border-white/20 focus-within:bg-white/[0.055]">
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept={CHAT_IMAGE_ACCEPT}
+              onChange={handleImageSelected}
+              className="sr-only"
+              tabIndex={-1}
+            />
+            <button
+              type="button"
+              onClick={() => imageInputRef.current?.click()}
+              disabled={isImagePickerDisabled}
+              aria-label={imagePickerLabel}
+              title={imagePickerLabel}
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa] disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              <Paperclip size={17} strokeWidth={1.8} />
+            </button>
             <GifPicker disabled={isChatDisabled} onSelect={handleSendGif} />
             <textarea
               ref={textareaRef}
@@ -1057,7 +1241,11 @@ function ChatPanel({
             />
             <button
               type="submit"
-              disabled={isChatDisabled || !chatInput.trim()}
+              disabled={
+                isChatDisabled ||
+                isImageUploading ||
+                (!chatInput.trim() && !pendingImage)
+              }
               aria-label="Send message"
               title="Send message"
               className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#F95F4A] text-white transition-[background-color,filter,opacity] hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:bg-white/[0.06] disabled:text-[#a1a1aa] disabled:brightness-100 ${
@@ -1067,6 +1255,11 @@ function ChatPanel({
               <Send size={18} strokeWidth={1.75} />
             </button>
           </div>
+          {!areImageAttachmentsEnabled && !isChatDisabled ? (
+            <p className="mt-1.5 px-1 text-[11px] text-[#a1a1aa]">
+              Image attachments are disabled by the host.
+            </p>
+          ) : null}
         </div>
       </form>
     </div>

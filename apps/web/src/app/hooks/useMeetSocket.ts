@@ -733,6 +733,7 @@ interface UseMeetSocketOptions {
   isTtsDisabled: boolean;
   setIsTtsDisabled: (value: boolean) => void;
   setIsDmEnabled: (value: boolean) => void;
+  setAreImageAttachmentsEnabled: (value: boolean) => void;
   setIsReactionsDisabled: (value: boolean) => void;
   setActiveScreenShareId: (value: string | null) => void;
   setActiveSpeakerId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -834,6 +835,7 @@ export function useMeetSocket({
   isTtsDisabled,
   setIsTtsDisabled,
   setIsDmEnabled,
+  setAreImageAttachmentsEnabled,
   setIsReactionsDisabled,
   setActiveScreenShareId,
   setActiveSpeakerId,
@@ -1606,6 +1608,7 @@ export function useMeetSocket({
         setIsHandRaised(false);
         setIsTtsDisabled(false);
         setIsDmEnabled(true);
+        setAreImageAttachmentsEnabled(true);
         setMeetingRequiresInviteCode(false);
         setWebinarConfig(null);
       }
@@ -1645,6 +1648,7 @@ export function useMeetSocket({
       setWebinarSpeakerUserId,
       setIsTtsDisabled,
       setIsDmEnabled,
+      setAreImageAttachmentsEnabled,
       setMeetingRequiresInviteCode,
       setServerActiveSpeakerAvailable,
       setWebinarConfig,
@@ -4607,6 +4611,9 @@ export function useMeetSocket({
               setIsTtsDisabled(response.isTtsDisabled ?? false);
               setIsChatLocked(response.isChatLocked ?? false);
               setIsDmEnabled(response.isDmEnabled ?? true);
+              setAreImageAttachmentsEnabled(
+                response.areImageAttachmentsEnabled ?? true,
+              );
               setIsReactionsDisabled(response.isReactionsDisabled ?? false);
               resolve("waiting");
               return;
@@ -4627,6 +4634,9 @@ export function useMeetSocket({
               setIsTtsDisabled(response.isTtsDisabled ?? false);
               setIsChatLocked(response.isChatLocked ?? false);
               setIsDmEnabled(response.isDmEnabled ?? true);
+              setAreImageAttachmentsEnabled(
+                response.areImageAttachmentsEnabled ?? true,
+              );
               setIsReactionsDisabled(response.isReactionsDisabled ?? false);
               if (
                 Object.prototype.hasOwnProperty.call(response, "activeSpeakerId")
@@ -6124,6 +6134,20 @@ export function useMeetSocket({
                 if (!isRoomEvent(eventRoomId)) return;
                 console.info("[Meets] Room DM state changed:", enabled);
                 setIsDmEnabled(enabled);
+              },
+            );
+
+            socket.on(
+              "imageAttachmentsStateChanged",
+              ({
+                enabled,
+                roomId: eventRoomId,
+              }: {
+                enabled: boolean;
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                setAreImageAttachmentsEnabled(enabled);
               },
             );
 

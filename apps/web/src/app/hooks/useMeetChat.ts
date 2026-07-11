@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
-import type { ChatGifAttachment, ChatMessage, ChatReplyPreview } from "../lib/types";
+import type {
+  ChatGifAttachment,
+  ChatImageAttachment,
+  ChatMessage,
+  ChatReplyPreview,
+} from "../lib/types";
 import {
   createLocalChatMessage,
   formatActionContent,
@@ -10,6 +15,12 @@ import {
   normalizeChatMessage,
   parseChatCommand,
 } from "../lib/chat-commands";
+import {
+  CHAT_IMAGE_SIZE_MESSAGE,
+  CHAT_IMAGE_TYPE_MESSAGE,
+  MAX_CHAT_IMAGE_BYTES,
+  isSupportedChatImageType,
+} from "../lib/chat-images";
 import {
   ConclaveAssistantApiKeyRequiredError,
   type AssistantChatMessage,
@@ -41,6 +52,8 @@ export interface ConclaveAssistantApiKeyPromptState {
 const DIRECT_MESSAGE_INTENT_PATTERN =
   /^(?:@\S+\s+[\s\S]+|\/dm\s+\S+\s+[\s\S]+)$/i;
 const CONCLAVE_AUTHORIZATION_TIMEOUT_MS = 8000;
+const CHAT_IMAGE_AUTHORIZATION_TIMEOUT_MS = 8000;
+const CHAT_IMAGE_UPLOAD_TIMEOUT_MS = 30_000;
 
 type LocalRenderChatMessage = ChatMessage & {
   clientRenderKey?: string;
@@ -62,6 +75,7 @@ interface UseMeetChatOptions {
   isChatLocked?: boolean;
   isAdmin?: boolean;
   isDmEnabled?: boolean;
+  areImageAttachmentsEnabled?: boolean;
   isMuted?: boolean;
   isCameraOff?: boolean;
   onToggleMute?: () => void;
@@ -88,6 +102,7 @@ export function useMeetChat({
   isChatLocked = false,
   isAdmin = false,
   isDmEnabled = true,
+  areImageAttachmentsEnabled = true,
   isMuted,
   isCameraOff,
   onToggleMute,
@@ -409,7 +424,10 @@ export function useMeetChat({
         "Introduce yourself and briefly tell me what you can help with in this meeting.";
 
       const history: ConclaveAssistantHistoryItem[] = chatMessagesRef.current
-        .filter((message) => message.userId !== "system" && !message.gif)
+        .filter(
+          (message) =>
+            message.userId !== "system" && !message.gif && !message.image,
+        )
         .map((message) => ({
           name: message.displayName,
           isAssistant:
@@ -494,6 +512,7 @@ export function useMeetChat({
       content: string,
       gif?: ChatGifAttachment,
       replyTo?: ChatReplyPreview,
+      image?: ChatImageAttachment,
     ): ChatMessage =>
       normalizeChatMessage({
         id: `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -502,6 +521,7 @@ export function useMeetChat({
         content,
         timestamp: Date.now(),
         ...(gif ? { gif } : {}),
+        ...(image ? { image } : {}),
         ...(replyTo ? { replyTo } : {}),
       }).message,
     [currentUserDisplayName, currentUserId],
@@ -512,8 +532,13 @@ export function useMeetChat({
       id: message.id,
       userId: message.userId,
       displayName: message.displayName,
-      content: message.gif ? message.gif.title || "GIF" : message.content,
+      content: message.gif
+        ? message.gif.title || "GIF"
+        : message.image
+          ? message.image.fileName || "Image"
+          : message.content,
       hasGif: Boolean(message.gif),
+      hasImage: Boolean(message.image),
       isDirect: message.isDirect,
       dmTargetUserId: message.dmTargetUserId,
     });
@@ -535,19 +560,22 @@ export function useMeetChat({
       content: string,
       gif?: ChatGifAttachment,
       replyTo?: ChatReplyPreview,
+      image?: ChatImageAttachment,
     ): Promise<ChatMessage | null> => {
       const socket = socketRef.current;
       const trimmedContent = content.trim();
-      if (!socket || (!trimmedContent && !gif)) {
+      if (!socket || (!trimmedContent && !gif && !image)) {
         return Promise.resolve(null);
       }
 
-      const messageContent = trimmedContent || gif?.title || "GIF";
+      const messageContent =
+        trimmedContent || gif?.title || image?.fileName || "Image";
       const isTtsMessage = /^\/tts(?:\s|$)/i.test(messageContent);
       const optimisticMessage = buildOptimisticMessage(
         messageContent,
         gif,
         replyTo,
+        image,
       );
       setChatMessages((prev) => [...prev, optimisticMessage]);
 
@@ -557,6 +585,7 @@ export function useMeetChat({
           {
             content: messageContent,
             ...(gif ? { gif } : {}),
+            ...(image ? { image: { id: image.id } } : {}),
             ...(replyTo ? { replyTo } : {}),
             ...(isTtsMessage && outgoingTtsVoiceToken
               ? { ttsVoiceToken: outgoingTtsVoiceToken }
@@ -789,6 +818,133 @@ export function useMeetChat({
     ],
   );
 
+  const sendChatImage = useCallback(
+    async (
+      file: File,
+      caption: string,
+      onProgress?: (progress: number) => void,
+    ): Promise<boolean> => {
+      if (isObserverMode) return false;
+      if (isChatLocked && !isAdmin) {
+        appendLocalMessage("Chat is locked by the host.");
+        return false;
+      }
+      if (!areImageAttachmentsEnabled) {
+        appendLocalMessage("Image attachments are disabled by the host.");
+        return false;
+      }
+      if (!isSupportedChatImageType(file.type)) {
+        appendLocalMessage(CHAT_IMAGE_TYPE_MESSAGE);
+        return false;
+      }
+      if (file.size <= 0 || file.size > MAX_CHAT_IMAGE_BYTES) {
+        appendLocalMessage(CHAT_IMAGE_SIZE_MESSAGE);
+        return false;
+      }
+
+      const socket = socketRef.current;
+      if (!socket) {
+        appendLocalMessage("Image upload is unavailable while disconnected.");
+        return false;
+      }
+
+      try {
+        const authorization = await new Promise<{
+          token: string;
+          uploadUrl: string;
+          maxBytes: number;
+        }>((resolve, reject) => {
+          const timeoutId = window.setTimeout(() => {
+            reject(new Error("Image upload authorization timed out."));
+          }, CHAT_IMAGE_AUTHORIZATION_TIMEOUT_MS);
+          socket.emit(
+            "chat:imageUploadAuthorize",
+            {},
+            (
+              response:
+                | { token: string; uploadUrl: string; maxBytes: number }
+                | { error: string },
+            ) => {
+              window.clearTimeout(timeoutId);
+              if (!response || "error" in response) {
+                reject(new Error(response?.error || "Image upload unavailable."));
+                return;
+              }
+              resolve(response);
+            },
+          );
+        });
+
+        if (file.size > authorization.maxBytes) {
+          throw new Error(CHAT_IMAGE_SIZE_MESSAGE);
+        }
+        const uploadUrl = new URL(authorization.uploadUrl);
+        uploadUrl.searchParams.set("name", file.name);
+        const image = await new Promise<ChatImageAttachment>((resolve, reject) => {
+          const request = new XMLHttpRequest();
+          request.open("POST", uploadUrl.toString());
+          request.responseType = "json";
+          // Bound the upload so a stalled connection can't leave the composer
+          // stuck in its uploading state (which blocks sending and removal).
+          request.timeout = CHAT_IMAGE_UPLOAD_TIMEOUT_MS;
+          request.setRequestHeader(
+            "Authorization",
+            `Bearer ${authorization.token}`,
+          );
+          request.setRequestHeader("Content-Type", file.type);
+          request.upload.addEventListener("progress", (event) => {
+            if (event.lengthComputable) {
+              onProgress?.(Math.round((event.loaded / event.total) * 100));
+            }
+          });
+          request.addEventListener("load", () => {
+            const response = request.response as
+              | { image?: ChatImageAttachment; error?: string }
+              | null;
+            if (request.status >= 200 && request.status < 300 && response?.image) {
+              onProgress?.(100);
+              resolve(response.image);
+              return;
+            }
+            reject(new Error(response?.error || "Image upload failed."));
+          });
+          request.addEventListener("error", () => {
+            reject(new Error("Image upload failed. Check your connection."));
+          });
+          request.addEventListener("timeout", () => {
+            reject(new Error("Image upload timed out. Try again."));
+          });
+          request.send(file);
+        });
+
+        const activeReply = replyTarget ?? undefined;
+        const message = await sendChatInternal(
+          caption,
+          undefined,
+          activeReply,
+          image,
+        );
+        if (message && activeReply) setReplyTarget(null);
+        return Boolean(message);
+      } catch (error) {
+        appendLocalMessage(
+          error instanceof Error ? error.message : "Image upload failed.",
+        );
+        return false;
+      }
+    },
+    [
+      appendLocalMessage,
+      areImageAttachmentsEnabled,
+      isAdmin,
+      isChatLocked,
+      isObserverMode,
+      replyTarget,
+      sendChatInternal,
+      socketRef,
+    ],
+  );
+
   return {
     chatMessages,
     setChatMessages,
@@ -802,6 +958,7 @@ export function useMeetChat({
     toggleChat,
     sendChat,
     sendChatGif,
+    sendChatImage,
     isChatOpenRef,
     replyTarget,
     startReply,

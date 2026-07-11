@@ -115,6 +115,8 @@ export function WheelWebApp() {
 
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const failoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const canEditRef = useRef(canEdit);
+  canEditRef.current = canEdit;
 
   const soundsRef = useRef<WheelSounds | null>(null);
   if (soundsRef.current === null && typeof window !== "undefined") {
@@ -184,8 +186,10 @@ export function WheelWebApp() {
 
       // The spinner writes the outcome so the result lands exactly once and
       // never before wheels stop elsewhere. If the spinner vanished mid-spin
-      // (closed tab, dropped connection), any remaining client records it
-      // after a grace window; recordResult dedupes by spinId either way.
+      // (closed tab, dropped connection), any remaining client that is still
+      // allowed to write records it after a grace window; recordResult dedupes
+      // by spinId either way. Locked viewers and observers must never mutate a
+      // local document with updates the SFU will reject.
       const isSpinner = Boolean(user?.id) && user?.id === settled.spunById;
       const finalizeResult = () => {
         recordResult(doc, {
@@ -198,14 +202,14 @@ export function WheelWebApp() {
           removeEntryById(doc, winner.id);
         }
       };
-      if (!isSpinner) {
+      if (!isSpinner && canEditRef.current) {
         const jitteredDelay = RESULT_FAILOVER_MS + Math.random() * 900;
         failoverTimerRef.current = setTimeout(() => {
           failoverTimerRef.current = null;
           const recorded = getHistory(doc).some(
             (result) => result.spinId === settled.spinId
           );
-          if (!recorded) finalizeResult();
+          if (!recorded && canEditRef.current) finalizeResult();
         }, jitteredDelay);
       }
 
@@ -226,7 +230,7 @@ export function WheelWebApp() {
         // Recording (and auto-remove) happens after the flash so the slice
         // is visible while it celebrates; both are idempotent if a failover
         // client got there first.
-        if (isSpinner) finalizeResult();
+        if (isSpinner && canEditRef.current) finalizeResult();
       }, flashable ? REVEAL_DELAY_MS : 120);
     },
     [doc, user]

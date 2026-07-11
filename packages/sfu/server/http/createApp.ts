@@ -1,10 +1,14 @@
 import type { MediaKind } from "mediasoup/types";
+import { randomBytes } from "node:crypto";
 import cors from "cors";
 import express from "express";
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../../config/classes/Admin.js";
-import type { Room } from "../../config/classes/Room.js";
+import {
+  MAX_CHAT_IMAGE_BYTES,
+  type Room,
+} from "../../config/classes/Room.js";
 import type { ProducerType } from "../../config/classes/Client.js";
 import { config as defaultConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
@@ -34,11 +38,27 @@ import { registerSchedulingRoutes } from "./schedulingRoutes.js";
 import type { SfuState } from "../state.js";
 import { resolveWebinarLinkTarget } from "../webinar.js";
 import { canonicalizeClientId } from "../clientIds.js";
+import {
+  consumeChatImageUploadToken,
+  createChatImageReadSignature,
+  detectChatImageType,
+  sanitizeChatImageFileName,
+  SUPPORTED_CHAT_IMAGE_TYPES,
+  verifyChatImageReadSignature,
+  verifyChatImageUploadToken,
+} from "../chatImages.js";
 
 export type CreateSfuAppOptions = {
   state: SfuState;
   config?: typeof defaultConfig;
   getIo?: () => SocketIOServer | null;
+};
+
+type ChatImageUploadLocals = {
+  chatImageUpload: {
+    room: Room;
+    clientId: string;
+  };
 };
 
 const hasValidSecret = (req: Request, secret: string): boolean => {
@@ -137,6 +157,26 @@ const parseEndRoomMessage = (value: unknown): string => {
   });
 };
 
+const getBearerToken = (req: Request): string => {
+  const authorization = req.header("authorization") || "";
+  return authorization.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length).trim()
+    : "";
+};
+
+const getRequestOrigin = (
+  req: Request,
+  configuredOrigin: string,
+): string => {
+  if (configuredOrigin) return configuredOrigin.replace(/\/$/, "");
+  const forwardedProtocol = req
+    .header("x-forwarded-proto")
+    ?.split(",")[0]
+    ?.trim();
+  const forwardedHost = req.header("x-forwarded-host")?.split(",")[0]?.trim();
+  return `${forwardedProtocol || req.protocol}://${forwardedHost || req.get("host")}`;
+};
+
 const resolveClientId = (req: Request): string | undefined => {
   const headerValue = normalizeIdentifier(req.header("x-sfu-client")) ?? "";
   const queryValue = normalizeIdentifier(req.query.clientId) ?? "";
@@ -225,7 +265,7 @@ export const createSfuApp = ({
   // SFU_CORS_ORIGINS to a comma-separated list to lock origins down in prod.
   const corsOrigins = resolveCorsOrigins();
   app.use(cors({ origin: corsOrigins }));
-  app.use(express.json());
+  const consumedChatImageUploadTokens = new Map<string, number>();
 
   const requireSecret = (req: Request, res: Response): boolean => {
     if (hasValidSecret(req, config.sfuSecret)) {
@@ -463,6 +503,158 @@ export const createSfuApp = ({
     res.json(healthData);
   });
 
+  const authorizeChatImageUpload = (
+    req: Request,
+    res: Response<unknown, ChatImageUploadLocals>,
+    next: NextFunction,
+  ): void => {
+    const claims = verifyChatImageUploadToken(
+      config.sfuSecret,
+      getBearerToken(req),
+    );
+    if (!claims) {
+      res.status(401).json({ error: "Image upload authorization expired." });
+      return;
+    }
+
+    const room = state.rooms.get(claims.roomChannelId);
+    const client = room?.getClient(claims.userId);
+    if (!room || !client) {
+      res.status(410).json({ error: "This room is no longer active." });
+      return;
+    }
+    if (client.isObserver) {
+      res
+        .status(403)
+        .json({ error: "Watch-only attendees cannot upload images." });
+      return;
+    }
+    if (!room.areImageAttachmentsEnabled) {
+      res
+        .status(403)
+        .json({ error: "Image attachments were disabled by the host." });
+      return;
+    }
+    if (room.isChatLocked && !(client instanceof Admin)) {
+      res.status(403).json({ error: "Chat is locked by the host." });
+      return;
+    }
+
+    // Consume the capability before reading the request body. Replays are
+    // rejected by this middleware without buffering another multi-megabyte
+    // payload in express.raw.
+    if (!consumeChatImageUploadToken(claims, consumedChatImageUploadTokens)) {
+      res
+        .status(401)
+        .json({ error: "Image upload authorization was already used." });
+      return;
+    }
+    res.locals.chatImageUpload = { room, clientId: client.id };
+    next();
+  };
+
+  app.post(
+    "/chat-images",
+    authorizeChatImageUpload,
+    express.raw({
+      type: [...SUPPORTED_CHAT_IMAGE_TYPES],
+      limit: MAX_CHAT_IMAGE_BYTES,
+    }),
+    (
+      req: Request,
+      res: Response<unknown, ChatImageUploadLocals>,
+    ) => {
+      const { room, clientId } = res.locals.chatImageUpload;
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        res.status(415).json({
+          error: "Choose a JPEG, PNG, GIF, WebP, or AVIF image.",
+        });
+        return;
+      }
+
+      const mimeType = detectChatImageType(req.body);
+      if (!mimeType) {
+        res.status(415).json({
+          error: "Choose a JPEG, PNG, GIF, WebP, or AVIF image.",
+        });
+        return;
+      }
+
+      const id = randomBytes(24).toString("base64url");
+      const signature = createChatImageReadSignature(
+        config.sfuSecret,
+        room.channelId,
+        id,
+      );
+      const assetPath = `/chat-images/${id}?room=${encodeURIComponent(
+        room.channelId,
+      )}&signature=${encodeURIComponent(signature)}`;
+      const url = new URL(
+        assetPath,
+        `${getRequestOrigin(req, config.instancePublicUrl)}/`,
+      ).toString();
+      const fileName = sanitizeChatImageFileName(req.query.name);
+      const result = room.addChatImageAsset({
+        id,
+        url,
+        fileName,
+        mimeType,
+        size: req.body.length,
+        data: req.body,
+        uploadedBy: clientId,
+        createdAt: Date.now(),
+        attached: false,
+      });
+      if (!result.ok) {
+        res.status(413).json({ error: result.error });
+        return;
+      }
+
+      res.status(201).json({
+        image: { id, url, fileName, mimeType, size: req.body.length },
+      });
+    },
+  );
+
+  app.get("/chat-images/:assetId", (req, res) => {
+    const assetId = normalizeIdentifier(req.params.assetId, 128);
+    const roomChannelId = normalizeIdentifier(req.query.room, 512);
+    const signature = normalizeIdentifier(req.query.signature, 256);
+    if (
+      !assetId ||
+      !roomChannelId ||
+      !signature ||
+      !verifyChatImageReadSignature(
+        config.sfuSecret,
+        roomChannelId,
+        assetId,
+        signature,
+      )
+    ) {
+      res.status(404).end();
+      return;
+    }
+
+    const asset = state.rooms.get(roomChannelId)?.getChatImageAsset(assetId);
+    if (!asset) {
+      res.status(404).end();
+      return;
+    }
+
+    res.set({
+      "Cache-Control": "no-store",
+      "Content-Type": asset.mimeType,
+      "Content-Length": String(asset.size),
+      "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(asset.fileName)}`,
+      "X-Content-Type-Options": "nosniff",
+    });
+    res.send(asset.data);
+  });
+
+  // Keep the chat-image authorization middleware ahead of any body parser so
+  // replayed capabilities are rejected before request bytes are buffered.
+  app.use(express.json());
+
   app.get("/rooms", (req, res) => {
     if (!hasValidSecret(req, config.sfuSecret)) {
       return res.status(401).json({ error: "Unauthorized" });
@@ -667,6 +859,7 @@ export const createSfuApp = ({
       noGuests: readBoolean(body, "noGuests"),
       ttsDisabled: readBoolean(body, "ttsDisabled"),
       dmEnabled: readBoolean(body, "dmEnabled"),
+      imageAttachmentsEnabled: readBoolean(body, "imageAttachmentsEnabled"),
       reactionsDisabled: readBoolean(body, "reactionsDisabled"),
     };
 

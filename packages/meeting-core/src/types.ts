@@ -45,6 +45,7 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   gif?: ChatGifAttachment;
+  image?: ChatImageAttachment;
   isDirect?: boolean;
   dmTargetUserId?: string;
   dmTargetDisplayName?: string;
@@ -59,8 +60,22 @@ export interface ChatReplyPreview {
   displayName: string;
   content: string;
   hasGif?: boolean;
+  hasImage?: boolean;
   isDirect?: boolean;
   dmTargetUserId?: string;
+}
+
+export interface ChatImageAttachment {
+  id: string;
+  url: string;
+  fileName: string;
+  mimeType:
+    | "image/jpeg"
+    | "image/png"
+    | "image/gif"
+    | "image/webp"
+    | "image/avif";
+  size: number;
 }
 
 export type ChatGifAttachmentKind = "gif" | "sticker" | "clip";
@@ -235,6 +250,7 @@ export interface JoinRoomResponse {
   isTtsDisabled?: boolean;
   isChatLocked?: boolean;
   isDmEnabled?: boolean;
+  areImageAttachmentsEnabled?: boolean;
   isReactionsDisabled?: boolean;
   meetingRequiresInviteCode?: boolean;
   webinarRole?: "attendee" | "participant" | "host";

@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type {
   ChatGifAttachment,
+  ChatImageAttachment,
   ChatMessage,
   ChatReplyPreview,
   SendChatData,
@@ -9,11 +10,15 @@ import type {
 import { Admin } from "../../../config/classes/Admin.js";
 import { config } from "../../../config/config.js";
 import { Logger } from "../../../utilities/loggers.js";
-import type { Room } from "../../../config/classes/Room.js";
+import {
+  MAX_CHAT_IMAGE_BYTES,
+  type Room,
+} from "../../../config/classes/Room.js";
 import type { ConnectionContext } from "../context.js";
 import { trackConclaveAnswerPacket } from "../conclaveRelayLifecycle.js";
 import { respond } from "./ack.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
+import { createChatImageUploadToken } from "../../chatImages.js";
 
 const AT_DIRECT_MESSAGE_PATTERN = /^@(\S+)\s+([\s\S]+)$/;
 const DM_COMMAND_PATTERN = /^\/dm\s+(\S+)\s+([\s\S]+)$/i;
@@ -155,6 +160,40 @@ const normalizeChatGifAttachment = (
   };
 };
 
+const getChatImageAttachmentId = (value: unknown): string => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const id = (value as Record<string, unknown>).id;
+  return typeof id === "string" ? id.trim() : "";
+};
+
+const normalizeChatImageAttachment = (
+  value: unknown,
+  room: Room,
+  senderUserId: string,
+): ChatImageAttachment | { error: string } | null => {
+  if (!value) return null;
+  if (typeof value !== "object") {
+    return { error: "Invalid image attachment." };
+  }
+  if (!room.areImageAttachmentsEnabled) {
+    return { error: "Image attachments are disabled by the host." };
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const id = getChatImageAttachmentId(candidate);
+  const asset = id ? room.getChatImageAsset(id) : undefined;
+  if (!asset || asset.uploadedBy !== senderUserId) {
+    return { error: "Image attachment is no longer available." };
+  }
+  return {
+    id: asset.id,
+    url: asset.url,
+    fileName: asset.fileName,
+    mimeType: asset.mimeType,
+    size: asset.size,
+  };
+};
+
 type ReplyNormalizeResult =
   | { replyTo?: ChatReplyPreview }
   | { error: string };
@@ -201,8 +240,11 @@ const normalizeReplyTo = (
         displayName: original.displayName,
         content: original.gif
           ? original.gif.title || "GIF"
-          : original.content.slice(0, MAX_REPLY_CONTENT_LENGTH),
+          : original.image
+            ? original.image.fileName || "Image"
+            : original.content.slice(0, MAX_REPLY_CONTENT_LENGTH),
         hasGif: Boolean(original.gif),
+        hasImage: Boolean(original.image),
         isDirect: original.isDirect,
         dmTargetUserId: original.dmTargetUserId,
       },
@@ -249,6 +291,7 @@ const normalizeReplyTo = (
       displayName: displayName.slice(0, MAX_REPLY_NAME_LENGTH),
       content: content.slice(0, MAX_REPLY_CONTENT_LENGTH),
       hasGif: Boolean(candidate.hasGif),
+      hasImage: Boolean(candidate.hasImage),
       isDirect: true,
       dmTargetUserId: options.dmTargetUserId,
     },
@@ -626,6 +669,67 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
   const { socket } = context;
 
   socket.on(
+    "chat:imageUploadAuthorize",
+    (
+      _data: unknown,
+      callback: (
+        response:
+          | { token: string; uploadUrl: string; maxBytes: number }
+          | { error: string },
+      ) => void,
+    ) => {
+      if (!context.currentClient || !context.currentRoom) {
+        respond(callback, { error: "Not in a room" });
+        return;
+      }
+      if (!takeToken(socket, "chatImageUpload", RATE_LIMITS.chatImageUpload)) {
+        respond(callback, {
+          error: "Too many image uploads; please wait a moment.",
+        });
+        return;
+      }
+
+      const room = context.currentRoom;
+      const sender = context.currentClient;
+      if (sender.isObserver) {
+        respond(callback, { error: "Watch-only attendees cannot upload images." });
+        return;
+      }
+      if (room.isChatLocked && !(sender instanceof Admin)) {
+        respond(callback, { error: "Chat is locked by the host." });
+        return;
+      }
+      if (!room.areImageAttachmentsEnabled) {
+        respond(callback, { error: "Image attachments are disabled by the host." });
+        return;
+      }
+
+      const forwardedProtocol = socket.handshake.headers["x-forwarded-proto"];
+      const forwardedHost = socket.handshake.headers["x-forwarded-host"];
+      const protocol = Array.isArray(forwardedProtocol)
+        ? forwardedProtocol[0]
+        : forwardedProtocol?.split(",")[0]?.trim();
+      const host = Array.isArray(forwardedHost)
+        ? forwardedHost[0]
+        : forwardedHost?.split(",")[0]?.trim() ||
+          socket.handshake.headers.host;
+      const origin =
+        config.instancePublicUrl.replace(/\/$/, "") ||
+        `${protocol || (socket.handshake.secure ? "https" : "http")}://${host}`;
+
+      respond(callback, {
+        token: createChatImageUploadToken(
+          config.sfuSecret,
+          room.channelId,
+          sender.id,
+        ),
+        uploadUrl: `${origin}/chat-images`,
+        maxBytes: MAX_CHAT_IMAGE_BYTES,
+      });
+    },
+  );
+
+  socket.on(
     "sendChat",
     (
       data: SendChatData,
@@ -641,40 +745,59 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           return;
         }
 
+        const room = context.currentRoom;
+        const sender = context.currentClient;
+        const pendingImageId = getChatImageAttachmentId(data?.image);
+        const rejectMessage = (error: string): void => {
+          if (pendingImageId) {
+            room.removeUnattachedChatImageAsset(pendingImageId, sender.id);
+          }
+          respond(callback, { error });
+        };
+
         // Throttle: drop over-budget messages (ack an error, do not process).
         if (!takeToken(socket, "sendChat", RATE_LIMITS.chat)) {
-          respond(callback, { error: "You are sending messages too quickly" });
+          rejectMessage("You are sending messages too quickly");
           return;
         }
 
-        const room = context.currentRoom;
-        const sender = context.currentClient;
-
         if (context.currentClient.isObserver) {
-          respond(callback, {
-            error: "Watch-only attendees cannot send chat messages",
-          });
+          rejectMessage("Watch-only attendees cannot send chat messages");
           return;
         }
         if (
           room.isChatLocked &&
           !(context.currentClient instanceof Admin)
         ) {
-          respond(callback, { error: "Chat is locked by the host" });
+          rejectMessage("Chat is locked by the host");
           return;
         }
 
         const normalizedGif = normalizeChatGifAttachment(data.gif);
         if (normalizedGif && "error" in normalizedGif) {
-          respond(callback, { error: normalizedGif.error });
+          rejectMessage(normalizedGif.error);
           return;
         }
 
         const gif = normalizedGif ?? undefined;
+        const normalizedImage = normalizeChatImageAttachment(
+          data.image,
+          room,
+          sender.id,
+        );
+        if (normalizedImage && "error" in normalizedImage) {
+          rejectMessage(normalizedImage.error);
+          return;
+        }
+        const image = normalizedImage ?? undefined;
+        if (gif && image) {
+          rejectMessage("Send one attachment at a time.");
+          return;
+        }
         const content =
           typeof data.content === "string" ? data.content.trim() : "";
-        if (!content && !gif) {
-          respond(callback, { error: "Message cannot be empty" });
+        if (!content && !gif && !image) {
+          rejectMessage("Message cannot be empty");
           return;
         }
 
@@ -684,14 +807,12 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           ? null
           : parseDirectMessageIntent(content);
         if (directMessageIntent && "error" in directMessageIntent) {
-          respond(callback, { error: directMessageIntent.error });
+          rejectMessage(directMessageIntent.error);
           return;
         }
 
         if (directMessageIntent && !room.isDmEnabled) {
-          respond(callback, {
-            error: "Private messages are disabled by the host.",
-          });
+          rejectMessage("Private messages are disabled by the host.");
           return;
         }
 
@@ -703,7 +824,7 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
             directMessageIntent.targetToken,
           );
           if ("error" in resolvedTarget) {
-            respond(callback, { error: resolvedTarget.error });
+            rejectMessage(resolvedTarget.error);
             return;
           }
           dmTarget = resolvedTarget;
@@ -715,7 +836,7 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           dmTargetUserId: dmTarget?.userId,
         });
         if ("error" in normalizedReply) {
-          respond(callback, { error: normalizedReply.error });
+          rejectMessage(normalizedReply.error);
           return;
         }
         const replyTo = normalizedReply.replyTo;
@@ -726,6 +847,9 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
         if (!messageContent && gif) {
           messageContent = gif.title;
         }
+        if (!messageContent && image) {
+          messageContent = image.fileName;
+        }
 
         const isTtsMessage =
           !directMessageIntent &&
@@ -733,17 +857,25 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
             messageContent.toLowerCase() === "/tts");
         if (isTtsMessage) {
           if (room.isTtsDisabled) {
-            respond(callback, {
-              error: "TTS is disabled by the host in this room.",
-            });
+            rejectMessage("TTS is disabled by the host in this room.");
             return;
           }
         }
 
         if (messageContent.length > 1000) {
-          respond(callback, {
-            error: "Message too long (max 1000 characters)",
-          });
+          rejectMessage("Message too long (max 1000 characters)");
+          return;
+        }
+
+        const targetClient = dmTarget
+          ? room.getClient(dmTarget.userId)
+          : undefined;
+        if (dmTarget && !targetClient) {
+          rejectMessage("Private message target is no longer available.");
+          return;
+        }
+        if (image && !room.markChatImageAssetAttached(image.id, sender.id)) {
+          rejectMessage("Image attachment is no longer available.");
           return;
         }
 
@@ -759,6 +891,7 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           content: messageContent,
           timestamp: Date.now(),
           ...(gif ? { gif } : {}),
+          ...(image ? { image } : {}),
           ...(replyTo ? { replyTo } : {}),
           ...(isTtsMessage
             ? { ttsVoiceToken: normalizeTtsVoiceToken(data.ttsVoiceToken) }
@@ -769,13 +902,7 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
         };
 
         if (dmTarget) {
-          const targetClient = room.getClient(dmTarget.userId);
-          if (!targetClient) {
-            respond(callback, { error: "Private message target is no longer available." });
-            return;
-          }
-
-          targetClient.socket.emit("chatMessage", message);
+          targetClient!.socket.emit("chatMessage", message);
           Logger.info(
             `DM in room ${room.id}: ${displayName} -> ${dmTarget.displayName} (messageId=${message.id})`,
           );

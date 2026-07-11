@@ -103,6 +103,8 @@ export const RATE_LIMITS = {
   appsYjsUpdate: { capacity: 60, refillPerSec: 30 },
   // Chat messages: ~5/s sustained, small burst.
   chat: { capacity: 10, refillPerSec: 5 },
+  // Image uploads are much heavier than text messages; authorize a small burst.
+  chatImageUpload: { capacity: 6, refillPerSec: 0.2 },
   // Assistant answer authorization is user-triggered and should stay sparse.
   conclaveAuthorize: { capacity: 4, refillPerSec: 0.2 },
   // Conclave AI answer relay: streamed in throttled chunks, so allow a higher

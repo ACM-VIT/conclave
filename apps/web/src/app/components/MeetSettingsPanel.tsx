@@ -4,6 +4,7 @@ import {
   Check,
   Copy,
   Globe,
+  Image as ImageIcon,
   Link2,
   Lock,
   MessageSquare,
@@ -60,6 +61,8 @@ interface MeetSettingsPanelProps {
   onToggleTtsDisabled?: () => void;
   isDmEnabled: boolean;
   onToggleDmEnabled?: () => void;
+  areImageAttachmentsEnabled: boolean;
+  onToggleImageAttachments?: () => void;
   isReactionsDisabled: boolean;
   onToggleReactionsDisabled?: () => void;
   meetingRequiresInviteCode: boolean;
@@ -449,6 +452,8 @@ export default function MeetSettingsPanel({
   onToggleTtsDisabled,
   isDmEnabled,
   onToggleDmEnabled,
+  areImageAttachmentsEnabled,
+  onToggleImageAttachments,
   isReactionsDisabled,
   onToggleReactionsDisabled,
   meetingRequiresInviteCode,
@@ -691,6 +696,14 @@ export default function MeetSettingsPanel({
             tone="success"
             onClick={onToggleDmEnabled}
             disabled={!onToggleDmEnabled}
+          />
+          <SwitchRow
+            icon={ImageIcon}
+            label="Image attachments"
+            isOn={areImageAttachmentsEnabled}
+            tone="success"
+            onClick={onToggleImageAttachments}
+            disabled={!onToggleImageAttachments}
           />
           <SwitchRow
             icon={Volume2}

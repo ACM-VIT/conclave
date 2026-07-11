@@ -2,13 +2,12 @@
 
 import {
   BrainIcon,
-  CheckIcon,
+  ChevronDownIcon,
   FileTextIcon,
   GithubIcon,
   GlobeIcon,
   ListTreeIcon,
   PencilLineIcon,
-  XIcon,
   type LucideIcon,
 } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
@@ -26,6 +25,11 @@ import {
   ChainOfThoughtSearchResults,
   ChainOfThoughtStep,
 } from "./ai-elements/chain-of-thought";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "./ai-elements/collapsible";
 import {
   Reasoning,
   ReasoningContent,
@@ -216,61 +220,55 @@ function ConclaveMessage({
           ) : null}
 
           {status === "approval_required" && approval ? (
-            <div className="mb-1 overflow-hidden rounded-xl border border-[#F95F4A]/30 bg-black/25">
-              <div className="border-b border-white/10 px-3 py-2.5">
+            <div className="mb-1 overflow-hidden rounded-xl border border-white/10 bg-black/25">
+              <div className="px-3.5 py-3">
                 <div className="flex items-center gap-2 text-[12px] font-semibold text-[#fafafa]">
                   <GithubIcon className="size-3.5 text-[#F95F4A]" />
-                  Approve GitHub issue
+                  Create GitHub issue
                 </div>
-                <p className="mt-1 text-[11px] leading-relaxed text-[#a1a1aa]">
-                  Review the exact write before Conclave sends it to GitHub.
+                <p className="mt-1.5 text-[13px] font-medium leading-snug text-[#f4f4f5]">
+                  {approval.title}
                 </p>
               </div>
-              <div className="space-y-2.5 px-3 py-3">
-                <div>
-                  <p className="text-[9px] font-semibold uppercase tracking-[0.13em] text-[#71717a]">
-                    Title
-                  </p>
-                  <p className="mt-1 text-[12px] font-medium leading-snug text-[#f4f4f5]">
-                    {approval.title}
-                  </p>
-                </div>
-                <details className="group rounded-lg border border-white/10 bg-white/[0.025]">
-                  <summary className="cursor-pointer list-none px-2.5 py-2 text-[11px] font-medium text-[#a1a1aa]">
-                    Review issue body
-                  </summary>
-                  <div className="max-h-44 overflow-y-auto border-t border-white/10 px-2.5 py-2 text-[11px] text-[#d4d4d8]">
-                    <Response>{approval.body}</Response>
+              <Collapsible className="border-t border-white/[0.08]">
+                <CollapsibleTrigger className="group/body flex w-full items-center gap-1.5 px-3.5 py-2 text-left text-[11px] font-medium text-[#a1a1aa] transition-colors hover:text-[#d4d4d8]">
+                  <ChevronDownIcon className="size-3 transition-transform group-data-[state=open]/body:rotate-180" />
+                  Issue body
+                </CollapsibleTrigger>
+                <CollapsibleContent className="web-collapsible overflow-hidden outline-none">
+                  <div className="max-h-44 overflow-y-auto px-3.5 pb-3">
+                    <Response className="web-markdown-compact text-[11.5px] leading-normal text-[#d4d4d8]">
+                      {approval.body}
+                    </Response>
                   </div>
-                </details>
-                <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-white/10 px-2.5 py-2 text-[11px] leading-relaxed text-[#d4d4d8] transition hover:bg-white/[0.035]">
+                </CollapsibleContent>
+              </Collapsible>
+              <div className="border-t border-white/[0.08] px-3.5 py-3">
+                <label className="flex cursor-pointer items-start gap-2 text-[11px] leading-relaxed text-[#d4d4d8]">
                   <input
                     type="checkbox"
                     checked={approvalChecked}
                     onChange={(event) =>
                       setApprovalChecked(event.currentTarget.checked)
                     }
-                    className="mt-0.5 size-3.5 accent-[#F95F4A]"
+                    className="mt-[3px] size-3.5 shrink-0 accent-[#F95F4A]"
                   />
-                  I reviewed this issue and approve creating it in the configured
-                  repository.
+                  I reviewed this issue and approve creating it.
                 </label>
-                <div className="flex justify-end gap-2">
+                <div className="mt-3 flex items-center justify-end gap-2">
                   <button
                     type="button"
                     onClick={() => onToolApproval?.(message.id, "deny")}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-white/15 px-3 text-[11px] font-medium text-[#d4d4d8] transition hover:bg-white/[0.06]"
+                    className="inline-flex h-8 items-center rounded-full px-3.5 text-[12px] font-medium text-[#a1a1aa] transition-colors duration-[120ms] hover:bg-white/[0.06] hover:text-[#fafafa]"
                   >
-                    <XIcon className="size-3" />
                     Cancel
                   </button>
                   <button
                     type="button"
                     disabled={!approvalChecked}
                     onClick={() => onToolApproval?.(message.id, "approve")}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-[#F95F4A]/50 bg-[#F95F4A]/20 px-3 text-[11px] font-semibold text-[#fafafa] transition hover:bg-[#F95F4A]/30 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="inline-flex h-8 items-center rounded-full bg-[#F95F4A] px-4 text-[12px] font-semibold text-white transition-[filter] duration-[120ms] hover:brightness-105 disabled:cursor-not-allowed disabled:bg-[#232327] disabled:text-[#fafafa]/40"
                   >
-                    <CheckIcon className="size-3" />
                     Create issue
                   </button>
                 </div>

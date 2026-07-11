@@ -69,6 +69,7 @@ export type RoomSnapshot = {
     noGuests: boolean;
     ttsDisabled: boolean;
     dmEnabled: boolean;
+    imageAttachmentsEnabled: boolean;
     reactionsDisabled: boolean;
     requiresMeetingInviteCode: boolean;
   };
@@ -143,6 +144,7 @@ export type RoomPolicyUpdate = {
   noGuests?: boolean;
   ttsDisabled?: boolean;
   dmEnabled?: boolean;
+  imageAttachmentsEnabled?: boolean;
   reactionsDisabled?: boolean;
 };
 
@@ -341,6 +343,7 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
       noGuests: room.noGuests,
       ttsDisabled: room.isTtsDisabled,
       dmEnabled: room.isDmEnabled,
+      imageAttachmentsEnabled: room.areImageAttachmentsEnabled,
       reactionsDisabled: room.isReactionsDisabled,
       requiresMeetingInviteCode: room.requiresMeetingInviteCode,
     },
@@ -720,6 +723,18 @@ export const applyRoomPolicyUpdate = (
     changed.dmEnabled = update.dmEnabled;
     io.to(room.channelId).emit("dmStateChanged", {
       enabled: update.dmEnabled,
+      roomId: room.id,
+    });
+  }
+
+  if (
+    typeof update.imageAttachmentsEnabled === "boolean" &&
+    update.imageAttachmentsEnabled !== room.areImageAttachmentsEnabled
+  ) {
+    room.setImageAttachmentsEnabled(update.imageAttachmentsEnabled);
+    changed.imageAttachmentsEnabled = update.imageAttachmentsEnabled;
+    io.to(room.channelId).emit("imageAttachmentsStateChanged", {
+      enabled: update.imageAttachmentsEnabled,
       roomId: room.id,
     });
   }

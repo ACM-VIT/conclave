@@ -45,6 +45,7 @@ export const SFU_EVENTS = {
 
     // Chat / reactions / hand / identity
     sendChat: "sendChat",
+    chatImageUploadAuthorize: "chat:imageUploadAuthorize",
     // Issues a short-lived token for a visible public "@Conclave" question.
     conclaveAuthorize: "conclave:authorize",
     // Relays a signed streamed "@Conclave" AI answer for the whole room.
@@ -59,6 +60,7 @@ export const SFU_EVENTS = {
     lockChat: "lockChat",
     setNoGuests: "setNoGuests",
     setDmEnabled: "setDmEnabled",
+    setImageAttachmentsEnabled: "setImageAttachmentsEnabled",
     setTtsDisabled: "setTtsDisabled",
     getRoomLockStatus: "getRoomLockStatus",
     getChatLockStatus: "getChatLockStatus",
@@ -183,6 +185,7 @@ export const SFU_EVENTS = {
     chatLockChanged: "chatLockChanged",
     noGuestsChanged: "noGuestsChanged",
     dmStateChanged: "dmStateChanged",
+    imageAttachmentsStateChanged: "imageAttachmentsStateChanged",
     ttsDisabledChanged: "ttsDisabledChanged",
     reactionsDisabledChanged: "reactionsDisabledChanged",
 

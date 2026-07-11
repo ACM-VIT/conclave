@@ -46,7 +46,8 @@ export function ChatSpectator({ messages }: { messages: AdminChatMessage[] | nul
                 {message.displayName}
               </span>{" "}
               <span style={{ color: color.textMuted }}>
-                {message.content || (message.gif ? "(gif)" : "")}
+                {message.content ||
+                  (message.gif ? "(gif)" : message.image ? "(image)" : "")}
               </span>
             </p>
           ))}

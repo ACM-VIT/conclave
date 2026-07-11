@@ -16,6 +16,9 @@ const REMOVE_WINNER_KEY = "removeWinnerOnDone";
 export const MAX_WHEEL_ENTRIES = 64;
 export const MAX_ENTRY_LABEL_LENGTH = 48;
 const MAX_HISTORY_LENGTH = 25;
+const MIN_SPIN_DURATION_MS = 250;
+const MAX_SPIN_DURATION_MS = 30_000;
+const MAX_SPIN_TURNS = 20;
 
 export type WheelEntry = {
   id: string;
@@ -59,17 +62,22 @@ const readEntriesArray = (doc: Y.Doc): EntriesArray | null => {
   return value instanceof Y.Array ? (value as EntriesArray) : null;
 };
 
+const normalizeLabel = (rawLabel: string): string =>
+  rawLabel.replace(/\s+/g, " ").trim().slice(0, MAX_ENTRY_LABEL_LENGTH);
+
 const isEntry = (value: unknown): value is WheelEntry => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as { id?: unknown; label?: unknown };
-  return typeof record.id === "string" && typeof record.label === "string";
+  return (
+    typeof record.id === "string" &&
+    typeof record.label === "string" &&
+    record.label.trim().length > 0 &&
+    record.label.length <= MAX_ENTRY_LABEL_LENGTH
+  );
 };
 
 export const createEntryId = (): string =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-
-const normalizeLabel = (rawLabel: string): string =>
-  rawLabel.replace(/\s+/g, " ").trim().slice(0, MAX_ENTRY_LABEL_LENGTH);
 
 // Keep a joining client's document empty until the server sync arrives. Yjs
 // map defaults written before that sync can win conflict resolution and reset
@@ -153,16 +161,26 @@ const isSpin = (value: unknown): value is WheelSpin => {
     typeof record.spinId === "string" &&
     Array.isArray(record.entries) &&
     record.entries.length > 0 &&
+    record.entries.length <= MAX_WHEEL_ENTRIES &&
     record.entries.every(isEntry) &&
     typeof record.winnerIndex === "number" &&
     Number.isInteger(record.winnerIndex) &&
     record.winnerIndex >= 0 &&
     record.winnerIndex < record.entries.length &&
     typeof record.startedAt === "number" &&
+    Number.isFinite(record.startedAt) &&
     typeof record.durationMs === "number" &&
-    record.durationMs > 0 &&
+    Number.isFinite(record.durationMs) &&
+    record.durationMs >= MIN_SPIN_DURATION_MS &&
+    record.durationMs <= MAX_SPIN_DURATION_MS &&
     typeof record.turns === "number" &&
+    Number.isInteger(record.turns) &&
+    record.turns >= 1 &&
+    record.turns <= MAX_SPIN_TURNS &&
     typeof record.jitter === "number" &&
+    Number.isFinite(record.jitter) &&
+    record.jitter >= 0 &&
+    record.jitter <= 1 &&
     typeof record.spunById === "string" &&
     typeof record.spunByName === "string"
   );

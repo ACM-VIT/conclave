@@ -211,6 +211,11 @@ interface MeetsMainContentProps {
   setChatInput: Dispatch<SetStateAction<string>>;
   sendChat: (content: string) => void;
   sendChatGif: (gif: ChatGifAttachment) => void;
+  sendChatImage: (
+    file: File,
+    caption: string,
+    onProgress?: (progress: number) => void,
+  ) => Promise<boolean>;
   chatOverlayMessages: ChatMessage[];
   setChatOverlayMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   replyTarget: ChatReplyPreview | null;
@@ -275,6 +280,7 @@ interface MeetsMainContentProps {
   adminNotice?: AdminNoticeNotification | null;
   isTtsDisabled: boolean;
   isDmEnabled: boolean;
+  areImageAttachmentsEnabled: boolean;
   isReactionsDisabled: boolean;
   meetingRequiresInviteCode: boolean;
   webinarConfig?: WebinarConfigSnapshot | null;
@@ -461,6 +467,7 @@ export default function MeetsMainContent({
   setChatInput,
   sendChat,
   sendChatGif,
+  sendChatImage,
   chatOverlayMessages,
   setChatOverlayMessages,
   replyTarget,
@@ -517,6 +524,7 @@ export default function MeetsMainContent({
   adminNotice = null,
   isTtsDisabled,
   isDmEnabled,
+  areImageAttachmentsEnabled,
   isReactionsDisabled,
   meetingRequiresInviteCode,
   webinarConfig,
@@ -1325,6 +1333,15 @@ export default function MeetsMainContent({
     sendChatGifRef.current(gif);
   }, []);
 
+  const handleSendChatImage = useCallback(
+    (
+      file: File,
+      caption: string,
+      onProgress?: (progress: number) => void,
+    ) => sendChatImage(file, caption, onProgress),
+    [sendChatImage],
+  );
+
   const handleToggleTtsDisabled = useCallback(() => {
     if (!socket) return;
     socket.emit(
@@ -1350,6 +1367,19 @@ export default function MeetsMainContent({
       },
     );
   }, [socket, isDmEnabled]);
+
+  const handleToggleImageAttachments = useCallback(() => {
+    if (!socket) return;
+    socket.emit(
+      "setImageAttachmentsEnabled",
+      { enabled: !areImageAttachmentsEnabled },
+      (res: { error?: string }) => {
+        if (res?.error) {
+          console.error("Failed to toggle image attachments:", res.error);
+        }
+      },
+    );
+  }, [areImageAttachmentsEnabled, socket]);
 
   const handleToggleReactionsDisabled = useCallback(() => {
     if (!socket) return;
@@ -2258,10 +2288,12 @@ export default function MeetsMainContent({
           onInputChange={setChatInput}
           onSend={handleSendChat}
           onSendGif={handleSendChatGif}
+          onSendImage={handleSendChatImage}
           onClose={handleToggleChat}
           currentUserId={currentUserId}
           isChatLocked={isChatLocked}
           isDmEnabled={isDmEnabled}
+          areImageAttachmentsEnabled={areImageAttachmentsEnabled}
           isAdmin={isAdmin}
           mentionableParticipants={mentionableParticipants}
           replyTarget={replyTarget}
@@ -2319,6 +2351,8 @@ export default function MeetsMainContent({
             onToggleTtsDisabled={handleToggleTtsDisabled}
             isDmEnabled={isDmEnabled}
             onToggleDmEnabled={handleToggleDmEnabled}
+            areImageAttachmentsEnabled={areImageAttachmentsEnabled}
+            onToggleImageAttachments={handleToggleImageAttachments}
             isReactionsDisabled={isReactionsDisabled}
             onToggleReactionsDisabled={handleToggleReactionsDisabled}
             meetingRequiresInviteCode={meetingRequiresInviteCode}

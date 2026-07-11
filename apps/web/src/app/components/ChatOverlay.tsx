@@ -6,8 +6,10 @@ import { Avatar } from "@conclave/ui-tokens/web";
 import { color } from "@conclave/ui-tokens";
 import type { ChatMessage } from "../lib/types";
 import { getActionText } from "../lib/chat-commands";
+import { chatImageCaption } from "../lib/chat-images";
 import { formatDisplayName } from "../lib/utils";
 import ChatGifAttachmentView from "./ChatGifAttachmentView";
+import ChatImageAttachmentView from "./ChatImageAttachmentView";
 
 interface ChatOverlayProps {
   messages: ChatMessage[];
@@ -19,7 +21,8 @@ function ChatOverlay({ messages, onDismiss }: ChatOverlayProps) {
     <div className="fixed bottom-24 left-4 z-40 flex w-[21rem] max-w-[calc(100vw-1.5rem)] flex-col gap-2">
       {messages.slice(-3).map((message) => {
         const displayName = formatDisplayName(message.displayName || message.userId);
-        const actionText = getActionText(message.content);
+        const actionText =
+          message.gif || message.image ? null : getActionText(message.content);
         return (
           <div
             key={message.id}
@@ -60,6 +63,14 @@ function ChatOverlay({ messages, onDismiss }: ChatOverlayProps) {
                   gif={message.gif}
                   className="mt-2 rounded-xl"
                   widthClassName="w-[150px]"
+                />
+              ) : message.image ? (
+                <ChatImageAttachmentView
+                  image={message.image}
+                  caption={chatImageCaption(message.content, message.image)}
+                  expandable={false}
+                  className="mt-2"
+                  widthClassName="max-w-[180px]"
                 />
               ) : (
                 <p

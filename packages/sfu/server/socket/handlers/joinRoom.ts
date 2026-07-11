@@ -599,6 +599,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             isTtsDisabled: room.isTtsDisabled,
             isChatLocked: room.isChatLocked,
             isDmEnabled: room.isDmEnabled,
+            areImageAttachmentsEnabled: room.areImageAttachmentsEnabled,
             isReactionsDisabled: room.isReactionsDisabled,
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
           });
@@ -645,6 +646,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             isTtsDisabled: room.isTtsDisabled,
             isChatLocked: room.isChatLocked,
             isDmEnabled: room.isDmEnabled,
+            areImageAttachmentsEnabled: room.areImageAttachmentsEnabled,
             isReactionsDisabled: room.isReactionsDisabled,
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
           });
@@ -849,6 +851,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           enabled: context.currentRoom.isDmEnabled,
           roomId: context.currentRoom.id,
         });
+        socket.emit("imageAttachmentsStateChanged", {
+          enabled: context.currentRoom.areImageAttachmentsEnabled,
+          roomId: context.currentRoom.id,
+        });
 
         socket.emit("reactionsDisabledChanged", {
           disabled: context.currentRoom.isReactionsDisabled,
@@ -941,6 +947,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           isTtsDisabled: context.currentRoom.isTtsDisabled,
           isChatLocked: context.currentRoom.isChatLocked,
           isDmEnabled: context.currentRoom.isDmEnabled,
+          areImageAttachmentsEnabled:
+            context.currentRoom.areImageAttachmentsEnabled,
           isReactionsDisabled: context.currentRoom.isReactionsDisabled,
           meetingRequiresInviteCode: context.currentRoom.requiresMeetingInviteCode,
           webinarRole: context.currentClient.isWebinarAttendee

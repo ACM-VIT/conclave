@@ -56,9 +56,30 @@ export type TranscriptAudioProducerEntry = {
   paused: boolean;
 };
 
+export type RoomChatImageAsset = {
+  id: string;
+  url: string;
+  fileName: string;
+  mimeType:
+    | "image/jpeg"
+    | "image/png"
+    | "image/gif"
+    | "image/webp"
+    | "image/avif";
+  size: number;
+  data: Buffer;
+  uploadedBy: string;
+  createdAt: number;
+  attached: boolean;
+};
+
 const WEBINAR_AUDIO_LEVEL_THRESHOLD = -70;
 const WEBINAR_AUDIO_LEVEL_INTERVAL_MS = 350;
 const CHAT_HISTORY_LIMIT = 100;
+export const MAX_CHAT_IMAGE_BYTES = 6 * 1024 * 1024;
+export const CHAT_IMAGE_ORPHAN_TTL_MS = 2 * 60 * 1000;
+const MAX_CHAT_IMAGE_ROOM_BYTES = 64 * 1024 * 1024;
+const MAX_CHAT_IMAGE_USER_BYTES = 24 * 1024 * 1024;
 const MAX_INVITE_CODE_LENGTH = 256;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
@@ -140,6 +161,9 @@ export class Room {
   public displayNamesByKey: Map<string, string> = new Map();
   public handRaisedByUserId: Set<string> = new Set();
   private recentChatMessages: ChatMessage[] = [];
+  private chatImageAssets: Map<string, RoomChatImageAsset> = new Map();
+  private chatImageExpiryTimers: Map<string, NodeJS.Timeout> = new Map();
+  private chatImageBytes = 0;
   public lockedAllowedUsers: Set<string> = new Set();
   public blockedUsers: Set<string> = new Set();
   public cleanupTimer: NodeJS.Timeout | null = null;
@@ -149,6 +173,7 @@ export class Room {
   private _noGuests: boolean = false;
   private _isTtsDisabled: boolean = false;
   private _isDmEnabled: boolean = true;
+  private _areImageAttachmentsEnabled: boolean = true;
   private _reactionsDisabled: boolean = false;
   private _meetingInviteCodeHash: string | null = null;
   public appsState: { activeAppId: string | null; locked: boolean } = {
@@ -895,6 +920,84 @@ export class Room {
     this._isDmEnabled = enabled;
   }
 
+  get areImageAttachmentsEnabled(): boolean {
+    return this._areImageAttachmentsEnabled;
+  }
+
+  setImageAttachmentsEnabled(enabled: boolean): void {
+    this._areImageAttachmentsEnabled = enabled;
+  }
+
+  addChatImageAsset(
+    asset: RoomChatImageAsset,
+  ): { ok: true } | { ok: false; error: string } {
+    if (this.chatImageAssets.has(asset.id)) {
+      return { ok: false, error: "Image attachment already exists." };
+    }
+    if (asset.size <= 0 || asset.size > MAX_CHAT_IMAGE_BYTES) {
+      return { ok: false, error: "Images must be 6 MB or smaller." };
+    }
+    if (this.chatImageBytes + asset.size > MAX_CHAT_IMAGE_ROOM_BYTES) {
+      return {
+        ok: false,
+        error: "This room has reached its temporary image limit.",
+      };
+    }
+
+    let userBytes = 0;
+    for (const existing of this.chatImageAssets.values()) {
+      if (existing.uploadedBy === asset.uploadedBy) {
+        userBytes += existing.size;
+      }
+    }
+    if (userBytes + asset.size > MAX_CHAT_IMAGE_USER_BYTES) {
+      return {
+        ok: false,
+        error: "You have reached the temporary image limit for this room.",
+      };
+    }
+
+    this.chatImageAssets.set(asset.id, asset);
+    this.chatImageBytes += asset.size;
+    if (!asset.attached) {
+      const expiryTimer = setTimeout(() => {
+        this.removeUnattachedChatImageAsset(asset.id, asset.uploadedBy);
+      }, CHAT_IMAGE_ORPHAN_TTL_MS);
+      expiryTimer.unref();
+      this.chatImageExpiryTimers.set(asset.id, expiryTimer);
+    }
+    return { ok: true };
+  }
+
+  getChatImageAsset(assetId: string): RoomChatImageAsset | undefined {
+    return this.chatImageAssets.get(assetId);
+  }
+
+  markChatImageAssetAttached(assetId: string, userId: string): boolean {
+    const asset = this.chatImageAssets.get(assetId);
+    if (!asset || asset.uploadedBy !== userId) return false;
+    asset.attached = true;
+    const expiryTimer = this.chatImageExpiryTimers.get(assetId);
+    if (expiryTimer) {
+      clearTimeout(expiryTimer);
+      this.chatImageExpiryTimers.delete(assetId);
+    }
+    return true;
+  }
+
+  removeUnattachedChatImageAsset(assetId: string, userId: string): boolean {
+    const asset = this.chatImageAssets.get(assetId);
+    if (!asset || asset.uploadedBy !== userId || asset.attached) return false;
+    this.chatImageAssets.delete(assetId);
+    this.chatImageBytes = Math.max(0, this.chatImageBytes - asset.size);
+    const expiryTimer = this.chatImageExpiryTimers.get(assetId);
+    if (expiryTimer) {
+      clearTimeout(expiryTimer);
+      this.chatImageExpiryTimers.delete(assetId);
+    }
+    return true;
+  }
+
   get isReactionsDisabled(): boolean {
     return this._reactionsDisabled;
   }
@@ -1424,6 +1527,12 @@ export class Room {
     this.meetingParticipantCount = 0;
     this.clearApps();
     this.clearGame();
+    for (const expiryTimer of this.chatImageExpiryTimers.values()) {
+      clearTimeout(expiryTimer);
+    }
+    this.chatImageExpiryTimers.clear();
+    this.chatImageAssets.clear();
+    this.chatImageBytes = 0;
     if (this.webinarAudioLevelObserver) {
       try {
         this.webinarAudioLevelObserver.close();

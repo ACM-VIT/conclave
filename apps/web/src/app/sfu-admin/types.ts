@@ -120,6 +120,7 @@ export type AdminChatMessage = {
   content: string;
   timestamp: number;
   gif?: unknown;
+  image?: unknown;
 };
 
 export type TranscriptSpectatorToken = {
