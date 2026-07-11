@@ -67,6 +67,7 @@ export type PersistedSnapshot = {
   session: TranscriptSessionState;
   segments: TranscriptSegment[];
   minutes: TranscriptMinutesSnapshot;
+  minutesCompactedAt?: number;
   sequence: number;
   serviceVersion?: TranscriptServiceVersion;
   transcriptionConfig?: PersistedTranscriptionConfig;

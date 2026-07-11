@@ -34,6 +34,7 @@ import type {
 import {
   CONCLAVE_ASSISTANT_USER_ID,
   type AssistantChatMessage,
+  type AssistantToolApprovalDecision,
   type ConclaveAssistantModel,
 } from "../lib/conclave-assistant";
 import type {
@@ -220,6 +221,10 @@ interface MeetsMainContentProps {
     model: ConclaveAssistantModel,
   ) => void;
   onCancelAssistantApiKey: () => void;
+  onAssistantToolApproval: (
+    answerId: string,
+    decision: AssistantToolApprovalDecision,
+  ) => void;
   socket: Socket | null;
   setPendingUsers: Dispatch<SetStateAction<Map<string, string>>>;
   resolveDisplayName: (userId: string) => string;
@@ -463,6 +468,7 @@ export default function MeetsMainContent({
   assistantApiKeyPrompt,
   onSubmitAssistantApiKey,
   onCancelAssistantApiKey,
+  onAssistantToolApproval,
   socket,
   setPendingUsers,
   resolveDisplayName,
@@ -2235,6 +2241,7 @@ export default function MeetsMainContent({
           assistantApiKeyPrompt={assistantApiKeyPrompt}
           onSubmitAssistantApiKey={onSubmitAssistantApiKey}
           onCancelAssistantApiKey={onCancelAssistantApiKey}
+          onAssistantToolApproval={onAssistantToolApproval}
         />
       )}
 

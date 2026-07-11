@@ -10,7 +10,11 @@ export const CONCLAVE_ASSISTANT_USER_ID = "conclave-assistant";
 export const CONCLAVE_ASSISTANT_NAME = "Conclave";
 export const CONCLAVE_MENTION_TOKEN = "Conclave";
 
-export type ConclaveAssistantStatus = "streaming" | "done" | "error";
+export type ConclaveAssistantStatus =
+  | "streaming"
+  | "approval_required"
+  | "done"
+  | "error";
 type ConclaveAssistantPartStatus = "streaming" | "done";
 
 export const CONCLAVE_ASSISTANT_GLOBAL_MODEL = DEFAULT_TRANSCRIPT_QA_MODEL;
@@ -66,6 +70,16 @@ export interface AssistantTask {
   query?: string;
 }
 
+export interface AssistantToolApproval {
+  id: string;
+  tool: "create_github_issue";
+  title: string;
+  body: string;
+  token: string;
+}
+
+export type AssistantToolApprovalDecision = "approve" | "deny";
+
 // Client-only fields layered onto a ChatMessage for assistant rendering.
 export interface AssistantChatMessage extends ChatMessage {
   isAssistant?: boolean;
@@ -76,6 +90,10 @@ export interface AssistantChatMessage extends ChatMessage {
   // Tool activity (web search, transcript lookup, issue creation) shown as a
   // compact action timeline.
   tasks?: AssistantTask[];
+  // Present only for the participant who invoked the side-effecting tool.
+  // Other room members continue to see the relayed in-progress task, but
+  // cannot approve an action on the requester's behalf.
+  toolApproval?: AssistantToolApproval;
 }
 
 // Merge a streamed task into an existing list, upserting by id and keeping a
@@ -155,13 +173,22 @@ interface StreamConclaveAssistantOptions {
   transcript: string;
   transcriptActive: boolean;
   signal?: AbortSignal;
+  githubIssueApproval?: {
+    decision: AssistantToolApprovalDecision;
+    approval: AssistantToolApproval;
+  };
   onDelta: (fullText: string) => void;
   onReasoning: (fullReasoning: string) => void;
   onReasoningDone?: () => void;
   onTask: (task: AssistantTask) => void;
+  onApproval?: (approval: AssistantToolApproval) => void;
   onRelay: (packet: ConclaveAssistantRelayPacket) => void;
   onDone?: (finalText: string) => void;
 }
+
+export type StreamConclaveAssistantResult =
+  | { status: "done"; text: string }
+  | { status: "approval_required"; approval: AssistantToolApproval };
 
 const CONCLAVE_RELAY_MIN_INTERVAL_MS = 350;
 const CONCLAVE_RELAY_MIN_CONTENT_DELTA = 160;
@@ -188,6 +215,11 @@ type AssistantStreamEvent =
       relay?: ConclaveAssistantRelayPacket;
     }
   | {
+      type: "approval";
+      approval: AssistantToolApproval;
+      relay?: ConclaveAssistantRelayPacket;
+    }
+  | {
       type: "error";
       error?: string;
       relay?: ConclaveAssistantRelayPacket;
@@ -201,6 +233,7 @@ const parseAssistantStreamEvent = (line: string): AssistantStreamEvent | null =>
       parsed.type !== "delta" &&
       parsed.type !== "reasoning" &&
       parsed.type !== "task" &&
+      parsed.type !== "approval" &&
       parsed.type !== "done" &&
       parsed.type !== "error"
     ) {
@@ -244,13 +277,15 @@ export const streamConclaveAssistant = async ({
   transcript,
   transcriptActive,
   signal,
+  githubIssueApproval,
   onDelta,
   onReasoning,
   onReasoningDone,
   onTask,
+  onApproval,
   onRelay,
   onDone,
-}: StreamConclaveAssistantOptions): Promise<string> => {
+}: StreamConclaveAssistantOptions): Promise<StreamConclaveAssistantResult> => {
   const response = await fetch("/api/conclave/assistant", {
     method: "POST",
     headers: {
@@ -263,6 +298,8 @@ export const streamConclaveAssistant = async ({
       history,
       transcript,
       transcriptActive,
+      supportsToolApproval: true,
+      ...(githubIssueApproval ? { githubIssueApproval } : {}),
       ...(apiKey ? { apiKey } : {}),
       ...(apiKey && model ? { model } : {}),
     }),
@@ -295,6 +332,7 @@ export const streamConclaveAssistant = async ({
   let pending = "";
   let streamError: string | null = null;
   let completed = false;
+  let pendingApproval: AssistantToolApproval | null = null;
   let lastRelayedAt = 0;
   let lastRelayedStreamedLength = 0;
   let lastRelayedProcessFingerprint = "";
@@ -360,6 +398,11 @@ export const streamConclaveAssistant = async ({
       onTask(event.task);
       return;
     }
+    if (event.type === "approval") {
+      pendingApproval = event.approval;
+      onApproval?.(event.approval);
+      return;
+    }
     if (event.type === "error") {
       streamError = event.error || "Conclave could not answer right now.";
       return;
@@ -393,9 +436,12 @@ export const streamConclaveAssistant = async ({
   if (streamError) {
     throw new Error(streamError);
   }
-  if (!completed) {
+  if (!completed && !pendingApproval) {
     onReasoningDone?.();
     onDone?.(text);
   }
-  return text;
+  if (pendingApproval) {
+    return { status: "approval_required", approval: pendingApproval };
+  }
+  return { status: "done", text };
 };

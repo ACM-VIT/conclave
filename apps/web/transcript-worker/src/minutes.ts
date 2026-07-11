@@ -6,6 +6,25 @@ import type {
 import { DEFAULT_QA_MODEL } from "./constants";
 import { hashCode, safeJsonParse, toStringValue, trimText } from "./utils";
 
+export const COMPACT_MINUTES_SECTION_LIMITS = {
+  topics: 8,
+  decisions: 10,
+  actionItems: 12,
+  openQuestions: 10,
+  followUps: 10,
+} as const;
+
+// Incremental updates get a little breathing room between compactions, but
+// never enough to let a long meeting grow the persisted/model context without
+// bound. The compaction pass folds these back to the canonical limits above.
+export const WORKING_MINUTES_SECTION_LIMITS = {
+  topics: 16,
+  decisions: 20,
+  actionItems: 24,
+  openQuestions: 20,
+  followUps: 20,
+} as const;
+
 export const createEmptyMinutes = (
   model = DEFAULT_QA_MODEL,
 ): TranscriptMinutesSnapshot => ({
@@ -88,16 +107,19 @@ export const parseMinutesFromText = (
       })
       .filter((item): item is TranscriptMinutesEntry => Boolean(item));
 
-  return {
-    summary: trimText(toStringValue(data.summary, fallback.summary), 1200),
-    topics: normalizeEntries("topics"),
-    decisions: normalizeEntries("decisions"),
-    actionItems: normalizeEntries("actionItems"),
-    openQuestions: normalizeEntries("openQuestions"),
-    followUps: normalizeEntries("followUps"),
-    updatedAt: Date.now(),
-    model: fallback.model,
-  };
+  return boundMinutesSnapshot(
+    {
+      summary: trimText(toStringValue(data.summary, fallback.summary), 1200),
+      topics: normalizeEntries("topics"),
+      decisions: normalizeEntries("decisions"),
+      actionItems: normalizeEntries("actionItems"),
+      openQuestions: normalizeEntries("openQuestions"),
+      followUps: normalizeEntries("followUps"),
+      updatedAt: Date.now(),
+      model: fallback.model,
+    },
+    COMPACT_MINUTES_SECTION_LIMITS,
+  );
 };
 
 const minutesSectionKeys = [
@@ -109,6 +131,43 @@ const minutesSectionKeys = [
 ] as const;
 
 type MinutesSectionKey = (typeof minutesSectionKeys)[number];
+
+type MinutesSectionLimits = Record<MinutesSectionKey, number>;
+
+const retainEdges = (
+  entries: TranscriptMinutesEntry[],
+  limit: number,
+): TranscriptMinutesEntry[] => {
+  const unique = Array.from(
+    new Map(entries.map((entry) => [entry.id, entry])).values(),
+  );
+  if (unique.length <= limit) return unique;
+  const olderCount = Math.ceil(limit / 2);
+  return [
+    ...unique.slice(0, olderCount),
+    ...unique.slice(-(limit - olderCount)),
+  ];
+};
+
+export const boundMinutesSnapshot = (
+  snapshot: TranscriptMinutesSnapshot,
+  limits: MinutesSectionLimits = WORKING_MINUTES_SECTION_LIMITS,
+): TranscriptMinutesSnapshot => ({
+  ...snapshot,
+  summary: trimText(snapshot.summary, 1200),
+  topics: retainEdges(snapshot.topics, limits.topics),
+  decisions: retainEdges(snapshot.decisions, limits.decisions),
+  actionItems: retainEdges(snapshot.actionItems, limits.actionItems),
+  openQuestions: retainEdges(snapshot.openQuestions, limits.openQuestions),
+  followUps: retainEdges(snapshot.followUps, limits.followUps),
+});
+
+export const minutesNeedCompaction = (
+  snapshot: TranscriptMinutesSnapshot,
+): boolean =>
+  minutesSectionKeys.some(
+    (key) => snapshot[key].length >= WORKING_MINUTES_SECTION_LIMITS[key],
+  );
 
 const normalizeUpdateEntries = (
   value: unknown,
@@ -177,7 +236,7 @@ export const applyMinutesUpdateFromText = (
   const data = parsed as Record<string, unknown>;
   const summary = trimText(toStringValue(data.summary), 1200);
 
-  return {
+  return boundMinutesSnapshot({
     summary: summary || current.summary,
     topics: applySectionUpdate(current.topics, data.topics, "topics"),
     decisions: applySectionUpdate(
@@ -202,5 +261,5 @@ export const applyMinutesUpdateFromText = (
     ),
     updatedAt: Date.now(),
     model: current.model,
-  };
+  });
 };

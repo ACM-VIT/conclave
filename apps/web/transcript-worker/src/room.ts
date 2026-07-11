@@ -22,6 +22,7 @@ import {
   MAX_AUDIO_CHUNK_BASE64_BYTES,
   MAX_CLIENT_MESSAGE_BYTES,
   MIN_OPENAI_COMMIT_AUDIO_SAMPLES,
+  MINUTES_COMPACTION_INTERVAL_MS,
   MINUTES_QUIET_DEBOUNCE_MS,
   MINUTES_MAX_WAIT_MS,
   MINUTES_MIN_WORDS,
@@ -41,8 +42,10 @@ import {
   isSameTranscriptAudioSpeaker,
 } from "./audio-speaker";
 import {
+  boundMinutesSnapshot,
   createEmptyMinutes,
   fallbackMinutes,
+  minutesNeedCompaction,
 } from "./minutes";
 import {
   getGlobalTranscriptProviderKeyAvailability,
@@ -50,6 +53,7 @@ import {
   resolveTranscriptProviderApiKey,
 } from "./key-policy";
 import {
+  compactMinutes,
   generateMinutes,
   streamQuestionAnswer,
 } from "./openai";
@@ -158,6 +162,7 @@ export class TranscriptRoom {
   private readonly transcriptionReplayJournal =
     new TranscriptAudioReplayJournal();
   private lastMinutesRefreshAt = 0;
+  private lastMinutesCompactionAt = 0;
   // Auto-minutes scheduler state. We debounce regeneration so AI minutes are
   // never clobbered mid-conversation; the crude fallback is only ever a seed.
   private minutesTimer: ReturnType<typeof setTimeout> | null = null;
@@ -319,6 +324,11 @@ export class TranscriptRoom {
     );
     this.segments = snapshot.segments ?? [];
     this.minutes = snapshot.minutes ?? createEmptyMinutes(this.session.qaModel);
+    this.lastMinutesCompactionAt =
+      snapshot.minutesCompactedAt ??
+      snapshot.session.startedAt ??
+      this.minutes.updatedAt ??
+      Date.now();
     this.sequence = snapshot.sequence ?? this.segments.length;
     if (shouldRecoverAutomatically) {
       this.state.waitUntil(this.restorePersistedGlobalSession(snapshot));
@@ -832,6 +842,7 @@ export class TranscriptRoom {
       this.sequence = 0;
       this.minutes = createEmptyMinutes(qaModel);
       this.lastMinutesRefreshAt = 0;
+      this.lastMinutesCompactionAt = now;
       this.resetMinutesScheduler();
     }
     this.broadcastSession();
@@ -936,6 +947,7 @@ export class TranscriptRoom {
     this.audioPaused = false;
     this.sequence = 0;
     this.lastMinutesRefreshAt = 0;
+    this.lastMinutesCompactionAt = 0;
     this.minutes = createEmptyMinutes(this.session.qaModel);
     await this.state.storage.delete("snapshot");
     this.broadcast({
@@ -1998,7 +2010,34 @@ export class TranscriptRoom {
         fallback: this.hasMinutesContent(this.minutes) ? this.minutes : fallback,
       });
       if (minutes) {
-        this.minutes = minutes;
+        const compactionDue =
+          minutesNeedCompaction(minutes) ||
+          Date.now() - this.lastMinutesCompactionAt >=
+            MINUTES_COMPACTION_INTERVAL_MS;
+        if (compactionDue) {
+          try {
+            this.minutes = await compactMinutes({
+              env: this.env,
+              apiKey: this.responseApiKey,
+              model: this.session.qaModel,
+              current: minutes,
+            });
+          } catch (error) {
+            // Keep the live minutes usable even if the background compaction
+            // request fails. The hard bound prevents prompt/persistence growth
+            // and the next interval can try a semantic compaction again.
+            console.warn("[TranscriptWorker] minutes compaction failed", {
+              roomId: this.session.roomId,
+              message: redactSensitiveText(
+                error instanceof Error ? error.message : String(error),
+              ),
+            });
+            this.minutes = boundMinutesSnapshot(minutes);
+          }
+          this.lastMinutesCompactionAt = Date.now();
+        } else {
+          this.minutes = boundMinutesSnapshot(minutes);
+        }
         this.hasAiMinutes = true;
         this.broadcast({ type: "minutes.updated", minutes: this.minutes });
         await this.persist();
@@ -2136,6 +2175,7 @@ export class TranscriptRoom {
       session: this.session,
       segments: this.segments,
       minutes: this.minutes,
+      minutesCompactedAt: this.lastMinutesCompactionAt,
       sequence: this.sequence,
       serviceVersion: this.serviceVersion(),
       transcriptionConfig,
@@ -2169,6 +2209,7 @@ export class TranscriptRoom {
     this.audioPaused = false;
     this.sequence = 0;
     this.lastMinutesRefreshAt = 0;
+    this.lastMinutesCompactionAt = 0;
     this.session = {
       ...createIdleSession(roomId),
       qaModel,

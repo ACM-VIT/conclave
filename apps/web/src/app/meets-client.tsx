@@ -1073,6 +1073,7 @@ export default function MeetsClient({
     assistantApiKeyPrompt,
     submitAssistantApiKey,
     cancelAssistantApiKeyPrompt,
+    resolveAssistantToolApproval,
   } = useMeetChat({
     socketRef: refs.socketRef,
     currentUserId: userId,
@@ -3158,6 +3159,7 @@ export default function MeetsClient({
         assistantApiKeyPrompt={assistantApiKeyPrompt}
         onSubmitAssistantApiKey={submitAssistantApiKey}
         onCancelAssistantApiKey={cancelAssistantApiKeyPrompt}
+        onAssistantToolApproval={resolveAssistantToolApproval}
         socket={refs.socketRef.current}
         setPendingUsers={setPendingUsers}
         resolveDisplayName={resolveDisplayName}

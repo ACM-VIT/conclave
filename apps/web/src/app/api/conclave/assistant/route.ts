@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import jwt from "jsonwebtoken";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import type {
   FunctionTool,
   ResponseCreateParamsStreaming,
@@ -18,12 +18,15 @@ import {
   CONCLAVE_ASSISTANT_GLOBAL_MODEL,
   isConclaveAssistantModel,
   mergeAssistantTask,
+  type AssistantToolApproval,
+  type AssistantToolApprovalDecision,
   type AssistantTask,
   type ConclaveAssistantRelayPacket,
 } from "../../../lib/conclave-assistant";
 import {
   createGithubIssue,
   parseGithubIssueDraft,
+  type GithubIssueDraft,
 } from "./github-issues";
 
 const CONCLAVE_ASSISTANT_WEB_SEARCH_TOOL: WebSearchTool = {
@@ -47,7 +50,7 @@ const CREATE_GITHUB_ISSUE_TOOL: FunctionTool = {
   type: "function",
   name: "create_github_issue",
   description:
-    "Create an issue in the configured Conclave GitHub repository. Infer the participant's intent from the full conversation, including natural follow-ups and references such as 'create it'. Call this only when the participant clearly intends the issue to be created now, not when they only want to discuss, draft, or learn about issues.",
+    "Prepare an issue for the configured Conclave GitHub repository. The app will show the exact title and body to the participant and require inline approval before any write occurs. Infer intent from the full conversation, including natural follow-ups such as 'create it'. Call this only when the participant clearly wants to enter that approval flow, not when they only want to discuss, draft, or learn about issues.",
   strict: true,
   parameters: {
     type: "object",
@@ -96,7 +99,7 @@ const ASSISTANT_SYSTEM_PROMPT = [
   "- For general questions (definitions, code, ideas, planning, explanations, quick research-style asks), answer directly even if the transcript has no relevant context.",
   "- Use web search for current facts, links, market/product/news/current-event questions, or when the user asks for sources. Cite sources by name or link when you rely on search.",
   "- Decide whether to call `create_github_issue` from the participant's intent in the full conversation, not from keyword matching. Understand natural references and follow-ups such as `create it` in context.",
-  "- Call the tool only when the participant clearly wants the issue created now. Do not call it when they only want to discuss an idea, draft issue text, ask how GitHub issues work, or explicitly decline creation.",
+  "- Call the tool only when the participant clearly wants to review and approve an issue for creation now. The app always requires their inline approval before performing the write. Do not call it when they only want to discuss an idea, draft issue text, ask how GitHub issues work, or explicitly decline creation.",
   "- Write a complete, self-contained Markdown issue whose structure fits the request. For example, bugs often benefit from reproduction and expected/actual behavior, while features often benefit from motivation, proposed behavior, and acceptance criteria. Include only relevant, supported details and never invent unknown facts.",
   "- Never put API keys, credentials, private raw transcripts, or unrelated personal information in a GitHub issue. Include only the context needed for the requested issue.",
   "- After the issue tool runs, clearly say whether it succeeded and include the returned issue number and link. Never claim an issue exists unless the tool confirms it.",
@@ -132,6 +135,11 @@ interface AssistantRequestBody {
   transcriptActive?: boolean;
   apiKey?: string;
   model?: string;
+  supportsToolApproval?: boolean;
+  githubIssueApproval?: {
+    decision?: AssistantToolApprovalDecision;
+    approval?: Partial<AssistantToolApproval>;
+  };
 }
 
 const asString = (value: unknown): string =>
@@ -148,6 +156,27 @@ type ConclaveAssistantTokenPayload = jwt.JwtPayload & {
   roomId?: string;
   clientId?: string;
   channelId?: string;
+};
+
+type GithubIssueApprovalTokenPayload = jwt.JwtPayload & {
+  tokenUse?: string;
+  approvalId?: string;
+  answerId?: string;
+  questionMessageId?: string;
+  userId?: string;
+  roomId?: string;
+  clientId?: string;
+  channelId?: string;
+  issueHash?: string;
+};
+
+export type GithubIssueApprovalIdentity = {
+  answerId: string;
+  questionMessageId: string;
+  userId: string;
+  roomId: string;
+  clientId: string;
+  channelId: string;
 };
 
 const resolveSfuSecret = (): string =>
@@ -185,6 +214,96 @@ const verifyAssistantToken = (
   } catch {
     return null;
   }
+};
+
+const githubIssueDraftHash = (draft: GithubIssueDraft): string =>
+  createHash("sha256")
+    .update(JSON.stringify({ title: draft.title, body: draft.body }))
+    .digest("base64url");
+
+export const createGithubIssueApproval = (
+  draft: GithubIssueDraft,
+  assistant: GithubIssueApprovalIdentity,
+): AssistantToolApproval => {
+  const id = randomUUID();
+  const token = jwt.sign(
+    {
+      tokenUse: "conclave:github-issue-approval",
+      approvalId: id,
+      answerId: assistant.answerId,
+      questionMessageId: assistant.questionMessageId,
+      userId: assistant.userId,
+      roomId: assistant.roomId,
+      clientId: assistant.clientId,
+      channelId: assistant.channelId,
+      issueHash: githubIssueDraftHash(draft),
+    } satisfies GithubIssueApprovalTokenPayload,
+    resolveSfuSecret(),
+    {
+      algorithm: "HS256",
+      audience: "conclave-web",
+      issuer: "conclave-web",
+      expiresIn: "10m",
+    },
+  );
+  return {
+    id,
+    tool: GITHUB_ISSUE_TOOL_NAME,
+    title: draft.title,
+    body: draft.body,
+    token,
+  };
+};
+
+export const verifyGithubIssueApproval = (
+  approval: Partial<AssistantToolApproval> | undefined,
+  assistant: GithubIssueApprovalIdentity,
+): { approval: AssistantToolApproval; draft: GithubIssueDraft } | null => {
+  if (
+    !approval ||
+    approval.tool !== GITHUB_ISSUE_TOOL_NAME ||
+    typeof approval.id !== "string" ||
+    typeof approval.title !== "string" ||
+    typeof approval.body !== "string" ||
+    typeof approval.token !== "string"
+  ) {
+    return null;
+  }
+  let payload: GithubIssueApprovalTokenPayload;
+  try {
+    payload = jwt.verify(approval.token, resolveSfuSecret(), {
+      algorithms: ["HS256"],
+      audience: "conclave-web",
+      issuer: "conclave-web",
+    }) as GithubIssueApprovalTokenPayload;
+  } catch {
+    return null;
+  }
+  let draft: GithubIssueDraft;
+  try {
+    draft = parseGithubIssueDraft(
+      JSON.stringify({ title: approval.title, body: approval.body }),
+    );
+  } catch {
+    return null;
+  }
+  if (
+    payload.tokenUse !== "conclave:github-issue-approval" ||
+    payload.approvalId !== approval.id ||
+    payload.answerId !== assistant.answerId ||
+    payload.questionMessageId !== assistant.questionMessageId ||
+    payload.userId !== assistant.userId ||
+    payload.roomId !== assistant.roomId ||
+    payload.clientId !== assistant.clientId ||
+    payload.channelId !== assistant.channelId ||
+    payload.issueHash !== githubIssueDraftHash(draft)
+  ) {
+    return null;
+  }
+  return {
+    approval: approval as AssistantToolApproval,
+    draft,
+  };
 };
 
 const relaySigningInput = (packet: Omit<ConclaveAssistantRelayPacket, "signature">): string =>
@@ -290,6 +409,14 @@ export async function POST(request: Request) {
       { status: 401 },
     );
   }
+  const approvalIdentity: GithubIssueApprovalIdentity = {
+    answerId: tokenPayload.answerId!,
+    questionMessageId: tokenPayload.questionMessageId!,
+    userId: tokenPayload.userId!,
+    roomId: tokenPayload.roomId!,
+    clientId: tokenPayload.clientId!,
+    channelId: tokenPayload.channelId!,
+  };
 
   const serverApiKey = process.env.OPENAI_API_KEY?.trim();
   const participantApiKey = asString(body.apiKey).trim();
@@ -313,6 +440,25 @@ export async function POST(request: Request) {
   if (!question) {
     return Response.json({ error: "Ask Conclave a question." }, { status: 400 });
   }
+
+  const rawApprovalDecision = body.githubIssueApproval?.decision;
+  const approvalDecision =
+    rawApprovalDecision === "approve" || rawApprovalDecision === "deny"
+      ? rawApprovalDecision
+      : null;
+  const resolvedGithubApproval = body.githubIssueApproval
+    ? verifyGithubIssueApproval(
+        body.githubIssueApproval.approval,
+        approvalIdentity,
+      )
+    : null;
+  const githubApprovalError = body.githubIssueApproval
+    ? !approvalDecision
+      ? "Choose whether to approve or deny the GitHub issue."
+      : !resolvedGithubApproval
+        ? "This GitHub issue approval is invalid or expired."
+        : null
+    : null;
 
   const history = Array.isArray(body.history) ? body.history : [];
   const chatLog = buildChatLog(history);
@@ -340,6 +486,11 @@ export async function POST(request: Request) {
 
   const modelConfig = getTranscriptResponseModelConfig(model);
   const client = createOpenAiClient(apiKey);
+  const tools = body.supportsToolApproval
+    ? CONCLAVE_ASSISTANT_TOOLS
+    : CONCLAVE_ASSISTANT_TOOLS.filter(
+        (tool) => !("name" in tool) || tool.name !== GITHUB_ISSUE_TOOL_NAME,
+      );
 
   const buildRequestParams = (
     nextInput: ResponseInputItem[],
@@ -351,7 +502,7 @@ export async function POST(request: Request) {
     max_output_tokens: modelConfig.qaMaxOutputTokens,
     store: false,
     tool_choice: "auto",
-    tools: CONCLAVE_ASSISTANT_TOOLS,
+    tools,
     ...requestOptions,
   });
 
@@ -399,7 +550,6 @@ export async function POST(request: Request) {
     });
   };
 
-  let createdGithubIssueOutput: string | null = null;
   const executeFunctionTool = async (
     call: ResponseFunctionToolCall,
   ): Promise<string> => {
@@ -415,26 +565,6 @@ export async function POST(request: Request) {
           ? "Use this transcript only for meeting-specific claims."
           : "The transcript panel is off, so no transcript is available.",
       });
-    }
-
-    if (call.name === GITHUB_ISSUE_TOOL_NAME) {
-      // A single assistant request may loop through tools several times. Reuse a
-      // successful result rather than risking duplicate issues in the same run.
-      if (createdGithubIssueOutput) return createdGithubIssueOutput;
-      try {
-        const draft = parseGithubIssueDraft(call.arguments);
-        const issue = await createGithubIssue(draft);
-        createdGithubIssueOutput = JSON.stringify({ success: true, issue });
-        return createdGithubIssueOutput;
-      } catch (error) {
-        return JSON.stringify({
-          success: false,
-          error:
-            error instanceof Error
-              ? error.message
-              : "GitHub issue creation failed.",
-        });
-      }
     }
 
     return JSON.stringify({
@@ -536,6 +666,57 @@ export async function POST(request: Request) {
           relay: makeRelayPacket(fullText, false),
         });
       };
+
+      if (githubApprovalError) {
+        fullText = githubApprovalError;
+        writeStreamEvent({
+          type: "error",
+          error: githubApprovalError,
+          relay: makeRelayPacket(fullText, true, true),
+        });
+        return;
+      }
+
+      if (resolvedGithubApproval && approvalDecision) {
+        const approvalTaskId = `approval-${resolvedGithubApproval.approval.id}`;
+        emitTask({
+          id: approvalTaskId,
+          kind: "github_issue",
+          status: "running",
+          query: resolvedGithubApproval.draft.title,
+        });
+        let content: string;
+        if (approvalDecision === "deny") {
+          content = "GitHub issue creation cancelled.";
+        } else {
+          try {
+            const issue = await createGithubIssue(resolvedGithubApproval.draft);
+            content = `Created GitHub issue [#${issue.number}](${issue.url}): ${issue.title}`;
+          } catch (error) {
+            content =
+              error instanceof Error
+                ? `I couldn't create the GitHub issue: ${error.message}`
+                : "I couldn't create the GitHub issue.";
+          }
+        }
+        emitTask({
+          id: approvalTaskId,
+          kind: "github_issue",
+          status: "done",
+          query: resolvedGithubApproval.draft.title,
+        });
+        fullText = content;
+        writeStreamEvent({
+          type: "delta",
+          delta: content,
+          relay: makeRelayPacket(fullText, false),
+        });
+        writeStreamEvent({
+          type: "done",
+          relay: makeRelayPacket(fullText, true),
+        });
+        return;
+      }
 
       try {
         let nextInput = input;
@@ -775,6 +956,19 @@ export async function POST(request: Request) {
 
           const functionOutputs: ResponseInputItem[] = [];
           for (const call of functionCalls) {
+            if (call.name === GITHUB_ISSUE_TOOL_NAME) {
+              const draft = parseGithubIssueDraft(call.arguments);
+              const approval = createGithubIssueApproval(
+                draft,
+                approvalIdentity,
+              );
+              writeStreamEvent({
+                type: "approval",
+                approval,
+                relay: makeRelayPacket(fullText, false),
+              });
+              return;
+            }
             const output = await executeFunctionTool(call);
             emitFunctionTask(call, "done");
             functionOutputs.push({

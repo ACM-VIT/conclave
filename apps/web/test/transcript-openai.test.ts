@@ -5,15 +5,23 @@ import type {
 } from "@conclave/meeting-core/transcript-types";
 import type { Env } from "../transcript-worker/src/types";
 import {
+  MINUTES_COMPACTION_SYSTEM_PROMPT,
   MINUTES_SYSTEM_PROMPT,
   QA_SYSTEM_PROMPT,
+  buildMinutesCompactionInput,
   buildMinutesUpdateInput,
   buildQaTranscriptContext,
   buildRealtimeTranscriptionConfig,
   buildTranscriptionPrompt,
   realtimeEndpoint,
 } from "../transcript-worker/src/openai";
-import { applyMinutesUpdateFromText } from "../transcript-worker/src/minutes";
+import {
+  applyMinutesUpdateFromText,
+  boundMinutesSnapshot,
+  COMPACT_MINUTES_SECTION_LIMITS,
+  minutesNeedCompaction,
+  WORKING_MINUTES_SECTION_LIMITS,
+} from "../transcript-worker/src/minutes";
 
 const segment = (
   sequence: number,
@@ -209,5 +217,41 @@ describe("transcript OpenAI request helpers", () => {
     const current = currentMinutes();
 
     expect(applyMinutesUpdateFromText("not json", current)).toBe(current);
+  });
+
+  it("builds a Codex-style replacement-memory compaction request", () => {
+    const input = buildMinutesCompactionInput(currentMinutes());
+
+    expect(input).toContain("canonical long-term memory");
+    expect(input).toContain("decision-postgres");
+    expect(MINUTES_COMPACTION_SYSTEM_PROMPT).toContain("replacement snapshot");
+    expect(MINUTES_COMPACTION_SYSTEM_PROMPT).toContain(
+      "must not lose commitments",
+    );
+  });
+
+  it("keeps incremental working memory bounded until semantic compaction", () => {
+    const current = currentMinutes();
+    current.actionItems = Array.from(
+      { length: WORKING_MINUTES_SECTION_LIMITS.actionItems + 8 },
+      (_, index) => ({
+        id: `action-${index}`,
+        text: `Action ${index}`,
+      }),
+    );
+
+    const bounded = boundMinutesSnapshot(current);
+
+    expect(bounded.actionItems).toHaveLength(
+      WORKING_MINUTES_SECTION_LIMITS.actionItems,
+    );
+    expect(bounded.actionItems[0]?.id).toBe("action-0");
+    expect(bounded.actionItems.at(-1)?.id).toBe(
+      `action-${WORKING_MINUTES_SECTION_LIMITS.actionItems + 7}`,
+    );
+    expect(minutesNeedCompaction(bounded)).toBe(true);
+    expect(COMPACT_MINUTES_SECTION_LIMITS.actionItems).toBeLessThan(
+      WORKING_MINUTES_SECTION_LIMITS.actionItems,
+    );
   });
 });

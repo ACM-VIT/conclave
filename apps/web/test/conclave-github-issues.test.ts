@@ -5,6 +5,11 @@ import {
   resolveGithubIssuesConfig,
   type GithubIssueDraft,
 } from "../src/app/api/conclave/assistant/github-issues";
+import {
+  createGithubIssueApproval,
+  verifyGithubIssueApproval,
+  type GithubIssueApprovalIdentity,
+} from "../src/app/api/conclave/assistant/route";
 
 const issueDraft: GithubIssueDraft = {
   title: "Add per-message copy action",
@@ -22,6 +27,15 @@ const issueDraft: GithubIssueDraft = {
     "- [ ] Copy is available for every text message.",
     "- [ ] The action provides visible success feedback.",
   ].join("\n"),
+};
+
+const approvalIdentity: GithubIssueApprovalIdentity = {
+  answerId: "answer-1",
+  questionMessageId: "question-1",
+  userId: "user-1",
+  roomId: "room-1",
+  clientId: "client-1",
+  channelId: "room:room-1",
 };
 
 describe("Conclave GitHub issues", () => {
@@ -80,6 +94,26 @@ describe("Conclave GitHub issues", () => {
       "X-GitHub-Api-Version": "2022-11-28",
     });
     expect(JSON.parse(String(requests[0]?.init?.body))).toEqual(issueDraft);
+  });
+
+  it("binds approval to the exact issue draft and requester", () => {
+    const approval = createGithubIssueApproval(issueDraft, approvalIdentity);
+
+    expect(verifyGithubIssueApproval(approval, approvalIdentity)?.draft).toEqual(
+      issueDraft,
+    );
+    expect(
+      verifyGithubIssueApproval(
+        { ...approval, title: "A tampered title" },
+        approvalIdentity,
+      ),
+    ).toBeNull();
+    expect(
+      verifyGithubIssueApproval(approval, {
+        ...approvalIdentity,
+        userId: "different-user",
+      }),
+    ).toBeNull();
   });
 
   it("requires server-side GitHub configuration", () => {

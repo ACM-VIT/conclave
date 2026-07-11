@@ -23,7 +23,11 @@ import {
   DEFAULT_TRANSCRIPTION_LOCALIZATION_PROMPT,
 } from "./constants";
 import type { Env } from "./types";
-import { applyMinutesUpdateFromText } from "./minutes";
+import {
+  applyMinutesUpdateFromText,
+  COMPACT_MINUTES_SECTION_LIMITS,
+  parseMinutesFromText,
+} from "./minutes";
 
 export const MINUTES_SYSTEM_PROMPT = [
   "You are Conclave's live meeting secretary.",
@@ -43,6 +47,18 @@ export const MINUTES_SYSTEM_PROMPT = [
   "- followUps: async communication, documents, reminders, or checks that should happen after the meeting.",
   "Prefer speaker names when the transcript makes ownership or context clear.",
   "Omit empty or speculative items. Do not duplicate the same item across sections unless the meeting explicitly treats it as both a decision and an action.",
+  "Return only the requested structured output.",
+].join("\n");
+
+export const MINUTES_COMPACTION_SYSTEM_PROMPT = [
+  "You compact Conclave's accumulated live meeting minutes into a smaller canonical memory.",
+  "Treat the supplied minutes as the complete source of truth. Do not add facts or use outside knowledge.",
+  "Return a replacement snapshot, not an incremental update.",
+  "Preserve every still-relevant decision, concrete action item, owner, due date, unresolved question, and required follow-up.",
+  "Merge duplicates and near-duplicates, fold low-value topic chatter into the summary, and remove entries that are already represented more precisely elsewhere.",
+  "Keep stable IDs when an item survives. When merging duplicates, retain the clearest existing ID.",
+  "Rewrite the summary as a concise summary-so-far that bridges the earlier meeting context into future incremental updates.",
+  "This is lossy only for redundant wording and low-value discussion detail; it must not lose commitments, decisions, blockers, or unresolved work.",
   "Return only the requested structured output.",
 ].join("\n");
 
@@ -150,6 +166,57 @@ const minutesResponseFormat: ResponseFormatTextJSONSchemaConfig = {
   },
 };
 
+const minutesSnapshotResponseFormat: ResponseFormatTextJSONSchemaConfig = {
+  type: "json_schema",
+  name: "conclave_compacted_meeting_minutes",
+  strict: true,
+  description: "A bounded replacement snapshot of accumulated meeting minutes.",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "summary",
+      "topics",
+      "decisions",
+      "actionItems",
+      "openQuestions",
+      "followUps",
+    ],
+    properties: {
+      summary: {
+        type: "string",
+        description:
+          "A concise summary-so-far preserving the meeting's important context.",
+      },
+      topics: {
+        type: "array",
+        maxItems: COMPACT_MINUTES_SECTION_LIMITS.topics,
+        items: minutesEntrySchema,
+      },
+      decisions: {
+        type: "array",
+        maxItems: COMPACT_MINUTES_SECTION_LIMITS.decisions,
+        items: minutesEntrySchema,
+      },
+      actionItems: {
+        type: "array",
+        maxItems: COMPACT_MINUTES_SECTION_LIMITS.actionItems,
+        items: minutesEntrySchema,
+      },
+      openQuestions: {
+        type: "array",
+        maxItems: COMPACT_MINUTES_SECTION_LIMITS.openQuestions,
+        items: minutesEntrySchema,
+      },
+      followUps: {
+        type: "array",
+        maxItems: COMPACT_MINUTES_SECTION_LIMITS.followUps,
+        items: minutesEntrySchema,
+      },
+    },
+  },
+};
+
 const createOpenAiClient = (env: Env, apiKey: string): OpenAI => {
   const baseURL =
     env.CLOUDFLARE_AI_GATEWAY_OPENAI_URL?.trim() ||
@@ -219,6 +286,14 @@ export const buildMinutesUpdateInput = (options: {
     options.transcript || "(No recent transcript.)",
   ].join("\n");
 
+export const buildMinutesCompactionInput = (
+  current: TranscriptMinutesSnapshot,
+): string =>
+  [
+    "Accumulated minutes to compact into canonical long-term memory:",
+    JSON.stringify(current),
+  ].join("\n");
+
 export const generateMinutes = async (options: {
   env: Env;
   apiKey: string;
@@ -257,6 +332,41 @@ export const generateMinutes = async (options: {
     options.current,
     options.fallback,
   );
+};
+
+export const compactMinutes = async (options: {
+  env: Env;
+  apiKey: string;
+  model: string;
+  current: TranscriptMinutesSnapshot;
+}): Promise<TranscriptMinutesSnapshot> => {
+  const client = createOpenAiClient(options.env, options.apiKey);
+  const modelConfig = getTranscriptResponseModelConfig(options.model);
+  const request: ResponseCreateParamsNonStreaming = {
+    model: options.model,
+    instructions: MINUTES_COMPACTION_SYSTEM_PROMPT,
+    input: buildMinutesCompactionInput(options.current),
+    max_output_tokens: modelConfig.minutesMaxOutputTokens,
+    store: false,
+  };
+  const text = buildTextConfig(
+    modelConfig,
+    modelConfig.minutesVerbosity,
+    minutesSnapshotResponseFormat,
+  );
+  const reasoning = buildReasoningConfig(
+    modelConfig,
+    modelConfig.minutesReasoningEffort,
+  );
+  if (text) request.text = text;
+  if (reasoning) request.reasoning = reasoning;
+
+  const response = await client.responses.create(request);
+  const compacted = parseMinutesFromText(response.output_text, options.current);
+  if (compacted === options.current) {
+    throw new Error("Minutes compaction returned an invalid snapshot.");
+  }
+  return compacted;
 };
 
 export async function* streamQuestionAnswer(options: {

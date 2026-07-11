@@ -16,6 +16,8 @@ import {
   type ConclaveAssistantModel,
   type ConclaveAssistantRelayPacket,
   type ConclaveAssistantHistoryItem,
+  type AssistantToolApproval,
+  type AssistantToolApprovalDecision,
   CONCLAVE_ASSISTANT_GLOBAL_MODEL,
   CONCLAVE_ASSISTANT_NAME,
   CONCLAVE_ASSISTANT_USER_ID,
@@ -121,6 +123,15 @@ export function useMeetChat({
   );
   const pendingAssistantRequestRef =
     useRef<PendingConclaveAssistantRequest | null>(null);
+  const pendingToolApprovalsRef = useRef<
+    Map<
+      string,
+      {
+        request: PendingConclaveAssistantRequest;
+        approval: AssistantToolApproval;
+      }
+    >
+  >(new Map());
 
   useEffect(() => {
     chatMessagesRef.current = chatMessages;
@@ -132,6 +143,7 @@ export function useMeetChat({
         controller.abort();
       }
       assistantControllersRef.current.clear();
+      pendingToolApprovalsRef.current.clear();
     },
     [],
   );
@@ -208,16 +220,30 @@ export function useMeetChat({
       request: PendingConclaveAssistantRequest,
       apiKey?: string,
       model?: ConclaveAssistantModel,
+      githubIssueApproval?: {
+        decision: AssistantToolApprovalDecision;
+        approval: AssistantToolApproval;
+      },
     ) => {
       const controller = new AbortController();
       assistantControllersRef.current.add(controller);
-      patchAssistantMessage(request.answerId, {
-        content: "",
-        assistantStatus: "streaming",
-        reasoning: "",
-        reasoningStatus: undefined,
-        tasks: [],
-      });
+      patchAssistantMessage(
+        request.answerId,
+        githubIssueApproval
+          ? {
+              content: "",
+              assistantStatus: "streaming",
+              toolApproval: undefined,
+            }
+          : {
+              content: "",
+              assistantStatus: "streaming",
+              reasoning: "",
+              reasoningStatus: undefined,
+              tasks: [],
+              toolApproval: undefined,
+            },
+      );
 
       requestConclaveAuthorization(
         request.answerId,
@@ -234,6 +260,7 @@ export function useMeetChat({
             transcript: request.context.transcript,
             transcriptActive: request.context.transcriptActive,
             signal: controller.signal,
+            githubIssueApproval,
             onDelta: (fullText) => {
               if (controller.signal.aborted) return;
               patchAssistantMessage(request.answerId, { content: fullText });
@@ -267,6 +294,18 @@ export function useMeetChat({
                 ),
               );
             },
+            onApproval: (approval) => {
+              if (controller.signal.aborted) return;
+              pendingToolApprovalsRef.current.set(request.answerId, {
+                request,
+                approval,
+              });
+              patchAssistantMessage(request.answerId, {
+                assistantStatus: "approval_required",
+                reasoningStatus: "done",
+                toolApproval: approval,
+              });
+            },
             onRelay: (packet) => {
               if (controller.signal.aborted) return;
               relayConclavePacket(packet);
@@ -293,12 +332,15 @@ export function useMeetChat({
             },
           }),
         )
-        .then((finalText) => {
+        .then((result) => {
           if (controller.signal.aborted) return;
+          if (result.status === "approval_required") return;
           patchAssistantMessage(request.answerId, {
-            content: finalText.trim() || "I didn't catch anything to answer.",
+            content:
+              result.text.trim() || "I didn't catch anything to answer.",
             assistantStatus: "done",
             reasoningStatus: "done",
+            toolApproval: undefined,
           });
         })
         .catch((error) => {
@@ -323,6 +365,7 @@ export function useMeetChat({
                 ? error.message
                 : "Conclave could not answer right now.",
             assistantStatus: "error",
+            toolApproval: undefined,
           });
         })
         .finally(() => {
@@ -335,6 +378,21 @@ export function useMeetChat({
       requestConclaveAuthorization,
       setChatMessages,
     ],
+  );
+
+  const resolveAssistantToolApproval = useCallback(
+    (answerId: string, decision: AssistantToolApprovalDecision) => {
+      const pending = pendingToolApprovalsRef.current.get(answerId);
+      if (!pending) return;
+      pendingToolApprovalsRef.current.delete(answerId);
+      startConclaveStream(
+        pending.request,
+        assistantApiKeyRef.current || undefined,
+        assistantApiKeyRef.current ? assistantModelRef.current : undefined,
+        { decision, approval: pending.approval },
+      );
+    },
+    [startConclaveStream],
   );
 
   // "@Conclave …" summons the room AI. The question is first accepted as a
@@ -751,5 +809,6 @@ export function useMeetChat({
     assistantApiKeyPrompt,
     submitAssistantApiKey,
     cancelAssistantApiKeyPrompt,
+    resolveAssistantToolApproval,
   };
 }

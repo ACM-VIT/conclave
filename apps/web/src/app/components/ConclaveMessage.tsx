@@ -2,17 +2,20 @@
 
 import {
   BrainIcon,
+  CheckIcon,
   FileTextIcon,
   GithubIcon,
   GlobeIcon,
   ListTreeIcon,
   PencilLineIcon,
+  XIcon,
   type LucideIcon,
 } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import {
   type AssistantChatMessage,
   type AssistantTask,
+  type AssistantToolApprovalDecision,
   CONCLAVE_ASSISTANT_NAME,
 } from "../lib/conclave-assistant";
 import {
@@ -52,7 +55,7 @@ const TASK_META: Record<
   },
   github_issue: {
     icon: GithubIcon,
-    running: "Opening a GitHub issue",
+    running: "Preparing a GitHub issue",
     done: "Finished the GitHub issue request",
   },
   answer: {
@@ -83,15 +86,29 @@ const TaskStep = ({ task }: { task: AssistantTask }) => {
 interface ConclaveMessageProps {
   message: AssistantChatMessage;
   isNew: boolean;
+  onToolApproval?: (
+    answerId: string,
+    decision: AssistantToolApprovalDecision,
+  ) => void;
 }
 
 // Renders a Conclave AI chat message: a collapsible "chain of thought" surface
 // (reasoning trace + tool steps) above the streamed markdown answer. The whole
 // thought process can be collapsed so the assistant stays unobtrusive.
-function ConclaveMessage({ message, isNew }: ConclaveMessageProps) {
+function ConclaveMessage({
+  message,
+  isNew,
+  onToolApproval,
+}: ConclaveMessageProps) {
   const status = message.assistantStatus ?? "done";
   const isStreaming = status === "streaming";
   const isError = status === "error";
+  const approval = message.toolApproval;
+  const [approvalChecked, setApprovalChecked] = useState(false);
+
+  useEffect(() => {
+    setApprovalChecked(false);
+  }, [approval?.id]);
 
   const tasks = message.tasks ?? [];
   const visibleTasks = tasks.filter(
@@ -196,6 +213,69 @@ function ConclaveMessage({ message, isNew }: ConclaveMessageProps) {
                 ))}
               </ChainOfThoughtContent>
             </ChainOfThought>
+          ) : null}
+
+          {status === "approval_required" && approval ? (
+            <div className="mb-1 overflow-hidden rounded-xl border border-[#F95F4A]/30 bg-black/25">
+              <div className="border-b border-white/10 px-3 py-2.5">
+                <div className="flex items-center gap-2 text-[12px] font-semibold text-[#fafafa]">
+                  <GithubIcon className="size-3.5 text-[#F95F4A]" />
+                  Approve GitHub issue
+                </div>
+                <p className="mt-1 text-[11px] leading-relaxed text-[#a1a1aa]">
+                  Review the exact write before Conclave sends it to GitHub.
+                </p>
+              </div>
+              <div className="space-y-2.5 px-3 py-3">
+                <div>
+                  <p className="text-[9px] font-semibold uppercase tracking-[0.13em] text-[#71717a]">
+                    Title
+                  </p>
+                  <p className="mt-1 text-[12px] font-medium leading-snug text-[#f4f4f5]">
+                    {approval.title}
+                  </p>
+                </div>
+                <details className="group rounded-lg border border-white/10 bg-white/[0.025]">
+                  <summary className="cursor-pointer list-none px-2.5 py-2 text-[11px] font-medium text-[#a1a1aa]">
+                    Review issue body
+                  </summary>
+                  <div className="max-h-44 overflow-y-auto border-t border-white/10 px-2.5 py-2 text-[11px] text-[#d4d4d8]">
+                    <Response>{approval.body}</Response>
+                  </div>
+                </details>
+                <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-white/10 px-2.5 py-2 text-[11px] leading-relaxed text-[#d4d4d8] transition hover:bg-white/[0.035]">
+                  <input
+                    type="checkbox"
+                    checked={approvalChecked}
+                    onChange={(event) =>
+                      setApprovalChecked(event.currentTarget.checked)
+                    }
+                    className="mt-0.5 size-3.5 accent-[#F95F4A]"
+                  />
+                  I reviewed this issue and approve creating it in the configured
+                  repository.
+                </label>
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onToolApproval?.(message.id, "deny")}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-white/15 px-3 text-[11px] font-medium text-[#d4d4d8] transition hover:bg-white/[0.06]"
+                  >
+                    <XIcon className="size-3" />
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!approvalChecked}
+                    onClick={() => onToolApproval?.(message.id, "approve")}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-[#F95F4A]/50 bg-[#F95F4A]/20 px-3 text-[11px] font-semibold text-[#fafafa] transition hover:bg-[#F95F4A]/30 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <CheckIcon className="size-3" />
+                    Create issue
+                  </button>
+                </div>
+              </div>
+            </div>
           ) : null}
 
           {isStreaming && !hasAnswer && !hasProcess ? (

@@ -25,6 +25,9 @@ export const MINUTES_QUIET_DEBOUNCE_MS = 7_000;
 // Hard cap so a continuous monologue still refreshes minutes periodically even
 // if the quiet window never arrives.
 export const MINUTES_MAX_WAIT_MS = 45_000;
+// Like Codex context compaction, periodically replace the larger incremental
+// working memory with a bounded canonical summary before it becomes unwieldy.
+export const MINUTES_COMPACTION_INTERVAL_MS = 12 * 60 * 1000;
 // Don't auto-generate minutes until there's enough spoken content to summarize;
 // below this we keep the "cooking up minutes" placeholder instead of echoing the
 // transcript back as a summary.

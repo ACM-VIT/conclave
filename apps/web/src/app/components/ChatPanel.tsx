@@ -17,6 +17,7 @@ import type { ChatGifAttachment, ChatMessage, ChatReplyPreview } from "../lib/ty
 import { getActionText, getCommandSuggestions } from "../lib/chat-commands";
 import {
   type AssistantChatMessage,
+  type AssistantToolApprovalDecision,
   type ConclaveAssistantModel,
   CONCLAVE_ASSISTANT_BYOK_MODELS,
   CONCLAVE_ASSISTANT_NAME,
@@ -60,6 +61,10 @@ interface ChatPanelProps {
     model: ConclaveAssistantModel,
   ) => void;
   onCancelAssistantApiKey?: () => void;
+  onAssistantToolApproval?: (
+    answerId: string,
+    decision: AssistantToolApprovalDecision,
+  ) => void;
   mentionableParticipants?: MentionableParticipant[];
   replyTarget?: ChatReplyPreview | null;
   onReply?: (message: ChatMessage) => void;
@@ -92,6 +97,7 @@ function ChatPanel({
   },
   onSubmitAssistantApiKey,
   onCancelAssistantApiKey,
+  onAssistantToolApproval,
   mentionableParticipants = [],
   replyTarget = null,
   onReply,
@@ -558,6 +564,7 @@ function ChatPanel({
                     key={messageRenderKey}
                     message={assistantMsg}
                     isNew={isNew}
+                    onToolApproval={onAssistantToolApproval}
                   />
                 );
               }
