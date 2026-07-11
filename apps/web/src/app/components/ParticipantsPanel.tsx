@@ -37,6 +37,7 @@ interface ParticipantsPanelProps {
 
 const ICON = 18;
 const STROKE = 1.75;
+const ADMIT_ALL_ACK_TIMEOUT_MS = 10000;
 
 const getAdminActionError = (
   response: unknown,
@@ -105,6 +106,7 @@ function ParticipantsPanel({
   >(null);
   const [pendingKickUserId, setPendingKickUserId] = useState<string | null>(null);
   const [removingUserId, setRemovingUserId] = useState<string | null>(null);
+  const [isAdmittingAll, setIsAdmittingAll] = useState(false);
   const [hostActionError, setHostActionError] = useState<string | null>(null);
   const effectiveHostUserId = hostUserId ?? (isAdmin ? currentUserId : null);
   const effectiveHostUserIds = new Set<string>(
@@ -143,13 +145,22 @@ function ParticipantsPanel({
     });
   };
 
-  const handleAdmitAllPending = () => {
-    if (!socket || !isAdmin) return;
+  const handleAdmitAll = () => {
+    if (!socket || !isAdmin || isAdmittingAll) return;
     setHostActionError(null);
-    socket.emit("admin:admitAllPending", (res: unknown) => {
-      const error = getAdminActionError(res, "Couldn’t admit everyone waiting.");
-      if (error) setHostActionError(error);
-    });
+    setIsAdmittingAll(true);
+    socket
+      .timeout(ADMIT_ALL_ACK_TIMEOUT_MS)
+      .emit(
+        "admin:admitAllPending",
+        (timeoutError: Error | null, res: unknown) => {
+          setIsAdmittingAll(false);
+          const error = timeoutError
+            ? "Couldn’t admit everyone."
+            : getAdminActionError(res, "Couldn’t admit everyone.");
+          if (error) setHostActionError(error);
+        },
+      );
   };
 
   const handlePromoteHost = (targetUserId: string) => {
@@ -244,6 +255,9 @@ function ParticipantsPanel({
   const hostActionClass =
     actionButtonBase +
     " border border-[#F95F4A]/35 bg-[#F95F4A]/10 text-[#F95F4A] hover:bg-[#F95F4A]/15";
+  const admitActionClass =
+    actionButtonBase +
+    " border border-[#22c55e]/35 bg-[#22c55e]/10 text-[#22c55e] hover:bg-[#22c55e]/15";
   const dangerActionClass =
     actionButtonBase +
     " border border-[#ea4335]/35 bg-[#ea4335]/10 text-[#ea4335] hover:bg-[#ea4335]/15";
@@ -308,11 +322,11 @@ function ParticipantsPanel({
 
       {isAdmin && pendingList.length > 0 && (
         <section className="border-b border-white/10">
-          <div className="flex w-full items-center justify-between gap-2 px-4 py-2.5 transition-colors hover:bg-white/[0.04]">
+          <div className="flex items-center gap-2 pr-4">
             <button
               type="button"
               onClick={() => setIsPendingExpanded((prev) => !prev)}
-              className="flex min-w-0 flex-1 items-center gap-2"
+              className="flex min-w-0 flex-1 items-center justify-between px-4 py-2.5 transition-colors hover:bg-white/[0.04]"
               aria-expanded={isPendingExpanded}
             >
               <span className="flex items-center gap-2 text-[12.5px] font-semibold text-[#fafafa]">
@@ -331,9 +345,11 @@ function ParticipantsPanel({
             </button>
             <button
               type="button"
-              onClick={handleAdmitAllPending}
-              className="inline-flex shrink-0 items-center justify-center rounded-md border border-[#22c55e]/35 bg-[#22c55e]/10 px-2.5 py-1.5 text-[12.5px] font-medium text-[#22c55e] transition-colors hover:bg-[#22c55e]/15"
-              title="Admit everyone waiting"
+              onClick={handleAdmitAll}
+              disabled={isAdmittingAll}
+              className={`${admitActionClass} shrink-0`}
+              title="Admit everyone in the waiting room"
+              aria-label="Admit all waiting participants"
             >
               Admit all
             </button>
@@ -363,7 +379,7 @@ function ParticipantsPanel({
                             },
                           )
                         }
-                        className="inline-flex items-center justify-center rounded-md border border-[#22c55e]/35 bg-[#22c55e]/10 px-2.5 py-1.5 text-[12.5px] font-medium text-[#22c55e] transition-colors hover:bg-[#22c55e]/15"
+                        className={admitActionClass}
                         title="Admit to meeting"
                         aria-label={`Admit ${pendingName}`}
                       >
@@ -380,7 +396,7 @@ function ParticipantsPanel({
                             },
                           )
                         }
-                        className="inline-flex items-center justify-center rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[12.5px] font-medium text-[#a1a1aa] transition-colors hover:bg-white/[0.07] hover:text-[#fafafa]"
+                        className={neutralActionClass}
                         title="Deny entry"
                         aria-label={`Reject ${pendingName}`}
                       >
