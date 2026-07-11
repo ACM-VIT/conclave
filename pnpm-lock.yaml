@@ -258,6 +258,9 @@ importers:
       mediasoup:
         specifier: ^3.20.10
         version: 3.20.10
+      openai:
+        specifier: ^6.45.0
+        version: 6.45.0(@aws-sdk/credential-provider-node@3.972.58)(@smithy/hash-node@4.4.2)(@smithy/signature-v4@5.5.2)(ws@8.21.0)(zod@4.4.3)
       opusscript:
         specifier: 0.1.1
         version: 0.1.1

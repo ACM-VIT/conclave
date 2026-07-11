@@ -1344,15 +1344,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val isScreenVideo = producerType == "screen" && response.kind == "video"
         val trackKey = if (isScreenVideo) "${producerUserId}-screen" else producerUserId
 
-        consumers[response.id] = ConsumerInfo(
-            consumer = consumer,
-            producerId = response.producerId,
-            userId = producerUserId,
-            kind = response.kind,
-            type = producerType,
-            trackKey = trackKey
-        )
-
         // Request a keyframe on the initial video consume so the decoder gets a
         // fresh IDR immediately instead of a frozen/blank first frame.
         if (response.kind == "video" && producerType == ProducerType.webcam.rawValue) {
@@ -1369,7 +1360,25 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             } catch (_: Throwable) {
             }
         }
-        socket.resumeConsumer(response.id, response.kind == "video")
+        try {
+            socket.resumeConsumer(response.id, response.kind == "video")
+        } catch (error: Throwable) {
+            // The SFU keeps video consumers paused until this acknowledgement.
+            // Roll back both halves so the producer remains genuinely missing
+            // and MeetingViewModel's retry can create a usable consumer.
+            consumer.close()
+            socket.closeConsumer(response.id)
+            throw error
+        }
+
+        consumers[response.id] = ConsumerInfo(
+            consumer = consumer,
+            producerId = response.producerId,
+            userId = producerUserId,
+            kind = response.kind,
+            type = producerType,
+            trackKey = trackKey
+        )
 
         if (response.kind == "video") {
             val track = consumer.track as? VideoTrack

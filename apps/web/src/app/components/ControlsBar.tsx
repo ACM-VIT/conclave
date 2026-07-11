@@ -5,6 +5,7 @@ import {
   MoreHorizontal,
   PhoneOff,
   Settings,
+  Shapes,
   Shield,
   Smile,
   SwitchCamera,
@@ -16,6 +17,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type FormEvent,
@@ -120,13 +122,33 @@ function MediaClusterButton({
 
 type PanelStatus = "live" | "attention" | null;
 
-function PanelClusterItem({
-  d,
-  status,
-}: {
+/** Room-level "something is happening here" marker on a dock icon. Distinct
+ * from the active variant, which means "my panel is open". */
+interface DockDot {
+  color: string;
+  pulse?: boolean;
+}
+
+interface DockEntry {
   d: ControlDescriptor;
-  status?: PanelStatus;
-}) {
+  dot?: DockDot | null;
+}
+
+function DockStatusDot({ dot }: { dot: DockDot }) {
+  return (
+    <span
+      aria-hidden
+      className={
+        "absolute right-1 top-1 h-2 w-2 rounded-full " +
+        (dot.pulse ? "animate-pulse" : "")
+      }
+      style={{ backgroundColor: dot.color, boxShadow: "0 0 0 2px #131316" }}
+    />
+  );
+}
+
+function DockItem({ entry, tabIndex }: { entry: DockEntry; tabIndex?: number }) {
+  const { d, dot } = entry;
   const Icon = d.icon;
   const active = d.variant === "active";
   return (
@@ -140,10 +162,11 @@ function PanelClusterItem({
         onClick={d.onPress}
         aria-label={d.label}
         title={d.label}
+        tabIndex={tabIndex}
         className={
-          "relative inline-flex h-10 w-10 items-center justify-center rounded-full " +
-          "transition-[background-color,color] duration-[120ms] hover:bg-white/[0.08] " +
-          (active ? "" : "hover:!text-[#fafafa]")
+          "relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full " +
+          "transition-[background-color,color] duration-[120ms] " +
+          (active ? "bg-white/[0.09]" : "hover:bg-white/[0.08] hover:!text-[#fafafa]")
         }
         style={{ color: active ? color.accent : color.textMuted }}
       >
@@ -156,74 +179,286 @@ function PanelClusterItem({
             {d.badge > 9 ? "9+" : d.badge}
           </span>
         ) : null}
-        {status ? (
-          <span
-            aria-hidden
-            className={
-              "absolute right-1 top-1 h-2 w-2 rounded-full " +
-              (status === "attention" ? "animate-pulse" : "")
-            }
-            style={{
-              backgroundColor: status === "live" ? "#32d583" : "#f97066",
-              boxShadow: "0 0 0 2px #131316",
-            }}
-          />
-        ) : null}
+        {dot ? <DockStatusDot dot={dot} /> : null}
       </button>
     </HotkeyTooltip>
   );
 }
 
+function DockDivider() {
+  return (
+    <span
+      aria-hidden
+      className="mx-1 h-5 w-px shrink-0 rounded-full bg-white/[0.12]"
+    />
+  );
+}
+
 /**
- * The side-panel toggles (participants, games, transcript, chat) collapse into
- * one overlapping "squabble" of icons to keep the bar uncrowded. Hover (or
- * keyboard focus) fans them out so any one can be picked. Badges and the
- * transcript live/paused dot stay visible even while collapsed, so the cluster
- * still surfaces unread chat and transcript state at a glance.
+ * The right-rail dock. Panel toggles are grouped by intent instead of lined up
+ * as six equal icons: the people panels (participants, chat) stay put, the
+ * activity panels (games, apps, transcript) fold into a single slot that fans
+ * open on hover or tap, and the host shield anchors its own segment. When
+ * something is live in the room — game running, app open, transcript recording
+ * — the folded slot morphs into that activity's icon with a status dot, so one
+ * click returns to it without any "LIVE" chrome.
  */
-function PanelCluster({
-  items,
-  transcriptStatus,
+function ActivityDock({
+  core,
+  activities,
+  promoted,
+  host,
   forceOpen = false,
 }: {
-  items: ControlDescriptor[];
-  transcriptStatus?: PanelStatus;
+  core: DockEntry[];
+  activities: DockEntry[];
+  /** The activity owning the folded slot's face right now (live beats open). */
+  promoted?: DockEntry | null;
+  host?: DockEntry | null;
   forceOpen?: boolean;
 }) {
-  const [hovered, setHovered] = useState(false);
-  const open = hovered || forceOpen;
+  const [expanded, setExpanded] = useState(false);
+  const segmentRef = useRef<HTMLDivElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const trayId = useId();
+  const open = expanded || forceOpen;
+  const collapsible = activities.length > 1;
+
+  const cancelClose = useCallback(() => {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  }, []);
+  useEffect(() => cancelClose, [cancelClose]);
+
+  // A short grace period keeps the tray from snapping shut when the pointer
+  // clips the segment edge on its way to an icon. Only *keyboard* focus pins
+  // the tray open — a mouse click also focuses the button it hit, and honoring
+  // that would leave the tray stuck open after every click.
+  const scheduleClose = () => {
+    cancelClose();
+    closeTimer.current = setTimeout(() => {
+      const segment = segmentRef.current;
+      const focused = document.activeElement;
+      if (
+        segment &&
+        focused instanceof HTMLElement &&
+        segment.contains(focused) &&
+        focused.matches(":focus-visible")
+      ) {
+        return;
+      }
+      setExpanded(false);
+    }, 160);
+  };
+
+  const openTray = () => {
+    cancelClose();
+    setExpanded(true);
+  };
+
+  // Touch/keyboard path: hover never fired, so the face itself unfolds the
+  // tray and hands focus to the first activity.
+  const openTrayFromFace = () => {
+    openTray();
+    requestAnimationFrame(() => {
+      segmentRef.current
+        ?.querySelector<HTMLButtonElement>("[data-tray] button")
+        ?.focus();
+    });
+  };
+
+  const face = promoted ?? null;
+  const FaceIcon = face?.d.icon ?? Shapes;
+  const faceLabel = face ? face.d.label : "Activities";
+  const faceActive = face?.d.variant === "active";
 
   return (
-    <div
-      className="relative flex items-center rounded-full transition-colors duration-150"
-      style={{ backgroundColor: open ? "rgba(255,255,255,0.04)" : "transparent" }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onFocusCapture={() => setHovered(true)}
-      onBlurCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) {
-          setHovered(false);
-        }
-      }}
-    >
-      {items.map((d, index) => {
-        const status = d.id === "transcript" ? (transcriptStatus ?? null) : null;
-        const raised =
-          d.variant === "active" || Boolean(status) || (d.badge ?? 0) > 0;
-        return (
-          <div
-            key={d.id}
-            className="transition-[margin] duration-200 ease-out"
-            style={{
-              marginLeft: index === 0 ? 0 : open ? 2 : -12,
-              zIndex: raised ? 20 : 10 - index,
-            }}
-          >
-            <PanelClusterItem d={d} status={status} />
-          </div>
-        );
-      })}
+    <div className="flex items-center rounded-full bg-white/[0.05] p-1">
+      {core.map((entry) => (
+        <DockItem key={entry.d.id} entry={entry} />
+      ))}
+      {activities.length > 0 && (
+        <>
+          {core.length > 0 && <DockDivider />}
+          {collapsible ? (
+            <div
+              ref={segmentRef}
+              className="flex items-center"
+              onMouseEnter={openTray}
+              onMouseLeave={scheduleClose}
+              onBlurCapture={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) {
+                  setExpanded(false);
+                }
+              }}
+            >
+              <div
+                aria-hidden={open}
+                className="overflow-hidden transition-[width,opacity] duration-[120ms] ease-out"
+                style={{
+                  width: open ? 0 : 40,
+                  opacity: open ? 0 : 1,
+                  pointerEvents: open ? "none" : "auto",
+                }}
+              >
+                <button
+                  type="button"
+                  aria-label={faceLabel}
+                  title={faceLabel}
+                  aria-expanded={open}
+                  aria-controls={trayId}
+                  tabIndex={open ? -1 : 0}
+                  onClick={openTrayFromFace}
+                  className="relative inline-flex h-10 w-10 items-center justify-center rounded-full transition-[background-color,color] duration-[120ms] hover:bg-white/[0.08] hover:!text-[#fafafa]"
+                  style={{ color: faceActive ? color.accent : color.textMuted }}
+                >
+                  {/* Keyed so a promotion change pops the new face in. */}
+                  <span
+                    key={face?.d.id ?? "activities"}
+                    className="inline-flex animate-[acm-pop-in_150ms_cubic-bezier(0.22,1,0.36,1)_both]"
+                  >
+                    <FaceIcon size={ICON} strokeWidth={STROKE} />
+                  </span>
+                  {face?.dot ? <DockStatusDot dot={face.dot} /> : null}
+                </button>
+              </div>
+              <div id={trayId} data-tray className="flex items-center">
+                {activities.map((entry, index) => (
+                  <div
+                    key={entry.d.id}
+                    aria-hidden={!open}
+                    className="overflow-hidden transition-[width,opacity] duration-[120ms] ease-out"
+                    style={{
+                      width: open ? 40 : 0,
+                      opacity: open ? 1 : 0,
+                      pointerEvents: open ? "auto" : "none",
+                      // Ripple outward on open only; fold back as one.
+                      transitionDelay: open ? `${index * 30}ms` : "0ms",
+                    }}
+                  >
+                    <DockItem entry={entry} tabIndex={open ? 0 : -1} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            activities.map((entry) => (
+              <DockItem key={entry.d.id} entry={entry} />
+            ))
+          )}
+        </>
+      )}
+      {host ? (
+        <>
+          <DockDivider />
+          <DockItem entry={host} />
+        </>
+      ) : null}
     </div>
+  );
+}
+
+
+/**
+ * One-time "Watch together" nudge. It used to point at the More menu; the
+ * watch app now lives in the Apps panel, so it anchors to the activity dock
+ * (rendered inside the dock's relative wrapper) with the tray held open.
+ */
+function WatchTogetherTip({
+  cast,
+  onDismiss,
+}: {
+  cast?: { id: string; name: string }[];
+  onDismiss: () => void;
+}) {
+  return (
+      <Coachmark
+        title="Watch together"
+        description={"You can now watch YouTube together on Conclave."}
+        width="w-[16.5rem]"
+        className="!left-auto right-0 !translate-x-0"
+        arrowLeft="calc(100% - 7.5rem)"
+        onDismiss={onDismiss}
+        visual={
+          /* A living watch party: the room's real avatars orbit the
+             play button (counter-rotated so faces stay upright) while
+             the playhead below plays a video through, fades, and starts
+             the next one, a seamless nod to the queue. Continuous by
+             design; stilled for reduced-motion users. */
+          <div
+            className="relative h-[4.75rem] w-full overflow-hidden rounded-lg border"
+            style={{
+              borderColor: color.border,
+              backgroundColor: "#101014",
+            }}
+            aria-hidden="true"
+          >
+            <span className="absolute inset-0 flex items-center justify-center pb-1">
+              <span
+                className="flex h-7 w-7 items-center justify-center rounded-full animate-[acm-pop-in_340ms_cubic-bezier(0.22,1,0.36,1)_both]"
+                style={{ backgroundColor: "#F95F4A" }}
+              >
+                <svg
+                  width="10"
+                  height="10"
+                  viewBox="0 0 24 24"
+                  fill="#ffffff"
+                  style={{ marginLeft: 1.5 }}
+                >
+                  <polygon points="6 4 20 12 6 20 6 4" />
+                </svg>
+              </span>
+            </span>
+            <span className="absolute left-1/2 top-1/2 h-0 w-0 -translate-y-[2px] animate-[acm-orbit_11s_linear_infinite] motion-reduce:animate-none">
+              {(cast ?? [])
+                .slice(0, 4)
+                .map((member, index, orbit) => (
+                  <span
+                    key={member.id}
+                    className="absolute"
+                    style={{
+                      transform: `rotate(${(360 / orbit.length) * index}deg) translateX(26px)`,
+                    }}
+                  >
+                    <span
+                      className="block"
+                      style={{
+                        transform: `rotate(${(-360 / orbit.length) * index}deg)`,
+                      }}
+                    >
+                      {/* Centered via margins, not translate: the spin
+                          animation owns this element's transform. */}
+                      <span
+                        className="block h-[18px] w-[18px] overflow-hidden rounded-full animate-[acm-orbit-rev_11s_linear_infinite] motion-reduce:animate-none"
+                        style={{
+                          boxShadow: "0 0 0 2px #101014",
+                          margin: "-9px 0 0 -9px",
+                        }}
+                      >
+                        <Avatar
+                          id={member.id}
+                          name={member.name}
+                          size={18}
+                        />
+                      </span>
+                    </span>
+                  </span>
+                ))}
+            </span>
+            <span
+              className="absolute inset-x-0 bottom-0 h-[3px]"
+              style={{ backgroundColor: "#26262d" }}
+            >
+              <span
+                className="block h-full animate-[acm-watch-reel_6400ms_cubic-bezier(0.4,0.1,0.4,0.9)_infinite] motion-reduce:animate-none"
+                style={{ backgroundColor: "#F95F4A", width: "6%" }}
+              />
+            </span>
+          </div>
+        }
+      />
   );
 }
 
@@ -418,6 +653,10 @@ function ControlsBar(props: ControlsBarProps) {
   useClickOutside(moreOpen && !compact, moreRef, () => setMoreOpen(false));
   useClickOutside(browserOpen, browserRef, () => setBrowserOpen(false));
 
+  // Rows owned by the Apps panel stay palette-searchable but are dropped from
+  // the visible More menu (popover and phone drawer alike).
+  const moreRows = config.overflow.filter((row) => !row.paletteOnly);
+
   // One-time nudge toward the backgrounds/filters tucked inside More, only
   // surfaced if that option is actually available to this participant.
   const hasEffects = config.overflow.some(
@@ -446,7 +685,7 @@ function ControlsBar(props: ControlsBarProps) {
     delay: 2400,
   });
   // One-time nudge for Watch together, only for people who can actually open
-  // it (it lives in the More menu). Takes precedence over the older More tip.
+  // it (it now lives in the Apps panel, reached through the activity dock).
   const hasWatchControl = config.overflow.some(
     (row) => row.id === "watch" && !row.disabled,
   );
@@ -499,44 +738,104 @@ function ControlsBar(props: ControlsBarProps) {
     !reactionsOpen &&
     !browserOpen &&
     !filtersTip.visible &&
-    !watchTip.visible &&
-    ((gamesTip.visible && !props.isGamesOpen && !props.hasActiveGame) ||
+    (watchTip.visible ||
+      (gamesTip.visible && !props.isGamesOpen && !props.hasActiveGame) ||
       (gifsTip.visible && !props.isChatOpen));
+  // Tips that point at a folded activity hold the tray open so their target
+  // is actually visible.
+  const dockTrayForced =
+    panelCoachmarkVisible &&
+    (watchTip.visible ||
+      (gamesTip.visible && !props.isGamesOpen && !props.hasActiveGame));
 
-  // Side-panel toggles fold into one hover-to-pick cluster. Host controls join
-  // it as a final item so the right rail stays a single tidy group.
-  const panelItems: ControlDescriptor[] = config.left.map((d) => {
-    if (d.id === "games") {
-      return {
-        ...d,
-        onPress: () => {
-          gamesTip.dismiss();
-          d.onPress?.();
+  // Side-panel toggles regroup into the activity dock: people panels stay
+  // always-visible, activity panels fold into one adaptive slot, and the host
+  // shield anchors its own segment.
+  const leftById = new Map(config.left.map((d) => [d.id, d]));
+  const withTipDismiss = (
+    d: ControlDescriptor | undefined,
+    dismiss: () => void,
+  ): ControlDescriptor | undefined =>
+    d && {
+      ...d,
+      onPress: () => {
+        dismiss();
+        d.onPress?.();
+      },
+    };
+  const participantsItem = leftById.get("participants");
+  const chatItem = withTipDismiss(leftById.get("chat"), gifsTip.dismiss);
+  const gamesItem = withTipDismiss(leftById.get("games"), gamesTip.dismiss);
+  const appsItem = withTipDismiss(leftById.get("apps"), watchTip.dismiss);
+  const transcriptItem = leftById.get("transcript");
+
+  // In the dock, icon tint means "my panel is open" while the dot means
+  // "something is live in the room" — two signals, never conflated.
+  const gamesEntry: DockEntry | null = gamesItem
+    ? {
+        d: { ...gamesItem, variant: props.isGamesOpen ? "active" : "default" },
+        dot: props.hasActiveGame ? { color: color.accent } : null,
+      }
+    : null;
+  const appsEntry: DockEntry | null = appsItem
+    ? {
+        d: { ...appsItem, variant: props.isAppsOpen ? "active" : "default" },
+        dot: props.hasActiveApp ? { color: color.accent } : null,
+      }
+    : null;
+  const transcriptEntry: DockEntry | null = transcriptItem
+    ? {
+        d: {
+          ...transcriptItem,
+          variant: props.isTranscriptOpen ? "active" : "default",
         },
-      };
-    }
-    if (d.id === "chat") {
-      return {
-        ...d,
-        onPress: () => {
-          gifsTip.dismiss();
-          d.onPress?.();
-        },
-      };
-    }
-    return d;
-  });
-  if (showHost && !compact && onToggleHostControls) {
-    panelItems.push({
-      id: "host-controls",
-      icon: Shield,
-      label: "Host controls",
-      showTooltipWithoutHotkey: true,
-      variant: isHostControlsOpen ? "active" : "default",
-      badge: props.pendingUsersCount,
-      onPress: onToggleHostControls,
-    });
-  }
+        dot:
+          transcriptClusterStatus === "live"
+            ? { color: "#32d583" }
+            : transcriptClusterStatus === "attention"
+              ? { color: "#f97066", pulse: true }
+              : null,
+      }
+    : null;
+
+  const dockCore: DockEntry[] = [
+    participantsItem ? { d: participantsItem } : null,
+    chatItem ? { d: chatItem } : null,
+  ].filter((entry): entry is DockEntry => entry !== null);
+  const dockActivities: DockEntry[] = [
+    gamesEntry,
+    appsEntry,
+    transcriptEntry,
+  ].filter((entry): entry is DockEntry => entry !== null);
+
+  // The folded slot wears the most urgent activity's face: a transcript that
+  // needs attention beats live room state, which beats a merely-open panel.
+  const promotedEntry =
+    (transcriptEntry?.dot?.pulse ? transcriptEntry : null) ??
+    (props.hasActiveApp ? appsEntry : null) ??
+    (props.hasActiveGame ? gamesEntry : null) ??
+    (transcriptEntry?.dot ? transcriptEntry : null) ??
+    (props.isGamesOpen ? gamesEntry : null) ??
+    (props.isAppsOpen ? appsEntry : null) ??
+    (props.isTranscriptOpen ? transcriptEntry : null) ??
+    null;
+
+  const hostEntry: DockEntry | null =
+    showHost && !compact && onToggleHostControls
+      ? {
+          d: {
+            id: "host-controls",
+            icon: Shield,
+            label: "Host controls",
+            showTooltipWithoutHotkey: true,
+            variant: isHostControlsOpen ? "active" : "default",
+            badge: props.pendingUsersCount,
+            onPress: onToggleHostControls,
+          },
+        }
+      : null;
+  const dockVisible =
+    dockCore.length + dockActivities.length > 0 || hostEntry !== null;
 
   return (
     <div className="relative flex w-full items-center gap-2 px-4 py-3 sm:grid sm:grid-cols-[1fr_auto_1fr]">
@@ -643,95 +942,9 @@ function ControlsBar(props: ControlsBarProps) {
             label="More options"
             onClick={() => {
               if (filtersTip.visible) filtersTip.dismiss();
-              if (watchTip.visible) watchTip.dismiss();
               setMoreOpen((v) => !v);
             }}
           />
-          {watchTip.visible && !moreOpen && !reactionsOpen && !browserOpen ? (
-            <Coachmark
-              title="Watch together"
-              description={"You can now watch YouTube together on Conclave."}
-              width="w-[16.5rem]"
-              onDismiss={watchTip.dismiss}
-              visual={
-                /* A living watch party: the room's real avatars orbit the
-                   play button (counter-rotated so faces stay upright) while
-                   the playhead below plays a video through, fades, and starts
-                   the next one, a seamless nod to the queue. Continuous by
-                   design; stilled for reduced-motion users. */
-                <div
-                  className="relative h-[4.75rem] w-full overflow-hidden rounded-lg border"
-                  style={{
-                    borderColor: color.border,
-                    backgroundColor: "#101014",
-                  }}
-                  aria-hidden="true"
-                >
-                  <span className="absolute inset-0 flex items-center justify-center pb-1">
-                    <span
-                      className="flex h-7 w-7 items-center justify-center rounded-full animate-[acm-pop-in_340ms_cubic-bezier(0.22,1,0.36,1)_both]"
-                      style={{ backgroundColor: "#F95F4A" }}
-                    >
-                      <svg
-                        width="10"
-                        height="10"
-                        viewBox="0 0 24 24"
-                        fill="#ffffff"
-                        style={{ marginLeft: 1.5 }}
-                      >
-                        <polygon points="6 4 20 12 6 20 6 4" />
-                      </svg>
-                    </span>
-                  </span>
-                  <span className="absolute left-1/2 top-1/2 h-0 w-0 -translate-y-[2px] animate-[acm-orbit_11s_linear_infinite] motion-reduce:animate-none">
-                    {(props.coachAvatars ?? [])
-                      .slice(0, 4)
-                      .map((member, index, cast) => (
-                        <span
-                          key={member.id}
-                          className="absolute"
-                          style={{
-                            transform: `rotate(${(360 / cast.length) * index}deg) translateX(26px)`,
-                          }}
-                        >
-                          <span
-                            className="block"
-                            style={{
-                              transform: `rotate(${(-360 / cast.length) * index}deg)`,
-                            }}
-                          >
-                            {/* Centered via margins, not translate: the spin
-                                animation owns this element's transform. */}
-                            <span
-                              className="block h-[18px] w-[18px] overflow-hidden rounded-full animate-[acm-orbit-rev_11s_linear_infinite] motion-reduce:animate-none"
-                              style={{
-                                boxShadow: "0 0 0 2px #101014",
-                                margin: "-9px 0 0 -9px",
-                              }}
-                            >
-                              <Avatar
-                                id={member.id}
-                                name={member.name}
-                                size={18}
-                              />
-                            </span>
-                          </span>
-                        </span>
-                      ))}
-                  </span>
-                  <span
-                    className="absolute inset-x-0 bottom-0 h-[3px]"
-                    style={{ backgroundColor: "#26262d" }}
-                  >
-                    <span
-                      className="block h-full animate-[acm-watch-reel_6400ms_cubic-bezier(0.4,0.1,0.4,0.9)_infinite] motion-reduce:animate-none"
-                      style={{ backgroundColor: "#F95F4A", width: "6%" }}
-                    />
-                  </span>
-                </div>
-              }
-            />
-          ) : null}
           {filtersTip.visible &&
           !watchTip.visible &&
           !moreOpen &&
@@ -752,7 +965,7 @@ function ControlsBar(props: ControlsBarProps) {
               className={popoverPanelClass + " w-full"}
               style={{ backgroundColor: color.surfaceRaised, borderColor: color.border }}
             >
-              {config.overflow.map((row) => (
+              {moreRows.map((row) => (
                 <OverflowItem
                   key={row.id}
                   row={row}
@@ -841,7 +1054,7 @@ function ControlsBar(props: ControlsBarProps) {
                       </div>
                     )}
                     <div className="grid grid-cols-3 gap-2">
-                      {config.overflow.map((row) => (
+                      {moreRows.map((row) => (
                         <MoreTile
                           key={row.id}
                           row={row}
@@ -971,16 +1184,21 @@ function ControlsBar(props: ControlsBarProps) {
       </div>
 
       <div className="flex min-w-0 shrink-0 items-center justify-self-end gap-0.5">
-        {panelItems.length > 0 && (
+        {dockVisible && (
           <div className="relative flex pr-[max(0.5rem,env(safe-area-inset-right))]">
-            <div className="overflow-hidden rounded-full bg-white/[0.04]">
-              <PanelCluster
-                items={panelItems}
-                transcriptStatus={transcriptClusterStatus}
-                forceOpen={panelCoachmarkVisible}
+            <ActivityDock
+              core={dockCore}
+              activities={dockActivities}
+              promoted={promotedEntry}
+              host={hostEntry}
+              forceOpen={dockTrayForced}
+            />
+            {panelCoachmarkVisible && watchTip.visible ? (
+              <WatchTogetherTip
+                cast={props.coachAvatars}
+                onDismiss={watchTip.dismiss}
               />
-            </div>
-            {panelCoachmarkVisible && gamesTip.visible ? (
+            ) : panelCoachmarkVisible && gamesTip.visible ? (
               <Coachmark
                 title="Games are here!"
                 description="Start a quick room game with everyone."

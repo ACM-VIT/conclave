@@ -1484,15 +1484,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         let isScreenVideo = (producerType == "screen" && response.kind == "video")
         let trackKey = isScreenVideo ? "\(producerUserId)-screen" : producerUserId
 
-        consumers[response.id] = ConsumerInfo(
-            consumer: consumer,
-            producerId: response.producerId,
-            userId: producerUserId,
-            kind: response.kind,
-            type: producerType,
-            trackKey: trackKey
-        )
-
         // Request a keyframe on the initial video consume so the decoder gets a
         // fresh IDR immediately instead of showing nothing/garbage until the
         // producer's next natural keyframe.
@@ -1508,7 +1499,28 @@ final class WebRTCClient: NSObject, ObservableObject {
                 requestKeyFrame: false
             )
         }
-        try await socket.resumeConsumer(consumerId: response.id, requestKeyFrame: response.kind == "video")
+        do {
+            try await socket.resumeConsumer(
+                consumerId: response.id,
+                requestKeyFrame: response.kind == "video"
+            )
+        } catch {
+            // A consumer is not usable until the SFU has resumed its server
+            // half. Do not leave a locally registered, server-paused track
+            // behind: MeetingViewModel must be able to retry this producer.
+            consumer.close()
+            socket.closeConsumer(consumerId: response.id)
+            throw error
+        }
+
+        consumers[response.id] = ConsumerInfo(
+            consumer: consumer,
+            producerId: response.producerId,
+            userId: producerUserId,
+            kind: response.kind,
+            type: producerType,
+            trackKey: trackKey
+        )
 
         if response.kind == "video", let videoTrack = consumer.track as? RTCVideoTrack {
             let trackWrapper = VideoTrackWrapper(

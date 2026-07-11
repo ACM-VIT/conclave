@@ -15,6 +15,10 @@ export const CHAT_IMAGE_ACCEPT = CHAT_IMAGE_MIME_TYPES.join(",");
 export const CHAT_IMAGE_TYPE_MESSAGE =
   "Choose a JPEG, PNG, GIF, WebP, or AVIF image.";
 export const CHAT_IMAGE_SIZE_MESSAGE = "Images must be 6 MB or smaller.";
+export const CHAT_IMAGE_MODERATION_BLOCKED_CODE =
+  "chat_image_moderation_blocked";
+export const CHAT_IMAGE_MODERATION_BLOCKED_MESSAGE =
+  "Image not sent. Our safety check flagged it as potentially harmful. Only you can see this notice.";
 
 export function isSupportedChatImageType(mimeType: string): boolean {
   return (CHAT_IMAGE_MIME_TYPES as readonly string[]).includes(mimeType);

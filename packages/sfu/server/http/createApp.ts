@@ -47,11 +47,13 @@ import {
   verifyChatImageReadSignature,
   verifyChatImageUploadToken,
 } from "../chatImages.js";
+import { moderateChatImage } from "../chatImageModeration.js";
 
 export type CreateSfuAppOptions = {
   state: SfuState;
   config?: typeof defaultConfig;
   getIo?: () => SocketIOServer | null;
+  moderateImage?: typeof moderateChatImage;
 };
 
 type ChatImageUploadLocals = {
@@ -259,6 +261,7 @@ export const createSfuApp = ({
   state,
   config = defaultConfig,
   getIo,
+  moderateImage = moderateChatImage,
 }: CreateSfuAppOptions): Express => {
   const app = express();
   // Env-driven CORS allow-list. Defaults to "*" (unchanged dev behavior); set
@@ -560,7 +563,7 @@ export const createSfuApp = ({
       type: [...SUPPORTED_CHAT_IMAGE_TYPES],
       limit: MAX_CHAT_IMAGE_BYTES,
     }),
-    (
+    async (
       req: Request,
       res: Response<unknown, ChatImageUploadLocals>,
     ) => {
@@ -576,6 +579,39 @@ export const createSfuApp = ({
       if (!mimeType) {
         res.status(415).json({
           error: "Choose a JPEG, PNG, GIF, WebP, or AVIF image.",
+        });
+        return;
+      }
+
+      try {
+        const moderation = await moderateImage({
+          data: req.body,
+          mimeType,
+          timeoutMs: config.chatImageModeration.timeoutMs,
+        });
+        if (moderation.blocked) {
+          Logger.warn(
+            `Blocked chat image in room ${room.id} (categories=${
+              moderation.categories.join(",") || "unspecified"
+            }${
+              moderation.requestId
+                ? `, requestId=${moderation.requestId}`
+                : ""
+            })`,
+          );
+          res.status(422).json({
+            code: "chat_image_moderation_blocked",
+            error: "Image not sent. Our safety check flagged it as potentially harmful.",
+          });
+          return;
+        }
+      } catch (error) {
+        Logger.warn(
+          `Chat image moderation unavailable in room ${room.id}; upload rejected`,
+          error,
+        );
+        res.status(503).json({
+          error: "Image safety check is temporarily unavailable. Try again.",
         });
         return;
       }

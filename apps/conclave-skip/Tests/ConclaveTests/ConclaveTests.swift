@@ -7962,6 +7962,30 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(androidWebRTCSource.contains("initialScreenConsumerPreference(\n                connectionQuality = initialReceiveConnectionQuality,"))
     }
 
+    func testNativeRemoteConsumersCommitOnlyAfterServerResume() throws {
+        let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
+        let iosWebRTCSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
+        let androidWebRTCSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+
+        XCTAssertTrue(viewModelSource.contains(
+            "guard consumingProducerIds.insert(producer.producerId).inserted else"
+        ))
+
+        let iosResume = try XCTUnwrap(iosWebRTCSource.range(of: "try await socket.resumeConsumer(\n                consumerId: response.id,"))
+        let iosCommit = try XCTUnwrap(iosWebRTCSource.range(of: "consumers[response.id] = ConsumerInfo("))
+        XCTAssertLessThan(iosResume.lowerBound, iosCommit.lowerBound)
+        XCTAssertTrue(iosWebRTCSource.contains(
+            "consumer.close()\n            socket.closeConsumer(consumerId: response.id)\n            throw error"
+        ))
+
+        let androidResume = try XCTUnwrap(androidWebRTCSource.range(of: "socket.resumeConsumer(response.id, response.kind == \"video\")"))
+        let androidCommit = try XCTUnwrap(androidWebRTCSource.range(of: "consumers[response.id] = ConsumerInfo("))
+        XCTAssertLessThan(androidResume.lowerBound, androidCommit.lowerBound)
+        XCTAssertTrue(androidWebRTCSource.contains(
+            "consumer.close()\n            socket.closeConsumer(response.id)\n            throw error"
+        ))
+    }
+
     func testReconnectPreservesCallAudioRoutingAndVisibleRoster() throws {
         let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
         let iosWebRTCSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")

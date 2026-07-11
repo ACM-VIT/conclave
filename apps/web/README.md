@@ -15,6 +15,21 @@ Integration notes
 - Reaction assets are served from `public/reactions` and passed via `reactionAssets`.
 - Set `NEXT_PUBLIC_SFU_CLIENT_ID` to tag requests with `x-sfu-client` so the SFU can apply per-client policies.
 
+## Chat image moderation
+
+The SFU sends every uploaded chat image to OpenAI's
+`omni-moderation-latest` model before creating the room-scoped attachment. The
+check uses the server-side `OPENAI_API_KEY`; clients never receive the key and
+cannot bypass the upload gate. Uploads fail closed if moderation is not
+configured, times out, returns an invalid response, or flags the image.
+
+- `OPENAI_API_KEY`: required on the SFU for chat image uploads.
+- `SFU_IMAGE_MODERATION_TIMEOUT_MS`: optional per-image timeout; defaults to
+  `8000` and is constrained to 1–30 seconds.
+
+The provider request is asynchronous and gates only that image's upload
+response. Other chat, media, and meeting traffic continues while it runs.
+
 ## Main web worker
 
 The in-chat `@Conclave` assistant runs through the Next.js app route in the

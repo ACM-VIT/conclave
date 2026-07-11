@@ -132,25 +132,20 @@ export function AppsPanel({
                       aria-hidden="true"
                     />
                   ) : isActive ? (
+                    // The accent border + icon already say "this one is on";
+                    // a quiet dot marks it without LIVE-badge chrome.
                     <>
-                      <span
-                        className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]"
-                        style={{
-                          color: color.accent,
-                          background: "rgba(249,95,74,0.12)",
-                        }}
-                      >
-                        <span
-                          className="h-1.5 w-1.5 rounded-full"
-                          style={{ background: color.accent }}
-                        />
-                        Live
-                      </span>
                       {canManage && (
                         <span className="text-[11.5px] text-[#71717a] opacity-0 transition-opacity group-hover:opacity-100">
                           Close
                         </span>
                       )}
+                      <span
+                        aria-hidden="true"
+                        className="h-1.5 w-1.5 rounded-full"
+                        style={{ background: color.accent }}
+                      />
+                      <span className="sr-only">Open now</span>
                     </>
                   ) : canManage ? (
                     <svg
