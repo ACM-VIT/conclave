@@ -143,6 +143,15 @@ function ParticipantsPanel({
     });
   };
 
+  const handleAdmitAllPending = () => {
+    if (!socket || !isAdmin) return;
+    setHostActionError(null);
+    socket.emit("admin:admitAllPending", (res: unknown) => {
+      const error = getAdminActionError(res, "Couldn’t admit everyone waiting.");
+      if (error) setHostActionError(error);
+    });
+  };
+
   const handlePromoteHost = (targetUserId: string) => {
     const targetParticipant = participants.get(targetUserId);
     const isWebinarAttendee = Boolean(
@@ -299,26 +308,36 @@ function ParticipantsPanel({
 
       {isAdmin && pendingList.length > 0 && (
         <section className="border-b border-white/10">
-          <button
-            type="button"
-            onClick={() => setIsPendingExpanded((prev) => !prev)}
-            className="flex w-full items-center justify-between px-4 py-2.5 transition-colors hover:bg-white/[0.04]"
-            aria-expanded={isPendingExpanded}
-          >
-            <span className="flex items-center gap-2 text-[12.5px] font-semibold text-[#fafafa]">
-              Waiting to join
-              <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#F95F4A]/15 px-1.5 text-[11px] font-semibold tabular-nums text-[#F95F4A]">
-                {pendingList.length}
+          <div className="flex w-full items-center justify-between gap-2 px-4 py-2.5 transition-colors hover:bg-white/[0.04]">
+            <button
+              type="button"
+              onClick={() => setIsPendingExpanded((prev) => !prev)}
+              className="flex min-w-0 flex-1 items-center gap-2"
+              aria-expanded={isPendingExpanded}
+            >
+              <span className="flex items-center gap-2 text-[12.5px] font-semibold text-[#fafafa]">
+                Waiting to join
+                <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#F95F4A]/15 px-1.5 text-[11px] font-semibold tabular-nums text-[#F95F4A]">
+                  {pendingList.length}
+                </span>
               </span>
-            </span>
-            <ChevronDown
-              size={ICON}
-              strokeWidth={STROKE}
-              className={`text-[#a1a1aa] transition-transform ${
-                isPendingExpanded ? "rotate-180" : ""
-              }`}
-            />
-          </button>
+              <ChevronDown
+                size={ICON}
+                strokeWidth={STROKE}
+                className={`text-[#a1a1aa] transition-transform ${
+                  isPendingExpanded ? "rotate-180" : ""
+                }`}
+              />
+            </button>
+            <button
+              type="button"
+              onClick={handleAdmitAllPending}
+              className="inline-flex shrink-0 items-center justify-center rounded-md border border-[#22c55e]/35 bg-[#22c55e]/10 px-2.5 py-1.5 text-[12.5px] font-medium text-[#22c55e] transition-colors hover:bg-[#22c55e]/15"
+              title="Admit everyone waiting"
+            >
+              Admit all
+            </button>
+          </div>
           {isPendingExpanded && (
             <div className="max-h-40 space-y-1 overflow-y-auto px-2 pb-2">
               {pendingList.map(([userId, displayName]) => {
