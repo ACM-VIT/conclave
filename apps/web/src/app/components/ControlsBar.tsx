@@ -147,7 +147,7 @@ function DockStatusDot({ dot }: { dot: DockDot }) {
   );
 }
 
-function DockItem({ entry, tabIndex }: { entry: DockEntry; tabIndex?: number }) {
+function DockItem({ entry }: { entry: DockEntry }) {
   const { d, dot } = entry;
   const Icon = d.icon;
   const active = d.variant === "active";
@@ -162,7 +162,6 @@ function DockItem({ entry, tabIndex }: { entry: DockEntry; tabIndex?: number }) 
         onClick={d.onPress}
         aria-label={d.label}
         title={d.label}
-        tabIndex={tabIndex}
         className={
           "relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full " +
           "transition-[background-color,color] duration-[120ms] " +
@@ -194,34 +193,67 @@ function DockDivider() {
   );
 }
 
+/** A labeled row inside the activities flyout: icon, name, and the same
+ * status-dot language as the dock (dot = live in the room). */
+function DockFlyoutRow({
+  entry,
+  onActivate,
+}: {
+  entry: DockEntry;
+  onActivate: () => void;
+}) {
+  const { d, dot } = entry;
+  const Icon = d.icon;
+  const active = d.variant === "active";
+  return (
+    <button
+      type="button"
+      aria-label={d.label}
+      onClick={onActivate}
+      className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[14px] font-medium transition-[background-color] duration-[120ms] hover:bg-white/[0.06]"
+      style={{ color: active ? color.accent : color.text }}
+    >
+      <Icon size={MENU_ICON} strokeWidth={STROKE} className="shrink-0" />
+      <span className="flex-1">{d.label}</span>
+      {dot ? (
+        <span
+          aria-hidden
+          className={
+            "h-2 w-2 shrink-0 rounded-full " + (dot.pulse ? "animate-pulse" : "")
+          }
+          style={{ backgroundColor: dot.color }}
+        />
+      ) : null}
+    </button>
+  );
+}
+
 /**
  * The right-rail dock. Panel toggles are grouped by intent instead of lined up
  * as six equal icons: the people panels (participants, chat) stay put, the
- * activity panels (games, apps, transcript) fold into a single slot that fans
- * open on hover or tap, and the host shield anchors its own segment. When
- * something is live in the room — game running, app open, transcript recording
- * — the folded slot morphs into that activity's icon with a status dot, so one
- * click returns to it without any "LIVE" chrome.
+ * activity panels (games, apps, transcript) share a single slot, and the host
+ * shield anchors its own segment. The slot opens a small flyout above the bar
+ * (hover, tap, or keyboard), so the pill never changes width and the bar never
+ * shifts. When something is live in the room — game running, app open,
+ * transcript recording — the slot wears that activity's icon with a status
+ * dot, so one click returns to it without any "LIVE" chrome.
  */
 function ActivityDock({
   core,
   activities,
   promoted,
   host,
-  forceOpen = false,
 }: {
   core: DockEntry[];
   activities: DockEntry[];
-  /** The activity owning the folded slot's face right now (live beats open). */
+  /** The activity owning the shared slot's face right now (live beats open). */
   promoted?: DockEntry | null;
   host?: DockEntry | null;
-  forceOpen?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [open, setOpen] = useState(false);
   const segmentRef = useRef<HTMLDivElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trayId = useId();
-  const open = expanded || forceOpen;
   const collapsible = activities.length > 1;
 
   const cancelClose = useCallback(() => {
@@ -232,10 +264,10 @@ function ActivityDock({
   }, []);
   useEffect(() => cancelClose, [cancelClose]);
 
-  // A short grace period keeps the tray from snapping shut when the pointer
-  // clips the segment edge on its way to an icon. Only *keyboard* focus pins
-  // the tray open — a mouse click also focuses the button it hit, and honoring
-  // that would leave the tray stuck open after every click.
+  // A short grace period keeps the flyout from snapping shut when the pointer
+  // crosses the gap between the face and the flyout. Only *keyboard* focus
+  // pins it open — a mouse click also focuses the button it hit, and honoring
+  // that would leave the flyout stuck open after every click.
   const scheduleClose = () => {
     cancelClose();
     closeTimer.current = setTimeout(() => {
@@ -249,19 +281,23 @@ function ActivityDock({
       ) {
         return;
       }
-      setExpanded(false);
+      setOpen(false);
     }, 160);
   };
 
-  const openTray = () => {
+  const openFlyout = () => {
     cancelClose();
-    setExpanded(true);
+    setOpen(true);
   };
 
-  // Touch/keyboard path: hover never fired, so the face itself unfolds the
-  // tray and hands focus to the first activity.
-  const openTrayFromFace = () => {
-    openTray();
+  // Tap/keyboard path: hover never fired, so the face itself toggles the
+  // flyout and hands focus to the first activity row.
+  const toggleFromFace = () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    openFlyout();
     requestAnimationFrame(() => {
       segmentRef.current
         ?.querySelector<HTMLButtonElement>("[data-tray] button")
@@ -285,63 +321,67 @@ function ActivityDock({
           {collapsible ? (
             <div
               ref={segmentRef}
-              className="flex items-center"
-              onMouseEnter={openTray}
+              className="relative flex items-center"
+              onMouseEnter={openFlyout}
               onMouseLeave={scheduleClose}
               onBlurCapture={(event) => {
                 if (!event.currentTarget.contains(event.relatedTarget)) {
-                  setExpanded(false);
+                  setOpen(false);
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && open) {
+                  event.stopPropagation();
+                  setOpen(false);
+                  segmentRef.current?.querySelector("button")?.focus();
                 }
               }}
             >
-              <div
-                aria-hidden={open}
-                className="overflow-hidden transition-[width,opacity] duration-[120ms] ease-out"
-                style={{
-                  width: open ? 0 : 40,
-                  opacity: open ? 0 : 1,
-                  pointerEvents: open ? "none" : "auto",
-                }}
+              <button
+                type="button"
+                aria-label={faceLabel}
+                title={faceLabel}
+                aria-expanded={open}
+                aria-controls={trayId}
+                onClick={toggleFromFace}
+                className="relative inline-flex h-10 w-10 items-center justify-center rounded-full transition-[background-color,color] duration-[120ms] hover:bg-white/[0.08] hover:!text-[#fafafa]"
+                style={{ color: faceActive ? color.accent : color.textMuted }}
               >
-                <button
-                  type="button"
-                  aria-label={faceLabel}
-                  title={faceLabel}
-                  aria-expanded={open}
-                  aria-controls={trayId}
-                  tabIndex={open ? -1 : 0}
-                  onClick={openTrayFromFace}
-                  className="relative inline-flex h-10 w-10 items-center justify-center rounded-full transition-[background-color,color] duration-[120ms] hover:bg-white/[0.08] hover:!text-[#fafafa]"
-                  style={{ color: faceActive ? color.accent : color.textMuted }}
+                {/* Keyed so a promotion change pops the new face in. */}
+                <span
+                  key={face?.d.id ?? "activities"}
+                  className="inline-flex animate-[acm-pop-in_150ms_cubic-bezier(0.22,1,0.36,1)_both]"
                 >
-                  {/* Keyed so a promotion change pops the new face in. */}
-                  <span
-                    key={face?.d.id ?? "activities"}
-                    className="inline-flex animate-[acm-pop-in_150ms_cubic-bezier(0.22,1,0.36,1)_both]"
-                  >
-                    <FaceIcon size={ICON} strokeWidth={STROKE} />
-                  </span>
-                  {face?.dot ? <DockStatusDot dot={face.dot} /> : null}
-                </button>
-              </div>
-              <div id={trayId} data-tray className="flex items-center">
-                {activities.map((entry, index) => (
+                  <FaceIcon size={ICON} strokeWidth={STROKE} />
+                </span>
+                {face?.dot ? <DockStatusDot dot={face.dot} /> : null}
+              </button>
+              {open && (
+                // pb-2 bridges the gap so hover stays continuous between the
+                // face and the flyout (same trick as the leave button's menu).
+                <div className="absolute bottom-full right-0 z-50 pb-2">
                   <div
-                    key={entry.d.id}
-                    aria-hidden={!open}
-                    className="overflow-hidden transition-[width,opacity] duration-[120ms] ease-out"
+                    id={trayId}
+                    data-tray
+                    className={popoverPanelClass + " w-44"}
                     style={{
-                      width: open ? 40 : 0,
-                      opacity: open ? 1 : 0,
-                      pointerEvents: open ? "auto" : "none",
-                      // Ripple outward on open only; fold back as one.
-                      transitionDelay: open ? `${index * 30}ms` : "0ms",
+                      backgroundColor: color.surfaceRaised,
+                      borderColor: color.border,
                     }}
                   >
-                    <DockItem entry={entry} tabIndex={open ? 0 : -1} />
+                    {activities.map((entry) => (
+                      <DockFlyoutRow
+                        key={entry.d.id}
+                        entry={entry}
+                        onActivate={() => {
+                          setOpen(false);
+                          entry.d.onPress?.();
+                        }}
+                      />
+                    ))}
                   </div>
-                ))}
-              </div>
+                </div>
+              )}
             </div>
           ) : (
             activities.map((entry) => (
@@ -379,7 +419,7 @@ function WatchTogetherTip({
         description={"You can now watch YouTube together on Conclave."}
         width="w-[16.5rem]"
         className="!left-auto right-0 !translate-x-0"
-        arrowLeft="calc(100% - 7.5rem)"
+        arrowLeft="calc(100% - 5rem)"
         onDismiss={onDismiss}
         visual={
           /* A living watch party: the room's real avatars orbit the
@@ -741,12 +781,6 @@ function ControlsBar(props: ControlsBarProps) {
     (watchTip.visible ||
       (gamesTip.visible && !props.isGamesOpen && !props.hasActiveGame) ||
       (gifsTip.visible && !props.isChatOpen));
-  // Tips that point at a folded activity hold the tray open so their target
-  // is actually visible.
-  const dockTrayForced =
-    panelCoachmarkVisible &&
-    (watchTip.visible ||
-      (gamesTip.visible && !props.isGamesOpen && !props.hasActiveGame));
 
   // Side-panel toggles regroup into the activity dock: people panels stay
   // always-visible, activity panels fold into one adaptive slot, and the host
@@ -839,9 +873,9 @@ function ControlsBar(props: ControlsBarProps) {
 
   return (
     <div className="relative flex w-full items-center gap-2 px-4 py-3 sm:grid sm:grid-cols-[1fr_auto_1fr]">
-      {/* Equal side columns keep center controls from overlapping side content
-          at sm+; below that the tag is dropped and the center group grows to
-          fill the row (flex-1) so the bar can't overlap itself. */}
+      {/* Equal side columns keep the center controls truly centered; the dock
+          never grows sideways (activities open as a flyout above it), so the
+          columns cannot collide and the bar never shifts. */}
       <div className="flex min-w-0 shrink-0 items-center justify-self-start">
         {!compact && <MeetingInfoTag roomId={roomId} />}
       </div>
@@ -1183,7 +1217,7 @@ function ControlsBar(props: ControlsBarProps) {
         />
       </div>
 
-      <div className="flex min-w-0 shrink-0 items-center justify-self-end gap-0.5">
+      <div className="flex min-w-0 shrink-0 items-center justify-self-end">
         {dockVisible && (
           <div className="relative flex pr-[max(0.5rem,env(safe-area-inset-right))]">
             <ActivityDock
@@ -1191,7 +1225,6 @@ function ControlsBar(props: ControlsBarProps) {
               activities={dockActivities}
               promoted={promotedEntry}
               host={hostEntry}
-              forceOpen={dockTrayForced}
             />
             {panelCoachmarkVisible && watchTip.visible ? (
               <WatchTogetherTip

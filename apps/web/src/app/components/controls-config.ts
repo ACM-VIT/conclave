@@ -42,6 +42,10 @@ export interface ControlsBarProps {
   /** Phone-width layout: fold screen-share/reactions into the More menu so the
    * core mic/camera/More/leave row fits without wrapping. */
   compact?: boolean;
+  /** Tight-stage layout (docked panels eating width): demote the least-used
+   * center controls (raise hand, screen share) into the More menu so the bar
+   * keeps breathing room instead of crowding. Ignored when compact is set. */
+  slim?: boolean;
   /** Room members (self first) for the watch-together coachmark vignette. */
   coachAvatars?: { id: string; name: string }[];
   roomId?: string;
@@ -341,6 +345,27 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
     // Phone-width bar: keep the core row to mic/cam/More/leave, fold
     // side controls, hand raise, and screen-share into the More menu instead
     // of squeezing them into separate rails.
+    overflow.push({
+      id: handDescriptor.id,
+      icon: handDescriptor.icon,
+      label: handDescriptor.label,
+      hotkey: handDescriptor.hotkey,
+      active: handDescriptor.variant === "active",
+      disabled: handDescriptor.disabled,
+      onPress: handDescriptor.onPress,
+    });
+    overflow.push({
+      id: "screen-share",
+      icon: screenShareDescriptor.icon,
+      label: screenShareDescriptor.label,
+      hotkey: screenShareDescriptor.hotkey,
+      active: p.isScreenSharing,
+      disabled: screenShareDescriptor.disabled,
+      onPress: screenShareDescriptor.onPress,
+    });
+  } else if (p.slim) {
+    // Tight stage: keep mic/camera/reactions/More/leave in the bar and demote
+    // the two least-used center controls to the top of the More menu.
     overflow.push({
       id: handDescriptor.id,
       icon: handDescriptor.icon,

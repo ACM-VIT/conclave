@@ -175,8 +175,8 @@ export function buildPaletteActions(
 ): PaletteAction[] {
   const actions: PaletteAction[] = [];
   // Force the full desktop config so side-panel toggles and hand/screen-share
-  // rows are present even when the visible bar is compact.
-  const config = buildControlsConfig({ ...p, compact: false });
+  // rows are present even when the visible bar is compact or slimmed.
+  const config = buildControlsConfig({ ...p, compact: false, slim: false });
 
   for (const d of config.center) {
     if (!d.onPress) continue;

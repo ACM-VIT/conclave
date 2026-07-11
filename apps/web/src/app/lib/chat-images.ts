@@ -20,8 +20,33 @@ export const CHAT_IMAGE_MODERATION_BLOCKED_CODE =
 export const CHAT_IMAGE_MODERATION_BLOCKED_MESSAGE =
   "Image not sent. Our safety check flagged it as potentially harmful. Only you can see this notice.";
 
+type ClipboardImageData = {
+  items: ArrayLike<
+    Pick<DataTransferItem, "getAsFile" | "kind" | "type">
+  >;
+  files: ArrayLike<File>;
+};
+
 export function isSupportedChatImageType(mimeType: string): boolean {
   return (CHAT_IMAGE_MIME_TYPES as readonly string[]).includes(mimeType);
+}
+
+export function findClipboardImageFile(
+  clipboardData: ClipboardImageData,
+): File | null {
+  for (let index = 0; index < clipboardData.items.length; index += 1) {
+    const item = clipboardData.items[index];
+    if (item?.kind !== "file" || !item.type.startsWith("image/")) continue;
+    const file = item.getAsFile();
+    if (file) return file;
+  }
+
+  for (let index = 0; index < clipboardData.files.length; index += 1) {
+    const file = clipboardData.files[index];
+    if (file?.type.startsWith("image/")) return file;
+  }
+
+  return null;
 }
 
 export function formatChatImageSize(bytes: number): string {

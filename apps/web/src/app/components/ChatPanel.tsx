@@ -22,6 +22,7 @@ import {
   CHAT_IMAGE_TYPE_MESSAGE,
   MAX_CHAT_IMAGE_BYTES,
   chatImageCaption,
+  findClipboardImageFile,
   formatChatImageSize,
   isSupportedChatImageType,
 } from "../lib/chat-images";
@@ -153,7 +154,7 @@ function ChatPanel({
   const isImagePickerDisabled =
     isChatDisabled || !areImageAttachmentsEnabled || isImageUploading;
   const imagePickerLabel = areImageAttachmentsEnabled
-    ? "Attach image"
+    ? "Attach or paste image"
     : "Image attachments disabled by host";
   const selectedAssistantModel =
     CONCLAVE_ASSISTANT_BYOK_MODELS.find(
@@ -364,29 +365,53 @@ function ChatPanel({
     pendingImage,
   ]);
 
+  const stageImage = useCallback(
+    (file: File): boolean => {
+      setImageUploadError(null);
+      if (!areImageAttachmentsEnabled) {
+        setImageUploadError("Image attachments are disabled by the host.");
+        return false;
+      }
+      if (isImageUploading) {
+        setImageUploadError("Wait for the current image to finish uploading.");
+        return false;
+      }
+      if (!isSupportedChatImageType(file.type)) {
+        setImageUploadError(CHAT_IMAGE_TYPE_MESSAGE);
+        return false;
+      }
+      if (file.size <= 0 || file.size > MAX_CHAT_IMAGE_BYTES) {
+        setImageUploadError(CHAT_IMAGE_SIZE_MESSAGE);
+        return false;
+      }
+      if (pendingImageUrlRef.current) {
+        URL.revokeObjectURL(pendingImageUrlRef.current);
+      }
+      const previewUrl = URL.createObjectURL(file);
+      pendingImageUrlRef.current = previewUrl;
+      setPendingImage({ file, previewUrl });
+      setImageUploadProgress(0);
+      textareaRef.current?.focus();
+      return true;
+    },
+    [areImageAttachmentsEnabled, isImageUploading],
+  );
+
   const handleImageSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    setImageUploadError(null);
-    if (!isSupportedChatImageType(file.type)) {
-      setImageUploadError(CHAT_IMAGE_TYPE_MESSAGE);
-      event.target.value = "";
-      return;
-    }
-    if (file.size > MAX_CHAT_IMAGE_BYTES) {
-      setImageUploadError(CHAT_IMAGE_SIZE_MESSAGE);
-      event.target.value = "";
-      return;
-    }
-    if (pendingImageUrlRef.current) {
-      URL.revokeObjectURL(pendingImageUrlRef.current);
-    }
-    const previewUrl = URL.createObjectURL(file);
-    pendingImageUrlRef.current = previewUrl;
-    setPendingImage({ file, previewUrl });
-    setImageUploadProgress(0);
-    textareaRef.current?.focus();
+    if (!stageImage(file)) event.target.value = "";
   };
+
+  const handlePaste = useCallback(
+    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const file = findClipboardImageFile(event.clipboardData);
+      if (!file) return;
+      event.preventDefault();
+      stageImage(file);
+    },
+    [stageImage],
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -621,8 +646,8 @@ function ChatPanel({
                       No messages yet
                     </p>
                     <p className="text-[12.5px] leading-relaxed text-[#a1a1aa]">
-                      Be the first to say something. Drop a GIF, share a link, or
-                      just say hi.
+                      Be the first to say something. Paste an image, drop a GIF,
+                      share a link, or just say hi.
                     </p>
                   </div>
                   {assistantEnabled && !isChatDisabled ? (
@@ -1229,6 +1254,7 @@ function ChatPanel({
               value={chatInput}
               onChange={(e) => onInputChange(e.target.value)}
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
               placeholder={
                 isChatLocked && !isAdmin
                     ? "Chat locked by host"
