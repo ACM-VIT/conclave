@@ -176,6 +176,10 @@ export interface OverflowRow {
   disabled?: boolean;
   /** When set, this row opens the browser launcher instead of firing onPress. */
   opensBrowserLauncher?: boolean;
+  /** Kept searchable in the command palette but hidden from the More menu —
+   * the Apps panel is the visible home for SDK apps, so listing them in More
+   * too would be a duplicate. */
+  paletteOnly?: boolean;
   onPress?: () => void;
 }
 
@@ -212,6 +216,10 @@ function canManageDevPlayground(p: ControlsBarProps): boolean {
 export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
   const canStartScreenShare = !p.activeScreenShareId || p.isScreenSharing;
   const screenShareDisabled = !canStartScreenShare;
+  // When the Apps launcher exists, every SDK app (whiteboard, watch, dev
+  // playground) plus the editing lock lives in the Apps panel; their rows go
+  // palette-only instead of doubling up in the More menu.
+  const appsPanelOwnsApps = Boolean(p.onToggleApps);
 
   const sideControls: ControlDescriptor[] = [];
   if (p.onToggleParticipants) {
@@ -425,6 +433,7 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       icon: StickyNote,
       label: p.isWhiteboardActive ? "Close whiteboard" : "Open whiteboard",
       active: p.isWhiteboardActive,
+      paletteOnly: appsPanelOwnsApps,
       onPress: () => (p.isWhiteboardActive ? p.onCloseWhiteboard?.() : p.onOpenWhiteboard?.()),
     });
   }
@@ -434,6 +443,7 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       icon: MonitorPlay,
       label: p.isWatchActive ? "Close watch together" : "Watch together",
       active: p.isWatchActive,
+      paletteOnly: appsPanelOwnsApps,
       onPress: () => (p.isWatchActive ? p.onCloseWatch?.() : p.onOpenWatch?.()),
     });
   }
@@ -443,6 +453,7 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       icon: TerminalSquare,
       label: p.isDevPlaygroundActive ? "Close dev playground" : "Open dev playground",
       active: p.isDevPlaygroundActive,
+      paletteOnly: appsPanelOwnsApps,
       onPress: () =>
         p.isDevPlaygroundActive ? p.onCloseDevPlayground?.() : p.onOpenDevPlayground?.(),
     });
@@ -453,6 +464,7 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       icon: p.isAppsLocked ? Lock : LockOpen,
       label: p.isAppsLocked ? "Unlock app editing" : "Lock app editing",
       active: p.isAppsLocked,
+      paletteOnly: appsPanelOwnsApps,
       onPress: p.onToggleAppsLock,
     });
   }

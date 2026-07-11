@@ -21,7 +21,7 @@ unrevealed answers) possible. A CRDT cannot hide anything from anyone.
 | `config.ts` | option schema defaults + `normalizeConfig` for untrusted host config |
 | `rng.ts` | seeded PRNG (server-only randomness for shuffles/deals) |
 | `roundLoop.ts` | shared round/phase driver + `allActivePlayersActed` liveness gate (advance early against connected players, never frozen seats) |
-| `aiContent.ts` | optional Workers AI generated prompt primitive |
+| `aiContent.ts` | optional OpenAI generated prompt primitive |
 | `engine.ts` | `GameSession` owns authoritative state, applies moves, projects views |
 | `registry.ts` | maps `gameId` to module |
 | `modules/*.ts` | the games themselves (pure reducers) with exported typed move unions |
@@ -92,7 +92,7 @@ Full contributor guide: `packages/apps-sdk/docs/guides/add-a-game.md`.
 - `wordle`: turn-based word game with a setter/guesser split.
 
 Trivia, Bluff, Would You Rather, Most Likely To, and Imposter can generate fresh
-content from the host's topic input when Workers AI is configured.
+content from the host's topic input when OpenAI is configured.
 
 ## Beyond the dock
 
@@ -111,10 +111,11 @@ and the vote events), grouped by room, with a per-play instance id. No player
 names or user content are ever sent; the free-text topic reduces to a
 `has_topic` boolean. With no key set, nothing is constructed or sent.
 
-## Workers AI content
+## OpenAI content
 
-The primitive uses Cloudflare Workers AI with `response_format: json_schema`.
-This is intentionally a runtime capability, not a patch inside one game:
+The primitive uses the official OpenAI TypeScript SDK and Responses API with
+strict JSON-schema Structured Outputs. This is intentionally a runtime
+capability, not a patch inside one game:
 
 - modules opt in with `generateContent`
 - socket handlers stay generic
@@ -125,27 +126,26 @@ This is intentionally a runtime capability, not a patch inside one game:
 Config:
 
 ```bash
-SFU_GAME_AI_CLOUDFLARE_ACCOUNT_ID=...
-SFU_GAME_AI_CLOUDFLARE_API_TOKEN=...
-CLOUDFLARE_WORKERS_AI_MODEL=cf/zai-org/glm-4.7-flash
+OPENAI_API_KEY=...
 SFU_GAME_AI_TIMEOUT_MS=25000
 SFU_GAME_AI_ENABLED=1
 SFU_GAME_AI_WEB_SEARCH_ENABLED=1
 SFU_GAME_AI_WEB_SEARCH_CONTEXT_SIZE=low
 ```
 
-For local development, `npx wrangler login` can provide the OAuth token. The
-account id must still be set. Production should use an API token with Workers AI
-access.
+The model is centrally fixed to `gpt-5.6-luna` in the SFU configuration. The
+same server-side `OPENAI_API_KEY` is shared with other OpenAI-backed SFU
+capabilities and is never sent to clients.
 
-Web search is enabled by default for generated game content using the model's
-built-in `web_search_options`. The default context size is `low` to keep game
-startup responsive.
+Web search is enabled by default through the Responses API `web_search` tool.
+The default context size is `low` to keep game startup responsive. Responses
+are not stored by OpenAI, and every generated object is constrained by the
+game's strict JSON schema and then validated again by the game module.
 
 Live smoke test:
 
 ```bash
-SFU_GAME_AI_CLOUDFLARE_ACCOUNT_ID=... pnpm -C packages/sfu run test:game-ai
+OPENAI_API_KEY=... pnpm -C packages/sfu run test:game-ai
 ```
 
 ## Known gaps / next

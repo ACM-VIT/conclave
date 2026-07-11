@@ -16,6 +16,8 @@ import {
   parseChatCommand,
 } from "../lib/chat-commands";
 import {
+  CHAT_IMAGE_MODERATION_BLOCKED_CODE,
+  CHAT_IMAGE_MODERATION_BLOCKED_MESSAGE,
   CHAT_IMAGE_SIZE_MESSAGE,
   CHAT_IMAGE_TYPE_MESSAGE,
   MAX_CHAT_IMAGE_BYTES,
@@ -899,14 +901,24 @@ export function useMeetChat({
           });
           request.addEventListener("load", () => {
             const response = request.response as
-              | { image?: ChatImageAttachment; error?: string }
+              | {
+                  image?: ChatImageAttachment;
+                  code?: string;
+                  error?: string;
+                }
               | null;
             if (request.status >= 200 && request.status < 300 && response?.image) {
               onProgress?.(100);
               resolve(response.image);
               return;
             }
-            reject(new Error(response?.error || "Image upload failed."));
+            reject(
+              new Error(
+                response?.code === CHAT_IMAGE_MODERATION_BLOCKED_CODE
+                  ? CHAT_IMAGE_MODERATION_BLOCKED_MESSAGE
+                  : response?.error || "Image upload failed.",
+              ),
+            );
           });
           request.addEventListener("error", () => {
             reject(new Error("Image upload failed. Check your connection."));

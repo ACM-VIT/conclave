@@ -213,28 +213,20 @@ const plainTransportAnnouncedIp =
   process.env.PLAIN_TRANSPORT_ANNOUNCED_IP?.trim() || announcedIp;
 const socketRedisUrl =
   process.env.SFU_REDIS_URL?.trim() || process.env.REDIS_URL?.trim() || "";
+const openAiApiKey = process.env.OPENAI_API_KEY?.trim() || "";
 const requireRedisAdapter = toBoolean(process.env.SFU_REQUIRE_REDIS_ADAPTER);
 if (requireRedisAdapter && !socketRedisUrl) {
   throw new Error(
     "SFU_REQUIRE_REDIS_ADAPTER=1 requires SFU_REDIS_URL or REDIS_URL.",
   );
 }
-const cloudflareWorkersAiAccountId =
-  process.env.SFU_GAME_AI_CLOUDFLARE_ACCOUNT_ID?.trim() ||
-  process.env.CLOUDFLARE_WORKERS_AI_ACCOUNT_ID?.trim() ||
-  "";
-const cloudflareWorkersAiToken =
-  process.env.SFU_GAME_AI_CLOUDFLARE_API_TOKEN?.trim() ||
-  process.env.CLOUDFLARE_WORKERS_AI_API_TOKEN?.trim() ||
-  process.env.CLOUDFLARE_WORKERS_AI_TOKEN?.trim() ||
-  "";
 const gameAiDisabled =
   process.env.SFU_GAME_AI_ENABLED === "0" ||
   process.env.SFU_GAME_AI_ENABLED?.toLowerCase() === "false";
 const gameAiWebSearchDisabled =
   process.env.SFU_GAME_AI_WEB_SEARCH_ENABLED === "0" ||
   process.env.SFU_GAME_AI_WEB_SEARCH_ENABLED?.toLowerCase() === "false";
-const gameAiWebSearchContextSize = (() => {
+const gameAiWebSearchContextSize = ((): "low" | "medium" | "high" => {
   const configured = process.env.SFU_GAME_AI_WEB_SEARCH_CONTEXT_SIZE?.trim();
   return configured === "medium" || configured === "high" ? configured : "low";
 })();
@@ -340,18 +332,22 @@ export const config = {
   draining: toBoolean(process.env.SFU_DRAINING),
   sfuSecret,
   clientPolicies,
+  openAi: {
+    apiKey: openAiApiKey,
+    maxRetries: 2,
+  },
+  chatImageModeration: {
+    timeoutMs: toNumber(process.env.SFU_IMAGE_MODERATION_TIMEOUT_MS, 8000, {
+      integer: true,
+      min: 1000,
+      max: 30000,
+    }),
+  },
   gameAi: {
-    enabled:
-      !gameAiDisabled &&
-      Boolean(
-        cloudflareWorkersAiAccountId &&
-          (cloudflareWorkersAiToken || process.env.NODE_ENV !== "production"),
-      ),
-    cloudflareAccountId: cloudflareWorkersAiAccountId,
-    apiToken: cloudflareWorkersAiToken,
-    model:
-      process.env.CLOUDFLARE_WORKERS_AI_MODEL?.trim() ||
-      "cf/zai-org/glm-5.2",
+    enabled: !gameAiDisabled && Boolean(openAiApiKey),
+    model: "gpt-5.6-luna",
+    reasoningEffort: "low" as const,
+    storeResponses: false,
     timeoutMs: toNumber(process.env.SFU_GAME_AI_TIMEOUT_MS, 25000, {
       integer: true,
       min: 500,

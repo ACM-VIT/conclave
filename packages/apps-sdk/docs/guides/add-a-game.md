@@ -348,22 +348,25 @@ Generation runs before `GameSession` is created. Reducers still stay pure, and a
 SFU configuration:
 
 ```bash
-SFU_GAME_AI_CLOUDFLARE_ACCOUNT_ID=...
-SFU_GAME_AI_CLOUDFLARE_API_TOKEN=...
-CLOUDFLARE_WORKERS_AI_MODEL=cf/zai-org/glm-4.7-flash
+OPENAI_API_KEY=...
 SFU_GAME_AI_TIMEOUT_MS=25000
 SFU_GAME_AI_WEB_SEARCH_ENABLED=1
 SFU_GAME_AI_WEB_SEARCH_CONTEXT_SIZE=low
 ```
 
-For local development, `npx wrangler login` can provide the OAuth token. The account id is still required. Production should use an API token with Workers AI access.
+Game generation uses the official OpenAI TypeScript SDK, the Responses API,
+and the centrally configured `gpt-5.6-luna` model. Keep `OPENAI_API_KEY`
+server-side; it is never sent to game clients.
 
-Web search is enabled by default for generated game content. Keep the context size at `low` unless a game truly needs deeper current-event grounding.
+Web search is enabled by default through the Responses API `web_search` tool.
+Keep the context size at `low` unless a game truly needs deeper current-event
+grounding. Generation uses strict JSON-schema Structured Outputs, and the game
+validator remains the final boundary before content enters game state.
 
 Run the live smoke test when changing generated content:
 
 ```bash
-SFU_GAME_AI_CLOUDFLARE_ACCOUNT_ID=... pnpm -C packages/sfu run test:game-ai
+OPENAI_API_KEY=... pnpm -C packages/sfu run test:game-ai
 ```
 
 ## Leaderboards

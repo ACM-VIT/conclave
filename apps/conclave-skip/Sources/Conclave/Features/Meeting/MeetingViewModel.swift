@@ -6039,7 +6039,9 @@ final class MeetingViewModel {
             return
         }
 
-        consumingProducerIds.insert(producer.producerId)
+        guard consumingProducerIds.insert(producer.producerId).inserted else {
+            return
+        }
         defer { consumingProducerIds.remove(producer.producerId) }
 
         do {
