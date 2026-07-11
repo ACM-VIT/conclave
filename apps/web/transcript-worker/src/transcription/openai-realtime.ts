@@ -116,6 +116,7 @@ export const connectOpenAiRealtimeTranscription = async (
         Authorization: `Bearer ${options.apiKey}`,
         Upgrade: "websocket",
       },
+      signal: options.signal,
     },
   );
   const socket = response.webSocket;

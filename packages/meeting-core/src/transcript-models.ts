@@ -90,8 +90,8 @@ export const LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS =
 
 export const TRANSCRIPT_QA_MODELS = [
   {
-    id: "gpt-5.5",
-    label: "GPT-5.5",
+    id: "gpt-5.6-terra",
+    label: "GPT-5.6 Terra",
     description: "Best meeting reasoning, synthesis, and Q&A quality.",
     supportsReasoning: true,
     supportsTextVerbosity: true,
@@ -104,9 +104,9 @@ export const TRANSCRIPT_QA_MODELS = [
     qaMaxOutputTokens: 1200,
   },
   {
-    id: "gpt-5.4",
-    label: "GPT-5.4",
-    description: "High-quality fallback when GPT-5.5 is unavailable.",
+    id: "gpt-5.6-luna",
+    label: "GPT-5.6 Luna",
+    description: "Fast for general meeting use cases.",
     supportsReasoning: true,
     supportsTextVerbosity: true,
     supportsStructuredOutputs: true,
@@ -118,9 +118,9 @@ export const TRANSCRIPT_QA_MODELS = [
     qaMaxOutputTokens: 1100,
   },
   {
-    id: "gpt-5.4-mini",
-    label: "GPT-5.4 Mini",
-    description: "Faster, lower-cost meeting assistant and minutes model.",
+    id: "gpt-5.6-sol",
+    label: "GPT-5.6 Sol",
+    description: "Highest quality frontier intelligence model.",
     supportsReasoning: true,
     supportsTextVerbosity: true,
     supportsStructuredOutputs: true,
@@ -130,21 +130,7 @@ export const TRANSCRIPT_QA_MODELS = [
     qaVerbosity: "low",
     minutesMaxOutputTokens: 1800,
     qaMaxOutputTokens: 900,
-  },
-  {
-    id: "gpt-5.4-nano",
-    label: "GPT-5.4 Nano",
-    description: "Lowest-cost option for lightweight transcript questions.",
-    supportsReasoning: true,
-    supportsTextVerbosity: true,
-    supportsStructuredOutputs: true,
-    minutesReasoningEffort: "minimal",
-    qaReasoningEffort: "minimal",
-    minutesVerbosity: "low",
-    qaVerbosity: "low",
-    minutesMaxOutputTokens: 1400,
-    qaMaxOutputTokens: 700,
-  },
+  }
 ] as const satisfies readonly TranscriptResponseModelConfig[];
 
 export const DEFAULT_TRANSCRIPT_TRANSCRIPTION_MODEL =

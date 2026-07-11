@@ -55,7 +55,7 @@ const minutes: TranscriptMinutesSnapshot = {
   openQuestions: [{ id: "question-1", text: "Who owns follow-up?" }],
   followUps: [{ id: "follow-1", text: "Send notes" }],
   updatedAt: 1_700_000_010_000,
-  model: "gpt-5.5",
+  model: "gpt-5.6-terra",
 };
 
 describe("transcript reducer", () => {

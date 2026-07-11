@@ -54,6 +54,22 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(stop.success)
     }
 
+    func testTranscriptRecoveryErrorPolicyClearsOnlyRecoveredConnectionErrors() throws {
+        XCTAssertNil(TranscriptRecoveryErrorPolicy.errorAfterSuccessfulRelayRecovery(
+            "Reconnecting transcription automatically…"
+        ))
+        XCTAssertNil(TranscriptRecoveryErrorPolicy.errorAfterSuccessfulRelayRecovery(
+            "Transcript controller disconnected."
+        ))
+        XCTAssertNil(TranscriptRecoveryErrorPolicy.errorAfterSuccessfulRelayRecovery(
+            "Transcription audio relay could not start."
+        ))
+        XCTAssertEqual(
+            TranscriptRecoveryErrorPolicy.errorAfterSuccessfulRelayRecovery("Invalid OpenAI API key."),
+            "Invalid OpenAI API key."
+        )
+    }
+
     func testSocketWireModelsRoundTripNativeShape() throws {
         let request = JoinRoomRequest(
             roomId: "room-a",
@@ -360,6 +376,82 @@ final class ConclaveTests: XCTestCase {
             ),
             ConnectionQuality.emergency
         )
+    }
+
+    func testConnectionQualityStabilizerRejectsThresholdFlapping() throws {
+        var stabilizer = ConnectionQualityStabilizer(initialValue: ConnectionQuality.good)
+
+        XCTAssertEqual(stabilizer.update(with: ConnectionQuality.poor), ConnectionQuality.good)
+        XCTAssertEqual(stabilizer.update(with: ConnectionQuality.good), ConnectionQuality.good)
+        XCTAssertEqual(stabilizer.update(with: ConnectionQuality.poor), ConnectionQuality.good)
+        XCTAssertEqual(stabilizer.update(with: ConnectionQuality.poor), ConnectionQuality.poor)
+
+        // Missing stats do not relax a constrained profile.
+        XCTAssertEqual(stabilizer.update(with: ConnectionQuality.unknown), ConnectionQuality.poor)
+
+        for _ in 0..<4 {
+            XCTAssertEqual(stabilizer.update(with: ConnectionQuality.good), ConnectionQuality.poor)
+        }
+        XCTAssertEqual(stabilizer.update(with: ConnectionQuality.good), ConnectionQuality.good)
+    }
+
+    func testConnectionQualityStabilizerAppliesEmergencyImmediately() throws {
+        var stabilizer = ConnectionQualityStabilizer(initialValue: ConnectionQuality.good)
+
+        XCTAssertEqual(stabilizer.update(with: ConnectionQuality.emergency), ConnectionQuality.emergency)
+    }
+
+    func testRecoveryMediaControlsAcceptIntentWithoutEnablingLiveOnlyActions() throws {
+        XCTAssertTrue(MeetingMediaControlAvailabilityPolicy.canChangeLocalMediaIntent(
+            connectionState: ConnectionState.joining,
+            isRecoveringConnection: true,
+            mediaPublishingDisabled: false
+        ))
+        XCTAssertTrue(MeetingMediaControlAvailabilityPolicy.canChangeLocalMediaIntent(
+            connectionState: ConnectionState.joined,
+            isRecoveringConnection: false,
+            mediaPublishingDisabled: false
+        ))
+        XCTAssertFalse(MeetingMediaControlAvailabilityPolicy.canChangeLocalMediaIntent(
+            connectionState: ConnectionState.joining,
+            isRecoveringConnection: false,
+            mediaPublishingDisabled: false
+        ))
+        XCTAssertFalse(MeetingMediaControlAvailabilityPolicy.canChangeLocalMediaIntent(
+            connectionState: ConnectionState.reconnecting,
+            isRecoveringConnection: true,
+            mediaPublishingDisabled: true
+        ))
+    }
+
+    @MainActor
+    func testRecoveryQueuesMuteAndCameraIntent() throws {
+        let viewModel = MeetingViewModel()
+        viewModel.state.connectionState = ConnectionState.joining
+        viewModel.state.isRecoveringConnection = true
+        viewModel.state.isMuted = false
+        viewModel.state.isCameraOff = false
+
+        viewModel.toggleMute()
+        viewModel.toggleCamera()
+
+        XCTAssertTrue(viewModel.state.isMuted)
+        XCTAssertTrue(viewModel.state.isCameraOff)
+
+        viewModel.toggleMute()
+        viewModel.toggleCamera()
+
+        XCTAssertFalse(viewModel.state.isMuted)
+        XCTAssertFalse(viewModel.state.isCameraOff)
+    }
+
+    func testMeetingBannerPoliciesKeepTheStageSlotStableAndDismissalQuiet() throws {
+        XCTAssertGreaterThanOrEqual(MeetingBannerSlotLayout.reservedHeight, 58.0)
+        XCTAssertEqual(MeetingQualityBannerPolicy.severity(ConnectionQuality.poor), 2)
+        XCTAssertEqual(MeetingQualityBannerPolicy.severity(ConnectionQuality.emergency), 3)
+        XCTAssertTrue(MeetingQualityBannerPolicy.shouldResetDismissal(for: ConnectionQuality.good))
+        XCTAssertFalse(MeetingQualityBannerPolicy.shouldResetDismissal(for: ConnectionQuality.fair))
+        XCTAssertFalse(MeetingQualityBannerPolicy.shouldResetDismissal(for: ConnectionQuality.unknown))
     }
 
     func testAndroidNetworkReachabilityQualityPolicyUsesBandwidthOnlyForValidatedQuality() throws {
@@ -7561,6 +7653,19 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(androidWebRTCSource.contains("private fun initialScreenConsumerPreference(\n        connectionQuality: ConnectionQuality,"))
         XCTAssertTrue(androidWebRTCSource.contains("initialReceiveConnectionQuality: ConnectionQuality = ConnectionQuality.unknown"))
         XCTAssertTrue(androidWebRTCSource.contains("initialScreenConsumerPreference(\n                connectionQuality = initialReceiveConnectionQuality,"))
+    }
+
+    func testReconnectPreservesCallAudioRoutingAndVisibleRoster() throws {
+        let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
+        let iosWebRTCSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
+        let androidWebRTCSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+
+        XCTAssertTrue(viewModelSource.contains("preserveCallAudioRouting: isRecoveryJoin"))
+        XCTAssertTrue(viewModelSource.contains("if shouldCleanupExistingMediaBeforeJoin {\n                    await stopScreenCaptureManager()\n                    await webRTCClient.cleanup(\n                        notifyLocalState: false,\n                        preserveCallAudioRouting: isRecoveryJoin"))
+        XCTAssertTrue(viewModelSource.contains("resetLiveRoomSnapshotStateForJoin(preservingVisibleState: isRecoveryJoin)"))
+        XCTAssertTrue(viewModelSource.contains("state.participants[userId]?.isCameraOff = true"))
+        XCTAssertTrue(iosWebRTCSource.contains("if !preserveCallAudioRouting {\n            try? audioSession.setActive(false)"))
+        XCTAssertTrue(androidWebRTCSource.contains("if (!preserveCallAudioRouting) {\n            releaseCallAudioMode()"))
     }
 
     func testBrowserStateClearTearsDownSystemMediaConsumers() throws {

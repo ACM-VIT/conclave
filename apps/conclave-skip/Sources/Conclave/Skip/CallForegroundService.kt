@@ -12,6 +12,7 @@ import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 
 /// Keeps call media alive in the background and exposes Leave/Mute actions.
@@ -29,6 +30,7 @@ class CallForegroundService : Service() {
 
     private var currentMuted: Boolean = true
     private var currentCameraOff: Boolean = true
+    private var callWakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -38,6 +40,7 @@ class CallForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                releaseCallWakeLock()
                 stopForegroundCompat()
                 stopSelf()
                 return START_NOT_STICKY
@@ -46,6 +49,7 @@ class CallForegroundService : Service() {
                 currentMuted = intent.getBooleanExtra(EXTRA_MUTED, currentMuted)
                 currentCameraOff = intent.getBooleanExtra(EXTRA_CAMERA_OFF, currentCameraOff)
                 try {
+                    ensureCallWakeLock()
                     startOrUpdateForeground()
                 } catch (t: Throwable) {
                     debugLog("[Call] Failed to update foreground call service: ${t}")
@@ -56,6 +60,7 @@ class CallForegroundService : Service() {
                 currentMuted = intent.getBooleanExtra(EXTRA_MUTED, currentMuted)
                 currentCameraOff = intent.getBooleanExtra(EXTRA_CAMERA_OFF, currentCameraOff)
                 try {
+                    ensureCallWakeLock()
                     startOrUpdateForeground()
                 } catch (t: Throwable) {
                     debugLog("[Call] Failed to start foreground call service: ${t}")
@@ -65,12 +70,48 @@ class CallForegroundService : Service() {
                 return START_STICKY
             }
             else -> {
+                if (PipController.isInCall) {
+                    return try {
+                        ensureCallWakeLock()
+                        startOrUpdateForeground()
+                        START_STICKY
+                    } catch (t: Throwable) {
+                        debugLog("[Call] Failed to restore foreground call service: ${t}")
+                        releaseCallWakeLock()
+                        START_NOT_STICKY
+                    }
+                }
                 return START_NOT_STICKY
             }
         }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        releaseCallWakeLock()
+        super.onDestroy()
+    }
+
+    private fun ensureCallWakeLock() {
+        val existing = callWakeLock
+        if (existing?.isHeld == true) return
+        val powerManager = getSystemService(PowerManager::class.java)
+        callWakeLock = powerManager
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:meeting-call")
+            .apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+    }
+
+    private fun releaseCallWakeLock() {
+        val wakeLock = callWakeLock
+        if (wakeLock?.isHeld == true) {
+            wakeLock.release()
+        }
+        callWakeLock = null
+    }
 
     private fun foregroundServiceTypeMask(): Int {
         var type = 0

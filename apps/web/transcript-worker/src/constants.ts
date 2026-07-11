@@ -12,6 +12,7 @@ export const DEFAULT_TRANSCRIPTION_DELAY = "medium";
 export const DEFAULT_TRANSCRIPTION_LOCALIZATION_PROMPT =
   "Locale: Indian English. Expect Indian accents, Hinglish code-switching, Hindi proper nouns, Indian names, college or team names, acronyms, and technical terms. Preserve spoken wording without expanding or correcting domain terms unless the audio makes it clear.";
 export const DEFAULT_IDLE_TTL_MS = 20 * 60 * 1000;
+export const DEFAULT_RECOVERY_RETENTION_MS = 6 * 60 * 60 * 1000;
 export const DEFAULT_MAX_SEGMENTS = 500;
 export const TRANSCRIPT_PCM_SAMPLE_RATE = 24_000;
 export const MIN_OPENAI_COMMIT_AUDIO_MS = 100;
@@ -32,6 +33,24 @@ export const MINUTES_MIN_WORDS = 24;
 export const MAX_CLIENT_MESSAGE_BYTES = 192 * 1024;
 export const MAX_AUDIO_CHUNK_BASE64_BYTES = 48 * 1024;
 export const SFU_RELAY_DISCONNECT_SUPPRESSION_MS = 15000;
+export const TRANSCRIPT_CONTROLLER_RECONNECT_GRACE_MS = 2 * 60 * 1000;
+export const TRANSCRIPT_SFU_RELAY_RECOVERY_GRACE_MS = 15_000;
+export const TRANSCRIPT_SFU_RELAY_RECOVERY_ATTEMPTS = 8;
+export const TRANSCRIPTION_CONNECT_TIMEOUT_MS = 10_000;
+export const TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS = 45_000;
+export const TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES = 8 * 1024 * 1024;
+export const TRANSCRIPTION_RECOVERY_MAX_AUDIO_AGE_MS = 2 * 60 * 1000;
+export const TRANSCRIPTION_RECOVERY_MAX_EVENTS = 2_000;
+export const TRANSCRIPTION_RECOVERY_DELAYS_MS = [
+  0,
+  250,
+  750,
+  1_500,
+  3_000,
+  5_000,
+  8_000,
+  10_000,
+] as const;
 export const OPENAI_REALTIME_URL = "https://api.openai.com/v1/realtime";
 export const OPENAI_REALTIME_TRANSCRIPTION_INTENT = "transcription";
 export const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";

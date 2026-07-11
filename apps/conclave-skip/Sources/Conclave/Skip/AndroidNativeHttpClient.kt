@@ -67,6 +67,7 @@ object AndroidNativeHttpClient {
         body: String?,
         accept: String?,
         contentType: String?,
+        authorization: String?,
         origin: String?,
         cookieHeader: String?,
         callback: (String?, String?) -> Unit
@@ -80,6 +81,7 @@ object AndroidNativeHttpClient {
                         body = body,
                         accept = accept,
                         contentType = contentType,
+                        authorization = authorization,
                         origin = origin,
                         clientId = null,
                         cookieHeader = cookieHeader,
@@ -100,6 +102,7 @@ object AndroidNativeHttpClient {
         body: String?,
         accept: String?,
         contentType: String?,
+        authorization: String? = null,
         origin: String?,
         clientId: String?,
         cookieHeader: String?,
@@ -117,6 +120,11 @@ object AndroidNativeHttpClient {
         val normalizedContentType = contentType?.trim().orEmpty()
         if (normalizedContentType.isNotEmpty()) {
             requestBuilder.header("Content-Type", normalizedContentType)
+        }
+
+        val normalizedAuthorization = authorization?.trim().orEmpty()
+        if (normalizedAuthorization.isNotEmpty()) {
+            requestBuilder.header("Authorization", normalizedAuthorization)
         }
 
         val normalizedOrigin = origin?.trim().orEmpty()

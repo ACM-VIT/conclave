@@ -1516,6 +1516,19 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
+    internal fun suspendLocalAudioForRecovery() {
+        localAudioTargetEnabled = false
+        audioCaptureReassertionGeneration += 1
+        try {
+            audioProducer?.pause()
+        } catch (_: Throwable) {
+        }
+        audioDeviceModule?.setMicrophoneMute(true)
+        localAudioTrack?.setEnabled(false)
+        localAudioEnabled = false
+        onLocalAudioEnabledChanged?.invoke(false)
+    }
+
     internal suspend fun reassertLocalAudioProducerUnmuted() {
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val producer = audioProducer ?: throw ErrorException("Audio producer not ready")
@@ -1592,6 +1605,18 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             debugLog("[WebRTC] Failed to toggle video: ${error}")
             throw error
         }
+    }
+
+    internal suspend fun suspendLocalVideoForRecovery() {
+        try {
+            videoProducer?.pause()
+        } catch (_: Throwable) {
+        }
+        localVideoTrack?.setEnabled(false)
+        localVideoTrackWrapper?.isEnabled = false
+        localVideoEnabled = false
+        stopWebcamCapture()
+        onLocalVideoEnabledChanged?.invoke(false)
     }
 
     internal suspend fun closeLocalAudioProducer() {
@@ -2383,7 +2408,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
-    internal suspend fun cleanup(notifyLocalState: Boolean = true) {
+    internal suspend fun cleanup(
+        notifyLocalState: Boolean = true,
+        preserveCallAudioRouting: Boolean = false,
+    ) {
         configurationGeneration += 1
         PermissionHelper.cancelPendingCallPermissionRequests()
         stopWebcamCapture()
@@ -2443,7 +2471,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         audioStartOrEnableInFlight = false
         localAudioTargetEnabled = false
         bluetoothConnectAutoRequestAttempted = false
-        releaseCallAudioMode()
+        if (!preserveCallAudioRouting) {
+            releaseCallAudioMode()
+        }
 
         // Reset the produce-state flags (mirrors the Swift WebRTCClient.cleanup
         // fix). The client is reused across calls via the singleton VM, so a

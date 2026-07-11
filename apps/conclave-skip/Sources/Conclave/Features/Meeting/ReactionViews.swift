@@ -4,6 +4,19 @@ import Observation
 import UIKit
 #endif
 
+enum MeetingReactionFlightPolicy {
+    static let durationSeconds = 3.45
+
+    static func horizontalDrift(for lane: Int) -> CGFloat {
+        let drifts: [CGFloat] = [-18.0, 12.0, -8.0, 18.0, 5.0]
+        return drifts[max(0, lane) % drifts.count]
+    }
+
+    static func verticalTravel(availableHeight: CGFloat) -> CGFloat {
+        min(280.0, max(150.0, availableHeight * 0.38))
+    }
+}
+
 // MARK: - Reaction Picker
 
 struct ReactionPickerView: View {
@@ -67,24 +80,49 @@ struct ReactionOverlayView: View {
     var body: some View {
         GeometryReader { geometry in
             ForEach(reactions) { reaction in
-                ReactionBubbleView(
+                FlyingReactionBubbleView(
                     reaction: reaction,
-                    displayName: displayNameForUser(reaction.userId)
+                    displayName: displayNameForUser(reaction.userId),
+                    availableHeight: geometry.size.height
                 )
                     .position(
                         x: CGFloat(reaction.lane + 1) * (geometry.size.width / 6.0),
-                        y: geometry.size.height - 180.0
+                        y: max(80.0, geometry.size.height - 110.0)
                     )
                     .transition(.asymmetric(
-                        insertion: .scale(scale: 0.8).combined(with: AnyTransition.opacity),
-                        removal: .move(edge: .top).combined(with: AnyTransition.opacity)
+                        insertion: .scale(scale: 0.72).combined(with: AnyTransition.opacity),
+                        removal: .scale(scale: 1.08).combined(with: AnyTransition.opacity)
                     ))
             }
         }
         #if !SKIP
         .allowsHitTesting(false)
         #endif
-        .animation(Animation.easeOut(duration: 0.3), value: reactions.count)
+    }
+}
+
+private struct FlyingReactionBubbleView: View {
+    let reaction: Reaction
+    let displayName: String
+    let availableHeight: CGFloat
+    @State private var isFlying = false
+
+    var body: some View {
+        ReactionBubbleView(reaction: reaction, displayName: displayName)
+            .offset(
+                x: isFlying ? MeetingReactionFlightPolicy.horizontalDrift(for: reaction.lane) : 0.0,
+                y: isFlying ? -MeetingReactionFlightPolicy.verticalTravel(availableHeight: availableHeight) : 0.0
+            )
+            .rotationEffect(.degrees(isFlying ? Double(MeetingReactionFlightPolicy.horizontalDrift(for: reaction.lane) / 5.0) : 0.0))
+            .scaleEffect(isFlying ? 1.06 : 0.82)
+            .opacity(isFlying ? 0.18 : 1.0)
+            .animation(
+                Animation.easeOut(duration: MeetingReactionFlightPolicy.durationSeconds),
+                value: isFlying
+            )
+            .onAppear {
+                isFlying = true
+            }
     }
 }
 
@@ -147,6 +185,14 @@ struct ReactionAssetThumbnailView: View {
     var body: some View {
         Group {
             if let imageURL {
+                #if SKIP
+                ComposeView { _ in
+                    AnimatedReactionAsset(
+                        urlString: imageURL.absoluteString,
+                        contentDescription: displayLabel
+                    )
+                }
+                #else
                 AsyncImage(url: imageURL) { image in
                     image
                         .resizable()
@@ -154,6 +200,7 @@ struct ReactionAssetThumbnailView: View {
                 } placeholder: {
                     fallback
                 }
+                #endif
             } else {
                 fallback
             }

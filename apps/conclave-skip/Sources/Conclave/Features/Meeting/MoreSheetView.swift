@@ -209,17 +209,6 @@ struct MoreSheetView: View {
                         viewModel.sendReaction(option)
                         closeSheet()
                     } label: {
-                        #if SKIP
-                        Text(option.label)
-                            .font(ACMFont.trial(11, weight: .medium))
-                            .foregroundStyle(ACMColors.text)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.72)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 38)
-                            .acmColorBackground(ACMColors.surfaceRaised)
-                            .clipShape(Capsule())
-                        #else
                         ReactionAssetThumbnailView(
                             value: option.value,
                             label: option.label,
@@ -229,8 +218,9 @@ struct MoreSheetView: View {
                             .frame(height: 38)
                             .acmColorBackground(ACMColors.surfaceRaised)
                             .clipShape(Capsule())
+                            #if !SKIP
                             .contentShape(Rectangle())
-                        #endif
+                            #endif
                     }
                     .buttonStyle(.plain)
                 }

@@ -1,5 +1,6 @@
-//  In-flow under the header because top-aligned overlays can make Skip duplicate
-//  Compose-backed icons at the top of the stage.
+//  A fixed in-flow status slot under the header. Keeping a stable height avoids
+//  moving/recomposing the video stage when connection notices appear, while also
+//  avoiding the duplicate Compose-backed icons seen with Android stage overlays.
 
 import SwiftUI
 import Observation
@@ -14,36 +15,12 @@ struct QualityBannerInfo {
     let border: Color
 }
 
-struct MeetingBannerOverlay: View {
-    @Bindable var viewModel: MeetingViewModel
-    let onShowParticipants: () -> Void
+enum MeetingBannerSlotLayout {
+    static let reservedHeight: CGFloat = 58.0
+}
 
-    // Highest quality-degradation severity the user has dismissed. The banner
-    // only re-appears if the connection worsens beyond this, and it resets once
-    // the connection recovers to good/unknown.
-    @State private var dismissedQualitySeverity: Int = 0
-
-    private var isReconnecting: Bool {
-        viewModel.state.connectionState == ConnectionState.reconnecting
-    }
-    private var isOffline: Bool {
-        viewModel.state.isNetworkOffline
-    }
-    private var hasPending: Bool {
-        viewModel.state.isAdmin && viewModel.state.pendingUsersCount > 0
-    }
-    private var hasServerRestartNotice: Bool {
-        viewModel.state.serverRestartNotice != nil
-    }
-    private var hasAdminNotice: Bool {
-        viewModel.state.adminNoticeMessage != nil
-    }
-    private var pendingText: String {
-        let n = viewModel.state.pendingUsersCount
-        return n == 1 ? "1 person waiting to join" : "\(n) people waiting to join"
-    }
-
-    private func qualitySeverity(_ quality: ConnectionQuality) -> Int {
+enum MeetingQualityBannerPolicy {
+    static func severity(_ quality: ConnectionQuality) -> Int {
         switch quality {
         case .fair: return 0
         case .poor: return 2
@@ -52,14 +29,43 @@ struct MeetingBannerOverlay: View {
         }
     }
 
+    static func shouldResetDismissal(for quality: ConnectionQuality) -> Bool {
+        quality == .good
+    }
+}
+
+struct MeetingBannerOverlay: View {
+    @Bindable var viewModel: MeetingViewModel
+    let onShowParticipants: () -> Void
+
+    // Highest quality-degradation severity the user has dismissed. The banner
+    // only re-appears if the connection worsens beyond this, and it resets once
+    // the connection has genuinely recovered to good.
+    @State private var dismissedQualitySeverity: Int = 0
+
+    private var isRecovering: Bool {
+        viewModel.state.isRecoveringConnection ||
+            viewModel.state.connectionState == ConnectionState.reconnecting
+    }
+    private var isOffline: Bool {
+        viewModel.state.isNetworkOffline
+    }
+    private var hasPending: Bool {
+        viewModel.state.isAdmin && viewModel.state.pendingUsersCount > 0
+    }
+    private var pendingText: String {
+        let n = viewModel.state.pendingUsersCount
+        return n == 1 ? "1 person waiting to join" : "\(n) people waiting to join"
+    }
+
     private var currentQualitySeverity: Int {
-        qualitySeverity(viewModel.state.connectionQuality)
+        MeetingQualityBannerPolicy.severity(viewModel.state.connectionQuality)
     }
 
     // Offline/reconnecting banners take priority and already explain the outage,
     // so quality warnings stay suppressed while either is showing.
     private var shouldShowQualityBanner: Bool {
-        guard !isOffline, !isReconnecting else { return false }
+        guard !isOffline, !isRecovering else { return false }
         guard viewModel.state.connectionState == .joined else { return false }
         return currentQualitySeverity > 0 && currentQualitySeverity > dismissedQualitySeverity
     }
@@ -86,9 +92,12 @@ struct MeetingBannerOverlay: View {
     }
 
     var body: some View {
-        Group {
-        if isOffline || isReconnecting || hasServerRestartNotice || hasAdminNotice || hasPending || shouldShowQualityBanner || viewModel.state.errorMessage != nil {
-            VStack(spacing: ACMSpacing.xs) {
+        ZStack(alignment: .top) {
+            Color.clear
+                .frame(height: MeetingBannerSlotLayout.reservedHeight)
+                .accessibilityHidden(true)
+
+            Group {
                 if isOffline {
                     MeetingBanner(
                         iosIcon: "wifi.slash",
@@ -99,33 +108,19 @@ struct MeetingBannerOverlay: View {
                         background: ACMColors.error.opacity(0.14),
                         border: ACMColors.error.opacity(0.34)
                     )
-                } else if isReconnecting {
+                } else if isRecovering {
                     MeetingBanner(
                         iosIcon: "wifi",
                         androidIcon: "warning",
                         iconTint: "amber",
                         iconColor: ACMColors.primaryOrange,
-                        text: "Reconnecting…",
+                        text: viewModel.state.serverRestartNotice ??
+                            "Connection interrupted. Restoring audio and video — mic and camera changes will be applied.",
                         background: ACMColors.surfaceRaised,
                         border: ACMColors.border,
                         showSpinner: true
                     )
-                }
-
-                if shouldShowQualityBanner, let info = qualityBannerInfo {
-                    MeetingBanner(
-                        iosIcon: info.iosIcon,
-                        androidIcon: info.androidIcon,
-                        iconTint: info.iconTint,
-                        iconColor: info.iconColor,
-                        text: info.text,
-                        background: info.background,
-                        border: info.border,
-                        onClose: { dismissedQualitySeverity = currentQualitySeverity }
-                    )
-                }
-
-                if !isOffline, let restartNotice = viewModel.state.serverRestartNotice {
+                } else if let restartNotice = viewModel.state.serverRestartNotice {
                     MeetingBanner(
                         iosIcon: "arrow.triangle.2.circlepath",
                         androidIcon: "warning",
@@ -135,9 +130,18 @@ struct MeetingBannerOverlay: View {
                         background: ACMColors.primaryOrange.opacity(0.14),
                         border: ACMColors.primaryOrange.opacity(0.34)
                     )
-                }
-
-                if let adminNotice = viewModel.state.adminNoticeMessage {
+                } else if let error = viewModel.state.errorMessage {
+                    MeetingBanner(
+                        iosIcon: "exclamationmark.triangle.fill",
+                        androidIcon: "warning",
+                        iconTint: "danger",
+                        iconColor: ACMColors.error,
+                        text: error,
+                        background: ACMColors.error.opacity(0.14),
+                        border: ACMColors.error.opacity(0.34),
+                        onClose: { viewModel.dismissError() }
+                    )
+                } else if let adminNotice = viewModel.state.adminNoticeMessage {
                     MeetingBanner(
                         iosIcon: adminNoticeIOSIcon,
                         androidIcon: adminNoticeAndroidIcon,
@@ -148,9 +152,7 @@ struct MeetingBannerOverlay: View {
                         border: adminNoticeBorder,
                         onClose: { viewModel.dismissAdminNotice() }
                     )
-                }
-
-                if hasPending {
+                } else if hasPending {
                     Button {
                         onShowParticipants()
                     } label: {
@@ -166,34 +168,34 @@ struct MeetingBannerOverlay: View {
                         )
                     }
                     .buttonStyle(.plain)
-                }
-
-                if let error = viewModel.state.errorMessage {
+                } else if shouldShowQualityBanner, let info = qualityBannerInfo {
                     MeetingBanner(
-                        iosIcon: "exclamationmark.triangle.fill",
-                        androidIcon: "warning",
-                        iconTint: "danger",
-                        iconColor: ACMColors.error,
-                        text: error,
-                        background: ACMColors.error.opacity(0.14),
-                        border: ACMColors.error.opacity(0.34),
-                        onClose: { viewModel.dismissError() }
+                        iosIcon: info.iosIcon,
+                        androidIcon: info.androidIcon,
+                        iconTint: info.iconTint,
+                        iconColor: info.iconColor,
+                        text: info.text,
+                        background: info.background,
+                        border: info.border,
+                        onClose: { dismissedQualitySeverity = currentQualitySeverity }
                     )
                 }
             }
             .padding(.horizontal, ACMSpacing.sm)
             .padding(.top, ACMSpacing.xs)
         }
-        }
+        .frame(minHeight: MeetingBannerSlotLayout.reservedHeight, alignment: .top)
         #if SKIP
         .onChange(of: "\(currentQualitySeverity)") {
-            if currentQualitySeverity == 0 {
+            if MeetingQualityBannerPolicy.shouldResetDismissal(
+                for: viewModel.state.connectionQuality
+            ) {
                 dismissedQualitySeverity = 0
             }
         }
         #else
         .onChange(of: viewModel.state.connectionQuality) { _, newValue in
-            if qualitySeverity(newValue) == 0 {
+            if MeetingQualityBannerPolicy.shouldResetDismissal(for: newValue) {
                 dismissedQualitySeverity = 0
             }
         }

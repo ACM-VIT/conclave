@@ -3,11 +3,15 @@ import {
   takeYouTubeRateLimit,
   youtubeRateLimitResponse,
 } from "../rate-limit";
+import {
+  resolveYouTubeBroadcastStatus,
+  youtubeMetadataCacheTtl,
+  youtubeMetadataRevalidateAfter,
+  type YouTubeBroadcastStatus,
+} from "@/lib/youtube-video-metadata";
 
 const YOUTUBE_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos";
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
-const LIVE_CACHE_TTL_MS = 30 * 1000;
-const VIDEO_CACHE_TTL_MS = 15 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 128;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_REQUESTS = 30;
@@ -16,6 +20,8 @@ export type YouTubeVideoMetadata = {
   videoId: string;
   title: string;
   isLive: boolean;
+  broadcastStatus: YouTubeBroadcastStatus;
+  revalidateAfterMs: number | null;
 };
 
 type CacheEntry = {
@@ -34,7 +40,6 @@ type VideosResponse = {
     };
     liveStreamingDetails?: {
       actualEndTime?: unknown;
-      activeLiveChatId?: unknown;
     };
   }>;
 };
@@ -42,7 +47,7 @@ type VideosResponse = {
 const readCache = (videoId: string): YouTubeVideoMetadata | null => {
   const entry = cache.get(videoId);
   if (!entry) return null;
-  const ttl = entry.value.isLive ? LIVE_CACHE_TTL_MS : VIDEO_CACHE_TTL_MS;
+  const ttl = youtubeMetadataCacheTtl(entry.value.broadcastStatus);
   if (Date.now() - entry.at >= ttl) {
     cache.delete(videoId);
     return null;
@@ -108,10 +113,17 @@ export async function GET(request: Request): Promise<Response> {
       return NextResponse.json({ error: "Video not found" }, { status: 404 });
     }
 
-    const isLive =
-      item.snippet?.liveBroadcastContent === "live" &&
-      typeof item.liveStreamingDetails?.actualEndTime !== "string";
-    const value: YouTubeVideoMetadata = { videoId, title, isLive };
+    const broadcastStatus = resolveYouTubeBroadcastStatus(
+      item.snippet?.liveBroadcastContent,
+      item.liveStreamingDetails?.actualEndTime,
+    );
+    const value: YouTubeVideoMetadata = {
+      videoId,
+      title,
+      isLive: broadcastStatus === "live",
+      broadcastStatus,
+      revalidateAfterMs: youtubeMetadataRevalidateAfter(broadcastStatus),
+    };
     writeCache(value);
     return NextResponse.json(value);
   } catch {

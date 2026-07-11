@@ -207,7 +207,40 @@ struct ChatGifAttachment: Codable, Equatable {
 
 enum ConclaveAssistantChatIdentity {
     static let userId = "conclave-assistant"
-    static let displayName = "Conclave"
+    static let displayName = "Conclave AI"
+    static let mentionToken = "conclave"
+}
+
+/// Keeps participant labels compact and consistent with the web meeting UI.
+/// Institution identities often arrive as `First Last 23BME0453`; the final
+/// registration token is useful for authentication, but not in a live tile or
+/// chat header. Limiting presentation to two words also prevents long names
+/// from destabilising compact phone layouts.
+enum MeetingDisplayNamePresentation {
+    static func formatted(_ rawValue: String) -> String {
+        let words = whitespaceSeparatedWords(rawValue)
+        guard !words.isEmpty else { return rawValue.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return words.prefix(2).joined(separator: " ")
+    }
+
+    private static func whitespaceSeparatedWords(_ value: String) -> [String] {
+        var words: [String] = []
+        var current = ""
+        for character in value {
+            if character.isWhitespace || character.isNewline {
+                if !current.isEmpty {
+                    words.append(current)
+                    current = ""
+                }
+            } else {
+                current += String(character)
+            }
+        }
+        if !current.isEmpty {
+            words.append(current)
+        }
+        return words
+    }
 }
 
 struct ChatMessage: Identifiable, Equatable {
@@ -428,6 +461,118 @@ enum ConnectionQuality: String, Codable {
     case fair
     case poor
     case unknown
+}
+
+/// Keeps one noisy RTC stats sample from immediately reconfiguring capture,
+/// simulcast layers, remote receive policy, and the visible quality banner.
+/// Emergency samples still apply immediately; ordinary degradation and
+/// recovery need consecutive evidence.
+struct ConnectionQualityStabilizer {
+    private(set) var value: ConnectionQuality
+    private var candidate: ConnectionQuality?
+    private var consecutiveSamples: Int = 0
+
+    init(initialValue: ConnectionQuality = .unknown) {
+        value = initialValue
+    }
+
+    mutating func reset(to value: ConnectionQuality = .unknown) {
+        self.value = value
+        candidate = nil
+        consecutiveSamples = 0
+    }
+
+    @discardableResult
+    mutating func update(with sample: ConnectionQuality) -> ConnectionQuality {
+        guard sample != value else {
+            candidate = nil
+            consecutiveSamples = 0
+            return value
+        }
+
+        // Missing stats are not evidence that a constrained link recovered.
+        // The tracker is reset explicitly when a call is torn down or a new
+        // startup profile is seeded.
+        guard sample != .unknown || value == .unknown else {
+            candidate = nil
+            consecutiveSamples = 0
+            return value
+        }
+
+        if candidate == sample {
+            consecutiveSamples += 1
+        } else {
+            candidate = sample
+            consecutiveSamples = 1
+        }
+
+        let requiredSamples = ConnectionQualityStabilityPolicy.requiredConsecutiveSamples(
+            from: value,
+            to: sample
+        )
+        guard consecutiveSamples >= requiredSamples else { return value }
+
+        value = sample
+        candidate = nil
+        consecutiveSamples = 0
+        return value
+    }
+}
+
+enum ConnectionQualityStabilityPolicy {
+    static func requiredConsecutiveSamples(
+        from current: ConnectionQuality,
+        to candidate: ConnectionQuality
+    ) -> Int {
+        guard current != candidate else { return 0 }
+
+        // Protect call continuity immediately when conditions are critical.
+        if candidate == .emergency {
+            return 1
+        }
+
+        // The first usable stats after startup should settle quickly without
+        // letting a single partial report drive the whole media graph.
+        if current == .unknown {
+            return 2
+        }
+
+        // Unknown is handled as "hold the current profile" by the tracker.
+        if candidate == .unknown {
+            return 10_000
+        }
+
+        let isWorsening = rank(candidate) > rank(current)
+        if isWorsening {
+            return candidate == .poor ? 2 : 3
+        }
+
+        // Recovery is deliberately slower than degradation. This prevents a
+        // roaming link from repeatedly restarting camera capture and swapping
+        // remote simulcast layers around a threshold.
+        return candidate == .good ? 5 : 4
+    }
+
+    private static func rank(_ quality: ConnectionQuality) -> Int {
+        switch quality {
+        case .unknown: return 0
+        case .good: return 1
+        case .fair: return 2
+        case .poor: return 3
+        case .emergency: return 4
+        }
+    }
+}
+
+enum MeetingMediaControlAvailabilityPolicy {
+    static func canChangeLocalMediaIntent(
+        connectionState: ConnectionState,
+        isRecoveringConnection: Bool,
+        mediaPublishingDisabled: Bool
+    ) -> Bool {
+        guard !mediaPublishingDisabled else { return false }
+        return connectionState == .joined || isRecoveringConnection
+    }
 }
 
 enum ConnectionQualityHintPolicy {

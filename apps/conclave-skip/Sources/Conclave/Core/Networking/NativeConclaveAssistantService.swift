@@ -121,9 +121,22 @@ enum NativeConclaveAssistantService {
         if let nativeError = error as? NativeConclaveAssistantError, nativeError.requiresApiKey {
             return "Conclave AI needs an OpenAI API key. Use Conclave AI on web to connect one for now."
         }
-        return error.localizedDescription.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty
-            ? "Conclave could not answer right now."
-            : error.localizedDescription
+        let rawMessage = error.localizedDescription.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        guard !rawMessage.isEmpty else {
+            return "Conclave could not answer right now."
+        }
+        let lowercased = rawMessage.lowercased()
+        if lowercased.contains("authorization is invalid or expired") {
+            return "Conclave AI authorization expired. Please try again."
+        }
+        // Kotlin may prefix a bridged Swift error with its generated class
+        // name. Never leak that implementation detail into chat (or let its
+        // dotted module name be mistaken for a tappable URL).
+        if lowercased.hasPrefix("conclave.module."),
+           let separator = rawMessage.range(of: ": ") {
+            return String(rawMessage[separator.upperBound...])
+        }
+        return rawMessage
     }
 
     private static func parseAssistantStreamFrame(_ frame: String) -> NativeConclaveAssistantStreamEvent? {
@@ -162,6 +175,7 @@ enum NativeConclaveAssistantService {
                 body: bodyString,
                 accept: request.value(forHTTPHeaderField: "Accept"),
                 contentType: request.value(forHTTPHeaderField: "Content-Type"),
+                authorization: request.value(forHTTPHeaderField: "Authorization"),
                 origin: nil,
                 cookieHeader: cookieHeader
             ) { response, errorMessage in

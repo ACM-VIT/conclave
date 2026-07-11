@@ -21,9 +21,45 @@ import skip.ui.UIApplication
 object PipManager {
     private const val ENTER_AFTER_MINIMAL_LAYOUT_FALLBACK_MS = 180L
     private const val ENTER_RESULT_FALLBACK_MS = 900L
+    private const val EXTERNAL_ACTIVITY_SUPPRESSION_MS = 2_000L
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingEnterRunnable: Runnable? = null
+    private var suppressionResetRunnable: Runnable? = null
     private var enterAttemptGeneration = 0
+    @Volatile private var suppressNextAutoEnter = false
+
+    /** Prevent an app-launched chooser/browser from being mistaken for Home. */
+    fun suppressNextAutoEnter(reason: String) {
+        suppressNextAutoEnter = true
+        suppressionResetRunnable?.let { mainHandler.removeCallbacks(it) }
+        val reset = Runnable {
+            suppressNextAutoEnter = false
+            suppressionResetRunnable = null
+        }
+        suppressionResetRunnable = reset
+        mainHandler.postDelayed(reset, EXTERNAL_ACTIVITY_SUPPRESSION_MS)
+        debugLog("[PiP] Suppressing next auto-enter: $reason")
+    }
+
+    fun consumeAutoEnterSuppression(): Boolean {
+        if (!suppressNextAutoEnter) return false
+        suppressNextAutoEnter = false
+        suppressionResetRunnable?.let { mainHandler.removeCallbacks(it) }
+        suppressionResetRunnable = null
+        return true
+    }
+
+    /** Configure Android 12+'s system Home-gesture auto-enter. */
+    fun configureForActiveCall(active: Boolean, muted: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val activity = UIApplication.shared.androidActivity ?: return
+        if (activity.isFinishing || activity.isDestroyed) return
+        try {
+            activity.setPictureInPictureParams(buildParams(activity, muted, autoEnter = active))
+        } catch (t: Throwable) {
+            debugLog("[PiP] Failed to configure auto-enter: ${t}")
+        }
+    }
 
     // Enter PiP for an active call. Safe to call only on API 26+.
     @RequiresApi(Build.VERSION_CODES.O)
@@ -140,6 +176,9 @@ object PipManager {
         if (wasInPip) {
             CallActionDispatcher.pictureInPictureContentRefresh()
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            configureForActiveCall(PipController.isInCall, PipController.muted)
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
@@ -193,13 +232,18 @@ object PipManager {
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
-    private fun buildParams(activity: Activity, muted: Boolean): android.app.PictureInPictureParams {
+    private fun buildParams(
+        activity: Activity,
+        muted: Boolean,
+        autoEnter: Boolean = PipController.isInCall
+    ): android.app.PictureInPictureParams {
         val builder = android.app.PictureInPictureParams.Builder()
             .setAspectRatio(Rational(16, 9))
             .setActions(listOf(muteAction(activity, muted), leaveAction(activity)))
         sourceRect(activity)?.let { builder.setSourceRectHint(it) }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setSeamlessResizeEnabled(true)
+            builder.setAutoEnterEnabled(autoEnter)
         }
         return builder.build()
     }

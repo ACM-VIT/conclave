@@ -197,11 +197,19 @@ struct ControlsBarView: View {
             #endif
         }()
         let isJoinedCall = viewModel.state.connectionState == .joined
-        let mediaControlsDisabled = !isJoinedCall || viewModel.state.mediaPublishingDisabled
+        let canChangeLocalMediaIntent = MeetingMediaControlAvailabilityPolicy.canChangeLocalMediaIntent(
+            connectionState: viewModel.state.connectionState,
+            isRecoveringConnection: viewModel.state.isRecoveringConnection,
+            mediaPublishingDisabled: viewModel.state.mediaPublishingDisabled
+        )
+        let mediaControlsDisabled = !canChangeLocalMediaIntent
+        let recoveryControlHint = viewModel.state.isRecoveringConnection
+            ? "This choice will be applied as the call reconnects."
+            : nil
         let isWebinarAttendee = viewModel.state.isWebinarAttendee
         let canUseParticipantActions = isJoinedCall
             && !isWebinarAttendee
-        let isScreenShareDisabled = mediaControlsDisabled ||
+        let isScreenShareDisabled = !isJoinedCall || viewModel.state.mediaPublishingDisabled ||
             viewModel.state.hasActiveRemoteScreenShare
 
         HStack(spacing: layout.itemSpacing) {
@@ -232,7 +240,8 @@ struct ControlsBarView: View {
                         icon: micIcon,
                         isMuted: viewModel.state.isMuted,
                         isDisabledDimmed: mediaControlsDisabled,
-                        accessibilityLabel: viewModel.state.isMuted ? "Unmute microphone" : "Mute microphone"
+                        accessibilityLabel: viewModel.state.isMuted ? "Unmute microphone" : "Mute microphone",
+                        accessibilityHint: recoveryControlHint
                     ) {
                     viewModel.toggleMute()
                 }
@@ -242,7 +251,8 @@ struct ControlsBarView: View {
                         icon: cameraIcon,
                         isMuted: viewModel.state.isCameraOff,
                         isDisabledDimmed: mediaControlsDisabled,
-                        accessibilityLabel: viewModel.state.isCameraOff ? "Turn camera on" : "Turn camera off"
+                        accessibilityLabel: viewModel.state.isCameraOff ? "Turn camera on" : "Turn camera off",
+                        accessibilityHint: recoveryControlHint
                     ) {
                     viewModel.toggleCamera()
                 }

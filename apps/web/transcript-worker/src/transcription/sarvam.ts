@@ -355,6 +355,7 @@ export const connectSarvamTranscription = async (
         "Api-Subscription-Key": options.apiKey,
         Upgrade: "websocket",
       },
+      signal: options.signal,
     },
   );
   const socket = response.webSocket;

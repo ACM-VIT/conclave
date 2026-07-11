@@ -16,6 +16,7 @@ export type LiveTranscriptionConnectOptions = {
   delay: string;
   locale: string;
   localizationPrompt?: string;
+  signal?: AbortSignal;
   callbacks: LiveTranscriptionCallbacks;
 };
 

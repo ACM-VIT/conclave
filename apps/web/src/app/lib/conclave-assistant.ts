@@ -9,29 +9,24 @@ export const CONCLAVE_MENTION_TOKEN = "Conclave";
 export type ConclaveAssistantStatus = "streaming" | "done" | "error";
 export type ConclaveAssistantPartStatus = "streaming" | "done";
 
-export const CONCLAVE_ASSISTANT_GLOBAL_MODEL = "gpt-5.4-mini";
+export const CONCLAVE_ASSISTANT_GLOBAL_MODEL = "gpt-5.6-terra";
 
 export const CONCLAVE_ASSISTANT_BYOK_MODELS = [
   {
-    id: "gpt-5.4-mini",
-    label: "GPT-5.4 Mini",
+    id: "gpt-5.6-luna",
+    label: "GPT-5.6 Luna",
     description: "Fast default",
   },
   {
-    id: "gpt-5.4",
-    label: "GPT-5.4",
+    id: "gpt-5.6-terra",
+    label: "GPT-5.6 Terra",
     description: "Higher quality",
   },
   {
-    id: "gpt-5.5",
-    label: "GPT-5.5",
-    description: "Best quality",
-  },
-  {
-    id: "gpt-5.4-nano",
-    label: "GPT-5.4 Nano",
-    description: "Lowest cost",
-  },
+    id: "gpt-5.6-sol",
+    label: "GPT-5.6 Sol",
+    description: "Frontier intelligence",
+  }
 ] as const;
 
 export type ConclaveAssistantModel =

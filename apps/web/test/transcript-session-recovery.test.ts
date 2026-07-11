@@ -5,6 +5,8 @@ import type {
 } from "@conclave/meeting-core/transcript-types";
 import {
   recoverPersistedTranscriptSession,
+  shouldAutomaticallyRecoverPersistedTranscriptSession,
+  shouldRetainRecoverableTranscriptSnapshot,
   TRANSCRIPT_RELAY_RECOVERED_MESSAGE,
   TRANSCRIPT_WORKER_UPDATED_MESSAGE,
 } from "../transcript-worker/src/session-recovery";
@@ -28,7 +30,7 @@ const session = (
     lastSeenAt: 2,
   },
   transcriptModel: "gpt-realtime-whisper",
-  qaModel: "gpt-5.5",
+  qaModel: "gpt-5.6-terra",
   transportMode: "browser",
   keySource: "global",
   startedAt: 1,
@@ -38,6 +40,44 @@ const session = (
 });
 
 describe("recoverPersistedTranscriptSession", () => {
+  it("automatically restores active sessions that use a shared provider key", () => {
+    expect(
+      shouldAutomaticallyRecoverPersistedTranscriptSession(
+        session({ keySource: "global" }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldAutomaticallyRecoverPersistedTranscriptSession(
+        session({ keySource: "controller" }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldAutomaticallyRecoverPersistedTranscriptSession(
+        session({ keySource: "global", status: "idle" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("retains recoverable snapshots until the recovery window expires", () => {
+    const recoverable = session({
+      status: "takeover_needed",
+      updatedAt: 1_000,
+    });
+    expect(
+      shouldRetainRecoverableTranscriptSnapshot(recoverable, 2_000, 5_000),
+    ).toBe(true);
+    expect(
+      shouldRetainRecoverableTranscriptSnapshot(recoverable, 6_000, 5_000),
+    ).toBe(false);
+    expect(
+      shouldRetainRecoverableTranscriptSnapshot(
+        session({ status: "idle", updatedAt: 1_000 }),
+        2_000,
+        5_000,
+      ),
+    ).toBe(false);
+  });
+
   it("turns active sessions from older worker versions into service-update takeover", () => {
     const recovered = recoverPersistedTranscriptSession(
       session(),

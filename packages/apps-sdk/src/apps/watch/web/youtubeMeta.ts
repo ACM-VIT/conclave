@@ -24,6 +24,31 @@ export type WatchVideoMetadata = {
   videoId: string;
   title: string;
   isLive: boolean;
+  broadcastStatus: WatchBroadcastStatus;
+  revalidateAfterMs: number | null;
+};
+
+export type WatchBroadcastStatus =
+  | "live"
+  | "upcoming"
+  | "none"
+  | "unknown";
+
+const isWatchBroadcastStatus = (
+  value: unknown,
+): value is WatchBroadcastStatus =>
+  value === "live" ||
+  value === "upcoming" ||
+  value === "none" ||
+  value === "unknown";
+
+/** Upcoming/unknown metadata must not suppress the faster iframe fallback. */
+export const liveHintForMetadata = (
+  metadata: WatchVideoMetadata | null,
+): boolean | null => {
+  if (metadata?.broadcastStatus === "live") return true;
+  if (metadata?.broadcastStatus === "none") return false;
+  return null;
 };
 
 /** 3661 -> "1:01:01", 754 -> "12:34". Null in, null out. */
@@ -169,11 +194,25 @@ export const fetchVideoMetadata = async (
     if (
       payload.videoId !== videoId ||
       typeof payload.title !== "string" ||
-      typeof payload.isLive !== "boolean"
+      typeof payload.isLive !== "boolean" ||
+      !isWatchBroadcastStatus(payload.broadcastStatus) ||
+      !(
+        payload.revalidateAfterMs === null ||
+        (typeof payload.revalidateAfterMs === "number" &&
+          Number.isFinite(payload.revalidateAfterMs) &&
+          payload.revalidateAfterMs >= 1_000)
+      ) ||
+      payload.isLive !== (payload.broadcastStatus === "live")
     ) {
       return null;
     }
-    return payload as WatchVideoMetadata;
+    return {
+      videoId: payload.videoId,
+      title: payload.title,
+      isLive: payload.isLive,
+      broadcastStatus: payload.broadcastStatus,
+      revalidateAfterMs: payload.revalidateAfterMs,
+    };
   } catch {
     return null;
   } finally {

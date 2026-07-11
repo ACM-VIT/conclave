@@ -16,6 +16,7 @@ export interface Env {
   TRANSCRIPT_TOKEN_SECRET: string;
   TRANSCRIPT_ALLOWED_ORIGIN?: string;
   TRANSCRIPT_IDLE_TTL_MS?: string;
+  TRANSCRIPT_RECOVERY_RETENTION_MS?: string;
   TRANSCRIPT_MAX_SEGMENTS?: string;
   TRANSCRIPT_TRANSCRIPTION_LANGUAGE?: string;
   TRANSCRIPT_TRANSCRIPTION_LOCALE?: string;
@@ -68,6 +69,13 @@ export type PersistedSnapshot = {
   minutes: TranscriptMinutesSnapshot;
   sequence: number;
   serviceVersion?: TranscriptServiceVersion;
+  transcriptionConfig?: PersistedTranscriptionConfig;
+};
+
+export type PersistedTranscriptionConfig = {
+  language: string;
+  delay: string;
+  locale: string;
 };
 
 export type ClientEnvelope =
@@ -82,6 +90,7 @@ export type ClientEnvelope =
       delay?: string;
     }
   | { type: "session.stop" }
+  | { type: "session.relayFailed"; message?: string }
   | { type: "session.pause" }
   | { type: "session.resume" }
   | {

@@ -145,7 +145,7 @@ struct SfuIceServer: Codable {
     }
 }
 
-struct SfuJoinUser: Encodable {
+struct SfuJoinUser: Codable, Equatable {
     let id: String?
     let email: String?
     let name: String?

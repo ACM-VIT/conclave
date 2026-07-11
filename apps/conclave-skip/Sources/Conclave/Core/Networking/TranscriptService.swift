@@ -1,5 +1,22 @@
 import Foundation
 
+enum TranscriptRecoveryErrorPolicy {
+    static func errorAfterSuccessfulRelayRecovery(_ currentError: String?) -> String? {
+        guard let currentError else { return nil }
+        let normalized = currentError.lowercased()
+        let recoveryMarkers = [
+            "relay",
+            "transcript audio",
+            "transcription audio",
+            "reconnect",
+            "controller disconnected",
+            "worker updated",
+            "resume or take over"
+        ]
+        return recoveryMarkers.contains { normalized.contains($0) } ? nil : currentError
+    }
+}
+
 /// Drives the transcript worker connection and mirrors the web client's SFU
 /// flow: fetch a worker token over socket.io, open the worker WebSocket, and -
 /// for controllers - send `session.start`, then hand the relay start token to
@@ -18,6 +35,10 @@ final class TranscriptService {
     private var pendingStartIsTakeover = false
     private var pendingRelayStart = false
     private var didRequestClose = false
+    private var reconnectTask: Task<Void, Never>?
+    private var reconnectAttempt = 0
+    private var recoverSessionAfterReconnect = false
+    private var startedByThisClient = false
     // Bumped by close()/open() so an in-flight open() that resumes after a close
     // doesn't resurrect a WebSocket for a torn-down panel.
     private var openGeneration = 0
@@ -25,7 +46,7 @@ final class TranscriptService {
     // Canonical default models (index 0 of the web catalogs). If unavailable the
     // worker reports an error over `session.state`, which we surface verbatim.
     private static let transcriptModel = "gpt-realtime-whisper"
-    private static let qaModel = "gpt-5.5"
+    private static let qaModel = "gpt-5.6-terra"
 
     init(state: TranscriptState, socketManager: SocketIOManager) {
         self.state = state
@@ -57,15 +78,18 @@ final class TranscriptService {
             }
 
             let ws = TranscriptWebSocket()
-            ws.onOpen = { [weak self] in self?.handleOpen() }
-            ws.onMessage = { [weak self] text in self?.handleMessage(text) }
-            ws.onClosed = { [weak self] reason in self?.handleClosed(reason) }
+            ws.onOpen = { [weak self] in self?.handleOpen(generation: generation) }
+            ws.onMessage = { [weak self] text in self?.handleMessage(text, generation: generation) }
+            ws.onClosed = { [weak self] reason in self?.handleClosed(reason, generation: generation) }
             webSocket = ws
             ws.connect(urlString: urlString)
         } catch {
             guard generation == openGeneration else { return }
-            state.connectionStatus = .error
-            state.errorMessage = "Couldn't connect to transcription."
+            if didRequestClose {
+                state.connectionStatus = .idle
+            } else {
+                scheduleReconnect()
+            }
         }
     }
 
@@ -73,10 +97,15 @@ final class TranscriptService {
     func close() {
         didRequestClose = true
         openGeneration += 1
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnectAttempt = 0
         webSocket?.close()
         webSocket = nil
         startAfterConnect = false
         pendingRelayStart = false
+        recoverSessionAfterReconnect = false
+        startedByThisClient = false
         if state.connectionStatus != .idle {
             state.connectionStatus = .idle
         }
@@ -90,6 +119,8 @@ final class TranscriptService {
         // Capture before overwriting the status: the send may be deferred
         // until the socket opens, and "starting" would mask the takeover.
         pendingStartIsTakeover = state.sessionStatus == "takeover_needed"
+        recoverSessionAfterReconnect = false
+        startedByThisClient = true
         state.sessionStatus = "starting"
         switch state.connectionStatus {
         case .connected:
@@ -106,6 +137,8 @@ final class TranscriptService {
         guard state.canStop || state.isLive else { return }
         state.sessionStatus = "stopping"
         pendingRelayStart = false
+        recoverSessionAfterReconnect = false
+        startedByThisClient = false
         sendJSON(["type": "session.stop"])
         Task { [socketManager] in
             _ = try? await socketManager.stopTranscriptSfuRelay()
@@ -114,7 +147,9 @@ final class TranscriptService {
 
     // MARK: - WebSocket callbacks
 
-    private func handleOpen() {
+    private func handleOpen(generation: Int) {
+        guard generation == openGeneration, !didRequestClose else { return }
+        reconnectTask = nil
         state.connectionStatus = .connected
         if startAfterConnect {
             startAfterConnect = false
@@ -122,19 +157,56 @@ final class TranscriptService {
         }
     }
 
-    private func handleClosed(_ reason: String?) {
+    private func handleClosed(_ reason: String?, generation: Int) {
+        guard generation == openGeneration else { return }
         webSocket = nil
         if didRequestClose {
             state.connectionStatus = .idle
             return
         }
-        state.connectionStatus = .error
-        if state.errorMessage == nil {
-            state.errorMessage = "Transcription connection was lost."
+        if startedByThisClient && Self.isRecoverableSessionStatus(state.sessionStatus) {
+            recoverSessionAfterReconnect = true
+            pendingRelayStart = true
+        }
+        scheduleReconnect()
+    }
+
+    private func scheduleReconnect() {
+        guard !didRequestClose, reconnectTask == nil else { return }
+        let attempt = reconnectAttempt
+        reconnectAttempt += 1
+        let reconnectDelaysNanoseconds: [UInt64] = [
+            UInt64(500_000_000),
+            UInt64(1_000_000_000),
+            UInt64(2_000_000_000),
+            UInt64(4_000_000_000),
+            UInt64(8_000_000_000),
+            UInt64(10_000_000_000)
+        ]
+        let delayNanoseconds = reconnectDelaysNanoseconds[min(attempt, reconnectDelaysNanoseconds.count - 1)]
+        state.connectionStatus = .connecting
+        if attempt >= 3 {
+            state.errorMessage = "Reconnecting transcription automatically…"
+        }
+        reconnectTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: delayNanoseconds)
+            } catch {
+                return
+            }
+            guard let self, !self.didRequestClose else { return }
+            self.reconnectTask = nil
+            self.state.connectionStatus = .idle
+            await self.open()
         }
     }
 
+    private static func isRecoverableSessionStatus(_ status: String) -> Bool {
+        status == "starting" || status == "live" || status == "paused"
+    }
+
     private func sendSessionStart() {
+        startedByThisClient = true
         pendingRelayStart = true
         // When the previous controller stepped away the worker expects a
         // takeover, not a fresh start (mirrors the web client).
@@ -149,11 +221,16 @@ final class TranscriptService {
 
     // MARK: - Incoming messages
 
-    private func handleMessage(_ text: String) {
+    private func handleMessage(_ text: String, generation: Int) {
+        guard generation == openGeneration, !didRequestClose else { return }
         guard let data = text.data(using: .utf8),
               let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = envelope["type"] as? String else {
             return
+        }
+        reconnectAttempt = 0
+        if state.errorMessage == "Reconnecting transcription automatically…" {
+            state.errorMessage = nil
         }
 
         switch type {
@@ -197,17 +274,37 @@ final class TranscriptService {
     }
 
     private func handleRelayToken(_ envelope: [String: Any]) {
-        guard pendingRelayStart, let token = envelope["token"] as? String, !token.isEmpty else { return }
+        let automatic = (envelope["automatic"] as? Bool) == true
+        guard (pendingRelayStart || automatic),
+              let token = envelope["token"] as? String,
+              !token.isEmpty else { return }
         pendingRelayStart = false
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let response = try? await self.socketManager.startTranscriptSfuRelay(relayStartToken: token)
-            // If the SFU rejects the relay, the worker never receives room audio -
-            // surface it and stop rather than showing a silent "live" session.
+            var response: TranscriptSfuRelayStartResponse?
+            let relayRetryDelaysNanoseconds: [UInt64] = [
+                UInt64(0),
+                UInt64(300_000_000),
+                UInt64(900_000_000)
+            ]
+            for delayNanoseconds in relayRetryDelaysNanoseconds {
+                if delayNanoseconds > UInt64(0) {
+                    try? await Task.sleep(nanoseconds: delayNanoseconds)
+                }
+                response = try? await self.socketManager.startTranscriptSfuRelay(relayStartToken: token)
+                if response?.success == true { break }
+            }
             if response == nil || response?.success == false {
-                self.state.errorMessage = response?.reason ?? "Transcription audio relay could not start."
-                self.state.sessionStatus = "error"
-                self.sendJSON(["type": "session.stop"])
+                if !automatic {
+                    self.state.errorMessage = response?.reason ?? "Transcription audio relay could not start."
+                    self.sendJSON([
+                        "type": "session.relayFailed",
+                        "message": response?.reason ?? "Transcription audio relay could not start."
+                    ])
+                }
+            } else {
+                self.state.errorMessage = TranscriptRecoveryErrorPolicy
+                    .errorAfterSuccessfulRelayRecovery(self.state.errorMessage)
             }
         }
     }
@@ -217,6 +314,19 @@ final class TranscriptService {
             state.sessionStatus = status
             if status == "error" || status == "idle" {
                 pendingRelayStart = false
+            }
+            if status == "live" || status == "paused" {
+                recoverSessionAfterReconnect = false
+            } else if status == "takeover_needed",
+                      recoverSessionAfterReconnect,
+                      startedByThisClient,
+                      state.canStart {
+                recoverSessionAfterReconnect = false
+                pendingStartIsTakeover = true
+                sendSessionStart()
+            } else if status == "idle" {
+                recoverSessionAfterReconnect = false
+                startedByThisClient = false
             }
         }
         if let controller = session["controller"] as? [String: Any] {

@@ -98,6 +98,16 @@ open class MainActivity: AppCompatActivity {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        if (PipManager.consumeAutoEnterSuppression()) {
+            return
+        }
+        // Android 12+ can distinguish the Home gesture from an app-launched
+        // chooser itself. Let system auto-enter handle Home so share sheets,
+        // browsers, and permission activities never force a fake PiP state.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            PipManager.configureForActiveCall(PipController.isInCall, PipController.muted)
+            return
+        }
         if (
             PipController.isInCall &&
             !PipController.inPipMode &&

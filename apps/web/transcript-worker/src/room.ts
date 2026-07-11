@@ -16,6 +16,7 @@ import {
 import {
   DEFAULT_MAX_SEGMENTS,
   DEFAULT_QA_MODEL,
+  DEFAULT_RECOVERY_RETENTION_MS,
   DEFAULT_TRANSCRIPT_MODEL,
   DEFAULT_IDLE_TTL_MS,
   MAX_AUDIO_CHUNK_BASE64_BYTES,
@@ -25,6 +26,11 @@ import {
   MINUTES_MAX_WAIT_MS,
   MINUTES_MIN_WORDS,
   SFU_RELAY_DISCONNECT_SUPPRESSION_MS,
+  TRANSCRIPT_CONTROLLER_RECONNECT_GRACE_MS,
+  TRANSCRIPT_SFU_RELAY_RECOVERY_ATTEMPTS,
+  TRANSCRIPT_SFU_RELAY_RECOVERY_GRACE_MS,
+  TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS,
+  TRANSCRIPTION_CONNECT_TIMEOUT_MS,
 } from "./constants";
 import {
   signTranscriptSfuRelayStartToken,
@@ -52,7 +58,11 @@ import {
   type TranscriptRateBucketName,
 } from "./rate-limit";
 import { getTranscriptServiceVersion } from "./service-version";
-import { recoverPersistedTranscriptSession } from "./session-recovery";
+import {
+  recoverPersistedTranscriptSession,
+  shouldAutomaticallyRecoverPersistedTranscriptSession,
+  shouldRetainRecoverableTranscriptSnapshot,
+} from "./session-recovery";
 import { TranscriptSpeakerAttribution } from "./speaker-attribution";
 import {
   canRefreshTranscriptMinutes,
@@ -66,6 +76,7 @@ import type {
   ClientEnvelope,
   Env,
   PersistedSnapshot,
+  PersistedTranscriptionConfig,
   QaAskEnvelope,
   SessionStartEnvelope,
   Viewer,
@@ -74,6 +85,13 @@ import {
   connectLiveTranscriptionProvider,
   type LiveTranscriptionSession,
 } from "./transcription";
+import {
+  TranscriptAudioReplayJournal,
+  TranscriptRecoveryAudioBuffer,
+  isRetryableTranscriptionFailure,
+  transcriptionRecoveryDelayMs,
+  type BufferedTranscriptAudioEvent,
+} from "./transcription-recovery";
 import {
   json,
   normalizeDelay,
@@ -120,6 +138,25 @@ export class TranscriptRoom {
   private sequence = 0;
   private responseApiKey: string | null = null;
   private transcriptionSession: LiveTranscriptionSession | null = null;
+  private transcriptionConnectionOptions:
+    | (PersistedTranscriptionConfig & {
+        apiKey: string;
+        transcriptModel: string;
+        localizationPrompt?: string;
+      })
+    | null = null;
+  private transcriptionConnectionEpoch = 0;
+  private transcriptionRecoveryGeneration = 0;
+  private transcriptionProviderOpeningGeneration: number | null = null;
+  private transcriptionRecoveryPromise: Promise<void> | null = null;
+  private pendingTranscriptionRecoveryFailure: string | null = null;
+  private pendingTranscriptionCommitAcks: number[] = [];
+  private transcriptionCommitWatchdogTimer: ReturnType<typeof setTimeout> | null =
+    null;
+  private readonly transcriptionRecoveryAudio =
+    new TranscriptRecoveryAudioBuffer();
+  private readonly transcriptionReplayJournal =
+    new TranscriptAudioReplayJournal();
   private lastMinutesRefreshAt = 0;
   // Auto-minutes scheduler state. We debounce regeneration so AI minutes are
   // never clobbered mid-conversation; the crude fallback is only ever a seed.
@@ -134,6 +171,9 @@ export class TranscriptRoom {
   private audioPaused = false;
   private suppressSfuRelayDisconnectsUntil = 0;
   private suppressSfuRelayDisconnectCount = 0;
+  private controllerReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private sfuRelayRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  private sfuRelayRecoveryAttempts = 0;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -186,6 +226,10 @@ export class TranscriptRoom {
     server.accept();
     this.viewers.set(server, viewer);
     this.ensureSession(roomId);
+    if (viewer.capabilities.relayAudio === true) {
+      this.cancelSfuRelayRecovery();
+    }
+    const controllerRebound = this.rebindControllerAfterReconnect(viewer);
     this.send(server, {
       type: "snapshot",
       viewerConnectionId: viewer.id,
@@ -210,6 +254,15 @@ export class TranscriptRoom {
       void this.handleClose(viewer);
     });
 
+    if (
+      controllerRebound &&
+      this.session?.status === "live" &&
+      this.session.transportMode === "sfu" &&
+      !this.hasSfuRelayViewer()
+    ) {
+      await this.sendSfuRelayStartToken(viewer, true);
+      await this.persist();
+    }
     await this.armCleanupAlarm();
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -224,11 +277,30 @@ export class TranscriptRoom {
       this.session?.status === "paused"
     ) {
       this.markTakeoverNeeded("Transcript controller disconnected.");
+      await this.persist();
+      return;
+    }
+    if (!this.session) return;
+    const recoveryRetentionMs = parsePositiveInt(
+      this.env.TRANSCRIPT_RECOVERY_RETENTION_MS,
+      DEFAULT_RECOVERY_RETENTION_MS,
+    );
+    if (
+      shouldRetainRecoverableTranscriptSnapshot(
+        this.session,
+        Date.now(),
+        recoveryRetentionMs,
+      )
+    ) {
+      await this.state.storage.setAlarm(
+        this.session.updatedAt + recoveryRetentionMs,
+      );
+      return;
     }
     if (
-      this.session?.status === "idle" ||
-      this.session?.status === "takeover_needed" ||
-      this.session?.status === "error"
+      this.session.status === "idle" ||
+      this.session.status === "takeover_needed" ||
+      this.session.status === "error"
     ) {
       await this.state.storage.delete("snapshot");
       this.resetInMemorySession(this.session.roomId, this.session.qaModel);
@@ -238,6 +310,8 @@ export class TranscriptRoom {
   private async load(): Promise<void> {
     const snapshot = await this.state.storage.get<PersistedSnapshot>("snapshot");
     if (!snapshot) return;
+    const shouldRecoverAutomatically =
+      shouldAutomaticallyRecoverPersistedTranscriptSession(snapshot.session);
     this.session = recoverPersistedTranscriptSession(
       snapshot.session,
       snapshot.serviceVersion,
@@ -246,6 +320,9 @@ export class TranscriptRoom {
     this.segments = snapshot.segments ?? [];
     this.minutes = snapshot.minutes ?? createEmptyMinutes(this.session.qaModel);
     this.sequence = snapshot.sequence ?? this.segments.length;
+    if (shouldRecoverAutomatically) {
+      this.state.waitUntil(this.restorePersistedGlobalSession(snapshot));
+    }
   }
 
   private ensureSession(roomId: string): TranscriptSessionState {
@@ -256,11 +333,110 @@ export class TranscriptRoom {
     return this.session;
   }
 
+  private async restorePersistedGlobalSession(
+    snapshot: PersistedSnapshot,
+  ): Promise<void> {
+    const transcriptModel = normalizeRealtimeTranscriptModel(
+      snapshot.session.transcriptModel,
+      DEFAULT_TRANSCRIPT_MODEL,
+    );
+    const provider = getTranscriptTranscriptionProvider(transcriptModel);
+    const transcriptionKey = this.resolveTranscriptionKey(provider, undefined);
+    const responseKey = this.resolveResponseKey(provider, undefined, undefined);
+    if (!transcriptionKey.ok || !responseKey.ok) return;
+
+    const wasPaused = snapshot.session.status === "paused";
+    const config = snapshot.transcriptionConfig ?? {
+      language: normalizeLanguage(this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE),
+      delay: normalizeDelay(undefined),
+      locale: normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
+    };
+    this.responseApiKey = responseKey.apiKey;
+    this.session = {
+      ...snapshot.session,
+      status: "starting",
+      updatedAt: Date.now(),
+      error: null,
+    };
+    try {
+      await this.connectTranscriptionProvider({
+        apiKey: transcriptionKey.apiKey,
+        transcriptModel,
+        ...config,
+        localizationPrompt: this.env.TRANSCRIPT_TRANSCRIPTION_PROMPT,
+      });
+      this.audioPaused = wasPaused;
+      this.session = {
+        ...this.session,
+        status: wasPaused ? "paused" : "live",
+        updatedAt: Date.now(),
+        error: null,
+      };
+      console.info("[TranscriptWorker] restored persisted live session", {
+        roomId: this.session.roomId,
+        transportMode: this.session.transportMode,
+        provider,
+      });
+      this.broadcastSession();
+      if (this.session.transportMode === "sfu") {
+        const controllerViewer = Array.from(this.viewers.values()).find(
+          (viewer) =>
+            viewer.id === this.session?.controller?.connectionId,
+        );
+        if (controllerViewer && !this.hasSfuRelayViewer()) {
+          await this.sendSfuRelayStartToken(controllerViewer, true);
+        }
+      }
+      await this.persist();
+    } catch (error) {
+      if (this.session.status !== "starting") return;
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to restore the transcription model.";
+      console.warn("[TranscriptWorker] persisted session restore failed", {
+        roomId: this.session.roomId,
+        transportMode: this.session.transportMode,
+        provider,
+        message: redactSensitiveText(message),
+      });
+      this.markTakeoverNeeded(message);
+      this.broadcastSession();
+      await this.persist();
+    }
+  }
+
+  private rebindControllerAfterReconnect(viewer: Viewer): boolean {
+    const controller = this.session?.controller;
+    if (!controller || controller.userId !== viewer.userId) return false;
+    if (
+      Array.from(this.viewers.values()).some(
+        (candidate) =>
+          candidate.id === controller.connectionId && candidate !== viewer,
+      )
+    ) {
+      return false;
+    }
+    if (controller.connectionId === viewer.id) return false;
+    this.cancelControllerReconnect();
+    this.session = {
+      ...this.session!,
+      controller: {
+        ...controller,
+        connectionId: viewer.id,
+        lastSeenAt: Date.now(),
+      },
+      updatedAt: Date.now(),
+    };
+    return true;
+  }
+
   private send(socket: WebSocket, data: unknown): void {
     try {
       socket.send(JSON.stringify(data));
     } catch {
-      this.viewers.delete(socket);
+      const viewer = this.viewers.get(socket);
+      if (viewer) void this.handleClose(viewer);
     }
   }
 
@@ -371,6 +547,9 @@ export class TranscriptRoom {
       case "session.stop":
         await this.stopSession(viewer);
         return;
+      case "session.relayFailed":
+        await this.failSfuRelaySession(viewer, message.message);
+        return;
       case "session.pause":
         await this.setPaused(viewer, true);
         return;
@@ -430,7 +609,7 @@ export class TranscriptRoom {
   }
 
   private async handleClose(viewer: Viewer): Promise<void> {
-    this.viewers.delete(viewer.socket);
+    if (!this.viewers.delete(viewer.socket)) return;
     if (
       shouldRequestSfuRelayHandoff({
         closingViewerCanRelayAudio: viewer.capabilities.relayAudio === true,
@@ -442,15 +621,7 @@ export class TranscriptRoom {
         await this.armCleanupAlarm();
         return;
       }
-      this.markTakeoverNeeded("Transcript SFU relay disconnected.");
-      this.broadcast({
-        type: "handoff.requested",
-        session: this.session,
-        globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
-        globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
-        serviceVersion: this.serviceVersion(),
-      });
-      await this.persist();
+      await this.beginSfuRelayRecovery();
       await this.armCleanupAlarm();
       return;
     }
@@ -463,17 +634,128 @@ export class TranscriptRoom {
         remainingUserIds: Array.from(this.viewers.values(), (item) => item.userId),
       })
     ) {
-      this.markTakeoverNeeded("Transcript controller disconnected.");
-      this.broadcast({
-        type: "handoff.requested",
-        session: this.session,
-        globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
-        globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
-        serviceVersion: this.serviceVersion(),
-      });
-      await this.persist();
+      const replacement = Array.from(this.viewers.values()).find(
+        (candidate) => candidate.userId === viewer.userId,
+      );
+      if (replacement && this.rebindControllerAfterReconnect(replacement)) {
+        this.broadcastSession();
+        if (
+          this.session?.status === "live" &&
+          this.session.transportMode === "sfu" &&
+          !this.hasSfuRelayViewer()
+        ) {
+          await this.sendSfuRelayStartToken(replacement, true);
+        }
+        await this.persist();
+      } else {
+        this.scheduleControllerReconnectGrace(viewer);
+      }
     }
     await this.armCleanupAlarm();
+  }
+
+  private scheduleControllerReconnectGrace(viewer: Viewer): void {
+    this.cancelControllerReconnect();
+    const connectionId = viewer.id;
+    const userId = viewer.userId;
+    this.controllerReconnectTimer = setTimeout(() => {
+      this.controllerReconnectTimer = null;
+      if (
+        this.session?.controller?.connectionId !== connectionId ||
+        this.session.controller.userId !== userId ||
+        Array.from(this.viewers.values()).some(
+          (candidate) => candidate.userId === userId,
+        )
+      ) {
+        return;
+      }
+      // SFU audio is room-scoped and can continue without the controller's UI.
+      // Keep it live so a brief app sleep or a controller changing networks is
+      // invisible to the rest of the meeting.
+      if (
+        this.session.status === "live" &&
+        this.session.transportMode === "sfu" &&
+        this.hasSfuRelayViewer()
+      ) {
+        return;
+      }
+      this.markTakeoverNeeded("Transcript controller disconnected.");
+      this.broadcastHandoffRequested();
+      void this.persist();
+    }, TRANSCRIPT_CONTROLLER_RECONNECT_GRACE_MS);
+  }
+
+  private cancelControllerReconnect(): void {
+    if (this.controllerReconnectTimer !== null) {
+      clearTimeout(this.controllerReconnectTimer);
+      this.controllerReconnectTimer = null;
+    }
+  }
+
+  private async beginSfuRelayRecovery(): Promise<void> {
+    if (
+      this.session?.status !== "live" ||
+      this.session.transportMode !== "sfu" ||
+      this.hasSfuRelayViewer()
+    ) {
+      return;
+    }
+    if (this.sfuRelayRecoveryTimer !== null) return;
+
+    this.sfuRelayRecoveryAttempts += 1;
+    const controller = this.session.controller;
+    const controllerViewer = controller
+      ? Array.from(this.viewers.values()).find(
+          (candidate) => candidate.id === controller.connectionId,
+        )
+      : undefined;
+    if (controllerViewer) {
+      await this.sendSfuRelayStartToken(controllerViewer, true);
+    }
+
+    this.sfuRelayRecoveryTimer = setTimeout(() => {
+      this.sfuRelayRecoveryTimer = null;
+      if (this.hasSfuRelayViewer()) {
+        this.cancelSfuRelayRecovery();
+        return;
+      }
+      if (
+        this.sfuRelayRecoveryAttempts <
+        TRANSCRIPT_SFU_RELAY_RECOVERY_ATTEMPTS
+      ) {
+        void this.beginSfuRelayRecovery();
+        return;
+      }
+      this.markTakeoverNeeded(
+        "Transcript audio relay could not reconnect automatically.",
+      );
+      this.broadcastHandoffRequested();
+      void this.persist();
+    }, TRANSCRIPT_SFU_RELAY_RECOVERY_GRACE_MS);
+  }
+
+  private cancelSfuRelayRecovery(): void {
+    if (this.sfuRelayRecoveryTimer !== null) {
+      clearTimeout(this.sfuRelayRecoveryTimer);
+      this.sfuRelayRecoveryTimer = null;
+    }
+    this.sfuRelayRecoveryAttempts = 0;
+  }
+
+  private hasSfuRelayViewer(): boolean {
+    return Array.from(this.viewers.values()).some(
+      (viewer) => viewer.capabilities.relayAudio === true,
+    );
+  }
+
+  private broadcastHandoffRequested(): void {
+    this.broadcast({
+      type: "handoff.requested",
+      session: this.session,
+      globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+      globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
+      serviceVersion: this.serviceVersion(),
+    });
   }
 
   private async startSession(
@@ -556,14 +838,17 @@ export class TranscriptRoom {
     await this.persist();
 
     try {
+      const language = normalizeLanguage(
+        message.language ?? this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
+      );
+      const delay = normalizeDelay(message.delay);
+      const locale = normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE);
       await this.connectTranscriptionProvider({
         apiKey: transcriptionKey.apiKey,
         transcriptModel,
-        language: normalizeLanguage(
-          message.language ?? this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
-        ),
-        delay: normalizeDelay(message.delay),
-        locale: normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
+        language,
+        delay,
+        locale,
         localizationPrompt: this.env.TRANSCRIPT_TRANSCRIPTION_PROMPT,
       });
       this.session = {
@@ -576,6 +861,7 @@ export class TranscriptRoom {
       await this.sendSfuRelayStartToken(viewer);
       await this.persist();
     } catch (error) {
+      if (this.session?.status !== "starting") return;
       this.markTakeoverNeeded(
         error instanceof Error
           ? error.message
@@ -584,6 +870,38 @@ export class TranscriptRoom {
       this.broadcastSession();
       await this.persist();
     }
+  }
+
+  private async failSfuRelaySession(
+    viewer: Viewer,
+    message: string | undefined,
+  ): Promise<void> {
+    if (
+      !this.session ||
+      this.session.transportMode !== "sfu" ||
+      !canStopTranscriptSession({
+        controllerUserId: this.session.controller?.userId,
+        viewerCanStop: viewer.capabilities.stop,
+        viewerUserId: viewer.userId,
+      })
+    ) {
+      this.sendError(viewer, "You cannot report a transcript relay failure.");
+      return;
+    }
+    console.warn("[TranscriptWorker] SFU relay start failed; recovering", {
+      roomId: this.session.roomId,
+      controllerUserId: viewer.userId,
+      message: redactSensitiveText(
+        trimText(message || "Transcript audio relay could not start.", 500),
+      ),
+    });
+    this.session = {
+      ...this.session,
+      updatedAt: Date.now(),
+      error: null,
+    };
+    await this.beginSfuRelayRecovery();
+    await this.persist();
   }
 
   private async stopSession(viewer: Viewer): Promise<void> {
@@ -602,6 +920,8 @@ export class TranscriptRoom {
     this.suppressSfuRelayDisconnectsUntil =
       Date.now() + SFU_RELAY_DISCONNECT_SUPPRESSION_MS;
     this.suppressSfuRelayDisconnectCount += 1;
+    this.cancelControllerReconnect();
+    this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();
     const roomId = this.session?.roomId || "unknown";
     this.responseApiKey = null;
@@ -677,6 +997,13 @@ export class TranscriptRoom {
     };
     this.broadcastSession();
     await this.persist();
+    if (
+      !paused &&
+      this.session.transportMode === "sfu" &&
+      !this.hasSfuRelayViewer()
+    ) {
+      await this.beginSfuRelayRecovery();
+    }
   }
 
   private appendAudio(
@@ -686,31 +1013,82 @@ export class TranscriptRoom {
   ): void {
     if (this.audioPaused) return;
     if (!this.canRelayAudio(viewer)) return;
-    if (!audio || !this.transcriptionSession) return;
+    if (!audio) return;
     const sampleCount = estimatePcm16Base64SampleCount(audio);
     if (sampleCount <= 0) return;
     const normalizedSpeaker = normalizeSpeaker(speaker, viewer);
+    if (!this.transcriptionSession) {
+      if (this.shouldBufferTranscriptionAudio()) {
+        this.transcriptionRecoveryAudio.enqueue({
+          type: "chunk",
+          audio,
+          speaker: normalizedSpeaker,
+          sampleCount,
+          createdAt: Date.now(),
+        });
+      }
+      return;
+    }
+    this.appendNormalizedAudio(audio, normalizedSpeaker, sampleCount);
+    if (this.isController(viewer) && this.session?.controller) {
+      this.session.controller.lastSeenAt = Date.now();
+    }
+  }
+
+  private appendNormalizedAudio(
+    audio: string,
+    speaker: TranscriptSpeaker,
+    sampleCount: number,
+    captureFailedEvent = true,
+    reportFailure = true,
+  ): boolean {
+    if (!this.transcriptionSession) return false;
     if (
       this.hasPendingAudio &&
       this.latestSpeaker &&
-      !isSameTranscriptAudioSpeaker(this.latestSpeaker, normalizedSpeaker) &&
+      !isSameTranscriptAudioSpeaker(this.latestSpeaker, speaker) &&
       !this.commitTranscriptionBuffer(
         this.latestSpeaker,
         "Transcript speaker handoff failed.",
+        reportFailure,
       )
     ) {
-      return;
+      if (captureFailedEvent && this.shouldBufferTranscriptionAudio()) {
+        this.transcriptionRecoveryAudio.enqueue({
+          type: "chunk",
+          audio,
+          speaker,
+          sampleCount,
+          createdAt: Date.now(),
+        });
+      }
+      return false;
     }
     try {
       this.transcriptionSession.appendAudio(audio);
-      this.latestSpeaker = normalizedSpeaker;
+      this.transcriptionReplayJournal.append(audio, speaker, sampleCount);
+      this.latestSpeaker = speaker;
       this.hasPendingAudio = true;
       this.pendingAudioSamples += sampleCount;
-      if (this.isController(viewer) && this.session?.controller) {
-        this.session.controller.lastSeenAt = Date.now();
-      }
+      return true;
     } catch {
-      void this.handleTranscriptionFailure("Transcript audio stream failed.");
+      if (reportFailure) {
+        void this.handleTranscriptionFailure(
+          "Transcript audio stream failed.",
+          captureFailedEvent
+            ? [
+                {
+                  type: "chunk",
+                  audio,
+                  speaker,
+                  sampleCount,
+                  createdAt: Date.now(),
+                },
+              ]
+            : [],
+        );
+      }
+      return false;
     }
   }
 
@@ -721,8 +1099,7 @@ export class TranscriptRoom {
     if (
       this.audioPaused ||
       !this.canRelayAudio(viewer) ||
-      !this.transcriptionSession ||
-      !this.hasPendingAudio
+      (!this.transcriptionSession && !this.shouldBufferTranscriptionAudio())
     ) {
       return;
     }
@@ -730,6 +1107,15 @@ export class TranscriptRoom {
       speaker,
       this.latestSpeaker ?? viewer,
     );
+    if (!this.transcriptionSession && this.shouldBufferTranscriptionAudio()) {
+      this.transcriptionRecoveryAudio.enqueue({
+        type: "commit",
+        speaker: normalizedSpeaker,
+        createdAt: Date.now(),
+      });
+      return;
+    }
+    if (!this.hasPendingAudio) return;
     if (
       !canCommitPendingAudioForSpeaker(this.latestSpeaker, normalizedSpeaker)
     ) {
@@ -745,6 +1131,7 @@ export class TranscriptRoom {
   private commitTranscriptionBuffer(
     speaker: TranscriptSpeaker,
     failureMessage: string,
+    reportFailure = true,
   ): boolean {
     if (!this.transcriptionSession || !this.hasPendingAudio) return false;
     try {
@@ -759,17 +1146,32 @@ export class TranscriptRoom {
       }
       this.transcriptionSession.commitAudio();
       this.speakerAttribution.enqueueCommit(speaker);
+      this.transcriptionReplayJournal.commit(speaker);
+      if (this.transcriptionSession.provider === "openai") {
+        this.trackPendingTranscriptionCommit();
+      }
       this.hasPendingAudio = false;
       this.pendingAudioSamples = 0;
       return true;
     } catch {
-      void this.handleTranscriptionFailure(failureMessage);
+      if (reportFailure) {
+        void this.handleTranscriptionFailure(failureMessage);
+      }
       return false;
     }
   }
 
   private clearAudio(viewer: Viewer): void {
-    if (!this.canRelayAudio(viewer) || !this.transcriptionSession) return;
+    if (!this.canRelayAudio(viewer)) return;
+    if (!this.transcriptionSession && this.shouldBufferTranscriptionAudio()) {
+      this.transcriptionRecoveryAudio.enqueue({
+        type: "clear",
+        speaker: normalizeSpeaker(undefined, viewer),
+        createdAt: Date.now(),
+      });
+      return;
+    }
+    if (!this.transcriptionSession) return;
     if (this.hasPendingAudio && this.latestSpeaker) {
       this.commitTranscriptionBuffer(
         this.latestSpeaker,
@@ -802,7 +1204,17 @@ export class TranscriptRoom {
     );
   }
 
-  private async sendSfuRelayStartToken(viewer: Viewer): Promise<void> {
+  private shouldBufferTranscriptionAudio(): boolean {
+    return (
+      this.transcriptionProviderOpeningGeneration !== null ||
+      this.transcriptionRecoveryPromise !== null
+    );
+  }
+
+  private async sendSfuRelayStartToken(
+    viewer: Viewer,
+    automatic = false,
+  ): Promise<void> {
     if (
       this.session?.status !== "live" ||
       this.session.transportMode !== "sfu" ||
@@ -826,6 +1238,7 @@ export class TranscriptRoom {
     this.send(viewer.socket, {
       type: "sfu.relayStartToken",
       ...relayToken,
+      automatic,
     } satisfies { type: "sfu.relayStartToken" } & TranscriptSfuRelayStartToken);
   }
 
@@ -869,22 +1282,114 @@ export class TranscriptRoom {
     localizationPrompt?: string;
   }): Promise<void> {
     this.closeTranscriptionProvider();
-    this.transcriptionSession = await connectLiveTranscriptionProvider({
-      env: this.env,
-      ...options,
-      callbacks: {
-        onCommitted: (itemId) => this.handleTranscriptItemCommitted(itemId),
-        onDelta: (itemId, delta) => this.applyTranscriptDelta(itemId, delta),
-        onFinal: (itemId, transcript) =>
-          this.applyTranscriptFinal(itemId, transcript),
-        onFailure: (message) => this.handleTranscriptionFailure(message),
-      },
-    });
+    const generation = this.transcriptionRecoveryGeneration;
+    this.transcriptionConnectionOptions = options;
+    this.transcriptionProviderOpeningGeneration = generation;
+    try {
+      try {
+        const connection = await this.openTranscriptionProvider(options);
+        if (generation !== this.transcriptionRecoveryGeneration) {
+          connection.close();
+          throw new Error("Transcript provider connection was superseded.");
+        }
+        this.transcriptionSession = connection;
+
+        const bufferedEvents = this.transcriptionRecoveryAudio.drain();
+        if (
+          bufferedEvents.length > 0 &&
+          !this.replayBufferedTranscriptionAudio(bufferedEvents, false)
+        ) {
+          this.transcriptionSession = null;
+          this.transcriptionConnectionEpoch += 1;
+          try {
+            connection.close();
+          } catch {}
+          this.resetTranscriptionAudioState();
+          this.transcriptionRecoveryAudio.enqueueMany(bufferedEvents);
+          throw new Error(
+            "Buffered transcript audio replay connection failed.",
+          );
+        }
+      } catch (error) {
+        if (generation !== this.transcriptionRecoveryGeneration) throw error;
+        const message = redactSensitiveText(
+          error instanceof Error
+            ? error.message
+            : "Transcription provider connection failed.",
+        );
+        if (isRetryableTranscriptionFailure(message)) {
+          await this.handleTranscriptionFailure(message);
+          if (this.transcriptionSession) return;
+        }
+        throw error;
+      }
+    } finally {
+      if (this.transcriptionProviderOpeningGeneration === generation) {
+        this.transcriptionProviderOpeningGeneration = null;
+      }
+    }
+  }
+
+  private async openTranscriptionProvider(options: {
+    apiKey: string;
+    transcriptModel: string;
+    language: string;
+    delay: string;
+    locale: string;
+    localizationPrompt?: string;
+  }): Promise<LiveTranscriptionSession> {
+    const epoch = this.transcriptionConnectionEpoch + 1;
+    this.transcriptionConnectionEpoch = epoch;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort("Transcript provider connection timed out.");
+    }, TRANSCRIPTION_CONNECT_TIMEOUT_MS);
+    try {
+      return await connectLiveTranscriptionProvider({
+        env: this.env,
+        ...options,
+        signal: controller.signal,
+        callbacks: {
+          onCommitted: (itemId) => {
+            if (epoch === this.transcriptionConnectionEpoch) {
+              this.handleTranscriptItemCommitted(itemId);
+            }
+          },
+          onDelta: (itemId, delta) => {
+            if (epoch === this.transcriptionConnectionEpoch) {
+              this.applyTranscriptDelta(itemId, delta);
+            }
+          },
+          onFinal: (itemId, transcript) => {
+            if (epoch !== this.transcriptionConnectionEpoch) return;
+            return this.applyTranscriptFinal(itemId, transcript);
+          },
+          onFailure: (message) => {
+            if (epoch !== this.transcriptionConnectionEpoch) return;
+            return this.handleTranscriptionFailure(message);
+          },
+        },
+      });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error("Transcript provider connection timed out.");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private closeTranscriptionProvider(): void {
+    this.transcriptionRecoveryGeneration += 1;
+    this.transcriptionProviderOpeningGeneration = null;
+    this.transcriptionRecoveryPromise = null;
+    this.pendingTranscriptionRecoveryFailure = null;
+    this.transcriptionConnectionEpoch += 1;
     const session = this.transcriptionSession;
     this.transcriptionSession = null;
+    this.transcriptionConnectionOptions = null;
+    this.transcriptionRecoveryAudio.reset();
     this.resetTranscriptionAudioState();
     try {
       session?.close();
@@ -895,22 +1400,71 @@ export class TranscriptRoom {
     const hadPartials = this.partialSegments.size > 0;
     this.partialSegments.clear();
     this.speakerAttribution.reset();
+    this.transcriptionReplayJournal.reset();
     this.latestSpeaker = null;
     this.hasPendingAudio = false;
     this.pendingAudioSamples = 0;
+    this.pendingTranscriptionCommitAcks = [];
+    if (this.transcriptionCommitWatchdogTimer !== null) {
+      clearTimeout(this.transcriptionCommitWatchdogTimer);
+      this.transcriptionCommitWatchdogTimer = null;
+    }
     if (hadPartials) {
       this.broadcast({ type: "partials.reset" });
     }
   }
 
   private handleTranscriptItemCommitted(itemId: string): void {
+    this.acknowledgeTranscriptionCommit();
+    this.transcriptionReplayJournal.bindCommittedItem(itemId);
     const speaker = this.speakerAttribution.bindCommittedItem(itemId);
     if (speaker) {
       this.reassignSegmentSpeaker(itemId, speaker);
     }
   }
 
-  private async handleTranscriptionFailure(message: string): Promise<void> {
+  private trackPendingTranscriptionCommit(): void {
+    this.pendingTranscriptionCommitAcks.push(Date.now());
+    this.armTranscriptionCommitWatchdog();
+  }
+
+  private acknowledgeTranscriptionCommit(): void {
+    this.pendingTranscriptionCommitAcks.shift();
+    this.armTranscriptionCommitWatchdog();
+  }
+
+  private armTranscriptionCommitWatchdog(): void {
+    if (this.transcriptionCommitWatchdogTimer !== null) {
+      clearTimeout(this.transcriptionCommitWatchdogTimer);
+      this.transcriptionCommitWatchdogTimer = null;
+    }
+    const oldestCommitAt = this.pendingTranscriptionCommitAcks[0];
+    if (oldestCommitAt === undefined) return;
+    const delay = Math.max(
+      0,
+      oldestCommitAt + TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS - Date.now(),
+    );
+    this.transcriptionCommitWatchdogTimer = setTimeout(() => {
+      this.transcriptionCommitWatchdogTimer = null;
+      const currentOldestCommitAt = this.pendingTranscriptionCommitAcks[0];
+      if (currentOldestCommitAt === undefined) return;
+      if (
+        currentOldestCommitAt + TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS >
+        Date.now()
+      ) {
+        this.armTranscriptionCommitWatchdog();
+        return;
+      }
+      void this.handleTranscriptionFailure(
+        "Transcription provider acknowledgment timed out.",
+      );
+    }, delay);
+  }
+
+  private async handleTranscriptionFailure(
+    message: string,
+    failedEvents: BufferedTranscriptAudioEvent[] = [],
+  ): Promise<void> {
     const redactedMessage = redactSensitiveText(message);
     console.warn("[TranscriptWorker] transcription provider failure", {
       roomId: this.session?.roomId,
@@ -919,18 +1473,221 @@ export class TranscriptRoom {
       provider: this.transcriptionSession?.provider ?? null,
       message: redactedMessage,
     });
-    this.broadcast({
-      type: "error",
-      message: redactedMessage,
-    });
-
     if (
       this.session?.status !== "live" &&
-      this.session?.status !== "starting"
+      this.session?.status !== "starting" &&
+      this.session?.status !== "paused"
     ) {
       return;
     }
+    if (this.transcriptionRecoveryPromise) {
+      this.transcriptionRecoveryAudio.enqueueMany(failedEvents);
+      this.pendingTranscriptionRecoveryFailure = redactedMessage;
+      return;
+    }
+    if (
+      !this.transcriptionConnectionOptions ||
+      !isRetryableTranscriptionFailure(redactedMessage)
+    ) {
+      await this.failTranscriptionPermanently(redactedMessage);
+      return;
+    }
 
+    const replayEvents = this.transcriptionReplayJournal.takeRecoveryEvents();
+    const failedSession = this.transcriptionSession;
+    this.transcriptionSession = null;
+    this.transcriptionConnectionEpoch += 1;
+    try {
+      failedSession?.close();
+    } catch {}
+    this.resetTranscriptionAudioState();
+    this.transcriptionRecoveryAudio.enqueueMany([
+      ...replayEvents,
+      ...failedEvents,
+    ]);
+
+    const generation = this.transcriptionRecoveryGeneration + 1;
+    this.transcriptionRecoveryGeneration = generation;
+    const recovery = this.recoverTranscriptionProvider(
+      generation,
+      redactedMessage,
+    );
+    this.transcriptionRecoveryPromise = recovery;
+    try {
+      await recovery;
+    } finally {
+      if (this.transcriptionRecoveryPromise === recovery) {
+        this.transcriptionRecoveryPromise = null;
+      }
+    }
+    const pendingFailure = this.pendingTranscriptionRecoveryFailure;
+    this.pendingTranscriptionRecoveryFailure = null;
+    if (
+      pendingFailure &&
+      generation === this.transcriptionRecoveryGeneration
+    ) {
+      await this.handleTranscriptionFailure(pendingFailure);
+    }
+  }
+
+  private async recoverTranscriptionProvider(
+    generation: number,
+    initialMessage: string,
+  ): Promise<void> {
+    const options = this.transcriptionConnectionOptions;
+    if (!options) return;
+
+    let lastMessage = initialMessage;
+    for (let attempt = 0; ; attempt += 1) {
+      const delay = transcriptionRecoveryDelayMs(attempt);
+      if (delay > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      }
+      if (generation !== this.transcriptionRecoveryGeneration) return;
+
+      let replacement: LiveTranscriptionSession | null = null;
+      let bufferedEvents: BufferedTranscriptAudioEvent[] = [];
+      try {
+        replacement = await this.openTranscriptionProvider(options);
+        if (generation !== this.transcriptionRecoveryGeneration) {
+          replacement.close();
+          return;
+        }
+        this.transcriptionSession = replacement;
+        bufferedEvents = this.transcriptionRecoveryAudio.drain();
+        if (!this.replayBufferedTranscriptionAudio(bufferedEvents, false)) {
+          throw new Error(
+            "Buffered transcript audio replay connection failed.",
+          );
+        }
+      } catch (error) {
+        if (replacement && this.transcriptionSession === replacement) {
+          this.pendingTranscriptionRecoveryFailure = null;
+          this.transcriptionSession = null;
+          this.transcriptionConnectionEpoch += 1;
+          try {
+            replacement.close();
+          } catch {}
+          this.resetTranscriptionAudioState();
+          this.transcriptionRecoveryAudio.enqueueMany(bufferedEvents);
+        }
+        lastMessage = redactSensitiveText(
+          error instanceof Error
+            ? error.message
+            : "Transcription provider reconnect failed.",
+        );
+        console.warn("[TranscriptWorker] transcription reconnect attempt failed", {
+          roomId: this.session?.roomId,
+          transportMode: this.session?.transportMode,
+          attempt: attempt + 1,
+          message: lastMessage,
+        });
+        if (!isRetryableTranscriptionFailure(lastMessage)) {
+          if (generation !== this.transcriptionRecoveryGeneration) return;
+          await this.failTranscriptionPermanently(lastMessage);
+          return;
+        }
+        continue;
+      }
+
+      const droppedEvents =
+        this.transcriptionRecoveryAudio.consumeDroppedEventCount();
+      console.info("[TranscriptWorker] transcription provider recovered", {
+        roomId: this.session?.roomId,
+        transportMode: this.session?.transportMode,
+        provider: replacement.provider,
+        attempt: attempt + 1,
+        bufferedEvents: bufferedEvents.length,
+        droppedEvents,
+      });
+      if (this.session) {
+        this.session = {
+          ...this.session,
+          updatedAt: Date.now(),
+          error: null,
+        };
+        this.broadcastSession();
+        try {
+          await this.persist();
+        } catch (error) {
+          console.warn("[TranscriptWorker] recovered session persist failed", {
+            roomId: this.session.roomId,
+            message: redactSensitiveText(
+              error instanceof Error ? error.message : "Snapshot write failed.",
+            ),
+          });
+        }
+      }
+      return;
+    }
+  }
+
+  private replayBufferedTranscriptionAudio(
+    events: BufferedTranscriptAudioEvent[],
+    reportFailure = true,
+  ): boolean {
+    for (const event of events) {
+      if (!this.transcriptionSession) return false;
+      if (event.type === "chunk") {
+        if (
+          !this.appendNormalizedAudio(
+            event.audio,
+            event.speaker,
+            event.sampleCount,
+            false,
+            reportFailure,
+          )
+        ) {
+          return false;
+        }
+        continue;
+      }
+      if (event.type === "commit") {
+        if (
+          this.hasPendingAudio &&
+          canCommitPendingAudioForSpeaker(this.latestSpeaker, event.speaker)
+        ) {
+          if (
+            !this.commitTranscriptionBuffer(
+              event.speaker,
+              "Recovered transcript audio commit failed.",
+              reportFailure,
+            )
+          ) {
+            return false;
+          }
+        }
+        continue;
+      }
+      if (this.hasPendingAudio && this.latestSpeaker) {
+        if (
+          !this.commitTranscriptionBuffer(
+            this.latestSpeaker,
+            "Recovered transcript audio commit failed.",
+            reportFailure,
+          )
+        ) {
+          return false;
+        }
+      } else {
+        try {
+          this.transcriptionSession.clearAudio();
+        } catch {
+          if (reportFailure) {
+            void this.handleTranscriptionFailure(
+              "Recovered transcript audio clear failed.",
+            );
+          }
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  private async failTranscriptionPermanently(message: string): Promise<void> {
+    const redactedMessage = redactSensitiveText(message);
+    this.broadcast({ type: "error", message: redactedMessage });
     this.markTakeoverNeeded(redactedMessage);
     this.broadcastSession();
     await this.persist();
@@ -1056,6 +1813,14 @@ export class TranscriptRoom {
     itemId: string,
     transcript: string,
   ): Promise<void> {
+    if (this.transcriptionSession?.provider === "sarvam") {
+      // Sarvam is a continuous stream and its final items do not map 1:1 to
+      // the room's periodic commit markers. A final acknowledges everything
+      // sent through the current VAD boundary, so begin a fresh recovery window.
+      this.transcriptionReplayJournal.reset();
+    } else {
+      this.transcriptionReplayJournal.finalizeItem(itemId);
+    }
     const segment = this.allocateSegment(itemId);
     const text = transcript.trim() || segment.text.trim();
     this.partialSegments.delete(itemId);
@@ -1094,6 +1859,8 @@ export class TranscriptRoom {
   }
 
   private markTakeoverNeeded(error: string): void {
+    this.cancelControllerReconnect();
+    this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();
     this.responseApiKey = null;
     this.resetTranscriptionAudioState();
@@ -1345,6 +2112,7 @@ export class TranscriptRoom {
         return "qa";
       case "session.start":
       case "session.stop":
+      case "session.relayFailed":
       case "session.pause":
       case "session.resume":
       case "session.takeover":
@@ -1356,25 +2124,42 @@ export class TranscriptRoom {
 
   private async persist(): Promise<void> {
     if (!this.session) return;
+    const transcriptionConfig = this.transcriptionConnectionOptions
+      ? {
+          language: this.transcriptionConnectionOptions.language,
+          delay: this.transcriptionConnectionOptions.delay,
+          locale: this.transcriptionConnectionOptions.locale,
+        }
+      : undefined;
     await this.state.storage.put("snapshot", {
       session: this.session,
       segments: this.segments,
       minutes: this.minutes,
       sequence: this.sequence,
       serviceVersion: this.serviceVersion(),
+      transcriptionConfig,
     } satisfies PersistedSnapshot);
     await this.armCleanupAlarm();
   }
 
   private async armCleanupAlarm(): Promise<void> {
-    const ttlMs = parsePositiveInt(
-      this.env.TRANSCRIPT_IDLE_TTL_MS,
-      DEFAULT_IDLE_TTL_MS,
-    );
+    const ttlMs =
+      this.session?.status === "takeover_needed" ||
+      this.session?.status === "error"
+        ? parsePositiveInt(
+            this.env.TRANSCRIPT_RECOVERY_RETENTION_MS,
+            DEFAULT_RECOVERY_RETENTION_MS,
+          )
+        : parsePositiveInt(
+            this.env.TRANSCRIPT_IDLE_TTL_MS,
+            DEFAULT_IDLE_TTL_MS,
+          );
     await this.state.storage.setAlarm(Date.now() + ttlMs);
   }
 
   private resetInMemorySession(roomId: string, qaModel = DEFAULT_QA_MODEL): void {
+    this.cancelControllerReconnect();
+    this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();
     this.responseApiKey = null;
     this.segments = [];

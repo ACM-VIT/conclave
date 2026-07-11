@@ -208,8 +208,10 @@ struct GridLayoutView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, padding)
-                    .padding(.top, padding)
+                    // The meeting column already owns the phone safe-area
+                    // inset. A second 16pt grid inset left a conspicuous black
+                    // gutter around the solo tile, so let the tile consume the
+                    // full stage and reserve only the controls separation.
                     .padding(.bottom, controlsOverlap)
                     .transition(.opacity)
                 } else if !shouldScrollGrid {

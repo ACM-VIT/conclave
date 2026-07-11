@@ -711,6 +711,7 @@ export interface TranscriptSfuRelayStartResponse {
 export interface TranscriptSfuRelayStartToken {
   token: string;
   expiresAt: number;
+  automatic?: boolean;
 }
 
 export interface TranscriptSfuRelayStartRequest {

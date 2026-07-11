@@ -10,15 +10,14 @@ import {
 
 describe("transcript model registry", () => {
   it("uses documented OpenAI response model ids", () => {
-    expect(DEFAULT_TRANSCRIPT_QA_MODEL).toBe("gpt-5.5");
+    expect(DEFAULT_TRANSCRIPT_QA_MODEL).toBe("gpt-5.6-terra");
     expect(TRANSCRIPT_QA_MODELS.map((model) => model.id)).toEqual([
-      "gpt-5.5",
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.4-nano",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.6-sol",
     ]);
     expect(
-      TRANSCRIPT_QA_MODELS.some((model) => model.id === "gpt-5.5-mini"),
+      TRANSCRIPT_QA_MODELS.some((model) => model.id === "gpt-5.6-luna"),
     ).toBe(false);
   });
 

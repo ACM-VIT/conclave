@@ -16,6 +16,19 @@ const ACTIVE_RECOVERY_STATUSES = new Set<TranscriptSessionState["status"]>([
   "paused",
 ]);
 
+export const shouldAutomaticallyRecoverPersistedTranscriptSession = (
+  session: TranscriptSessionState,
+): boolean =>
+  session.keySource === "global" && ACTIVE_RECOVERY_STATUSES.has(session.status);
+
+export const shouldRetainRecoverableTranscriptSnapshot = (
+  session: TranscriptSessionState,
+  now: number,
+  retentionMs: number,
+): boolean =>
+  (session.status === "takeover_needed" || session.status === "error") &&
+  now - session.updatedAt < retentionMs;
+
 const shouldTreatAsServiceUpdate = (
   snapshotVersion: TranscriptServiceVersion | undefined,
   currentVersion: TranscriptServiceVersion,

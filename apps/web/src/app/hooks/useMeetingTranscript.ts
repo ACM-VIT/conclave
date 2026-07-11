@@ -33,7 +33,10 @@ import {
   TranscriptAudioRelay,
   type TranscriptRelaySource,
 } from "../lib/transcript-audio";
-import { resolveSnapshotViewerConnectionId } from "../lib/transcript-connection";
+import {
+  clearRecoveredTranscriptError,
+  resolveSnapshotViewerConnectionId,
+} from "../lib/transcript-connection";
 
 export type TranscriptConnectionStatus =
   | "idle"
@@ -133,6 +136,7 @@ type ServerEnvelope =
       globalProviderKeysAvailable?: TranscriptProviderKeyAvailability;
       serviceVersion?: TranscriptServiceVersion;
     }
+  | { type: "relay.pong"; id?: string }
   | ({ type: "sfu.relayStartToken" } & TranscriptSfuRelayStartToken)
   | { type: "error"; message?: string };
 
@@ -145,6 +149,12 @@ type TranscriptSessionWaiter = {
 type SfuRelayStartTokenWaiter = {
   resolve: (token: TranscriptSfuRelayStartToken | null) => void;
   timeoutId: number;
+};
+
+type BufferedTranscriptClientMessage = {
+  serialized: string;
+  createdAt: number;
+  bytes: number;
 };
 
 const buildIdleSession = (roomId: string): TranscriptSessionState => ({
@@ -174,10 +184,27 @@ const toWorkerWebSocketUrl = (token: TranscriptTokenResponse): string => {
 
 // Matches ConclaveUpdatePill's cadence so both update prompts behave alike.
 const VERSION_POLL_INTERVAL_MS = 30_000;
-const SFU_SESSION_READY_TIMEOUT_MS = 12_000;
+const SFU_SESSION_READY_TIMEOUT_MS = 30_000;
 const SFU_RELAY_TOKEN_TIMEOUT_MS = 5_000;
 const SFU_RELAY_STOP_TIMEOUT_MS = 3_000;
 const SFU_EXPLICIT_STOP_SUPPRESS_TAKEOVER_MS = 10_000;
+const TRANSCRIPT_RECONNECT_MAX_DELAY_MS = 10_000;
+const TRANSCRIPT_RECONNECT_MAX_BUFFER_AGE_MS = 2 * 60 * 1000;
+const TRANSCRIPT_RECONNECT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
+const TRANSCRIPT_RECONNECT_MAX_BUFFER_MESSAGES = 2_000;
+const TRANSCRIPT_HEARTBEAT_INTERVAL_MS = 20_000;
+const TRANSCRIPT_HEARTBEAT_TIMEOUT_MS = 55_000;
+const SFU_RELAY_START_RETRY_DELAYS_MS = [0, 300, 900] as const;
+
+const isBufferableTranscriptAudioPayload = (payload: unknown): boolean => {
+  if (!payload || typeof payload !== "object" || !("type" in payload)) {
+    return false;
+  }
+  const type = (payload as { type?: unknown }).type;
+  return (
+    type === "audio.chunk" || type === "audio.commit" || type === "audio.clear"
+  );
+};
 
 const toWorkerVersionUrl = (workerUrl: string): string => {
   const base = workerUrl.replace(/\/+$/, "");
@@ -263,11 +290,20 @@ export function useMeetingTranscript({
   const [viewerConnectionId, setViewerConnectionId] = useState<string | null>(
     null,
   );
+  const [automaticRelayStartToken, setAutomaticRelayStartToken] =
+    useState<TranscriptSfuRelayStartToken | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const relayRef = useRef<TranscriptAudioRelay | null>(null);
   const connectPromiseRef = useRef<Promise<boolean> | null>(null);
   const subscribedRef = useRef(false);
   const connectRef = useRef<(() => Promise<boolean>) | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const bufferedAudioMessagesRef = useRef<BufferedTranscriptClientMessage[]>(
+    [],
+  );
+  const bufferedAudioBytesRef = useRef(0);
+  const lastControlPongAtRef = useRef(0);
   const sessionRef = useRef<TranscriptSessionState>(buildIdleSession(roomId));
   const sessionWaitersRef = useRef<Set<TranscriptSessionWaiter>>(new Set());
   const sfuRelayStartTokenRef = useRef<TranscriptSfuRelayStartToken | null>(
@@ -279,6 +315,88 @@ export function useMeetingTranscript({
   const serviceVersionRef = useRef<TranscriptServiceVersion | null>(null);
   const autoTakeoverAttemptRef = useRef<string | null>(null);
   const suppressAutoTakeoverUntilRef = useRef(0);
+
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current === null) return;
+    window.clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+  }, []);
+
+  const scheduleReconnect = useCallback(() => {
+    if (!subscribedRef.current || reconnectTimerRef.current !== null) return;
+    const attempt = reconnectAttemptRef.current;
+    const delay = Math.min(
+      TRANSCRIPT_RECONNECT_MAX_DELAY_MS,
+      500 * 2 ** Math.min(attempt, 5),
+    );
+    reconnectAttemptRef.current += 1;
+    setConnectionStatus("connecting");
+    if (attempt >= 3) {
+      setError("Reconnecting transcript automatically…");
+    }
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null;
+      void connectRef.current?.().then((connected) => {
+        if (!connected) scheduleReconnect();
+      });
+    }, delay);
+  }, []);
+
+  const clearBufferedAudioMessages = useCallback(() => {
+    bufferedAudioMessagesRef.current = [];
+    bufferedAudioBytesRef.current = 0;
+  }, []);
+
+  const pruneBufferedAudioMessages = useCallback(() => {
+    const cutoff = Date.now() - TRANSCRIPT_RECONNECT_MAX_BUFFER_AGE_MS;
+    while (
+      bufferedAudioMessagesRef.current.length > 0 &&
+      (bufferedAudioMessagesRef.current.length >
+        TRANSCRIPT_RECONNECT_MAX_BUFFER_MESSAGES ||
+        bufferedAudioBytesRef.current >
+          TRANSCRIPT_RECONNECT_MAX_BUFFER_BYTES ||
+        (bufferedAudioMessagesRef.current[0]?.createdAt ?? cutoff) < cutoff)
+    ) {
+      const removed = bufferedAudioMessagesRef.current.shift();
+      if (!removed) break;
+      bufferedAudioBytesRef.current -= removed.bytes;
+    }
+  }, []);
+
+  const bufferAudioMessage = useCallback(
+    (serialized: string) => {
+      bufferedAudioMessagesRef.current.push({
+        serialized,
+        createdAt: Date.now(),
+        bytes: serialized.length,
+      });
+      bufferedAudioBytesRef.current += serialized.length;
+      pruneBufferedAudioMessages();
+    },
+    [pruneBufferedAudioMessages],
+  );
+
+  const flushBufferedAudioMessages = useCallback(
+    (socket: WebSocket): boolean => {
+      pruneBufferedAudioMessages();
+      while (bufferedAudioMessagesRef.current.length > 0) {
+        const message = bufferedAudioMessagesRef.current[0];
+        if (!message) break;
+        try {
+          socket.send(message.serialized);
+        } catch {
+          try {
+            socket.close();
+          } catch {}
+          return false;
+        }
+        bufferedAudioMessagesRef.current.shift();
+        bufferedAudioBytesRef.current -= message.bytes;
+      }
+      return true;
+    },
+    [pruneBufferedAudioMessages],
+  );
 
   const transcriptSources = useMemo<TranscriptRelaySource[]>(() => {
     const sources: TranscriptRelaySource[] = [];
@@ -361,12 +479,39 @@ export function useMeetingTranscript({
     );
   }, [isViewOnly]);
 
-  const send = useCallback((payload: unknown): boolean => {
-    const socket = socketRef.current;
-    if (!hasUsableOpenSocket(socket)) return false;
-    socket!.send(JSON.stringify(payload));
-    return true;
-  }, []);
+  const send = useCallback(
+    (payload: unknown): boolean => {
+      let serialized: string;
+      try {
+        serialized = JSON.stringify(payload);
+      } catch {
+        return false;
+      }
+      const socket = socketRef.current;
+      if (hasUsableOpenSocket(socket)) {
+        try {
+          socket!.send(serialized);
+          return true;
+        } catch {
+          if (socketRef.current === socket) socketRef.current = null;
+          try {
+            socket?.close();
+          } catch {}
+          scheduleReconnect();
+        }
+      }
+      if (
+        subscribedRef.current &&
+        isBufferableTranscriptAudioPayload(payload)
+      ) {
+        bufferAudioMessage(serialized);
+        scheduleReconnect();
+        return true;
+      }
+      return false;
+    },
+    [bufferAudioMessage, scheduleReconnect],
+  );
 
   const applyServiceVersion = useCallback(
     (version: TranscriptServiceVersion | undefined): void => {
@@ -447,16 +592,26 @@ export function useMeetingTranscript({
     [],
   );
 
-  const applySessionState = useCallback((nextSession: TranscriptSessionState) => {
-    sessionRef.current = nextSession;
-    setSession(nextSession);
-    for (const waiter of Array.from(sessionWaitersRef.current)) {
-      if (!waiter.predicate(nextSession)) continue;
-      window.clearTimeout(waiter.timeoutId);
-      sessionWaitersRef.current.delete(waiter);
-      waiter.resolve(nextSession);
-    }
-  }, []);
+  const applySessionState = useCallback(
+    (nextSession: TranscriptSessionState) => {
+      sessionRef.current = nextSession;
+      setSession(nextSession);
+      if (
+        nextSession.status === "idle" ||
+        nextSession.status === "error" ||
+        nextSession.status === "takeover_needed"
+      ) {
+        clearBufferedAudioMessages();
+      }
+      for (const waiter of Array.from(sessionWaitersRef.current)) {
+        if (!waiter.predicate(nextSession)) continue;
+        window.clearTimeout(waiter.timeoutId);
+        sessionWaitersRef.current.delete(waiter);
+        waiter.resolve(nextSession);
+      }
+    },
+    [clearBufferedAudioMessages],
+  );
 
   const clearSessionWaiters = useCallback(() => {
     for (const waiter of Array.from(sessionWaitersRef.current)) {
@@ -604,10 +759,23 @@ export function useMeetingTranscript({
           });
           return;
         case "sfu.relayStartToken":
+          const hadRelayTokenWaiter =
+            sfuRelayStartTokenWaitersRef.current.size > 0;
           applySfuRelayStartToken({
             token: message.token,
             expiresAt: message.expiresAt,
+            automatic: message.automatic,
           });
+          if (message.automatic || !hadRelayTokenWaiter) {
+            setAutomaticRelayStartToken({
+              token: message.token,
+              expiresAt: message.expiresAt,
+              automatic: true,
+            });
+          }
+          return;
+        case "relay.pong":
+          lastControlPongAtRef.current = Date.now();
           return;
         case "error":
           setError(message.message || "Transcript service error.");
@@ -641,8 +809,7 @@ export function useMeetingTranscript({
       setError(null);
       const token = await getTranscriptToken();
       if (!token) {
-        setConnectionStatus("error");
-        setError("Could not authorize transcript for this room.");
+        scheduleReconnect();
         return false;
       }
 
@@ -662,44 +829,44 @@ export function useMeetingTranscript({
           if (socketRef.current === socket) {
             socketRef.current = null;
           }
-          setViewerConnectionId(null);
           try {
             socket.close();
           } catch {}
-          setConnectionStatus("error");
-          setError("Transcript worker connection timed out.");
+          scheduleReconnect();
           finish(false);
         }, 8000);
         socket.onopen = () => {
+          if (!flushBufferedAudioMessages(socket)) {
+            if (socketRef.current === socket) socketRef.current = null;
+            scheduleReconnect();
+            finish(false);
+            return;
+          }
+          clearReconnectTimer();
+          reconnectAttemptRef.current = 0;
+          lastControlPongAtRef.current = Date.now();
           setConnectionStatus("connected");
+          setError(null);
           finish(true);
         };
         socket.onerror = () => {
           if (socketRef.current === socket) {
             socketRef.current = null;
           }
-          setViewerConnectionId(null);
-          setConnectionStatus("error");
-          setError("Transcript worker connection failed.");
+          try {
+            socket.close();
+          } catch {}
+          scheduleReconnect();
+          finish(false);
+        };
+        socket.onclose = () => {
+          if (socketRef.current === socket) {
+            socketRef.current = null;
+            scheduleReconnect();
+          }
           finish(false);
         };
       });
-      socket.onclose = () => {
-        if (socketRef.current === socket) {
-          socketRef.current = null;
-          setViewerConnectionId(null);
-          setConnectionStatus((prev) =>
-            prev === "error" ? "error" : "idle",
-          );
-          if (subscribedRef.current) {
-            window.setTimeout(() => {
-              if (subscribedRef.current) {
-                void connectRef.current?.();
-              }
-            }, 2000);
-          }
-        }
-      };
       return connected;
     })();
 
@@ -708,11 +875,43 @@ export function useMeetingTranscript({
     } finally {
       connectPromiseRef.current = null;
     }
-  }, [getTranscriptToken, handleServerMessage, isJoined]);
+  }, [
+    clearReconnectTimer,
+    flushBufferedAudioMessages,
+    getTranscriptToken,
+    handleServerMessage,
+    isJoined,
+    scheduleReconnect,
+  ]);
 
   useEffect(() => {
     connectRef.current = connect;
   }, [connect]);
+
+  useEffect(() => {
+    if (connectionStatus !== "connected" || !rawIsController) return;
+    lastControlPongAtRef.current = Date.now();
+    const heartbeat = window.setInterval(() => {
+      const socket = socketRef.current;
+      if (
+        !hasUsableOpenSocket(socket) ||
+        Date.now() - lastControlPongAtRef.current >
+          TRANSCRIPT_HEARTBEAT_TIMEOUT_MS
+      ) {
+        if (socketRef.current === socket) socketRef.current = null;
+        try {
+          socket?.close();
+        } catch {}
+        scheduleReconnect();
+        return;
+      }
+      send({
+        type: "relay.ping",
+        id: `control-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      });
+    }, TRANSCRIPT_HEARTBEAT_INTERVAL_MS);
+    return () => window.clearInterval(heartbeat);
+  }, [connectionStatus, rawIsController, scheduleReconnect, send]);
 
   const ensureSfuRelayAvailable = useCallback(async (): Promise<boolean> => {
     if (!getTranscriptSfuRelayStatus || !startTranscriptSfuRelay) {
@@ -728,32 +927,49 @@ export function useMeetingTranscript({
     return true;
   }, [getTranscriptSfuRelayStatus, startTranscriptSfuRelay]);
 
-  const startSfuRelay = useCallback(async (): Promise<boolean> => {
+  const startSfuRelay = useCallback(async (
+    providedToken?: TranscriptSfuRelayStartToken,
+  ): Promise<boolean> => {
     if (!startTranscriptSfuRelay) {
       setError("This SFU does not support server-side transcript relay.");
       return false;
     }
-    const relayStartToken = await waitForSfuRelayStartToken();
+    const relayStartToken =
+      providedToken ?? (await waitForSfuRelayStartToken());
     if (!relayStartToken?.token || relayStartToken.expiresAt <= Date.now()) {
       setError("Transcript worker did not authorize the SFU relay.");
       return false;
     }
-    const relayStart = await startTranscriptSfuRelay({
-      relayStartToken: relayStartToken.token,
-    });
+    let relayStart: TranscriptSfuRelayStartResponse | null = null;
+    for (
+      let attempt = 0;
+      attempt < SFU_RELAY_START_RETRY_DELAYS_MS.length;
+      attempt += 1
+    ) {
+      const delay = SFU_RELAY_START_RETRY_DELAYS_MS[attempt] ?? 0;
+      if (delay > 0) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
+      }
+      relayStart = await startTranscriptSfuRelay({
+        relayStartToken: relayStartToken.token,
+      });
+      if (relayStart?.success) break;
+    }
     if (!relayStart?.success) {
-      setSfuRelayStatus(
-        relayStart
-          ? {
-              mode: "sfu",
-              status: relayStart.status,
-              available: false,
-              reason: relayStart.reason,
-              updatedAt: relayStart.updatedAt,
-            }
-          : null,
-      );
-      setError(relayStart?.reason || "Could not start SFU transcript relay.");
+      if (!providedToken?.automatic) {
+        setSfuRelayStatus(
+          relayStart
+            ? {
+                mode: "sfu",
+                status: relayStart.status,
+                available: false,
+                reason: relayStart.reason,
+                updatedAt: relayStart.updatedAt,
+              }
+            : null,
+        );
+        setError(relayStart?.reason || "Could not start SFU transcript relay.");
+      }
       return false;
     }
     setSfuRelayStatus({
@@ -762,8 +978,33 @@ export function useMeetingTranscript({
       available: true,
       updatedAt: relayStart.updatedAt,
     });
+    setError(clearRecoveredTranscriptError);
     return true;
   }, [startTranscriptSfuRelay, waitForSfuRelayStartToken]);
+
+  useEffect(() => {
+    if (
+      !automaticRelayStartToken ||
+      automaticRelayStartToken.expiresAt <= Date.now() ||
+      session.status !== "live" ||
+      session.transportMode !== "sfu" ||
+      session.controller?.userId !== currentUserId ||
+      !rawIsController
+    ) {
+      return;
+    }
+    const token = automaticRelayStartToken;
+    setAutomaticRelayStartToken(null);
+    void startSfuRelay(token);
+  }, [
+    automaticRelayStartToken,
+    currentUserId,
+    rawIsController,
+    session.controller?.userId,
+    session.status,
+    session.transportMode,
+    startSfuRelay,
+  ]);
 
   const reconnect = useCallback(async (): Promise<boolean> => {
     const relay = relayRef.current;
@@ -879,13 +1120,16 @@ export function useMeetingTranscript({
         if (readySession?.status !== "live") {
           setError(
             readySession?.error ||
-              "Transcript worker did not become ready for SFU audio.",
+              "Transcript is still reconnecting automatically.",
           );
-          send({ type: "session.stop" });
           return false;
         }
         if (!(await startSfuRelay())) {
-          send({ type: "session.stop" });
+          suppressAutoTakeoverUntilRef.current = Date.now() + 30_000;
+          send({
+            type: "session.relayFailed",
+            message: "SFU transcript audio relay could not reconnect.",
+          });
           return false;
         }
       }
@@ -940,13 +1184,16 @@ export function useMeetingTranscript({
         if (readySession?.status !== "live") {
           setError(
             readySession?.error ||
-              "Transcript worker did not become ready for SFU audio.",
+              "Transcript is still reconnecting automatically.",
           );
-          send({ type: "session.stop" });
           return false;
         }
         if (!(await startSfuRelay())) {
-          send({ type: "session.stop" });
+          suppressAutoTakeoverUntilRef.current = Date.now() + 30_000;
+          send({
+            type: "session.relayFailed",
+            message: "SFU transcript audio relay could not reconnect.",
+          });
           return false;
         }
       }
@@ -1105,6 +1352,9 @@ export function useMeetingTranscript({
   useEffect(() => {
     if (!isJoined) {
       subscribedRef.current = false;
+      clearReconnectTimer();
+      reconnectAttemptRef.current = 0;
+      clearBufferedAudioMessages();
       const relay = relayRef.current;
       relayRef.current = null;
       const socket = socketRef.current;
@@ -1139,6 +1389,7 @@ export function useMeetingTranscript({
       serviceVersionRef.current = null;
       setAvailableServiceVersion(null);
       setViewerConnectionId(null);
+      setAutomaticRelayStartToken(null);
       setSfuRelayStatus(null);
       return;
     }
@@ -1148,6 +1399,8 @@ export function useMeetingTranscript({
   }, [
     clearSessionWaiters,
     clearSfuRelayStartTokenWaiters,
+    clearBufferedAudioMessages,
+    clearReconnectTimer,
     connect,
     isJoined,
     roomId,
@@ -1166,6 +1419,9 @@ export function useMeetingTranscript({
 
   useEffect(() => {
     return () => {
+      subscribedRef.current = false;
+      clearReconnectTimer();
+      clearBufferedAudioMessages();
       clearSessionWaiters();
       clearSfuRelayStartTokenWaiters();
       const relay = relayRef.current;
@@ -1184,7 +1440,12 @@ export function useMeetingTranscript({
         } catch {}
       }
     };
-  }, [clearSessionWaiters, clearSfuRelayStartTokenWaiters]);
+  }, [
+    clearReconnectTimer,
+    clearBufferedAudioMessages,
+    clearSessionWaiters,
+    clearSfuRelayStartTokenWaiters,
+  ]);
 
   useEffect(() => {
     const shouldStream =
@@ -1192,8 +1453,7 @@ export function useMeetingTranscript({
       session.transportMode !== "sfu" &&
       session.status === "live" &&
       session.controller?.userId === currentUserId &&
-      session.controller.connectionId === viewerConnectionId &&
-      hasUsableOpenSocket(socketRef.current);
+      session.controller.connectionId === viewerConnectionId;
     if (!shouldStream) {
       void relayRef.current?.stop();
       relayRef.current = null;

@@ -65,7 +65,7 @@ final class WebRTCClient {
     func activateCallAudioSession() { fatalError() }
     func startProducingAudio() async throws { fatalError() }
     func startProducingVideo() async throws { fatalError() }
-    func cleanup(notifyLocalState: Bool = true) async { fatalError() }
+    func cleanup(notifyLocalState: Bool = true, preserveCallAudioRouting: Bool = false) async { fatalError() }
     func checkVideoFreezes() async { fatalError() }
     func refreshVideoDecoders(userId: String? = nil) async { fatalError() }
     func sampleConnectionQuality() -> ConnectionQuality { fatalError() }
@@ -77,8 +77,10 @@ final class WebRTCClient {
     func hasAudioConsumer(userIdPrefix: String) -> Bool { fatalError() }
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { fatalError() }
     func setAudioEnabled(_ enabled: Bool) async throws { fatalError() }
+    func suspendLocalAudioForRecovery() { fatalError() }
     func reassertLocalAudioProducerUnmuted() async throws { fatalError() }
     func setVideoEnabled(_ enabled: Bool) async throws { fatalError() }
+    func suspendLocalVideoForRecovery() async { fatalError() }
     func canSwitchCamera() -> Bool { fatalError() }
     func setPreferredCameraFacing(_ facing: LocalCameraFacing) { fatalError() }
     func switchCamera() async throws { fatalError() }

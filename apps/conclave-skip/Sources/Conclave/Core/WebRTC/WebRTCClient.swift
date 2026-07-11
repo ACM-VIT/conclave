@@ -1638,6 +1638,20 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
+    /// Applies a privacy-critical local mute immediately while the signaling
+    /// connection is unavailable. The user's intent is republished by the
+    /// meeting view model after recovery; no socket acknowledgement is needed
+    /// (or possible) here.
+    func suspendLocalAudioForRecovery() {
+        audioCaptureReassertionTask?.cancel()
+        audioCaptureReassertionTask = nil
+        audioCaptureRestartTask?.cancel()
+        audioCaptureRestartTask = nil
+        audioProducer?.pause()
+        rtcLocalAudioTrack?.isEnabled = false
+        localAudioEnabled = false
+    }
+
     func reassertLocalAudioProducerUnmuted() async throws {
         guard let socket = socketManager else { throw WebRTCError.notConfigured }
         guard let producer = audioProducer else { throw WebRTCError.noTransport }
@@ -1689,6 +1703,18 @@ final class WebRTCClient: NSObject, ObservableObject {
             debugLog("[WebRTC] Failed to toggle video: \(error)")
             throw error
         }
+    }
+
+    /// Stops local camera capture without touching signaling. Capture the old
+    /// capturer before suspension so replacement media cannot be stopped if
+    /// reconnect setup completes while `stopCapture()` is awaiting.
+    func suspendLocalVideoForRecovery() async {
+        let capturer = videoCapturer
+        videoProducer?.pause()
+        rtcLocalVideoTrack?.isEnabled = false
+        localVideoTrack?.isEnabled = false
+        localVideoEnabled = false
+        await capturer?.stopCapture()
     }
 
     func closeLocalAudioProducer() async {
@@ -2790,7 +2816,10 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     // MARK: - Cleanup
 
-    func cleanup(notifyLocalState: Bool = true) async {
+    func cleanup(
+        notifyLocalState: Bool = true,
+        preserveCallAudioRouting: Bool = false
+    ) async {
         configurationGeneration += 1
         await videoCapturer?.stopCapture()
         videoCapturer = nil
@@ -2864,7 +2893,9 @@ final class WebRTCClient: NSObject, ObservableObject {
         device = nil
         runtimeIceServersJSON = nil
 
-        try? audioSession.setActive(false)
+        if !preserveCallAudioRouting {
+            try? audioSession.setActive(false)
+        }
 
         debugLog("[WebRTC] Cleanup complete")
     }

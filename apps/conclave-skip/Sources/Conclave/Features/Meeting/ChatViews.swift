@@ -101,151 +101,16 @@ struct ChatLatestEntryChange: Equatable {
 struct ChatOverlayView: View {
     @Bindable var viewModel: MeetingViewModel
     var onFocusChanged: (Bool) -> Void = { _ in }
-    @State private var messageText = ""
     @State private var replyTarget: ChatReplyPreview?
     @State private var lastReportedFocus = false
-    @State private var showGifPicker = false
-    @FocusState private var isInputFocused: Bool
-    private let maxChatInputLength = 1000
-
-    private var messageTextBinding: Binding<String> {
-        Binding(
-            get: { messageText },
-            set: { newValue in
-                messageText = String(newValue.prefix(maxChatInputLength))
-                markComposerActive()
-            }
-        )
-    }
-
-    private var isWatchOnlyChatDisabled: Bool {
-        viewModel.state.isWebinarAttendee
-    }
-
-    private var isHostChatLocked: Bool {
-        viewModel.state.isChatLocked && !viewModel.state.isAdmin
-    }
-
-    private var isConnectionChatDisabled: Bool {
-        viewModel.state.connectionState != .joined
-    }
-
-    private var isChatDisabled: Bool {
-        isConnectionChatDisabled || isWatchOnlyChatDisabled || isHostChatLocked
-    }
-
-    private var placeholder: String {
-        if isConnectionChatDisabled {
-            return "Chat unavailable until joined"
-        }
-        if isWatchOnlyChatDisabled {
-            return "Watch-only: chat disabled"
-        }
-        if isHostChatLocked {
-            return "Chat locked by host"
-        }
-        return "Message"
-    }
-
-    private var commandSuggestions: [ChatCommand] {
-        guard !isChatDisabled, messageText.hasPrefix("/") else { return [] }
-        let raw = String(messageText.dropFirst())
-        guard !raw.contains(where: { $0.isWhitespace }) else { return [] }
-        return ChatCommandParser.matchesPartialCommand(messageText)
-    }
-
-    private var inputHeight: CGFloat {
-        ChatComposerLayout.inputHeight(isAndroid: isAndroidComposerLayout)
-    }
-
-    private var inputHorizontalPadding: CGFloat {
-        ChatComposerLayout.inputHorizontalPadding(isAndroid: isAndroidComposerLayout)
-    }
-
-    private var inputVerticalPadding: CGFloat {
-        ChatComposerLayout.inputVerticalPadding(isAndroid: isAndroidComposerLayout)
-    }
-
-    private var composerHorizontalPadding: CGFloat {
-        ChatComposerLayout.composerHorizontalPadding(isAndroid: isAndroidComposerLayout)
-    }
-
-    private var composerVerticalPadding: CGFloat {
-        ChatComposerLayout.composerVerticalPadding(isAndroid: isAndroidComposerLayout)
-    }
-
-    private var mentionSuggestionsMaxHeight: CGFloat {
-        #if SKIP
-        return isInputFocused ? 108.0 : 154.0
-        #else
-        return 154.0
-        #endif
-    }
-
-    private var commandSuggestionsMaxHeight: CGFloat {
-        #if SKIP
-        return isInputFocused ? 128.0 : 190.0
-        #else
-        return 190.0
-        #endif
-    }
-
-    private var composerMinHeight: CGFloat {
-        ChatComposerLayout.composerMinHeight(isAndroid: isAndroidComposerLayout)
-    }
-
-    private var isAndroidComposerLayout: Bool {
-        #if SKIP
-        return true
-        #else
-        return false
-        #endif
-    }
-
-    private var mentionContext: ChatMentionContext? {
-        ChatMentionContextPolicy.context(
-            for: messageText,
-            isChatDisabled: isChatDisabled,
-            isDmEnabled: viewModel.state.isDmEnabled
-        )
-    }
-
-    private var mentionSuggestions: [ChatMentionSuggestion] {
-        guard let context = mentionContext else { return [] }
-        let query = context.query.lowercased()
-        let normalizedQuery = ChatMentionSuggestion.normalizeToken(query)
-        return viewModel.state.presentParticipants
-            .map { participant in
-                let displayName = viewModel.state.displayName(for: participant.id)
-                return ChatMentionSuggestion(
-                    userId: participant.id,
-                    displayName: displayName,
-                    mentionToken: ChatMentionSuggestion.token(userId: participant.id, displayName: displayName)
-                )
-            }
-            .filter { suggestion in
-                guard !query.isEmpty else { return true }
-                let displayNameMatch = suggestion.displayName.lowercased().contains(query)
-                let tokenMatch = !normalizedQuery.isEmpty && suggestion.mentionToken.contains(normalizedQuery)
-                return displayNameMatch || tokenMatch
-            }
-            .sorted { left, right in
-                if !normalizedQuery.isEmpty {
-                    let leftStartsWith = left.mentionToken.hasPrefix(normalizedQuery)
-                    let rightStartsWith = right.mentionToken.hasPrefix(normalizedQuery)
-                    if leftStartsWith != rightStartsWith {
-                        return leftStartsWith
-                    }
-                }
-                return left.displayName.lowercased() < right.displayName.lowercased()
-            }
-    }
+    @State private var isComposerFocused = false
+    @State private var mentionSuggestionsCount = 0
+    @State private var commandSuggestionsCount = 0
 
     var body: some View {
         let _ = PerformanceDiagnostics.render("ChatOverlayView") {
-            "messages=\(viewModel.state.chatMessages.count) systems=\(viewModel.state.systemMessages.count) text=\(messageText.count) focused=\(isInputFocused)"
+            "messages=\(viewModel.state.chatMessages.count) systems=\(viewModel.state.systemMessages.count) focused=\(isComposerFocused)"
         }
-        let canSendMessage = !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isChatDisabled
 
         VStack(spacing: 0) {
             #if SKIP
@@ -286,9 +151,9 @@ struct ChatOverlayView: View {
                 systemMessages: viewModel.state.systemMessages,
                 localUserId: viewModel.state.userId,
                 localSfuUserId: viewModel.state.sfuUserId,
-                isInputFocused: isInputFocused,
-                mentionSuggestionsCount: mentionSuggestions.count,
-                commandSuggestionsCount: commandSuggestions.count,
+                isInputFocused: isComposerFocused,
+                mentionSuggestionsCount: mentionSuggestionsCount,
+                commandSuggestionsCount: commandSuggestionsCount,
                 isCurrentUser: { userId in
                     viewModel.state.isLocalIdentityUserId(userId)
                 },
@@ -299,131 +164,24 @@ struct ChatOverlayView: View {
             .equatable()
             .frame(minHeight: 0, maxHeight: .infinity)
 
-            VStack(spacing: 10) {
-                if let replyTarget {
-                    ChatReplyComposerView(
-                        replyTo: replyTarget,
-                        isReplyFromCurrentUser: viewModel.state.isLocalIdentityUserId(replyTarget.userId),
-                        onCancel: { self.replyTarget = nil }
-                    )
-                }
-
-                if !mentionSuggestions.isEmpty, let context = mentionContext {
-                    ChatMentionSuggestionsView(
-                        suggestions: mentionSuggestions,
-                        maxHeight: mentionSuggestionsMaxHeight,
-                        onSelect: { suggestion in
-                            applyMentionSuggestion(suggestion, context: context)
-                        }
-                    )
-                } else if !commandSuggestions.isEmpty {
-                    ChatCommandSuggestionsView(
-                        commands: commandSuggestions,
-                        maxHeight: commandSuggestionsMaxHeight,
-                        onSelect: applyCommandSuggestion
-                    )
-                }
-
-                HStack(alignment: .bottom, spacing: 10) {
-                    Button {
-                        isInputFocused = false
-                        showGifPicker = true
-                    } label: {
-                        ACMSystemIcon.icon("photo.stack", android: "gif", size: 18)
-                            .foregroundStyle(isChatDisabled ? ACMColors.textFaint : ACMColors.textMuted)
-                            .frame(width: inputHeight, height: inputHeight)
-                            .acmColorBackground(ACMColors.surfaceRaised)
-                            .clipShape(Circle())
+            ChatComposerView(
+                viewModel: viewModel,
+                replyTarget: $replyTarget,
+                onFocusChanged: { focused in
+                    if isComposerFocused != focused {
+                        isComposerFocused = focused
                     }
-                    .buttonStyle(.plain)
-                    .frame(width: inputHeight, height: inputHeight)
-                    #if !SKIP
-                    .contentShape(Circle())
-                    #endif
-                    .disabled(isChatDisabled)
-                    .accessibilityLabel("Add a GIF")
-
-                    #if SKIP
-                    // SkipUI's TextField is a Material3 OutlinedTextField with
-                    // a 56dp minimum height. Give it its natural size - any
-                    // hard frame smaller than that clips the text vertically.
-                    TextField(placeholder, text: messageTextBinding)
-                        .textFieldStyle(.plain)
-                        .font(ACMFont.trial(14))
-                        .foregroundStyle(ACMColors.text)
-                        .tint(ACMColors.primaryOrange)
-                        .padding(.horizontal, inputHorizontalPadding)
-                        .acmColorBackground(ACMColors.bgAlt)
-                        .overlay {
-                            Capsule().strokeBorder(lineWidth: 1).foregroundStyle(ACMColors.border)
-                        }
-                        .clipShape(Capsule())
-                        .focused($isInputFocused)
-                        .onTapGesture {
-                            markComposerActive()
-                        }
-                        .lineLimit(1)
-                        .submitLabel(SubmitLabel.send)
-                        .onSubmit {
-                            sendMessage()
-                        }
-                        .disabled(isChatDisabled)
-                    #else
-                    // Grows to a few lines on iOS; SkipUI has no vertical-axis
-                    // TextField, so Android stays single line above.
-                    TextField(placeholder, text: messageTextBinding, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(ACMFont.trial(14))
-                        .foregroundStyle(ACMColors.text)
-                        .tint(ACMColors.primaryOrange)
-                        .padding(.horizontal, inputHorizontalPadding)
-                        .padding(.vertical, 10)
-                        .frame(minHeight: inputHeight)
-                        .acmColorBackground(ACMColors.bgAlt)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .strokeBorder(lineWidth: 1)
-                                .foregroundStyle(ACMColors.border)
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .focused($isInputFocused)
-                        .lineLimit(1...4)
-                        .submitLabel(SubmitLabel.send)
-                        .onSubmit {
-                            sendMessage()
-                        }
-                        .disabled(isChatDisabled)
-                    #endif
-
-                    Button {
-                        sendMessage()
-                    } label: {
-                        ACMSystemIcon.icon("arrow.up", android: "send", size: 16)
-                            .foregroundStyle(canSendMessage ? Color.white : ACMColors.textFaint)
-                            .frame(width: inputHeight, height: inputHeight)
-                            .acmColorBackground(canSendMessage ? ACMColors.primaryOrange : ACMColors.surfaceRaised)
-                            .clipShape(Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .frame(width: inputHeight, height: inputHeight)
-                        #if !SKIP
-                        .contentShape(Circle())
-                        #endif
-                        .disabled(!canSendMessage)
-                        // Icon-only control: without a label it is invisible
-                        // to VoiceOver/TalkBack and UI automation entirely.
-                        .accessibilityLabel("Send message")
+                    reportFocus(focused)
+                },
+                onSuggestionCountsChanged: { mentionCount, commandCount in
+                    if mentionSuggestionsCount != mentionCount {
+                        mentionSuggestionsCount = mentionCount
+                    }
+                    if commandSuggestionsCount != commandCount {
+                        commandSuggestionsCount = commandCount
+                    }
                 }
-                .onTapGesture {
-                    markComposerActive()
-                }
-            }
-            .padding(.horizontal, composerHorizontalPadding)
-            .padding(.vertical, composerVerticalPadding)
-            .overlay(alignment: .top) {
-                Rectangle().fill(ACMColors.border).frame(height: 1)
-            }
-            .frame(minHeight: composerMinHeight)
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .acmColorBackground(ACMColors.surface)
@@ -437,56 +195,13 @@ struct ChatOverlayView: View {
             // without a bounded top edge it reads as a clipped rectangle.
             Rectangle().fill(ACMColors.border).frame(height: 1)
         }
-#if SKIP
-        .onChange(of: isInputFocused ? "focused" : "blurred") {
-            reportFocus(isInputFocused)
-        }
-#else
-        .onChange(of: isInputFocused) { _, focused in
-            reportFocus(focused)
-        }
-        #endif
-        .onChange(of: messageText) {
-            guard !messageText.isEmpty else { return }
-            markComposerActive()
-        }
-        .sheet(isPresented: $showGifPicker) {
-            GifPickerView(onSelect: { gif in
-                sendGif(gif)
-            })
-        }
         .onDisappear {
             reportFocus(false)
         }
     }
 
-    private func sendGif(_ gif: ChatGifAttachment) {
-        guard !isChatDisabled else { return }
-        let activeReply = replyTarget
-        replyTarget = nil
-        HapticManager.shared.trigger(.light)
-        viewModel.sendChatGif(gif, replyTo: activeReply)
-    }
-
-    func sendMessage() {
-        let trimmed = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isChatDisabled else { return }
-        let activeReply = replyTarget
-        let shouldClearDraft = ChatSubmitReplyPolicy.shouldClearDraftAfterSubmit(trimmed, isDmEnabled: viewModel.state.isDmEnabled)
-        if ChatSubmitReplyPolicy.shouldClearReplyAfterSubmit(trimmed, isDmEnabled: viewModel.state.isDmEnabled) {
-            replyTarget = nil
-        }
-        HapticManager.shared.trigger(.light)
-        viewModel.sendChatMessage(trimmed, replyTo: activeReply)
-        if shouldClearDraft {
-            messageText = ""
-        } else {
-            focusInput()
-        }
-    }
-
     private func closeChat() {
-        isInputFocused = false
+        isComposerFocused = false
         reportFocus(false)
         PerformanceDiagnostics.event("chat_close")
         #if SKIP
@@ -495,13 +210,6 @@ struct ChatOverlayView: View {
         withAnimation(.easeInOut(duration: 0.12)) {
             viewModel.toggleChat()
         }
-        #endif
-    }
-
-    private func markComposerActive() {
-        #if SKIP
-        guard !isChatDisabled else { return }
-        reportFocus(true)
         #endif
     }
 
@@ -521,7 +229,6 @@ struct ChatOverlayView: View {
             isDirect: message.isDirect,
             dmTargetUserId: message.dmTargetUserId
         )
-        focusInput()
     }
 
     private func replyPreviewContent(for message: ChatMessage) -> String {
@@ -534,6 +241,318 @@ struct ChatOverlayView: View {
             return "Message"
         }
         return String(content.prefix(180))
+    }
+
+}
+
+/// Owns the hot draft/focus state so each keystroke invalidates only the
+/// composer and suggestion list—not the message timeline or full meeting dock.
+private struct ChatComposerView: View {
+    @Bindable var viewModel: MeetingViewModel
+    @Binding var replyTarget: ChatReplyPreview?
+    let onFocusChanged: (Bool) -> Void
+    let onSuggestionCountsChanged: (Int, Int) -> Void
+    @State private var messageText = ""
+    @State private var showGifPicker = false
+    @FocusState private var isInputFocused: Bool
+    private let maxChatInputLength = 1000
+
+    private var messageTextBinding: Binding<String> {
+        Binding(
+            get: { messageText },
+            set: { newValue in
+                let nextValue = String(newValue.prefix(maxChatInputLength))
+                if messageText != nextValue {
+                    messageText = nextValue
+                }
+                markComposerActive()
+            }
+        )
+    }
+
+    private var isWatchOnlyChatDisabled: Bool { viewModel.state.isWebinarAttendee }
+    private var isHostChatLocked: Bool { viewModel.state.isChatLocked && !viewModel.state.isAdmin }
+    private var isConnectionChatDisabled: Bool { viewModel.state.connectionState != .joined }
+    private var isChatDisabled: Bool {
+        isConnectionChatDisabled || isWatchOnlyChatDisabled || isHostChatLocked
+    }
+
+    private var placeholder: String {
+        if isConnectionChatDisabled { return "Chat unavailable until joined" }
+        if isWatchOnlyChatDisabled { return "Watch-only: chat disabled" }
+        if isHostChatLocked { return "Chat locked by host" }
+        return "Message"
+    }
+
+    private var commandSuggestions: [ChatCommand] {
+        guard !isChatDisabled, messageText.hasPrefix("/") else { return [] }
+        let raw = String(messageText.dropFirst())
+        guard !raw.contains(where: { $0.isWhitespace }) else { return [] }
+        return ChatCommandParser.matchesPartialCommand(messageText)
+    }
+
+    private var isAndroidComposerLayout: Bool {
+        #if SKIP
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    private var inputHeight: CGFloat {
+        ChatComposerLayout.inputHeight(isAndroid: isAndroidComposerLayout)
+    }
+    private var inputHorizontalPadding: CGFloat {
+        ChatComposerLayout.inputHorizontalPadding(isAndroid: isAndroidComposerLayout)
+    }
+    private var composerHorizontalPadding: CGFloat {
+        ChatComposerLayout.composerHorizontalPadding(isAndroid: isAndroidComposerLayout)
+    }
+    private var composerVerticalPadding: CGFloat {
+        ChatComposerLayout.composerVerticalPadding(isAndroid: isAndroidComposerLayout)
+    }
+    private var composerMinHeight: CGFloat {
+        ChatComposerLayout.composerMinHeight(isAndroid: isAndroidComposerLayout)
+    }
+    private var mentionSuggestionsMaxHeight: CGFloat {
+        #if SKIP
+        return isInputFocused ? 108.0 : 154.0
+        #else
+        return 154.0
+        #endif
+    }
+    private var commandSuggestionsMaxHeight: CGFloat {
+        #if SKIP
+        return isInputFocused ? 128.0 : 190.0
+        #else
+        return 190.0
+        #endif
+    }
+
+    private var mentionContext: ChatMentionContext? {
+        ChatMentionContextPolicy.context(
+            for: messageText,
+            isChatDisabled: isChatDisabled,
+            isDmEnabled: viewModel.state.isDmEnabled
+        )
+    }
+
+    private var mentionSuggestions: [ChatMentionSuggestion] {
+        guard let context = mentionContext else { return [] }
+        let remoteCandidates = viewModel.state.presentParticipants.map { participant in
+            ChatMentionCandidate(
+                userId: participant.id,
+                displayName: viewModel.state.displayName(for: participant.id)
+            )
+        }
+        return ChatMentionSuggestionPolicy.suggestions(
+            context: context,
+            localUserId: viewModel.state.userId,
+            localDisplayName: viewModel.state.displayName(for: viewModel.state.userId),
+            remoteCandidates: remoteCandidates
+        )
+    }
+
+    var body: some View {
+        let canSendMessage = !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isChatDisabled
+        let visibleMentionSuggestions = mentionSuggestions
+        let visibleCommandSuggestions = commandSuggestions
+        VStack(spacing: 10) {
+            if let replyTarget {
+                ChatReplyComposerView(
+                    replyTo: replyTarget,
+                    isReplyFromCurrentUser: viewModel.state.isLocalIdentityUserId(replyTarget.userId),
+                    onCancel: { self.replyTarget = nil }
+                )
+            }
+
+            if !visibleMentionSuggestions.isEmpty, let context = mentionContext {
+                ChatMentionSuggestionsView(
+                    suggestions: visibleMentionSuggestions,
+                    maxHeight: mentionSuggestionsMaxHeight,
+                    onSelect: { suggestion in
+                        applyMentionSuggestion(suggestion, context: context)
+                    }
+                )
+            } else if !visibleCommandSuggestions.isEmpty {
+                ChatCommandSuggestionsView(
+                    commands: visibleCommandSuggestions,
+                    maxHeight: commandSuggestionsMaxHeight,
+                    onSelect: applyCommandSuggestion
+                )
+            }
+
+            HStack(alignment: .bottom, spacing: 10) {
+                Button {
+                    isInputFocused = false
+                    showGifPicker = true
+                } label: {
+                    HStack(spacing: 5) {
+                        ACMSystemIcon.icon("photo.stack", android: "gif", size: 13)
+                        Text("GIF")
+                            .font(ACMFont.trial(11, weight: .semibold))
+                    }
+                    .foregroundStyle(isChatDisabled ? ACMColors.textFaint : ACMColors.textMuted)
+                    .frame(width: 58, height: inputHeight)
+                    .acmColorBackground(ACMColors.surfaceRaised)
+                    .overlay {
+                        Capsule().strokeBorder(ACMColors.border, lineWidth: 1)
+                    }
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .frame(width: 58, height: inputHeight)
+                #if !SKIP
+                .contentShape(Capsule())
+                #endif
+                .disabled(isChatDisabled)
+                .accessibilityLabel("Add a GIF")
+
+                #if SKIP
+                TextField(placeholder, text: messageTextBinding)
+                    .textFieldStyle(.plain)
+                    .font(ACMFont.trial(14))
+                    .foregroundStyle(ACMColors.text)
+                    .tint(ACMColors.primaryOrange)
+                    .padding(.horizontal, inputHorizontalPadding)
+                    .acmColorBackground(ACMColors.bgAlt)
+                    .overlay {
+                        Capsule().strokeBorder(lineWidth: 1).foregroundStyle(ACMColors.border)
+                    }
+                    .clipShape(Capsule())
+                    .focused($isInputFocused)
+                    .onTapGesture { markComposerActive() }
+                    .lineLimit(1)
+                    .submitLabel(SubmitLabel.send)
+                    .onSubmit { sendMessage() }
+                    .disabled(isChatDisabled)
+                #else
+                TextField(placeholder, text: messageTextBinding, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(ACMFont.trial(14))
+                    .foregroundStyle(ACMColors.text)
+                    .tint(ACMColors.primaryOrange)
+                    .padding(.horizontal, inputHorizontalPadding)
+                    .padding(.vertical, 10)
+                    .frame(minHeight: inputHeight)
+                    .acmColorBackground(ACMColors.bgAlt)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .strokeBorder(lineWidth: 1)
+                            .foregroundStyle(ACMColors.border)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .focused($isInputFocused)
+                    .lineLimit(1...4)
+                    .submitLabel(SubmitLabel.send)
+                    .onSubmit { sendMessage() }
+                    .disabled(isChatDisabled)
+                #endif
+
+                Button {
+                    sendMessage()
+                } label: {
+                    ACMSystemIcon.icon("arrow.up", android: "send", size: 16)
+                        .foregroundStyle(canSendMessage ? Color.white : ACMColors.textFaint)
+                        .frame(width: inputHeight, height: inputHeight)
+                        .acmColorBackground(canSendMessage ? ACMColors.primaryOrange : ACMColors.surfaceRaised)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .frame(width: inputHeight, height: inputHeight)
+                #if !SKIP
+                .contentShape(Circle())
+                #endif
+                .disabled(!canSendMessage)
+                .accessibilityLabel("Send message")
+            }
+            .onTapGesture { markComposerActive() }
+        }
+        .padding(.horizontal, composerHorizontalPadding)
+        .padding(.vertical, composerVerticalPadding)
+        .overlay(alignment: .top) {
+            Rectangle().fill(ACMColors.border).frame(height: 1)
+        }
+        .frame(minHeight: composerMinHeight)
+        #if SKIP
+        .onChange(of: isInputFocused ? "focused" : "blurred") {
+            onFocusChanged(isInputFocused)
+        }
+        #else
+        .onChange(of: isInputFocused) { _, focused in
+            onFocusChanged(focused)
+        }
+        #endif
+        .onChange(of: replyTarget?.id ?? "") {
+            if replyTarget != nil {
+                focusInput()
+            }
+        }
+        .onChange(of: "\(visibleMentionSuggestions.count):\(visibleCommandSuggestions.count)") {
+            onSuggestionCountsChanged(visibleMentionSuggestions.count, visibleCommandSuggestions.count)
+        }
+        .onAppear {
+            onSuggestionCountsChanged(visibleMentionSuggestions.count, visibleCommandSuggestions.count)
+        }
+        #if SKIP
+        .overlay {
+            ComposeView { context in
+                FlexibleGifPickerSheetHost(
+                    context: context,
+                    isPresented: showGifPicker,
+                    detentFraction: 0.58,
+                    onDismiss: { showGifPicker = false },
+                    onSelect: sendGif
+                )
+            }
+            .frame(width: 0, height: 0)
+        }
+        #else
+        .sheet(isPresented: $showGifPicker) {
+            GifPickerView(onSelect: sendGif)
+        }
+        #endif
+        .onDisappear {
+            onFocusChanged(false)
+        }
+    }
+
+    private func sendGif(_ gif: ChatGifAttachment) {
+        guard !isChatDisabled else { return }
+        let activeReply = replyTarget
+        replyTarget = nil
+        HapticManager.shared.trigger(.light)
+        viewModel.sendChatGif(gif, replyTo: activeReply)
+    }
+
+    private func sendMessage() {
+        let trimmed = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isChatDisabled else { return }
+        let activeReply = replyTarget
+        let shouldClearDraft = ChatSubmitReplyPolicy.shouldClearDraftAfterSubmit(
+            trimmed,
+            isDmEnabled: viewModel.state.isDmEnabled
+        )
+        if ChatSubmitReplyPolicy.shouldClearReplyAfterSubmit(
+            trimmed,
+            isDmEnabled: viewModel.state.isDmEnabled
+        ) {
+            replyTarget = nil
+        }
+        HapticManager.shared.trigger(.light)
+        viewModel.sendChatMessage(trimmed, replyTo: activeReply)
+        if shouldClearDraft {
+            messageText = ""
+        } else {
+            focusInput()
+        }
+    }
+
+    private func markComposerActive() {
+        #if SKIP
+        guard !isChatDisabled else { return }
+        onFocusChanged(true)
+        #endif
     }
 
     private func applyCommandSuggestion(_ command: ChatCommand) {
@@ -979,12 +998,13 @@ enum ChatMentionContextPolicy {
         isChatDisabled: Bool,
         isDmEnabled: Bool
     ) -> ChatMentionContext? {
-        guard !isChatDisabled, isDmEnabled else { return nil }
+        guard !isChatDisabled else { return nil }
 
         if let atContext = trailingAtMentionContext(in: text) {
             return atContext
         }
 
+        guard isDmEnabled else { return nil }
         let value = trimLeadingWhitespace(text)
         guard value.lowercased().hasPrefix("/dm") else { return nil }
         let query = trimLeadingWhitespace(String(value.dropFirst(3)))
@@ -1040,7 +1060,12 @@ enum ChatMentionContextPolicy {
     }
 }
 
-private struct ChatMentionSuggestion: Identifiable, Equatable {
+struct ChatMentionCandidate: Equatable {
+    let userId: String
+    let displayName: String
+}
+
+struct ChatMentionSuggestion: Identifiable, Equatable {
     let userId: String
     let displayName: String
     let mentionToken: String
@@ -1065,6 +1090,71 @@ private struct ChatMentionSuggestion: Identifiable, Equatable {
             normalized.append("\(character)")
         }
         return normalized.joined()
+    }
+}
+
+enum ChatMentionSuggestionPolicy {
+    static func suggestions(
+        context: ChatMentionContext,
+        localUserId: String,
+        localDisplayName: String,
+        remoteCandidates: [ChatMentionCandidate]
+    ) -> [ChatMentionSuggestion] {
+        var suggestions: [ChatMentionSuggestion] = []
+
+        if context.mode == .at {
+            suggestions.append(ChatMentionSuggestion(
+                userId: ConclaveAssistantChatIdentity.userId,
+                displayName: ConclaveAssistantChatIdentity.displayName,
+                mentionToken: ConclaveAssistantChatIdentity.mentionToken
+            ))
+
+            let normalizedLocalId = localUserId.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalizedLocalId.isEmpty {
+                let displayName = MeetingDisplayNamePresentation.formatted(localDisplayName)
+                suggestions.append(ChatMentionSuggestion(
+                    userId: normalizedLocalId,
+                    displayName: displayName.isEmpty ? "You" : displayName,
+                    mentionToken: ChatMentionSuggestion.token(
+                        userId: normalizedLocalId,
+                        displayName: displayName
+                    )
+                ))
+            }
+        }
+
+        for candidate in remoteCandidates {
+            let normalizedId = candidate.userId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedId.isEmpty,
+                  !suggestions.contains(where: { $0.userId == normalizedId }) else { continue }
+            let displayName = MeetingDisplayNamePresentation.formatted(candidate.displayName)
+            suggestions.append(ChatMentionSuggestion(
+                userId: normalizedId,
+                displayName: displayName.isEmpty ? MeetingState.fallbackDisplayName(for: normalizedId) : displayName,
+                mentionToken: ChatMentionSuggestion.token(userId: normalizedId, displayName: displayName)
+            ))
+        }
+
+        let query = context.query.lowercased()
+        let normalizedQuery = ChatMentionSuggestion.normalizeToken(query)
+        return suggestions
+            .filter { suggestion in
+                guard !query.isEmpty else { return true }
+                return suggestion.displayName.lowercased().contains(query)
+                    || (!normalizedQuery.isEmpty && suggestion.mentionToken.contains(normalizedQuery))
+            }
+            .sorted { left, right in
+                if left.userId == ConclaveAssistantChatIdentity.userId { return true }
+                if right.userId == ConclaveAssistantChatIdentity.userId { return false }
+                if !normalizedQuery.isEmpty {
+                    let leftStartsWith = left.mentionToken.hasPrefix(normalizedQuery)
+                    let rightStartsWith = right.mentionToken.hasPrefix(normalizedQuery)
+                    if leftStartsWith != rightStartsWith {
+                        return leftStartsWith
+                    }
+                }
+                return left.displayName.lowercased() < right.displayName.lowercased()
+            }
     }
 }
 
@@ -1194,7 +1284,7 @@ private enum ChatMessagePresentation {
         }
         let displayName = message.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !displayName.isEmpty {
-            return displayName
+            return MeetingDisplayNamePresentation.formatted(displayName)
         }
         let userId = message.userId.trimmingCharacters(in: .whitespacesAndNewlines)
         return MeetingState.fallbackDisplayName(for: userId)
@@ -1206,7 +1296,7 @@ private enum ChatMessagePresentation {
             let displayName = message.dmTargetDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let name = displayName.isEmpty
                 ? MeetingState.fallbackDisplayName(for: message.dmTargetUserId ?? "")
-                : displayName
+                : MeetingDisplayNamePresentation.formatted(displayName)
             return "Private to \(name)"
         }
         return "Private message"
@@ -1227,7 +1317,7 @@ private enum ChatMessagePresentation {
         }
         let displayName = reply.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !displayName.isEmpty {
-            return displayName
+            return MeetingDisplayNamePresentation.formatted(displayName)
         }
         return MeetingState.fallbackDisplayName(for: reply.userId)
     }
@@ -1323,6 +1413,26 @@ enum ChatGroupingPolicy {
             && previous.isDirect == message.isDirect
             && previous.dmTargetUserId == message.dmTargetUserId
             && message.timestamp.timeIntervalSince(previous.timestamp) < groupWindowSeconds
+    }
+}
+
+enum ChatTimestampPresentation {
+    static func text(for date: Date, calendar: Calendar = .current) -> String {
+        let components = calendar.dateComponents([.hour, .minute], from: date)
+        let hour24 = components.hour ?? 0
+        let minute = components.minute ?? 0
+        let hour12 = hour24 % 12 == 0 ? 12 : hour24 % 12
+        let minuteText = minute < 10 ? "0\(minute)" : "\(minute)"
+        return "\(hour12):\(minuteText) \(hour24 < 12 ? "AM" : "PM")"
+    }
+}
+
+enum ChatMessageLayout {
+    static func maximumContentWidth(isFromCurrentUser: Bool) -> CGFloat {
+        // The phone chat dock is at least 320pt wide. Reserving the 32pt
+        // avatar and 10pt gap keeps peer bubbles fully inside their column,
+        // including long unbroken error strings on Compose.
+        isFromCurrentUser ? 280.0 : 250.0
     }
 }
 
@@ -1435,7 +1545,7 @@ struct ChatMessageRow: View {
                 .foregroundStyle(ACMColors.text)
                 .lineLimit(1)
 
-            Text(message.timestamp, style: .time)
+            Text(ChatTimestampPresentation.text(for: message.timestamp))
                 .font(ACMFont.trial(11))
                 .foregroundStyle(ACMColors.textFaint)
 
@@ -1470,7 +1580,10 @@ struct ChatMessageRow: View {
                 isFromCurrentUser: isFromCurrentUser,
                 isDirect: message.isDirect
             )
-            .frame(maxWidth: 320, alignment: isFromCurrentUser ? .trailing : .leading)
+            .frame(
+                maxWidth: ChatMessageLayout.maximumContentWidth(isFromCurrentUser: isFromCurrentUser),
+                alignment: isFromCurrentUser ? .trailing : .leading
+            )
         }
     }
 }
@@ -1704,7 +1817,7 @@ struct ChatGifAttachmentView: View {
 }
 
 enum ChatGifAttachmentPresentation {
-    static let mediaWidth: CGFloat = 240
+    static let mediaWidth: CGFloat = 220
     private static let defaultMediaHeight: CGFloat = 150
     private static let minMediaHeight: CGFloat = 96
     private static let maxMediaHeight: CGFloat = 220

@@ -14,6 +14,7 @@ import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
 
 const TRANSCRIPT_TOKEN_TTL_SECONDS = 10 * 60;
+const TRANSCRIPT_RELAY_TOKEN_TTL_SECONDS = 12 * 60 * 60;
 
 const getTranscriptWorkerUrl = (): string =>
   (
@@ -97,7 +98,7 @@ const createTranscriptRelayToken = (options: {
     getTranscriptTokenSecret(),
     {
       algorithm: "HS256",
-      expiresIn: TRANSCRIPT_TOKEN_TTL_SECONDS,
+      expiresIn: TRANSCRIPT_RELAY_TOKEN_TTL_SECONDS,
     },
   );
 };

@@ -5,7 +5,7 @@ import type {
 } from "./types";
 
 export const createEmptyTranscriptMinutes = (
-  model = "gpt-5.5",
+  model = "gpt-5.6-terra",
 ): TranscriptMinutesSnapshot => ({
   summary: "",
   topics: [],

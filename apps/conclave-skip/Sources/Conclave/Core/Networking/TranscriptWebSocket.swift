@@ -40,6 +40,7 @@ final class TranscriptWebSocket {
     }
     #else
     private var task: URLSessionWebSocketTask?
+    private var pingTask: Task<Void, Never>?
     private var isActive = false
 
     func connect(urlString: String) {
@@ -55,6 +56,7 @@ final class TranscriptWebSocket {
         // URLSessionWebSocketTask buffers sends until the socket opens, so it's
         // safe to signal readiness now; a genuine failure surfaces via receive().
         onOpen?()
+        startPingLoop(for: task)
         receiveNext()
     }
 
@@ -78,11 +80,41 @@ final class TranscriptWebSocket {
                         self.receiveNext()
                     }
                 case .failure(let error):
-                    self.isActive = false
-                    self.onClosed?(error.localizedDescription)
+                    self.finishClosed(error.localizedDescription)
                 }
             }
         }
+    }
+
+    private func startPingLoop(for socketTask: URLSessionWebSocketTask) {
+        pingTask?.cancel()
+        pingTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: 20_000_000_000)
+                } catch {
+                    return
+                }
+                guard let self,
+                      self.isActive,
+                      self.task === socketTask else { return }
+                socketTask.sendPing { [weak self] error in
+                    guard let error else { return }
+                    Task { @MainActor [weak self] in
+                        self?.finishClosed(error.localizedDescription)
+                    }
+                }
+            }
+        }
+    }
+
+    private func finishClosed(_ reason: String?) {
+        guard isActive else { return }
+        isActive = false
+        pingTask?.cancel()
+        pingTask = nil
+        task = nil
+        onClosed?(reason)
     }
 
     func send(_ text: String) {
@@ -91,6 +123,8 @@ final class TranscriptWebSocket {
 
     func close() {
         isActive = false
+        pingTask?.cancel()
+        pingTask = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
     }

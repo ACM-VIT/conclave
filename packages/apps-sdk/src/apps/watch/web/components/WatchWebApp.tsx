@@ -24,6 +24,7 @@ import {
 import {
   fetchVideoMetadata,
   fetchVideoTitle,
+  liveHintForMetadata,
   thumbnailUrl,
   type WatchVideoMetadata,
 } from "../youtubeMeta";
@@ -75,18 +76,36 @@ export function WatchWebApp() {
       return;
     }
     let cancelled = false;
+    let revalidateTimer: ReturnType<typeof setTimeout> | null = null;
+    let nextRevalidateAfterMs: number | null = null;
     setVideoMetadata(null);
-    void fetchVideoMetadata(videoId).then((metadata) => {
-      if (!cancelled && metadata?.videoId === videoId) {
+
+    const refreshMetadata = async () => {
+      const metadata = await fetchVideoMetadata(videoId);
+      if (cancelled) return;
+      if (metadata?.videoId === videoId) {
         setVideoMetadata(metadata);
+        nextRevalidateAfterMs = metadata.revalidateAfterMs;
       }
-    });
+      // Once a status is known to be transient, keep checking through an
+      // occasional failed request. An initial unavailable proxy still falls
+      // back to the iframe without starting a pointless polling loop.
+      if (nextRevalidateAfterMs !== null) {
+        revalidateTimer = setTimeout(() => {
+          void refreshMetadata();
+        }, nextRevalidateAfterMs);
+      }
+    };
+
+    void refreshMetadata();
     return () => {
       cancelled = true;
+      if (revalidateTimer) clearTimeout(revalidateTimer);
     };
   }, [videoId]);
-  const liveHint =
-    videoMetadata?.videoId === videoId ? videoMetadata.isLive : null;
+  const liveHint = liveHintForMetadata(
+    videoMetadata?.videoId === videoId ? videoMetadata : null,
+  );
 
   const player = useSyncedPlayback({
     doc,

@@ -6,6 +6,7 @@ import SwiftUI
 /// hands a ready-to-send `ChatGifAttachment` back to the composer.
 struct GifPickerView: View {
     let onSelect: (ChatGifAttachment) -> Void
+    var onDismiss: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var mediaKind: KlipyMediaKind = .gifs
@@ -49,6 +50,10 @@ struct GifPickerView: View {
             debounceTask?.cancel()
             debounceTask = nil
         }
+        #if !SKIP
+        .presentationDetents([.fraction(0.58)])
+        .presentationDragIndicator(.visible)
+        #endif
     }
 
     private var header: some View {
@@ -60,7 +65,7 @@ struct GifPickerView: View {
             Spacer()
 
             Button {
-                dismiss()
+                close()
             } label: {
                 ACMSystemIcon.icon("xmark", android: "close", size: 14, tint: "muted")
                     .foregroundStyle(ACMColors.textMuted)
@@ -237,7 +242,7 @@ struct GifPickerView: View {
 
         return Button {
             onSelect(gif)
-            dismiss()
+            close()
         } label: {
             ZStack {
                 if let url = URL(string: previewString) {
@@ -269,6 +274,14 @@ struct GifPickerView: View {
     }
 
     // MARK: - Loading
+
+    private func close() {
+        if let onDismiss {
+            onDismiss()
+        } else {
+            dismiss()
+        }
+    }
 
     private func scheduleDebouncedReload() {
         debounceTask?.cancel()

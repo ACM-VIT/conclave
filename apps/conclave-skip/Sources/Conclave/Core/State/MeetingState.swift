@@ -109,6 +109,20 @@ final class MeetingState {
             PerformanceDiagnostics.state("connectionState", old: "\(oldValue)", new: "\(connectionState)")
         }
     }
+    /// True from the first established-call interruption until replacement
+    /// transports and media are ready. Unlike `connectionState`, this remains
+    /// true while a reconnect-driven join is in `.joining`, so the UI does not
+    /// lose its notice or disable local media intent halfway through recovery.
+    var isRecoveringConnection: Bool = false {
+        didSet {
+            guard oldValue != isRecoveringConnection else { return }
+            PerformanceDiagnostics.state(
+                "isRecoveringConnection",
+                old: "\(oldValue)",
+                new: "\(isRecoveringConnection)"
+            )
+        }
+    }
     var errorMessage: String?
     var joinFormErrorMessage: String?
     var meetingEndedNoticeMessage: String?
@@ -903,6 +917,10 @@ final class MeetingState {
     }()
 
     func displayName(for id: String) -> String {
+        MeetingDisplayNamePresentation.formatted(rawDisplayName(for: id))
+    }
+
+    private func rawDisplayName(for id: String) -> String {
         let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
         if isLocalIdentityUserId(normalized) {
             return displayName.isEmpty ? "You" : displayName
