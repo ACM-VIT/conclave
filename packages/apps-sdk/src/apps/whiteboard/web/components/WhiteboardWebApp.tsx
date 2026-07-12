@@ -38,7 +38,8 @@ function KeyHint({ label }: { label: string }) {
 }
 
 export function WhiteboardWebApp() {
-  const { user, isAdmin, isReadOnly: appReadOnly } = useApps();
+  const { user, isAdmin, isReadOnly: appReadOnly, closeApp, hideForMe } = useApps();
+  const [isCloseMenuOpen, setIsCloseMenuOpen] = useState(false);
   const { doc, awareness, locked } = useAppDoc("whiteboard");
   const { states } = useAppPresence("whiteboard");
   const { tool, setTool, settings, setSettings } = useToolState();
@@ -189,6 +190,9 @@ export function WhiteboardWebApp() {
   }, []);
 
   useEffect(() => {
+    // Letters are the primary bindings (mnemonic: Pen, Eraser, Rect, cirO,
+    // Line, Arrow, Text, Sticky, Hand/pan, laser poinKer). Numbers 1-9 stay as
+    // a secondary alias in the original tool order for muscle memory.
     const toolsByKey: Record<string, typeof tool> = {
       "1": "select",
       "2": "pen",
@@ -197,11 +201,19 @@ export function WhiteboardWebApp() {
       "5": "rect",
       "6": "ellipse",
       "7": "line",
+      "8": "arrow",
+      "9": "text",
+      v: "select",
+      p: "pen",
+      e: "eraser",
+      r: "rect",
+      o: "ellipse",
+      l: "line",
       a: "arrow",
-      "8": "text",
-      "9": "sticky",
+      t: "text",
+      s: "sticky",
       h: "pan",
-      l: "laser",
+      k: "laser",
     };
     const toolsByCode: Record<string, typeof tool> = {
       Digit1: "select",
@@ -211,11 +223,19 @@ export function WhiteboardWebApp() {
       Digit5: "rect",
       Digit6: "ellipse",
       Digit7: "line",
+      Digit8: "arrow",
+      Digit9: "text",
+      KeyV: "select",
+      KeyP: "pen",
+      KeyE: "eraser",
+      KeyR: "rect",
+      KeyO: "ellipse",
+      KeyL: "line",
       KeyA: "arrow",
-      Digit8: "text",
-      Digit9: "sticky",
+      KeyT: "text",
+      KeyS: "sticky",
       KeyH: "pan",
-      KeyL: "laser",
+      KeyK: "laser",
       Numpad1: "select",
       Numpad2: "pen",
       Numpad3: "highlighter",
@@ -223,8 +243,8 @@ export function WhiteboardWebApp() {
       Numpad5: "rect",
       Numpad6: "ellipse",
       Numpad7: "line",
-      Numpad8: "text",
-      Numpad9: "sticky",
+      Numpad8: "arrow",
+      Numpad9: "text",
     };
 
     const widthSteps = [2, 3, 5, 8, 12];
@@ -340,7 +360,8 @@ export function WhiteboardWebApp() {
         .map((state) => ({
           clientId: state.clientId,
           color: state.user?.color ?? "#a1a1aa",
-          name: state.user?.name ?? "",
+          // First name only keeps the label small next to the pointer
+          name: (state.user?.name ?? "").trim().split(/\s+/)[0] ?? "",
           x: (state.cursor?.x ?? 0) * viewport.scale + viewport.translateX,
           y: (state.cursor?.y ?? 0) * viewport.scale + viewport.translateY,
         })),
@@ -411,11 +432,11 @@ export function WhiteboardWebApp() {
               Sketch, drop sticky notes, or point things out with the laser. Everyone in the call sees it live.
             </p>
             <div className="mt-1 flex items-center gap-2 text-[11px]" style={{ color: "rgba(255,255,255,0.35)" }}>
-              <KeyHint label="2" /> pen
+              <KeyHint label="P" /> pen
               <span className="mx-0.5">·</span>
-              <KeyHint label="9" /> sticky
+              <KeyHint label="S" /> sticky
               <span className="mx-0.5">·</span>
-              <KeyHint label="L" /> laser
+              <KeyHint label="K" /> laser
             </div>
           </div>
         </div>
@@ -480,27 +501,84 @@ export function WhiteboardWebApp() {
         </div>
       ) : null}
 
-      {stressToolsEnabled ? (
-        <div className="absolute right-3 top-3 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={triggerStressTest}
-            disabled={isReadOnly || stressTestRunning}
-            className="rounded-full px-3 py-2 text-[11px] font-medium text-[#d8d8d8] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
-            style={CAPSULE_STYLE}
-          >
-            {stressTestRunning ? "Running stress" : "Run stress test"}
-          </button>
-          {stressTestResult ? (
-            <div
-              className="whitespace-nowrap rounded-full px-3 py-2 text-[10px] text-[#b8b8b8]"
+      <div className="absolute right-3 top-3 flex items-center gap-2">
+        {stressToolsEnabled ? (
+          <>
+            <button
+              type="button"
+              onClick={triggerStressTest}
+              disabled={isReadOnly || stressTestRunning}
+              className="rounded-full px-3 py-2 text-[11px] font-medium text-[#d8d8d8] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
               style={CAPSULE_STYLE}
             >
-              {`${Math.round(stressTestResult.durationMs)}ms · ${stressTestResult.strokeCount} strokes · ${stressTestResult.queuedMoveEvents} moves`}
-            </div>
+              {stressTestRunning ? "Running stress" : "Run stress test"}
+            </button>
+            {stressTestResult ? (
+              <div
+                className="whitespace-nowrap rounded-full px-3 py-2 text-[10px] text-[#b8b8b8]"
+                style={CAPSULE_STYLE}
+              >
+                {`${Math.round(stressTestResult.durationMs)}ms · ${stressTestResult.strokeCount} strokes · ${stressTestResult.queuedMoveEvents} moves`}
+              </div>
+            ) : null}
+          </>
+        ) : null}
+
+        <div className="relative">
+          <button
+            type="button"
+            aria-label={isAdmin ? "Close whiteboard" : "Close whiteboard for me"}
+            onClick={() => {
+              if (isAdmin) {
+                setIsCloseMenuOpen((prev) => !prev);
+              } else {
+                hideForMe();
+              }
+            }}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-[#d8d8d8] transition-colors hover:text-white cursor-pointer"
+            style={CAPSULE_STYLE}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+
+          {isAdmin && isCloseMenuOpen ? (
+            <>
+              <div
+                className="fixed inset-0 z-10"
+                onClick={() => setIsCloseMenuOpen(false)}
+              />
+              <div
+                className="absolute right-0 top-[calc(100%+8px)] z-20 flex w-44 flex-col overflow-hidden rounded-xl py-1"
+                style={CAPSULE_STYLE}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCloseMenuOpen(false);
+                    hideForMe();
+                  }}
+                  className="px-3 py-2 text-left text-[12px] text-[#d8d8d8] transition-colors hover:bg-white/5 hover:text-white cursor-pointer"
+                >
+                  Close for me
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCloseMenuOpen(false);
+                    void closeApp();
+                  }}
+                  className="px-3 py-2 text-left text-[12px] text-[#d8d8d8] transition-colors hover:bg-white/5 hover:text-white cursor-pointer"
+                >
+                  Close for everyone
+                </button>
+              </div>
+            </>
           ) : null}
         </div>
-      ) : null}
+      </div>
 
       <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-3">
         <div
