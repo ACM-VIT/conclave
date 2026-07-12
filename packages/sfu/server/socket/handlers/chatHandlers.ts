@@ -120,6 +120,25 @@ const getPipedVideoId = (value: string): string | null => {
   }
 };
 
+const getPipedSearchItems = (
+  value: unknown,
+): Array<{ url?: string; title?: string; name?: string }> => {
+  const rawItems = Array.isArray(value)
+    ? value
+    : value && typeof value === "object"
+      ? (value as { items?: unknown }).items
+      : null;
+  if (!Array.isArray(rawItems)) return [];
+  return rawItems.filter(
+    (item): item is { url?: string; title?: string; name?: string } =>
+      Boolean(
+        item &&
+          typeof item === "object" &&
+          typeof (item as { url?: unknown }).url === "string",
+      ),
+  );
+};
+
 const resolveMusicTrack = async (options: {
   query: string;
   userId: string;
@@ -168,13 +187,7 @@ const resolveMusicTrack = async (options: {
       return { error: "Music search failed." };
     }
     const results = (await searchResponse.json()) as unknown;
-    const list = Array.isArray(results) ? results : [];
-    const first = list.find(
-      (item) =>
-        item &&
-        typeof item === "object" &&
-        typeof (item as { url?: unknown }).url === "string",
-    ) as { url?: string; title?: string; name?: string } | undefined;
+    const first = getPipedSearchItems(results)[0];
     const videoPath = first?.url;
     const videoId = videoPath ? getPipedVideoId(videoPath) : null;
     if (!videoId) {

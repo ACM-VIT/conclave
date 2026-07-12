@@ -15,8 +15,6 @@ type RoomAuthPayload = {
   userId?: string;
   email?: string;
   roomId?: string;
-  isHost?: boolean;
-  isAdmin?: boolean;
 };
 
 const sanitizePathSegment = (value: string): string =>
@@ -39,6 +37,14 @@ const takeRateLimit = (key: string): boolean => {
   }
   current.count += 1;
   return true;
+};
+
+const githubFailureStatus = (status: number): number => {
+  if (status === 409) return 409;
+  if (status === 422) return 400;
+  if (status === 429) return 429;
+  if (status >= 500) return 503;
+  return 424;
 };
 
 export async function POST(request: Request) {
@@ -160,7 +166,7 @@ export async function POST(request: Request) {
   if (!response.ok) {
     return NextResponse.json(
       { error: "Failed to version MoM." },
-      { status: response.status >= 400 && response.status < 500 ? 502 : 503 },
+      { status: githubFailureStatus(response.status) },
     );
   }
 
