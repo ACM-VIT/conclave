@@ -45,6 +45,7 @@ export type ParticipantAction =
       userId: string;
       status: ParticipantConnectionStatus | null;
     }
+  | { type: "UPDATE_TAGS"; userId: string; tags: string[] }
   | { type: "CLEAR_ALL" };
 
 // A brand-new entry has no producers, so it cannot be sending media: it starts
@@ -243,6 +244,22 @@ export function participantReducer(
       return withParticipant(state, action.userId, {
         ...(participant || createEmptyParticipant(action.userId)),
         isHandRaised: action.raised,
+      });
+    }
+    case "UPDATE_TAGS": {
+      const participant = state.get(action.userId);
+      if (!participant) return state;
+      const tags = action.tags.slice().sort();
+      const current = participant.tags ?? [];
+      if (
+        current.length === tags.length &&
+        current.every((tag, index) => tag === tags[index])
+      ) {
+        return state;
+      }
+      return withParticipant(state, action.userId, {
+        ...participant,
+        tags,
       });
     }
     case "UPDATE_CONNECTION_STATUS": {

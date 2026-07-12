@@ -11,6 +11,7 @@ export type ChatCommandId =
   | "mute"
   | "unmute"
   | "camera"
+  | "play"
   | "leave"
   | "clear";
 
@@ -92,6 +93,13 @@ export const CHAT_COMMANDS: ChatCommand[] = [
     description: "Control your camera",
     usage: "/camera on|off|toggle",
     insertText: "/camera ",
+  },
+  {
+    id: "play",
+    label: "play",
+    description: "Play music for the room",
+    usage: "/play <url or search>",
+    insertText: "/play ",
   },
   {
     id: "leave",

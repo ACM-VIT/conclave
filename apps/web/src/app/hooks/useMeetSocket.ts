@@ -33,6 +33,7 @@ import type {
   MeetError,
   Producer,
   MeetingConfigSnapshot,
+  MeetingMusicState,
   MeetingUpdateRequest,
   ParticipantConnectionStatus,
   ProducerInfo,
@@ -740,6 +741,8 @@ interface UseMeetSocketOptions {
   setIsDmEnabled: (value: boolean) => void;
   setAreImageAttachmentsEnabled: (value: boolean) => void;
   setIsReactionsDisabled: (value: boolean) => void;
+  setMusicState: React.Dispatch<React.SetStateAction<MeetingMusicState>>;
+  setAvailableParticipantTags: React.Dispatch<React.SetStateAction<string[]>>;
   setActiveScreenShareId: (value: string | null) => void;
   setActiveSpeakerId: React.Dispatch<React.SetStateAction<string | null>>;
   setServerActiveSpeakerAvailable: (value: boolean) => void;
@@ -842,6 +845,8 @@ export function useMeetSocket({
   setIsDmEnabled,
   setAreImageAttachmentsEnabled,
   setIsReactionsDisabled,
+  setMusicState,
+  setAvailableParticipantTags,
   setActiveScreenShareId,
   setActiveSpeakerId,
   setServerActiveSpeakerAvailable,
@@ -4649,6 +4654,16 @@ export function useMeetSocket({
                 response.areImageAttachmentsEnabled ?? true,
               );
               setIsReactionsDisabled(response.isReactionsDisabled ?? false);
+              setMusicState(
+                response.musicState ?? {
+                  permission: "off",
+                  slowModeMs: 30_000,
+                  track: null,
+                },
+              );
+              if (Array.isArray(response.availableTags)) {
+                setAvailableParticipantTags(response.availableTags);
+              }
               resolve("waiting");
               return;
             }
@@ -4672,6 +4687,26 @@ export function useMeetSocket({
                 response.areImageAttachmentsEnabled ?? true,
               );
               setIsReactionsDisabled(response.isReactionsDisabled ?? false);
+              setMusicState(
+                response.musicState ?? {
+                  permission: "off",
+                  slowModeMs: 30_000,
+                  track: null,
+                },
+              );
+              if (Array.isArray(response.availableTags)) {
+                setAvailableParticipantTags(response.availableTags);
+              }
+              if (Array.isArray(response.participantTags)) {
+                for (const entry of response.participantTags) {
+                  if (!entry?.userId || !Array.isArray(entry.tags)) continue;
+                  dispatchParticipants({
+                    type: "UPDATE_TAGS",
+                    userId: entry.userId,
+                    tags: entry.tags,
+                  });
+                }
+              }
               if (
                 Object.prototype.hasOwnProperty.call(response, "activeSpeakerId")
               ) {
@@ -4827,6 +4862,11 @@ export function useMeetSocket({
       setIsTtsDisabled,
       setIsChatLocked,
       setIsDmEnabled,
+      setAreImageAttachmentsEnabled,
+      setIsReactionsDisabled,
+      setMusicState,
+      setAvailableParticipantTags,
+      dispatchParticipants,
     ],
   );
 
@@ -6197,6 +6237,45 @@ export function useMeetSocket({
                 if (!isRoomEvent(eventRoomId)) return;
                 console.info("[Meets] Room reactions disabled changed:", disabled);
                 setIsReactionsDisabled(disabled);
+              },
+            );
+
+            socket.on(
+              "musicStateChanged",
+              ({
+                state,
+                roomId: eventRoomId,
+              }: {
+                state?: MeetingMusicState;
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId) || !state) return;
+                setMusicState(state);
+              },
+            );
+
+            socket.on(
+              "participantTagsChanged",
+              ({
+                userId: taggedUserId,
+                tags,
+                availableTags,
+                roomId: eventRoomId,
+              }: {
+                userId?: string;
+                tags?: string[];
+                availableTags?: string[];
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId) || !taggedUserId) return;
+                dispatchParticipants({
+                  type: "UPDATE_TAGS",
+                  userId: taggedUserId,
+                  tags: Array.isArray(tags) ? tags : [],
+                });
+                if (Array.isArray(availableTags)) {
+                  setAvailableParticipantTags(availableTags);
+                }
               },
             );
 

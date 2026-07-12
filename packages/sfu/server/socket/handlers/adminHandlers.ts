@@ -1421,6 +1421,122 @@ export const registerAdminHandlers = (
   });
 
   socket.on(
+    "setMusicPermission",
+    (
+      data: { permission?: "off" | "admin" | "everyone" },
+      cb,
+    ) => {
+      const guard = ensureAdminRoom(context);
+      if ("error" in guard) {
+        respond(cb, guard);
+        return;
+      }
+      const permission = data?.permission;
+      if (
+        permission !== "off" &&
+        permission !== "admin" &&
+        permission !== "everyone"
+      ) {
+        respond(cb, { error: "Invalid music permission" });
+        return;
+      }
+
+      const update = applyRoomPolicyUpdate(io, guard.room, {
+        musicPermission: permission,
+      });
+      Logger.info(
+        `Room ${guard.room.id} music permission changed to ${permission} by admin`,
+      );
+      respond(cb, {
+        success: true,
+        state: guard.room.getMusicState(),
+        changed: update.changed,
+      });
+    },
+  );
+
+  socket.on("music:stop", (_data, cb) => {
+    const guard = ensureAdminRoom(context);
+    if ("error" in guard) {
+      respond(cb, guard);
+      return;
+    }
+    guard.room.setCurrentMusicTrack(null);
+    io.to(guard.room.channelId).emit("musicStateChanged", {
+      roomId: guard.room.id,
+      state: guard.room.getMusicState(),
+    });
+    respond(cb, { success: true, state: guard.room.getMusicState() });
+  });
+
+  socket.on(
+    "setParticipantTags",
+    (data: { userId?: string; tags?: string[] }, cb) => {
+      const guard = ensureAdminRoom(context);
+      if ("error" in guard) {
+        respond(cb, guard);
+        return;
+      }
+      const targetId = normalizeUserId(data?.userId);
+      if (!targetId || !guard.room.getClient(targetId)) {
+        respond(cb, { error: "User not found" });
+        return;
+      }
+      const tags = Array.isArray(data?.tags) ? data.tags : [];
+      const nextTags = guard.room.setParticipantTags(targetId, tags);
+      io.to(guard.room.channelId).emit("participantTagsChanged", {
+        roomId: guard.room.id,
+        userId: targetId,
+        tags: nextTags,
+        availableTags: guard.room.getAvailableParticipantTags(),
+      });
+      respond(cb, {
+        success: true,
+        userId: targetId,
+        tags: nextTags,
+        availableTags: guard.room.getAvailableParticipantTags(),
+      });
+    },
+  );
+
+  socket.on(
+    "removeUsersByTag",
+    (data: { tag?: string; includeAdmins?: boolean }, cb) => {
+      const guard = ensureAdminRoom(context);
+      if ("error" in guard) {
+        respond(cb, guard);
+        return;
+      }
+      const tag = typeof data?.tag === "string" ? data.tag.trim().replace(/^@+/, "") : "";
+      if (!tag) {
+        respond(cb, { error: "Tag is required" });
+        return;
+      }
+      const removedUserIds: string[] = [];
+      const participants = Array.from(guard.room.clients.values());
+      for (const client of participants) {
+        if (client.id === guard.adminId) continue;
+        const isAdminTarget = client instanceof Admin;
+        if (isAdminTarget && !data?.includeAdmins) continue;
+        if (!guard.room.hasParticipantTag(client.id, tag)) continue;
+        const kicked = kickClient(guard.room, client.id, `Removed by @${tag}`, {
+          io,
+          state,
+        });
+        if (kicked) {
+          removedUserIds.push(client.id);
+        }
+      }
+      respond(cb, {
+        success: true,
+        tag,
+        removedCount: removedUserIds.length,
+        removedUserIds,
+      });
+    },
+  );
+
+  socket.on(
     "admin:setPolicies",
     (
       data: {

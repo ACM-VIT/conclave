@@ -26,6 +26,7 @@ type ParticipantSnapshot = {
   userKey: string | null;
   displayName: string;
   role: ParticipantRole;
+  tags: string[];
   mode: Client["mode"];
   socketId: string;
   muted: boolean;
@@ -71,7 +72,13 @@ export type RoomSnapshot = {
     dmEnabled: boolean;
     imageAttachmentsEnabled: boolean;
     reactionsDisabled: boolean;
+    musicPermission: ReturnType<Room["getMusicState"]>["permission"];
+    musicSlowModeMs: number;
     requiresMeetingInviteCode: boolean;
+  };
+  music: ReturnType<Room["getMusicState"]>;
+  tags: {
+    available: string[];
   };
   access: {
     allowedUserKeys: string[];
@@ -146,6 +153,7 @@ export type RoomPolicyUpdate = {
   dmEnabled?: boolean;
   imageAttachmentsEnabled?: boolean;
   reactionsDisabled?: boolean;
+  musicPermission?: ReturnType<Room["getMusicState"]>["permission"];
 };
 
 type ProducerInfo = ReturnType<Client["getProducerInfos"]>[number];
@@ -275,11 +283,17 @@ const toParticipantSnapshot = (
     (producer) =>
       producer.kind === "video" && producer.type === "webcam" && !producer.paused,
   );
+  const role = toParticipantRole(room, client);
+  const tags = new Set(room.getParticipantTags(client.id));
+  if (role === "host" || role === "admin") tags.add("host");
+  const userKey = room.userKeysById.get(client.id) ?? null;
+  if (isGuestUserKey(userKey)) tags.add("guest");
   return {
     userId: client.id,
-    userKey: room.userKeysById.get(client.id) ?? null,
+    userKey,
     displayName: toDisplayName(room, client.id),
-    role: toParticipantRole(room, client),
+    role,
+    tags: Array.from(tags).sort(),
     mode: client.mode,
     socketId: client.socket.id,
     muted: !hasLiveAudio,
@@ -345,7 +359,13 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
       dmEnabled: room.isDmEnabled,
       imageAttachmentsEnabled: room.areImageAttachmentsEnabled,
       reactionsDisabled: room.isReactionsDisabled,
+      musicPermission: room.getMusicState().permission,
+      musicSlowModeMs: room.musicSlowModeMs,
       requiresMeetingInviteCode: room.requiresMeetingInviteCode,
+    },
+    music: room.getMusicState(),
+    tags: {
+      available: room.getAvailableParticipantTags(),
     },
     access: {
       allowedUserKeys: Array.from(room.allowedUsers.values()).sort(),
@@ -748,6 +768,20 @@ export const applyRoomPolicyUpdate = (
     io.to(room.channelId).emit("reactionsDisabledChanged", {
       disabled: update.reactionsDisabled,
       roomId: room.id,
+    });
+  }
+
+  if (
+    (update.musicPermission === "off" ||
+      update.musicPermission === "admin" ||
+      update.musicPermission === "everyone") &&
+    update.musicPermission !== room.musicPermission
+  ) {
+    room.setMusicPermission(update.musicPermission);
+    changed.musicPermission = update.musicPermission;
+    io.to(room.channelId).emit("musicStateChanged", {
+      roomId: room.id,
+      state: room.getMusicState(),
     });
   }
 

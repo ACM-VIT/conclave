@@ -23,6 +23,7 @@ import BrowserLayout from "./BrowserLayout";
 import MeetingAppLayout from "./MeetingAppLayout";
 import ScreenShareAudioPlayers from "./ScreenShareAudioPlayers";
 import SystemAudioPlayers from "./SystemAudioPlayers";
+import MeetingMusicPlayer from "./MeetingMusicPlayer";
 import ParticipantVideo from "./ParticipantVideo";
 import ToastQueue from "./ToastQueue";
 import TranscriptPanel from "./TranscriptPanel";
@@ -55,6 +56,7 @@ import type {
   ConnectionState,
   MeetError,
   MeetingConfigSnapshot,
+  MeetingMusicState,
   MeetingUpdateRequest,
   Participant,
   ReconnectRecoveryStatus,
@@ -282,6 +284,8 @@ interface MeetsMainContentProps {
   isDmEnabled: boolean;
   areImageAttachmentsEnabled: boolean;
   isReactionsDisabled: boolean;
+  musicState: MeetingMusicState;
+  availableParticipantTags: string[];
   meetingRequiresInviteCode: boolean;
   webinarConfig?: WebinarConfigSnapshot | null;
   webinarRole?: "attendee" | "participant" | "host" | null;
@@ -526,6 +530,8 @@ export default function MeetsMainContent({
   isDmEnabled,
   areImageAttachmentsEnabled,
   isReactionsDisabled,
+  musicState,
+  availableParticipantTags,
   meetingRequiresInviteCode,
   webinarConfig,
   webinarRole,
@@ -1394,6 +1400,31 @@ export default function MeetsMainContent({
     );
   }, [socket, isReactionsDisabled]);
 
+  const handleSetMusicPermission = useCallback(
+    (permission: MeetingMusicState["permission"]) => {
+      if (!socket) return;
+      socket.emit(
+        "setMusicPermission",
+        { permission },
+        (res: { error?: string }) => {
+          if (res?.error) {
+            console.error("Failed to update music permission:", res.error);
+          }
+        },
+      );
+    },
+    [socket],
+  );
+
+  const handleStopMusic = useCallback(() => {
+    if (!socket) return;
+    socket.emit("music:stop", {}, (res: { error?: string }) => {
+      if (res?.error) {
+        console.error("Failed to stop music:", res.error);
+      }
+    });
+  }, [socket]);
+
   const handleToggleChat = useCallback(() => {
     if (!isChatOpen) {
       if (isParticipantsOpen) {
@@ -2231,6 +2262,16 @@ export default function MeetsMainContent({
         </div>
       )}
 
+      {isJoined && !isWebinarAttendee && (
+        <MeetingMusicPlayer
+          state={musicState}
+          isAdmin={isAdmin}
+          activeSpeakerId={activeSpeakerId}
+          currentUserId={currentUserId}
+          onStop={handleStopMusic}
+        />
+      )}
+
       {isJoined &&
         (isWebinarAttendee ? (
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/30 px-4 py-3">
@@ -2337,6 +2378,7 @@ export default function MeetsMainContent({
           onPendingUserStale={handlePendingUserStale}
           hostUserId={hostUserId}
           hostUserIds={hostUserIds}
+          availableTags={availableParticipantTags}
         />
       )}
 
@@ -2359,6 +2401,8 @@ export default function MeetsMainContent({
             onToggleImageAttachments={handleToggleImageAttachments}
             isReactionsDisabled={isReactionsDisabled}
             onToggleReactionsDisabled={handleToggleReactionsDisabled}
+            musicPermission={musicState.permission}
+            onSetMusicPermission={handleSetMusicPermission}
             meetingRequiresInviteCode={meetingRequiresInviteCode}
             onGetMeetingConfig={onGetMeetingConfig}
             onUpdateMeetingConfig={onUpdateMeetingConfig}

@@ -54,6 +54,24 @@ export interface ChatMessage {
   ttsVoiceToken?: string;
 }
 
+export type MeetingMusicPermission = "off" | "admin" | "everyone";
+
+export interface MeetingMusicTrack {
+  id: string;
+  query: string;
+  title: string;
+  url: string;
+  requestedByUserId: string;
+  requestedByDisplayName: string;
+  startedAt: number;
+}
+
+export interface MeetingMusicState {
+  permission: MeetingMusicPermission;
+  slowModeMs: number;
+  track: MeetingMusicTrack | null;
+}
+
 export interface ChatReplyPreview {
   id: string;
   userId: string;
@@ -210,6 +228,7 @@ export interface Participant {
   isCameraOff: boolean;
   isVideoAdaptivelyPaused: boolean;
   isHandRaised: boolean;
+  tags?: string[];
   isLeaving?: boolean;
   connectionStatus?: ParticipantConnectionStatus;
 }
@@ -252,6 +271,9 @@ export interface JoinRoomResponse {
   isDmEnabled?: boolean;
   areImageAttachmentsEnabled?: boolean;
   isReactionsDisabled?: boolean;
+  musicState?: MeetingMusicState;
+  participantTags?: { userId: string; tags: string[] }[];
+  availableTags?: string[];
   meetingRequiresInviteCode?: boolean;
   webinarRole?: "attendee" | "participant" | "host";
   isWebinarEnabled?: boolean;

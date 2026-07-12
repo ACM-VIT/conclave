@@ -634,6 +634,24 @@ export interface ChatMessage {
   ttsVoiceToken?: string;
 }
 
+export type MeetingMusicPermission = "off" | "admin" | "everyone";
+
+export interface MeetingMusicTrack {
+  id: string;
+  query: string;
+  title: string;
+  url: string;
+  requestedByUserId: string;
+  requestedByDisplayName: string;
+  startedAt: number;
+}
+
+export interface MeetingMusicState {
+  permission: MeetingMusicPermission;
+  slowModeMs: number;
+  track: MeetingMusicTrack | null;
+}
+
 export interface ChatReplyPreview {
   id: string;
   userId: string;

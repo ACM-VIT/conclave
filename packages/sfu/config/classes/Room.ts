@@ -18,6 +18,9 @@ import * as Y from "yjs";
 import type {
   ActiveSpeakerChangedNotification,
   ChatMessage,
+  MeetingMusicPermission,
+  MeetingMusicState,
+  MeetingMusicTrack,
   ProducerInfo,
   VideoQuality,
 } from "../../types.js";
@@ -81,6 +84,8 @@ export const CHAT_IMAGE_ORPHAN_TTL_MS = 2 * 60 * 1000;
 const MAX_CHAT_IMAGE_ROOM_BYTES = 64 * 1024 * 1024;
 const MAX_CHAT_IMAGE_USER_BYTES = 24 * 1024 * 1024;
 const MAX_INVITE_CODE_LENGTH = 256;
+const DEFAULT_ROOM_TAGS = ["host", "jc", "sc", "boards", "guest"];
+const MUSIC_SLOW_MODE_MS = 30_000;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 const normalizeInviteCode = (value: unknown): string => {
@@ -96,6 +101,18 @@ const normalizeInviteCode = (value: unknown): string => {
     return "";
   }
   return normalized;
+};
+
+const normalizeParticipantTag = (value: unknown): string => {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const normalized = value
+    .trim()
+    .replace(/^@+/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "");
+  return normalized.length > 0 && normalized.length <= 24 ? normalized : "";
 };
 
 const getAwarenessStateUserId = (state: unknown): string | null => {
@@ -176,6 +193,12 @@ export class Room {
   private _areImageAttachmentsEnabled: boolean = true;
   private _reactionsDisabled: boolean = false;
   private _meetingInviteCodeHash: string | null = null;
+  private _musicPermission: MeetingMusicPermission = "off";
+  private _currentMusicTrack: MeetingMusicTrack | null = null;
+  public readonly musicSlowModeMs = MUSIC_SLOW_MODE_MS;
+  public lastMusicRequestByUserId: Map<string, number> = new Map();
+  private availableParticipantTags: Set<string> = new Set(DEFAULT_ROOM_TAGS);
+  private participantTagsByUserId: Map<string, Set<string>> = new Map();
   public appsState: { activeAppId: string | null; locked: boolean } = {
     activeAppId: null,
     locked: false,
@@ -310,6 +333,8 @@ export class Room {
     const departingUserKey = this.userKeysById.get(clientId);
     this.userKeysById.delete(clientId);
     this.handRaisedByUserId.delete(clientId);
+    this.participantTagsByUserId.delete(clientId);
+    this.lastMusicRequestByUserId.delete(clientId);
     // Drop the cached display name once NO live client still shares this userKey
     // (a user may be joined from two tabs under one key). Without this,
     // displayNamesByKey is only cleared on full room teardown, so a long-lived
@@ -926,6 +951,85 @@ export class Room {
 
   setImageAttachmentsEnabled(enabled: boolean): void {
     this._areImageAttachmentsEnabled = enabled;
+  }
+
+  get musicPermission(): MeetingMusicPermission {
+    return this._musicPermission;
+  }
+
+  setMusicPermission(permission: MeetingMusicPermission): void {
+    this._musicPermission = permission;
+    if (permission === "off") {
+      this._currentMusicTrack = null;
+      this.lastMusicRequestByUserId.clear();
+    }
+  }
+
+  get currentMusicTrack(): MeetingMusicTrack | null {
+    return this._currentMusicTrack;
+  }
+
+  setCurrentMusicTrack(track: MeetingMusicTrack | null): void {
+    this._currentMusicTrack = track;
+  }
+
+  getMusicState(): MeetingMusicState {
+    return {
+      permission: this._musicPermission,
+      slowModeMs: this.musicSlowModeMs,
+      track: this._currentMusicTrack,
+    };
+  }
+
+  getAvailableParticipantTags(): string[] {
+    return Array.from(this.availableParticipantTags).sort();
+  }
+
+  setAvailableParticipantTags(tags: string[]): string[] {
+    const normalized = new Set<string>();
+    for (const tag of tags) {
+      const clean = normalizeParticipantTag(tag);
+      if (clean) normalized.add(clean);
+    }
+    for (const tag of DEFAULT_ROOM_TAGS) {
+      normalized.add(tag);
+    }
+    this.availableParticipantTags = normalized;
+    return this.getAvailableParticipantTags();
+  }
+
+  getParticipantTags(userId: string): string[] {
+    const tags = this.participantTagsByUserId.get(userId);
+    return tags ? Array.from(tags).sort() : [];
+  }
+
+  getParticipantTagsSnapshot(): { userId: string; tags: string[] }[] {
+    return Array.from(this.clients.keys()).map((userId) => ({
+      userId,
+      tags: this.getParticipantTags(userId),
+    }));
+  }
+
+  setParticipantTags(userId: string, tags: string[]): string[] {
+    const normalized = new Set<string>();
+    for (const tag of tags) {
+      const clean = normalizeParticipantTag(tag);
+      if (!clean) continue;
+      this.availableParticipantTags.add(clean);
+      normalized.add(clean);
+    }
+    if (normalized.size === 0) {
+      this.participantTagsByUserId.delete(userId);
+      return [];
+    }
+    this.participantTagsByUserId.set(userId, normalized);
+    return Array.from(normalized).sort();
+  }
+
+  hasParticipantTag(userId: string, tag: string): boolean {
+    const clean = normalizeParticipantTag(tag);
+    if (!clean) return false;
+    return this.participantTagsByUserId.get(userId)?.has(clean) ?? false;
   }
 
   addChatImageAsset(
@@ -1550,6 +1654,11 @@ export class Room {
     this.userKeysById.clear();
     this.adminUserKeys.clear();
     this.displayNamesByKey.clear();
+    this.participantTagsByUserId.clear();
+    this.availableParticipantTags = new Set(DEFAULT_ROOM_TAGS);
+    this.lastMusicRequestByUserId.clear();
+    this._musicPermission = "off";
+    this._currentMusicTrack = null;
     this.blockedUsers.clear();
     this.webinarActiveSpeakerUserId = null;
     this.webinarDominantSpeakerUserId = null;

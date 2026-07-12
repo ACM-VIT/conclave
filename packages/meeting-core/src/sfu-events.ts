@@ -68,6 +68,10 @@ export const SFU_EVENTS = {
     getTtsDisabledStatus: "getTtsDisabledStatus",
     setReactionsDisabled: "setReactionsDisabled",
     getReactionsDisabledStatus: "getReactionsDisabledStatus",
+    setMusicPermission: "setMusicPermission",
+    stopMusic: "music:stop",
+    setParticipantTags: "setParticipantTags",
+    removeUsersByTag: "removeUsersByTag",
     admitUser: "admitUser",
     rejectUser: "rejectUser",
     kickUser: "kickUser",
@@ -188,6 +192,8 @@ export const SFU_EVENTS = {
     imageAttachmentsStateChanged: "imageAttachmentsStateChanged",
     ttsDisabledChanged: "ttsDisabledChanged",
     reactionsDisabledChanged: "reactionsDisabledChanged",
+    musicStateChanged: "musicStateChanged",
+    participantTagsChanged: "participantTagsChanged",
 
     // Session lifecycle / disruptive
     kicked: "kicked",

@@ -33,6 +33,7 @@ interface ParticipantsPanelProps {
   };
   hostUserId?: string | null;
   hostUserIds?: string[];
+  availableTags?: string[];
 }
 
 const ICON = 18;
@@ -65,6 +66,7 @@ function ParticipantsPanel({
   localState,
   hostUserId,
   hostUserIds,
+  availableTags = ["host", "jc", "sc", "boards", "guest"],
 }: ParticipantsPanelProps & {
   socket: Socket | null;
   isAdmin?: boolean | null;
@@ -90,6 +92,7 @@ function ParticipantsPanel({
           isCameraOff: localState.isCameraOff,
           isVideoAdaptivelyPaused: false,
           isHandRaised: localState.isHandRaised,
+          tags: [],
         }
       : null;
   const displayParticipants = localParticipant
@@ -107,6 +110,7 @@ function ParticipantsPanel({
   const [pendingKickUserId, setPendingKickUserId] = useState<string | null>(null);
   const [removingUserId, setRemovingUserId] = useState<string | null>(null);
   const [isAdmittingAll, setIsAdmittingAll] = useState(false);
+  const [removingTag, setRemovingTag] = useState<string | null>(null);
   const [hostActionError, setHostActionError] = useState<string | null>(null);
   const effectiveHostUserId = hostUserId ?? (isAdmin ? currentUserId : null);
   const effectiveHostUserIds = new Set<string>(
@@ -232,6 +236,43 @@ function ParticipantsPanel({
     );
   };
 
+  const handleToggleTag = (targetUserId: string, tag: string) => {
+    if (!socket || !isAdmin) return;
+    const participant = participants.get(targetUserId);
+    const current = new Set(participant?.tags ?? []);
+    if (current.has(tag)) {
+      current.delete(tag);
+    } else {
+      current.add(tag);
+    }
+    setHostActionError(null);
+    socket.emit(
+      "setParticipantTags",
+      { userId: targetUserId, tags: Array.from(current) },
+      (res: { success?: boolean; error?: string }) => {
+        if (res?.error || !res?.success) {
+          setHostActionError(res?.error || "Failed to update tags.");
+        }
+      },
+    );
+  };
+
+  const handleRemoveByTag = (tag: string) => {
+    if (!socket || !isAdmin || removingTag) return;
+    setHostActionError(null);
+    setRemovingTag(tag);
+    socket.emit(
+      "removeUsersByTag",
+      { tag },
+      (res: { success?: boolean; error?: string; removedCount?: number }) => {
+        setRemovingTag(null);
+        if (res?.error || !res?.success) {
+          setHostActionError(res?.error || "Failed to remove tagged members.");
+        }
+      },
+    );
+  };
+
   useEffect(() => {
     if (
       expandedUserId &&
@@ -317,6 +358,24 @@ function ParticipantsPanel({
               <span>Stop video</span>
             </button>
           </div>
+          {availableTags.length > 0 && (
+            <div className="mt-2.5 flex flex-wrap gap-1.5">
+              {availableTags
+                .filter((tag) => tag !== "host" && tag !== "guest")
+                .map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => handleRemoveByTag(tag)}
+                    disabled={removingTag === tag}
+                    className="rounded-md border border-[#F95F4A]/25 bg-[#F95F4A]/10 px-2 py-1 text-[11.5px] font-semibold text-[#F95F4A] transition-colors hover:bg-[#F95F4A]/15 disabled:opacity-50"
+                    title={`Remove all members tagged @${tag}`}
+                  >
+                    {removingTag === tag ? "Removing" : `Remove @${tag}`}
+                  </button>
+                ))}
+            </div>
+          )}
         </section>
       )}
 
@@ -483,6 +542,25 @@ function ParticipantsPanel({
                       </span>
                     )}
                   </div>
+                  {((participant.tags ?? []).length > 0 || isHost) && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {Array.from(
+                        new Set([
+                          ...(isHost ? ["host"] : []),
+                          ...(participant.tags ?? []),
+                        ]),
+                      )
+                        .sort()
+                        .map((tag) => (
+                          <span
+                            key={tag}
+                            className="rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[10.5px] font-semibold text-[#a1a1aa]"
+                          >
+                            @{tag}
+                          </span>
+                        ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex shrink-0 items-center gap-2.5">
@@ -545,7 +623,29 @@ function ParticipantsPanel({
                   className="mx-2 mb-1 mt-0.5 rounded-lg border border-white/10 bg-black/20 px-3 py-2.5"
                 >
                   {isAdmin && !isMe && (
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-1.5">
+                        {availableTags
+                          .filter((tag) => tag !== "host" && tag !== "guest")
+                          .map((tag) => {
+                            const active = Boolean(participant.tags?.includes(tag));
+                            return (
+                              <button
+                                key={tag}
+                                type="button"
+                                onClick={() => handleToggleTag(participant.userId, tag)}
+                                className={`rounded-md border px-2 py-1 text-[11.5px] font-semibold transition-colors ${
+                                  active
+                                    ? "border-[#F95F4A]/35 bg-[#F95F4A]/15 text-[#F95F4A]"
+                                    : "border-white/10 bg-white/[0.04] text-[#a1a1aa] hover:bg-white/[0.07] hover:text-[#fafafa]"
+                                }`}
+                              >
+                                @{tag}
+                              </button>
+                            );
+                          })}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
                       {canPromoteParticipant && (
                         <>
                           {isPendingPromotion ? (
@@ -674,6 +774,7 @@ function ParticipantsPanel({
                           </button>
                         );
                       })() : null}
+                      </div>
                     </div>
                   )}
                 </div>
