@@ -1486,6 +1486,10 @@ export const registerAdminHandlers = (
       respond(cb, { error: "Authenticated host session required" });
       return;
     }
+    if (!guard.room.hasActiveHostEmail(email)) {
+      respond(cb, { error: "Only the current room host can finalize MoM" });
+      return;
+    }
 
     const authorizationId = randomUUID();
     guard.room.createMomFinalizeAuthorization(authorizationId, email);

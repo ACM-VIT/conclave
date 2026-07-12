@@ -991,13 +991,14 @@ export class Room {
     this._momFinalizeAuthorizations.delete(id);
     return (
       authorization.email === email.trim().toLowerCase() &&
-      this.hasActiveAdminEmail(email)
+      this.hasActiveHostEmail(email)
     );
   }
 
-  hasActiveAdminEmail(email: string): boolean {
+  hasActiveHostEmail(email: string): boolean {
     const normalized = email.trim().toLowerCase();
-    if (!normalized) return false;
+    const hostUserKey = this.hostUserKey?.trim().toLowerCase() ?? "";
+    if (!normalized || normalized !== hostUserKey) return false;
     for (const [userId, userKey] of this.userKeysById.entries()) {
       if (userKey.trim().toLowerCase() !== normalized) continue;
       const client = this.clients.get(userId);
