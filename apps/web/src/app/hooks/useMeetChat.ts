@@ -7,6 +7,7 @@ import type {
   ChatImageAttachment,
   ChatMessage,
   ChatReplyPreview,
+  SendChatMessageOptions,
 } from "../lib/types";
 import {
   createLocalChatMessage,
@@ -515,6 +516,7 @@ export function useMeetChat({
       gif?: ChatGifAttachment,
       replyTo?: ChatReplyPreview,
       image?: ChatImageAttachment,
+      suppressEmbeds?: boolean,
     ): ChatMessage =>
       normalizeChatMessage({
         id: `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -525,6 +527,7 @@ export function useMeetChat({
         ...(gif ? { gif } : {}),
         ...(image ? { image } : {}),
         ...(replyTo ? { replyTo } : {}),
+        ...(suppressEmbeds ? { suppressEmbeds: true } : {}),
       }).message,
     [currentUserDisplayName, currentUserId],
   );
@@ -563,6 +566,7 @@ export function useMeetChat({
       gif?: ChatGifAttachment,
       replyTo?: ChatReplyPreview,
       image?: ChatImageAttachment,
+      suppressEmbeds?: boolean,
     ): Promise<ChatMessage | null> => {
       const socket = socketRef.current;
       const trimmedContent = content.trim();
@@ -578,6 +582,7 @@ export function useMeetChat({
         gif,
         replyTo,
         image,
+        suppressEmbeds,
       );
       setChatMessages((prev) => [...prev, optimisticMessage]);
 
@@ -592,6 +597,7 @@ export function useMeetChat({
             ...(isTtsMessage && outgoingTtsVoiceToken
               ? { ttsVoiceToken: outgoingTtsVoiceToken }
               : {}),
+            ...(suppressEmbeds ? { suppressEmbeds: true } : {}),
           },
           (
             response:
@@ -668,7 +674,7 @@ export function useMeetChat({
   }, []);
 
   const sendChat = useCallback(
-    (content: string) => {
+    (content: string, options?: SendChatMessageOptions) => {
       if (isObserverMode) return;
       if (isChatLocked && !isAdmin) {
         appendLocalMessage("Chat is locked by the host.");
@@ -677,9 +683,16 @@ export function useMeetChat({
       const trimmed = content.trim();
       if (!trimmed) return;
 
+      const suppressEmbeds = options?.suppressEmbeds === true;
       const conclaveQuestion = parseConclaveMention(trimmed);
       if (conclaveQuestion !== null) {
-        void sendChatInternal(trimmed).then((message) => {
+        void sendChatInternal(
+          trimmed,
+          undefined,
+          undefined,
+          undefined,
+          suppressEmbeds,
+        ).then((message) => {
           if (message) {
             askConclave(conclaveQuestion, message.id);
           }
@@ -777,7 +790,13 @@ export function useMeetChat({
 
       const activeReply = replyTarget ?? undefined;
       if (activeReply) setReplyTarget(null);
-      void sendChatInternal(trimmed, undefined, activeReply);
+      void sendChatInternal(
+        trimmed,
+        undefined,
+        activeReply,
+        undefined,
+        suppressEmbeds,
+      );
     },
     [
       isObserverMode,

@@ -52,6 +52,12 @@ export interface ChatMessage {
   replyTo?: ChatReplyPreview;
   /** Encrypted capability for the sender's consented cloned TTS voice. */
   ttsVoiceToken?: string;
+  /** Sender dismissed the link preview; clients must not render embeds. */
+  suppressEmbeds?: boolean;
+}
+
+export interface SendChatMessageOptions {
+  suppressEmbeds?: boolean;
 }
 
 export interface ChatReplyPreview {

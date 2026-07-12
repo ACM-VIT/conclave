@@ -896,6 +896,7 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           ...(isTtsMessage
             ? { ttsVoiceToken: normalizeTtsVoiceToken(data.ttsVoiceToken) }
             : {}),
+          ...(data.suppressEmbeds === true ? { suppressEmbeds: true } : {}),
           isDirect: Boolean(dmTarget),
           dmTargetUserId: dmTarget?.userId,
           dmTargetDisplayName: dmTarget?.displayName,
