@@ -503,6 +503,7 @@ const createConclaveAuthorizationToken = (options: {
   answerId: string;
   questionMessageId: string;
   userId: string;
+  displayName: string;
   room: Room;
 }): string =>
   jwt.sign(
@@ -511,6 +512,7 @@ const createConclaveAuthorizationToken = (options: {
       answerId: options.answerId,
       questionMessageId: options.questionMessageId,
       userId: options.userId,
+      displayName: options.displayName,
       roomId: options.room.id,
       clientId: options.room.clientId,
       channelId: options.room.channelId,
@@ -989,6 +991,9 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
             answerId,
             questionMessageId,
             userId: sender.id,
+            displayName:
+              room.getDisplayNameForUser(sender.id) ||
+              fallbackDisplayNameFromUserId(sender.id),
             room,
           }),
         });

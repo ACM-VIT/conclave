@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  appendGithubIssueRequesterAttribution,
   createGithubIssue,
   parseGithubIssueDraft,
   resolveGithubIssuesConfig,
@@ -114,6 +115,33 @@ describe("Conclave GitHub issues", () => {
         userId: "different-user",
       }),
     ).toBeNull();
+  });
+
+  it("appends who requested the issue, sanitized to a single line", () => {
+    const attributed = appendGithubIssueRequesterAttribution(
+      issueDraft,
+      "Prakhar Joshi",
+    );
+    expect(attributed.title).toBe(issueDraft.title);
+    expect(attributed.body).toBe(
+      `${issueDraft.body}\n\n---\nRequested by **Prakhar Joshi** during a Conclave meeting.`,
+    );
+
+    const withInjectedLines = appendGithubIssueRequesterAttribution(
+      issueDraft,
+      "Sneaky\n\n## Injected heading",
+    );
+    expect(withInjectedLines.body).toContain(
+      "Requested by **Sneaky ## Injected heading** during a Conclave meeting.",
+    );
+
+    const withMissingName = appendGithubIssueRequesterAttribution(
+      issueDraft,
+      "   ",
+    );
+    expect(withMissingName.body).toContain(
+      "Requested by **a meeting participant** during a Conclave meeting.",
+    );
   });
 
   it("requires server-side GitHub configuration", () => {

@@ -24,6 +24,7 @@ import {
   type ConclaveAssistantRelayPacket,
 } from "../../../lib/conclave-assistant";
 import {
+  appendGithubIssueRequesterAttribution,
   createGithubIssue,
   parseGithubIssueDraft,
   type GithubIssueDraft,
@@ -153,6 +154,7 @@ type ConclaveAssistantTokenPayload = jwt.JwtPayload & {
   answerId?: string;
   questionMessageId?: string;
   userId?: string;
+  displayName?: string;
   roomId?: string;
   clientId?: string;
   channelId?: string;
@@ -409,6 +411,8 @@ export async function POST(request: Request) {
       { status: 401 },
     );
   }
+  const requesterDisplayName =
+    asString(tokenPayload.displayName).trim() || "a meeting participant";
   const approvalIdentity: GithubIssueApprovalIdentity = {
     answerId: tokenPayload.answerId!,
     questionMessageId: tokenPayload.questionMessageId!,
@@ -957,7 +961,10 @@ export async function POST(request: Request) {
           const functionOutputs: ResponseInputItem[] = [];
           for (const call of functionCalls) {
             if (call.name === GITHUB_ISSUE_TOOL_NAME) {
-              const draft = parseGithubIssueDraft(call.arguments);
+              const draft = appendGithubIssueRequesterAttribution(
+                parseGithubIssueDraft(call.arguments),
+                requesterDisplayName,
+              );
               const approval = createGithubIssueApproval(
                 draft,
                 approvalIdentity,

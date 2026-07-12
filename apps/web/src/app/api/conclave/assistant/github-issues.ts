@@ -30,6 +30,22 @@ interface GithubIssueApiResponse {
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.trim().length > 0;
 
+const MAX_REQUESTER_NAME_LENGTH = 120;
+
+export const appendGithubIssueRequesterAttribution = (
+  draft: GithubIssueDraft,
+  requesterDisplayName: string,
+): GithubIssueDraft => {
+  const name =
+    requesterDisplayName.replace(/[\r\n]+/g, " ").trim().slice(0, MAX_REQUESTER_NAME_LENGTH) ||
+    "a meeting participant";
+  const attribution = `\n\n---\nRequested by **${name}** during a Conclave meeting.`;
+  return {
+    title: draft.title,
+    body: `${draft.body}${attribution}`.slice(0, MAX_ISSUE_BODY_LENGTH),
+  };
+};
+
 export const parseGithubIssueDraft = (argumentsJson: string): GithubIssueDraft => {
   let value: unknown;
   try {
