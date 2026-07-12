@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { MediaKind } from "mediasoup/types";
 import jwt from "jsonwebtoken";
 import { Admin } from "../../../config/classes/Admin.js";
@@ -1486,11 +1487,15 @@ export const registerAdminHandlers = (
       return;
     }
 
+    const authorizationId = randomUUID();
+    guard.room.createMomFinalizeAuthorization(authorizationId, email);
     respond(cb, {
       token: jwt.sign(
         {
+          jti: authorizationId,
           purpose: "mom:finalize",
           roomId: guard.room.id,
+          clientId: guard.room.clientId,
           userId: user.userId,
           email,
         },

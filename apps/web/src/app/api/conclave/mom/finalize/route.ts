@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import { auth } from "@/lib/auth";
+import { resolveSfuSecret } from "@/lib/sfu-admin-auth";
+import { resolveSfuUrls } from "@/lib/sfu-url";
 
 export const runtime = "nodejs";
 
@@ -11,7 +13,9 @@ const RATE_LIMIT_MAX = 4;
 const rateLimit = new Map<string, { count: number; resetAt: number }>();
 
 type RoomAuthPayload = {
+  jti?: string;
   purpose?: string;
+  clientId?: string;
   userId?: string;
   email?: string;
   roomId?: string;
@@ -47,12 +51,48 @@ const githubFailureStatus = (status: number): number => {
   return 424;
 };
 
+const consumeSfuMomAuthorization = async (options: {
+  roomId: string;
+  clientId: string;
+  authorizationId: string;
+  email: string;
+  sfuSecret: string;
+}): Promise<boolean> => {
+  for (const sfuUrl of resolveSfuUrls()) {
+    const targetUrl = new URL(
+      `/admin/rooms/${encodeURIComponent(options.roomId)}/mom/finalize-authority`,
+      sfuUrl,
+    );
+    targetUrl.searchParams.set("clientId", options.clientId);
+    try {
+      const response = await fetch(targetUrl.toString(), {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "x-sfu-secret": options.sfuSecret,
+          "x-sfu-client": options.clientId,
+        },
+        cache: "no-store",
+        body: JSON.stringify({
+          authorizationId: options.authorizationId,
+          email: options.email,
+        }),
+      });
+      if (response.ok) return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+};
+
 export async function POST(request: Request) {
   const token = process.env.MOM_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
   const repository = process.env.MOM_GITHUB_REPOSITORY;
   const branch = process.env.MOM_GITHUB_BRANCH || "main";
   const basePath = process.env.MOM_GITHUB_BASE_PATH || "meeting-minutes";
-  const sfuSecret = process.env.SFU_SECRET || "development-secret";
+  const sfuSecret = resolveSfuSecret();
 
   if (!token || !repository) {
     return NextResponse.json(
@@ -107,6 +147,8 @@ export async function POST(request: Request) {
   if (
     roomAuth.roomId !== roomId ||
     roomAuth.purpose !== "mom:finalize" ||
+    !roomAuth.jti ||
+    !roomAuth.clientId ||
     roomAuth.email?.toLowerCase() !== sessionEmail
   ) {
     return NextResponse.json(
@@ -127,6 +169,20 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: "MoM is too large to version." },
       { status: 413 },
+    );
+  }
+
+  const hasLiveRoomAuthority = await consumeSfuMomAuthorization({
+    roomId,
+    clientId: roomAuth.clientId,
+    authorizationId: roomAuth.jti,
+    email: sessionEmail,
+    sfuSecret,
+  });
+  if (!hasLiveRoomAuthority) {
+    return NextResponse.json(
+      { error: "Only the current room host can finalize MoM." },
+      { status: 403 },
     );
   }
 

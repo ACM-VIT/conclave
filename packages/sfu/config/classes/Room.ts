@@ -85,6 +85,7 @@ const MAX_CHAT_IMAGE_ROOM_BYTES = 64 * 1024 * 1024;
 const MAX_CHAT_IMAGE_USER_BYTES = 24 * 1024 * 1024;
 const MAX_INVITE_CODE_LENGTH = 256;
 const MUSIC_SLOW_MODE_MS = 30_000;
+const MOM_FINALIZE_AUTHORIZATION_TTL_MS = 60_000;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 const normalizeInviteCode = (value: unknown): string => {
@@ -183,6 +184,10 @@ export class Room {
   private _musicPermission: MeetingMusicPermission = "off";
   private _currentMusicTrack: MeetingMusicTrack | null = null;
   private _musicRevision = 0;
+  private _momFinalizeAuthorizations = new Map<
+    string,
+    { email: string; expiresAt: number }
+  >();
   public readonly musicSlowModeMs = MUSIC_SLOW_MODE_MS;
   public lastMusicRequestByUserId: Map<string, number> = new Map();
   public appsState: { activeAppId: string | null; locked: boolean } = {
@@ -963,6 +968,54 @@ export class Room {
     this._musicRevision += 1;
   }
 
+  createMomFinalizeAuthorization(
+    id: string,
+    email: string,
+    now = Date.now(),
+  ): void {
+    this.pruneExpiredMomFinalizeAuthorizations(now);
+    this._momFinalizeAuthorizations.set(id, {
+      email: email.trim().toLowerCase(),
+      expiresAt: now + MOM_FINALIZE_AUTHORIZATION_TTL_MS,
+    });
+  }
+
+  consumeMomFinalizeAuthorization(
+    id: string,
+    email: string,
+    now = Date.now(),
+  ): boolean {
+    this.pruneExpiredMomFinalizeAuthorizations(now);
+    const authorization = this._momFinalizeAuthorizations.get(id);
+    if (!authorization) return false;
+    this._momFinalizeAuthorizations.delete(id);
+    return (
+      authorization.email === email.trim().toLowerCase() &&
+      this.hasActiveAdminEmail(email)
+    );
+  }
+
+  hasActiveAdminEmail(email: string): boolean {
+    const normalized = email.trim().toLowerCase();
+    if (!normalized) return false;
+    for (const [userId, userKey] of this.userKeysById.entries()) {
+      if (userKey.trim().toLowerCase() !== normalized) continue;
+      const client = this.clients.get(userId);
+      if (client instanceof Admin && !client.isObserver) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private pruneExpiredMomFinalizeAuthorizations(now = Date.now()): void {
+    for (const [id, authorization] of this._momFinalizeAuthorizations.entries()) {
+      if (authorization.expiresAt <= now) {
+        this._momFinalizeAuthorizations.delete(id);
+      }
+    }
+  }
+
   get musicRevision(): number {
     return this._musicRevision;
   }
@@ -1601,6 +1654,7 @@ export class Room {
     this._musicPermission = "off";
     this._currentMusicTrack = null;
     this._musicRevision += 1;
+    this._momFinalizeAuthorizations.clear();
     this.blockedUsers.clear();
     this.webinarActiveSpeakerUserId = null;
     this.webinarDominantSpeakerUserId = null;

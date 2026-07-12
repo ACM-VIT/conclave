@@ -873,6 +873,32 @@ export const createSfuApp = ({
     res.json({ room: toRoomSnapshot(lookup.room) });
   });
 
+  app.post("/admin/rooms/:roomId/mom/finalize-authority", (req, res) => {
+    if (!requireSecret(req, res)) {
+      return;
+    }
+
+    const lookup = resolveRoomForAdmin(req, res);
+    if (!lookup || "error" in lookup) {
+      return;
+    }
+
+    const body = requestBody(req);
+    const authorizationId = normalizeIdentifier(body.authorizationId);
+    const email = normalizeIdentifier(body.email, MAX_USER_ID_LENGTH);
+    if (!authorizationId || !email) {
+      res.status(400).json({ error: "authorizationId and email are required" });
+      return;
+    }
+
+    if (!lookup.room.consumeMomFinalizeAuthorization(authorizationId, email)) {
+      res.status(403).json({ error: "MoM finalization is not authorized" });
+      return;
+    }
+
+    res.json({ ok: true });
+  });
+
   app.post("/admin/rooms/:roomId/policies", (req, res) => {
     if (!requireSecret(req, res)) {
       return;
