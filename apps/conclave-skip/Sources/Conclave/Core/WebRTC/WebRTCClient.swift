@@ -150,6 +150,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     var consumers: [String: ConsumerInfo] = [:]
+    private var remoteProducerClosureGenerations: [String: Int] = [:]
     private var remoteConsumerPreferenceSignatures: [String: String] = [:]
     private var remoteConsumerLayerPreferenceUnsupportedIds: Set<String> = []
     private var remoteConsumerPreferenceInFlightIds: Set<String> = []
@@ -1442,6 +1443,8 @@ final class WebRTCClient: NSObject, ObservableObject {
         preferHighWebcamLayer: Bool = false,
         initialReceiveConnectionQuality: ConnectionQuality = .unknown
     ) async throws {
+        let consumeConfigurationGeneration = configurationGeneration
+        let producerClosureGeneration = remoteProducerClosureGenerations[producerId, default: 0]
         try await createReceiveTransportIfNeeded()
         guard let socket = socketManager,
               let rtpCaps = serverRtpCapabilities,
@@ -1513,6 +1516,13 @@ final class WebRTCClient: NSObject, ObservableObject {
             throw error
         }
 
+        guard configurationGeneration == consumeConfigurationGeneration,
+              remoteProducerClosureGenerations[producerId, default: 0] == producerClosureGeneration else {
+            consumer.close()
+            socket.closeConsumer(consumerId: response.id)
+            throw WebRTCError.staleConfiguration
+        }
+
         consumers[response.id] = ConsumerInfo(
             consumer: consumer,
             producerId: response.producerId,
@@ -1536,6 +1546,9 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     func closeConsumer(producerId: String, userId: String) {
+        if !producerId.isEmpty {
+            remoteProducerClosureGenerations[producerId, default: 0] += 1
+        }
         if producerId.isEmpty {
             let consumerIds = consumers
                 .filter { consumerMatchesUser($0.value, userId: userId) }
@@ -2860,6 +2873,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             info.consumer.close()
         }
         consumers.removeAll()
+        remoteProducerClosureGenerations.removeAll()
         videoFreezeStats.removeAll()
         remoteConsumerPreferenceSignatures.removeAll()
         remoteConsumerLayerPreferenceUnsupportedIds.removeAll()

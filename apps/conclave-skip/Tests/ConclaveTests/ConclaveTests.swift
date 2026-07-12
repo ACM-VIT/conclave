@@ -7970,6 +7970,12 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(viewModelSource.contains(
             "guard consumingProducerIds.insert(producer.producerId).inserted else"
         ))
+        XCTAssertTrue(viewModelSource.contains(
+            "deferredProducerConsumes[producer.producerId] = PendingProducerRetryItem("
+        ))
+        XCTAssertTrue(viewModelSource.contains(
+            "scheduleDeferredProducerConsume(producerId: producer.producerId)"
+        ))
 
         let iosResume = try XCTUnwrap(iosWebRTCSource.range(of: "try await socket.resumeConsumer(\n                consumerId: response.id,"))
         let iosCommit = try XCTUnwrap(iosWebRTCSource.range(of: "consumers[response.id] = ConsumerInfo("))
@@ -7977,12 +7983,18 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(iosWebRTCSource.contains(
             "consumer.close()\n            socket.closeConsumer(consumerId: response.id)\n            throw error"
         ))
+        XCTAssertTrue(iosWebRTCSource.contains(
+            "remoteProducerClosureGenerations[producerId, default: 0] == producerClosureGeneration"
+        ))
 
         let androidResume = try XCTUnwrap(androidWebRTCSource.range(of: "socket.resumeConsumer(response.id, response.kind == \"video\")"))
         let androidCommit = try XCTUnwrap(androidWebRTCSource.range(of: "consumers[response.id] = ConsumerInfo("))
         XCTAssertLessThan(androidResume.lowerBound, androidCommit.lowerBound)
         XCTAssertTrue(androidWebRTCSource.contains(
             "consumer.close()\n            socket.closeConsumer(response.id)\n            throw error"
+        ))
+        XCTAssertTrue(androidWebRTCSource.contains(
+            "(remoteProducerClosureGenerations[producerId] ?: 0) != producerClosureGeneration"
         ))
     }
 

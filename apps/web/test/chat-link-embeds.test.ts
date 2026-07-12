@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   extractEmbedUrls,
+  fetchChatLinkPreview,
   getYouTubeVideoId,
 } from "../src/app/lib/link-embeds";
 import {
@@ -16,6 +17,10 @@ import {
 } from "../src/app/lib/unfurl-tweet";
 
 const PAGE_URL = new URL("https://blog.example.com/posts/hello");
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("extractEmbedUrls", () => {
   it("embeds explicit https and www links only", () => {
@@ -70,6 +75,36 @@ describe("getYouTubeVideoId", () => {
     expect(getYouTubeVideoId("https://www.youtube.com/watch?v=short")).toBeNull();
     expect(getYouTubeVideoId("https://notyoutube.com/watch?v=dQw4w9WgXcQ")).toBeNull();
     expect(getYouTubeVideoId("not a url")).toBeNull();
+  });
+});
+
+describe("fetchChatLinkPreview", () => {
+  it("retries a URL after a transient unfurl failure", async () => {
+    const preview = {
+      url: "https://retry.example.com/article",
+      title: "Recovered preview",
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(Response.json({ preview }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchChatLinkPreview(preview.url)).resolves.toBeNull();
+    await expect(fetchChatLinkPreview(preview.url)).resolves.toEqual(preview);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("caches a successful response with no preview", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ preview: null }));
+    vi.stubGlobal("fetch", fetchMock);
+    const url = "https://no-preview.example.com/article";
+
+    await expect(fetchChatLinkPreview(url)).resolves.toBeNull();
+    await expect(fetchChatLinkPreview(url)).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

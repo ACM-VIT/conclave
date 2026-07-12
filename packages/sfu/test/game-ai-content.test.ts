@@ -62,7 +62,7 @@ describe("game AI content", () => {
     openAiConstructor.mockClear();
   });
 
-  it("uses the centrally configured OpenAI Responses contract", async () => {
+  it("lets the model decide when to use web search", async () => {
     createResponse.mockResolvedValue({
       output_text: JSON.stringify({ prompts: ["Moon bases"] }),
     });
@@ -95,7 +95,13 @@ describe("game AI content", () => {
     }
     expect(requestInput).toContain("Topic: latest space news");
     expect(requestInstructions).toContain(
-      "Generate concise, safe party-game content",
+      "You create high-quality party-game content",
+    );
+    expect(requestInstructions).toContain(
+      "Decide for yourself whether searching would materially improve",
+    );
+    expect(requestInstructions).toMatch(
+      /Current date and day \(UTC\): \d{4}-\d{2}-\d{2}, [A-Za-z]+\.$/,
     );
     expect(requestRecord).toMatchObject({
       model: "gpt-5.6-luna",
@@ -112,6 +118,29 @@ describe("game AI content", () => {
       },
       tools: [{ type: "web_search", search_context_size: "low" }],
     });
+    expect(request).not.toHaveProperty("tool_choice");
+    expect(requestOptions).toEqual({ timeout: 60_000 });
+  });
+
+  it("offers the same optional web search for evergreen topics", async () => {
+    createResponse.mockResolvedValue({
+      output_text: JSON.stringify({ prompts: ["Draw a moon base"] }),
+    });
+
+    await generateStructuredGameContent({
+      gameName: "Quick Draw",
+      topic: "space",
+      instructions: "Create one prompt.",
+      schemaName: "quick_draw_prompts",
+      schema,
+      parse: (payload) => payload,
+    });
+
+    const [request, requestOptions] = createResponse.mock.calls[0];
+    expect(request).not.toHaveProperty("tool_choice");
+    expect(request).toHaveProperty("tools", [
+      { type: "web_search", search_context_size: "low" },
+    ]);
     expect(requestOptions).toEqual({ timeout: 60_000 });
   });
 

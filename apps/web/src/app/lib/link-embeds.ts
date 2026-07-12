@@ -133,10 +133,15 @@ export function fetchChatLinkPreview(url: string): Promise<ChatLinkPreview | nul
   if (!pending) {
     pending = (async (): Promise<ChatLinkPreview | null> => {
       const response = await fetch(`/api/unfurl?url=${encodeURIComponent(url)}`);
-      if (!response.ok) return null;
+      if (!response.ok) {
+        throw new Error(`Unfurl failed with ${response.status}`);
+      }
       const payload = (await response.json()) as UnfurlResponsePayload;
       return payload?.preview ?? null;
-    })().catch(() => null);
+    })().catch(() => {
+      previewCache.delete(url);
+      return null;
+    });
     previewCache.set(url, pending);
   }
   return pending;

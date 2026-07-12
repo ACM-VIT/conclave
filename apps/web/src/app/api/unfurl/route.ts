@@ -1,4 +1,3 @@
-import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { NextResponse } from "next/server";
 import {
   type ChatLinkPreview,
@@ -6,7 +5,11 @@ import {
   getYouTubeThumbnailUrl,
   getYouTubeVideoId,
 } from "../../lib/link-embeds";
+import { toUnfurlAssetUrl } from "../../lib/unfurl-assets";
+import { fetchUnfurlResource } from "../../lib/unfurl-fetch";
 import { parseUnfurlableUrl, parseUnfurlHtml } from "../../lib/unfurl-html";
+import { takeUnfurlRateLimit } from "../../lib/unfurl-rate-limit";
+import { readHtmlPrefix } from "../../lib/unfurl-response";
 import { fetchTweetPreview, getTweetIdFromUrl } from "../../lib/unfurl-tweet";
 
 // Server-side link unfurler for chat embeds. The client hands us a URL from a
@@ -24,110 +27,8 @@ const USER_AGENT =
 
 // Found metadata is stable; misses retry sooner in case the page was flaky.
 const HIT_CACHE_CONTROL =
-  "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400";
-const MISS_CACHE_CONTROL = "public, max-age=300, s-maxage=900";
-
-const RATE_LIMIT = 30;
-const RATE_WINDOW_MS = 60_000;
-
-type CloudflareRateLimitBinding = {
-  limit(options: { key: string }): Promise<{ success: boolean }>;
-};
-
-type LocalRateLimitBucket = { windowStartedAt: number; count: number };
-const localBuckets = new Map<string, LocalRateLimitBucket>();
-const MAX_LOCAL_BUCKETS = 1_000;
-
-const clientKey = (request: Request): string => {
-  const forwardedFor = request.headers
-    .get("x-forwarded-for")
-    ?.split(",")
-    .at(0)
-    ?.trim();
-  const candidate =
-    [
-      request.headers.get("cf-connecting-ip")?.trim(),
-      request.headers.get("x-real-ip")?.trim(),
-      forwardedFor,
-      request.headers.get("user-agent")?.trim(),
-    ].find((value): value is string => Boolean(value)) ?? "anonymous";
-  return candidate.slice(0, 128);
-};
-
-const takeLocalRateLimit = (key: string): boolean => {
-  const now = Date.now();
-  const bucket = localBuckets.get(key);
-  if (!bucket || now - bucket.windowStartedAt >= RATE_WINDOW_MS) {
-    localBuckets.set(key, { windowStartedAt: now, count: 1 });
-    while (localBuckets.size > MAX_LOCAL_BUCKETS) {
-      const oldest = localBuckets.keys().next().value;
-      if (oldest === undefined) break;
-      localBuckets.delete(oldest);
-    }
-    return true;
-  }
-  if (bucket.count >= RATE_LIMIT) return false;
-  bucket.count += 1;
-  return true;
-};
-
-type RateLimitOutcome = { ok: true } | { ok: false; status: 429 | 503 };
-
-const takeUnfurlRateLimit = async (request: Request): Promise<RateLimitOutcome> => {
-  const key = `unfurl:${clientKey(request)}`;
-
-  let limiter: CloudflareRateLimitBinding | null = null;
-  try {
-    const { env } = await getCloudflareContext({ async: true });
-    const binding = (env as { UNFURL_RATE_LIMITER?: CloudflareRateLimitBinding })
-      .UNFURL_RATE_LIMITER;
-    limiter = binding && typeof binding.limit === "function" ? binding : null;
-  } catch {
-    limiter = null;
-  }
-
-  if (limiter) {
-    try {
-      const { success } = await limiter.limit({ key });
-      return success ? { ok: true } : { ok: false, status: 429 };
-    } catch {
-      // Fall through to the fail-closed production branch below.
-    }
-  }
-
-  if (process.env.NODE_ENV === "production") {
-    // An unfurler is an outbound-fetch proxy; never run it unmetered.
-    return { ok: false, status: 503 };
-  }
-
-  return takeLocalRateLimit(key) ? { ok: true } : { ok: false, status: 429 };
-};
-
-// Reads at most `maxBytes` of the body, stopping early once the document head
-// has closed — everything the parser wants lives there on real pages.
-const readHtmlPrefix = async (
-  response: Response,
-  maxBytes: number,
-): Promise<string> => {
-  const body = response.body;
-  if (!body) return "";
-  const reader = body.getReader();
-  const decoder = new TextDecoder("utf-8", { fatal: false });
-  let html = "";
-  let receivedBytes = 0;
-  try {
-    while (receivedBytes < maxBytes) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      receivedBytes += value.byteLength;
-      html += decoder.decode(value, { stream: true });
-      if (html.includes("</head")) break;
-    }
-  } finally {
-    reader.cancel().catch(() => {});
-  }
-  return html + decoder.decode();
-};
+  "private, max-age=3600, stale-while-revalidate=3600";
+const MISS_CACHE_CONTROL = "private, max-age=300";
 
 const IMAGE_CONTENT_TYPE_PATTERN =
   /^image\/(?:png|jpeg|gif|webp|avif|svg\+xml)\b/i;
@@ -168,11 +69,12 @@ const fetchYouTubePreview = async (
     title,
     description:
       typeof payload.author_name === "string" ? payload.author_name : undefined,
-    imageUrl:
+    imageUrl: toUnfurlAssetUrl(
       typeof payload.thumbnail_url === "string"
         ? payload.thumbnail_url
         : getYouTubeThumbnailUrl(videoId),
-    faviconUrl: "https://www.youtube.com/favicon.ico",
+    ),
+    faviconUrl: toUnfurlAssetUrl("https://www.youtube.com/favicon.ico"),
     imageLayout: "large",
   };
 };
@@ -193,26 +95,23 @@ const fetchPreview = async (target: URL): Promise<ChatLinkPreview | null> => {
     if (youTubePreview) return youTubePreview;
   }
 
-  let response: Response;
+  let fetched: Awaited<ReturnType<typeof fetchUnfurlResource>>;
   try {
-    response = await fetch(target, {
+    fetched = await fetchUnfurlResource(target, {
       headers: {
         accept: "text/html,application/xhtml+xml;q=0.9,image/*;q=0.8,*/*;q=0.5",
         "accept-language": "en",
         "user-agent": USER_AGENT,
       },
-      redirect: "follow",
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       cache: "no-store",
     });
   } catch {
     return null;
   }
-
-  // Redirects may land anywhere; re-run the same safety checks on the final
-  // URL before touching the body or echoing it back to clients.
-  const finalUrl = parseUnfurlableUrl(response.url || target.href);
-  if (!finalUrl || !response.ok) {
+  if (!fetched) return null;
+  const { response, finalUrl } = fetched;
+  if (!response.ok) {
     response.body?.cancel().catch(() => {});
     return null;
   }
@@ -224,7 +123,7 @@ const fetchPreview = async (target: URL): Promise<ChatLinkPreview | null> => {
     return {
       url: finalUrl.href,
       kind: "image",
-      imageUrl: finalUrl.href,
+      imageUrl: toUnfurlAssetUrl(finalUrl.href),
       siteName: finalUrl.hostname.replace(/^www\./, ""),
     };
   }
@@ -252,8 +151,8 @@ const fetchPreview = async (target: URL): Promise<ChatLinkPreview | null> => {
     siteName: metadata.siteName ?? finalUrl.hostname.replace(/^www\./, ""),
     title: metadata.title,
     description: metadata.description,
-    imageUrl: metadata.imageUrl,
-    faviconUrl: metadata.faviconUrl,
+    imageUrl: toUnfurlAssetUrl(metadata.imageUrl),
+    faviconUrl: toUnfurlAssetUrl(metadata.faviconUrl),
     imageLayout: metadata.imageLayout,
   };
 };
@@ -271,12 +170,6 @@ const previewResponse = (
     },
   });
 
-// workerd exposes the Cache API; `next dev` on Node does not. Cache hits are
-// shared across every participant who unfurls the same link and are served
-// before the rate limiter, so popular links stay cheap for everyone.
-const getEdgeCache = (): Cache | null =>
-  (globalThis as { caches?: { default?: Cache } }).caches?.default ?? null;
-
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const target = parseUnfurlableUrl(searchParams.get("url") ?? "");
@@ -285,22 +178,6 @@ export async function GET(request: Request) {
       { preview: null },
       { status: 400, cacheControl: "no-store" },
     );
-  }
-
-  const cacheKey = new Request(
-    new URL(
-      `/api/unfurl?url=${encodeURIComponent(target.href)}`,
-      request.url,
-    ).href,
-  );
-  const edgeCache = getEdgeCache();
-  if (edgeCache) {
-    try {
-      const cached = await edgeCache.match(cacheKey);
-      if (cached) return cached;
-    } catch {
-      // Cache API hiccups must never take down unfurling.
-    }
   }
 
   const rateLimit = await takeUnfurlRateLimit(request);
@@ -312,15 +189,5 @@ export async function GET(request: Request) {
   }
 
   const preview = await fetchPreview(target);
-  const response = previewResponse({ preview });
-
-  if (edgeCache) {
-    try {
-      await edgeCache.put(cacheKey, response.clone());
-    } catch {
-      // Same: caching is best-effort.
-    }
-  }
-
-  return response;
+  return previewResponse({ preview });
 }

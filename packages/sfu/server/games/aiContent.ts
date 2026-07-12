@@ -20,13 +20,22 @@ type GeneratedContentRequest<T> = {
 
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/g;
 const MAX_GENERATED_TEXT_LENGTH = 240;
-const CURRENT_TOPIC_TIMEOUT_MS = 60_000;
-const CURRENT_TOPIC_PATTERN =
-  /\b(latest|recent|current|news|today|this week|this month|this year|breaking|new)\b/i;
+const WEB_SEARCH_REQUEST_TIMEOUT_MS = 60_000;
 const GAME_AI_WEB_SEARCH_TOOL: WebSearchTool = {
   type: "web_search",
   search_context_size: sfuConfig.gameAi.webSearchContextSize,
 };
+
+const GAME_CONTENT_SYSTEM_INSTRUCTIONS = [
+  "You create high-quality party-game content for people playing together in a live video meeting.",
+  "Follow the requested game, topic, task instructions, and response schema exactly. Return only content that belongs in the schema; do not add commentary, citations, URLs, source lists, or extra fields unless the schema explicitly requests them.",
+  "Interpret the topic according to the user's likely intent and the mechanics of the named game. Make every item immediately understandable, playable, distinct from the other items, and concise enough to read aloud or display in a compact game interface.",
+  "Prefer concrete, vivid, broadly recognizable ideas over vague wording. Preserve useful variety across difficulty, framing, subject, and answer shape without drifting away from the requested topic.",
+  "Avoid duplicates, near-duplicates, answer leakage, ambiguous wording, impossible tasks, trick questions that depend on unstated assumptions, and content that requires participants to reveal private or sensitive information.",
+  "The audience may be mixed in age, background, culture, and familiarity with the topic. Keep the content welcoming and suitable for a general social setting. Do not generate hateful, harassing, sexually explicit, graphically violent, dangerous, humiliating, or targeted personal content.",
+  "When factual claims matter, favor accuracy over novelty. Do not fabricate events, people, quotations, statistics, titles, or other details. If reliable specificity is unavailable, use a sounder and more timeless alternative that still fits the topic.",
+  "Treat the supplied output schema as a strict contract. Satisfy every required field, respect all stated limits and types, and ensure the complete response is valid JSON matching that schema.",
+].join("\n");
 
 export const GAME_CONTENT_TOPIC_OPTION: GameOptionSpec = {
   id: "topic",
@@ -99,25 +108,26 @@ export const generateStructuredGameContent = async <T>({
   const cleanTopic = sanitizeTopic(topic);
   if (!cleanTopic || !sfuConfig.gameAi.enabled) return null;
 
-  const currentDate = new Date().toISOString().slice(0, 10);
-  const needsCurrentContext = CURRENT_TOPIC_PATTERN.test(cleanTopic);
+  const now = new Date();
+  const currentDate = now.toISOString().slice(0, 10);
+  const currentDay = new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    timeZone: "UTC",
+  }).format(now);
   const systemInstructions = [
-    "Generate concise, safe party-game content for a live video meeting.",
-    `Current date: ${currentDate}.`,
+    GAME_CONTENT_SYSTEM_INSTRUCTIONS,
     sfuConfig.gameAi.webSearchEnabled
-      ? "Web search is available. Use current web information whenever the topic asks for latest, recent, current, or news-based content."
-      : "Do not invent time-sensitive facts when current information is unavailable.",
-  ].join(" ");
+      ? [
+          "You have access to web search. Decide for yourself whether searching would materially improve the accuracy, freshness, specificity, relevance, or safety of the requested game content.",
+          "Search whenever it is useful, including when the request depends on information you are not confident is correct or complete. Do not search when the task can be answered reliably without it.",
+          "When you search, use the retrieved information to produce the requested game content, reconcile conflicting or uncertain details conservatively, and never invent unsupported facts.",
+        ].join("\n")
+      : "Web search is unavailable. Do not imply that uncertain or time-sensitive information has been verified; prefer reliable, timeless alternatives when necessary.",
+    `Current date and day (UTC): ${currentDate}, ${currentDay}.`,
+  ].join("\n\n");
   const input = [
     `Game: ${gameName}`,
     `Topic: ${cleanTopic}`,
-    needsCurrentContext
-      ? [
-          "This is a current-news topic. Use fresh web context before answering.",
-          "Prefer recent, verifiable developments over evergreen facts.",
-          "Do not use outdated examples unless the topic asks for historical context.",
-        ].join(" ")
-      : null,
     instructions,
     "Keep text short, original, and appropriate for a mixed group.",
   ]
@@ -131,7 +141,7 @@ export const generateStructuredGameContent = async <T>({
       schemaName,
       schema,
       maxOutputTokens ?? sfuConfig.gameAi.maxOutputTokens,
-      resolveRequestTimeoutMs(needsCurrentContext),
+      resolveRequestTimeoutMs(),
     );
     if (payload == null) {
       Logger.warn(`[Games AI] ${gameName} returned an empty structured response`);
@@ -185,11 +195,11 @@ const runOpenAiJson = async (
   return parseStrictJson(response.output_text);
 };
 
-const resolveRequestTimeoutMs = (needsCurrentContext: boolean): number => {
-  if (!needsCurrentContext || !sfuConfig.gameAi.webSearchEnabled) {
+const resolveRequestTimeoutMs = (): number => {
+  if (!sfuConfig.gameAi.webSearchEnabled) {
     return sfuConfig.gameAi.timeoutMs;
   }
-  return Math.max(sfuConfig.gameAi.timeoutMs, CURRENT_TOPIC_TIMEOUT_MS);
+  return Math.max(sfuConfig.gameAi.timeoutMs, WEB_SEARCH_REQUEST_TIMEOUT_MS);
 };
 
 const parseStrictJson = (value: string): unknown | null => {
