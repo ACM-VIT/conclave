@@ -161,6 +161,7 @@ const promoteNextAdmin = (room: Room): Admin | null => {
     }
     const promoted = room.promoteClientToAdmin(client.id);
     if (promoted) {
+      room.hostUserKey = room.userKeysById.get(promoted.id) ?? room.hostUserKey;
       return promoted;
     }
   }
