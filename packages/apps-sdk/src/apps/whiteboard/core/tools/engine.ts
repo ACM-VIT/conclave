@@ -1,6 +1,7 @@
 import type { Point, WhiteboardElement } from "../model/types";
 import { createId, addElement, updateElement, removeElement, getPageElements } from "../doc/index";
-import { hitTestElement, translateElement } from "../model/geometry";
+import { getBoundsForElement, hitTestElement, translateElement } from "../model/geometry";
+import { computeSnapAdjustment, type SnapGuide } from "./snapping";
 import type * as Y from "yjs";
 
 export type ToolKind =
@@ -64,6 +65,8 @@ export class ToolEngine {
   private dragStart: Point | null = null;
   private lastPoint: Point | null = null;
   private selectedId: string | null = null;
+  private snapThresholdCanvasUnits = 0;
+  private snapGuides: SnapGuide[] = [];
 
   constructor(doc: Y.Doc, pageId: string, tool: ToolKind, settings: ToolSettings) {
     this.doc = doc;
@@ -77,6 +80,7 @@ export class ToolEngine {
       this.activeElementId = null;
       this.dragStart = null;
       this.lastPoint = null;
+      this.snapGuides = [];
       if (tool !== "select" && tool !== "pan") {
         this.selectedId = null;
       }
@@ -88,11 +92,20 @@ export class ToolEngine {
     this.settings = settings;
   }
 
+  setSnapThreshold(canvasUnits: number) {
+    this.snapThresholdCanvasUnits = canvasUnits;
+  }
+
+  getSnapGuides(): SnapGuide[] {
+    return this.snapGuides;
+  }
+
   setPage(pageId: string) {
     this.pageId = pageId;
     this.activeElementId = null;
     this.dragStart = null;
     this.lastPoint = null;
+    this.snapGuides = [];
   }
 
   getSelectedId() {
@@ -268,8 +281,20 @@ export class ToolEngine {
       const dx = point.x - this.lastPoint.x;
       const dy = point.y - this.lastPoint.y;
       if (dx === 0 && dy === 0) return;
-      const next = translateElement(element, dx, dy);
+      const prospective = translateElement(element, dx, dy);
+      const otherBounds = elements
+        .filter((item) => item.id !== element.id)
+        .map(getBoundsForElement);
+      const adjustment = computeSnapAdjustment(
+        getBoundsForElement(prospective),
+        otherBounds,
+        this.snapThresholdCanvasUnits
+      );
+      this.snapGuides = adjustment.guides;
+      const next = translateElement(element, dx + adjustment.dx, dy + adjustment.dy);
       updateElement(this.doc, this.pageId, next);
+      // Keep lastPoint raw (unsnapped) so small moves within the snap radius
+      // don't accumulate drift between the cursor and the element.
       this.lastPoint = point;
       return;
     }
@@ -301,6 +326,7 @@ export class ToolEngine {
     this.dragStart = null;
     this.lastPoint = null;
     this.activeElementId = null;
+    this.snapGuides = [];
   }
 
   private eraseAtPoint(point: Point) {
