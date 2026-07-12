@@ -1,7 +1,7 @@
 "use client";
 
 import { Link as LinkIcon, Play, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   type ChatLinkPreview,
   type ChatLinkTweetData,
@@ -152,8 +152,21 @@ function TweetVideoView({
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [posterFailed, setPosterFailed] = useState(false);
+  const hasAutoStartedRef = useRef(false);
   const aspectRatio =
     media.width && media.height ? `${media.width} / ${media.height}` : "16 / 9";
+
+  // Kick playback off inside the click's user-activation window (the swap
+  // commits synchronously for discrete events) instead of trusting the
+  // autoplay attribute; retry muted if unmuted playback is denied.
+  const startPlayback = (video: HTMLVideoElement | null) => {
+    if (!video || hasAutoStartedRef.current) return;
+    hasAutoStartedRef.current = true;
+    video.play().catch(() => {
+      video.muted = true;
+      video.play().catch(() => {});
+    });
+  };
 
   if (media.kind === "gif") {
     return (
@@ -186,6 +199,7 @@ function TweetVideoView({
     >
       {isPlaying ? (
         <video
+          ref={startPlayback}
           src={media.videoUrl}
           poster={media.url}
           controls
