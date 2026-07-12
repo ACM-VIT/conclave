@@ -589,6 +589,10 @@ export default function MeetsClient({
     setServerRestartNotice,
     adminNotice,
     setAdminNotice,
+    musicState,
+    setMusicState,
+    roomAuthToken,
+    setRoomAuthToken,
   } = useMeetState({ initialRoomId });
 
   const [serverActiveSpeakerAvailable, setServerActiveSpeakerAvailable] =
@@ -2235,6 +2239,7 @@ export default function MeetsClient({
     setHostUserIds,
     setServerRestartNotice,
     setAdminNotice,
+    setRoomAuthToken,
     setWebinarConfig,
     setWebinarRole,
     setWebinarSpeakerUserId,
@@ -2253,6 +2258,7 @@ export default function MeetsClient({
     setIsDmEnabled,
     setAreImageAttachmentsEnabled,
     setIsReactionsDisabled,
+    setMusicState,
     setActiveScreenShareId,
     setActiveSpeakerId,
     setServerActiveSpeakerAvailable,
@@ -3207,6 +3213,8 @@ export default function MeetsClient({
         isDmEnabled={isDmEnabled}
         areImageAttachmentsEnabled={areImageAttachmentsEnabled}
         isReactionsDisabled={isReactionsDisabled}
+        musicState={musicState}
+        roomAuthToken={roomAuthToken}
         onToggleLock={() => {
           if (canModerateMeeting) void socket.toggleRoomLock(!isRoomLocked);
         }}

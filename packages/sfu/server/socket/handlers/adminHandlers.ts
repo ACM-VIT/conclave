@@ -1421,6 +1421,55 @@ export const registerAdminHandlers = (
   });
 
   socket.on(
+    "setMusicPermission",
+    (
+      data: { permission?: "off" | "admin" | "everyone" },
+      cb,
+    ) => {
+      const guard = ensureAdminRoom(context);
+      if ("error" in guard) {
+        respond(cb, guard);
+        return;
+      }
+      const permission = data?.permission;
+      if (
+        permission !== "off" &&
+        permission !== "admin" &&
+        permission !== "everyone"
+      ) {
+        respond(cb, { error: "Invalid music permission" });
+        return;
+      }
+
+      const update = applyRoomPolicyUpdate(io, guard.room, {
+        musicPermission: permission,
+      });
+      Logger.info(
+        `Room ${guard.room.id} music permission changed to ${permission} by admin`,
+      );
+      respond(cb, {
+        success: true,
+        state: guard.room.getMusicState(),
+        changed: update.changed,
+      });
+    },
+  );
+
+  socket.on("music:stop", (_data, cb) => {
+    const guard = ensureAdminRoom(context);
+    if ("error" in guard) {
+      respond(cb, guard);
+      return;
+    }
+    guard.room.setCurrentMusicTrack(null);
+    io.to(guard.room.channelId).emit("musicStateChanged", {
+      roomId: guard.room.id,
+      state: guard.room.getMusicState(),
+    });
+    respond(cb, { success: true, state: guard.room.getMusicState() });
+  });
+
+  socket.on(
     "admin:setPolicies",
     (
       data: {

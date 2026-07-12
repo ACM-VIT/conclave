@@ -5,6 +5,7 @@ import type {
   ChatImageAttachment,
   ChatMessage,
   ChatReplyPreview,
+  MeetingMusicTrack,
   SendChatData,
 } from "../../../types.js";
 import { Admin } from "../../../config/classes/Admin.js";
@@ -59,6 +60,15 @@ const MAX_TTS_VOICE_TOKEN_LENGTH = 2048;
 const TTS_VOICE_TOKEN_PATTERN = /^[A-Za-z0-9._~-]+$/;
 const KLIPY_MEDIA_HOSTS = new Set(["static.klipy.com"]);
 const KLIPY_PAGE_HOSTS = new Set(["klipy.com", "www.klipy.com"]);
+const MUSIC_DIRECT_URL_PATTERN = /^https:\/\/\S+$/i;
+const MUSIC_PIPED_API_BASE =
+  process.env.MUSIC_PIPED_API_BASE?.trim().replace(/\/+$/, "") || "";
+const MUSIC_DIRECT_URL_HOSTS = new Set(
+  (process.env.MUSIC_DIRECT_URL_HOSTS || "")
+    .split(",")
+    .map((host) => host.trim().toLowerCase())
+    .filter(Boolean),
+);
 
 const fallbackDisplayNameFromUserId = (userId: string): string =>
   userId.split("#")[0]?.split("@")[0] || userId;
@@ -77,6 +87,131 @@ const normalizeTtsVoiceToken = (value: unknown): string | undefined => {
     return undefined;
   }
   return token;
+};
+
+const isAllowedMusicUrl = (value: string): boolean => {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:") return false;
+    if (MUSIC_DIRECT_URL_HOSTS.size === 0) return false;
+    return MUSIC_DIRECT_URL_HOSTS.has(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+};
+
+const isHttpsUrl = (value: string): boolean => {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+};
+
+const getPipedVideoId = (value: string): string | null => {
+  try {
+    const parsed = new URL(value, "https://piped.invalid");
+    if (parsed.pathname === "/watch") {
+      return parsed.searchParams.get("v");
+    }
+    return parsed.pathname.split("/").filter(Boolean).at(-1) ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const resolveMusicTrack = async (options: {
+  query: string;
+  userId: string;
+  displayName: string;
+  allowDirectUrl: boolean;
+}): Promise<MeetingMusicTrack | { error: string }> => {
+  const query = options.query.trim();
+  if (!query) {
+    return { error: "Usage: /play <url or search>" };
+  }
+  if (query.length > 240) {
+    return { error: "Music query is too long." };
+  }
+
+  if (MUSIC_DIRECT_URL_PATTERN.test(query)) {
+    if (!options.allowDirectUrl) {
+      return { error: "Only hosts can play direct music URLs." };
+    }
+    if (!isAllowedMusicUrl(query)) {
+      return { error: "Use an allowed HTTPS music URL." };
+    }
+    return {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      query,
+      title: query,
+      url: query,
+      requestedByUserId: options.userId,
+      requestedByDisplayName: options.displayName,
+      startedAt: Date.now(),
+    };
+  }
+
+  if (!MUSIC_PIPED_API_BASE) {
+    return {
+      error:
+        "Music search is not configured. Ask a host to play an allowed direct audio URL or set MUSIC_PIPED_API_BASE.",
+    };
+  }
+
+  try {
+    const searchUrl = `${MUSIC_PIPED_API_BASE}/search?q=${encodeURIComponent(query)}&filter=music_songs`;
+    const searchResponse = await fetch(searchUrl, {
+      headers: { accept: "application/json" },
+    });
+    if (!searchResponse.ok) {
+      return { error: "Music search failed." };
+    }
+    const results = (await searchResponse.json()) as unknown;
+    const list = Array.isArray(results) ? results : [];
+    const first = list.find(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        typeof (item as { url?: unknown }).url === "string",
+    ) as { url?: string; title?: string; name?: string } | undefined;
+    const videoPath = first?.url;
+    const videoId = videoPath ? getPipedVideoId(videoPath) : null;
+    if (!videoId) {
+      return { error: "No music result found." };
+    }
+    const streamResponse = await fetch(
+      `${MUSIC_PIPED_API_BASE}/streams/${encodeURIComponent(videoId)}`,
+      {
+        headers: { accept: "application/json" },
+      },
+    );
+    if (!streamResponse.ok) {
+      return { error: "Music stream lookup failed." };
+    }
+    const streamData = (await streamResponse.json()) as {
+      title?: string;
+      audioStreams?: Array<{ url?: string; bitrate?: number }>;
+    };
+    const stream = streamData.audioStreams
+      ?.filter((entry) => typeof entry.url === "string" && isHttpsUrl(entry.url))
+      .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0))[0];
+    if (!stream?.url) {
+      return { error: "No playable audio stream found." };
+    }
+    return {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      query,
+      title: streamData.title || first.title || first.name || query,
+      url: stream.url,
+      requestedByUserId: options.userId,
+      requestedByDisplayName: options.displayName,
+      startedAt: Date.now(),
+    };
+  } catch (error) {
+    Logger.warn("Music resolver failed", error);
+    return { error: "Music resolver is unavailable." };
+  }
 };
 
 const normalizeHttpsUrl = (
@@ -667,6 +802,7 @@ const resolveDirectMessageTarget = (
 
 export const registerChatHandlers = (context: ConnectionContext): void => {
   const { socket } = context;
+  const { io } = context;
 
   socket.on(
     "chat:imageUploadAuthorize",
@@ -739,11 +875,12 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           | { error: string },
       ) => void,
     ) => {
-      try {
-        if (!context.currentClient || !context.currentRoom) {
-          respond(callback, { error: "Not in a room" });
-          return;
-        }
+      void (async () => {
+        try {
+          if (!context.currentClient || !context.currentRoom) {
+            respond(callback, { error: "Not in a room" });
+            return;
+          }
 
         const room = context.currentRoom;
         const sender = context.currentClient;
@@ -874,15 +1011,80 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           rejectMessage("Private message target is no longer available.");
           return;
         }
-        if (image && !room.markChatImageAssetAttached(image.id, sender.id)) {
-          rejectMessage("Image attachment is no longer available.");
-          return;
-        }
 
         const displayName =
           room.getDisplayNameForUser(sender.id) ||
           sender.id.split("#")[0]?.split("@")[0] ||
           "Anonymous";
+
+        const playMatch = messageContent.match(/^\/play(?:\s+([\s\S]+))?$/i);
+        if (playMatch && !directMessageIntent) {
+          if (gif || image) {
+            rejectMessage("Music commands cannot include attachments.");
+            return;
+          }
+          const permission = room.musicPermission;
+          if (permission === "off") {
+            rejectMessage("Room music is disabled by the host.");
+            return;
+          }
+          if (permission === "admin" && !(sender instanceof Admin)) {
+            rejectMessage("Only hosts can play music in this room.");
+            return;
+          }
+          if (permission === "everyone" && !(sender instanceof Admin)) {
+            const lastPlayedAt = room.lastMusicRequestByUserId.get(sender.id) ?? 0;
+            const retryInMs =
+              room.musicSlowModeMs - Math.max(0, Date.now() - lastPlayedAt);
+            if (retryInMs > 0) {
+              rejectMessage(
+                `Music slow mode is on. Try again in ${Math.ceil(retryInMs / 1000)}s.`,
+              );
+              return;
+            }
+          }
+          const resolved = await resolveMusicTrack({
+            query: playMatch[1] ?? "",
+            userId: sender.id,
+            displayName,
+            allowDirectUrl: sender instanceof Admin,
+          });
+          if ("error" in resolved) {
+            rejectMessage(resolved.error);
+            return;
+          }
+          if (
+            room.musicPermission === "off" ||
+            !room.getClient(sender.id) ||
+            (room.musicPermission === "admin" && !(sender instanceof Admin))
+          ) {
+            rejectMessage("Room music permissions changed. Try again.");
+            return;
+          }
+          room.setCurrentMusicTrack(resolved);
+          room.lastMusicRequestByUserId.set(sender.id, Date.now());
+          io.to(room.channelId).emit("musicStateChanged", {
+            roomId: room.id,
+            state: room.getMusicState(),
+          });
+
+          const message: ChatMessage = {
+            id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+            userId: sender.id,
+            displayName,
+            content: `Music: ${displayName} played ${resolved.title}`,
+            timestamp: Date.now(),
+          };
+          socket.to(room.channelId).emit("chatMessage", message);
+          room.recordChatMessage(message);
+          respond(callback, { success: true, message });
+          return;
+        }
+
+        if (image && !room.markChatImageAssetAttached(image.id, sender.id)) {
+          rejectMessage("Image attachment is no longer available.");
+          return;
+        }
 
         const message: ChatMessage = {
           id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
@@ -919,9 +1121,10 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
         }
 
         respond(callback, { success: true, message });
-      } catch (error) {
-        respond(callback, { error: (error as Error).message });
-      }
+        } catch (error) {
+          respond(callback, { error: (error as Error).message });
+        }
+      })();
     },
   );
 

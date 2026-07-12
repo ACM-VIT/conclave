@@ -589,6 +589,7 @@ export async function POST(request: Request) {
       isAdmin: isHost,
       allowRoomCreation,
       clientId,
+      roomId,
       sessionId,
       joinMode,
     },
