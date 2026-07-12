@@ -26,6 +26,30 @@ export const readHtmlPrefix = async (
   return html + decoder.decode();
 };
 
+/**
+ * Passes a body through unchanged, erroring the stream once `maxBytes` have
+ * flowed. Used for media too large to buffer — backpressure means only what
+ * the client actually consumes is transferred.
+ */
+export const boundedResponseStream = (
+  body: ReadableStream<Uint8Array>,
+  maxBytes: number,
+): ReadableStream<Uint8Array> => {
+  let receivedBytes = 0;
+  return body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        receivedBytes += chunk.byteLength;
+        if (receivedBytes > maxBytes) {
+          controller.error(new Error("unfurl asset exceeded byte limit"));
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    }),
+  );
+};
+
 /** Buffers a response only when its complete body fits within `maxBytes`. */
 export const readBoundedResponseBytes = async (
   response: Response,

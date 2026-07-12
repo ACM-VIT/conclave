@@ -10,6 +10,7 @@ import {
   parseUnfurlHtml,
   parseUnfurlableUrl,
 } from "../src/app/lib/unfurl-html";
+import { boundedResponseStream } from "../src/app/lib/unfurl-response";
 import {
   getSyndicationToken,
   getTweetIdFromUrl,
@@ -313,6 +314,11 @@ describe("getSyndicationToken", () => {
   });
 });
 
+// Tweet media round-trips through the asset proxy: images for privacy, video
+// because video.twimg.com 403s hotlinked playback.
+const assetUrl = (raw: string): string =>
+  `/api/unfurl/asset?url=${encodeURIComponent(raw)}`;
+
 describe("parseTweetResult", () => {
   const visibleText = "Hi 👋 see https://t.co/abc";
   const fixture = {
@@ -391,14 +397,16 @@ describe("parseTweetResult", () => {
     const [photo, video] = preview?.tweet?.media ?? [];
     expect(photo).toEqual({
       kind: "photo",
-      url: "https://pbs.twimg.com/media/AAA.jpg?name=small",
+      url: assetUrl("https://pbs.twimg.com/media/AAA.jpg?name=small"),
       width: 1200,
       height: 800,
     });
     // Middle bitrate mp4: chat cards don't need the 2 Mbps rendition.
     expect(video?.kind).toBe("video");
-    expect(video?.videoUrl).toBe("https://video.twimg.com/mid.mp4");
-    expect(video?.url).toBe("https://pbs.twimg.com/ext_tw_video_thumb/BBB.jpg");
+    expect(video?.videoUrl).toBe(assetUrl("https://video.twimg.com/mid.mp4"));
+    expect(video?.url).toBe(
+      assetUrl("https://pbs.twimg.com/ext_tw_video_thumb/BBB.jpg"),
+    );
     expect(video?.width).toBe(16);
     expect(video?.height).toBe(9);
   });
@@ -432,7 +440,7 @@ describe("parseTweetResult", () => {
     expect(preview?.tweet?.text).toBe("look at this");
     expect(preview?.tweet?.media[0]?.kind).toBe("gif");
     expect(preview?.tweet?.media[0]?.videoUrl).toBe(
-      "https://video.twimg.com/tweet_video/CCC.mp4",
+      assetUrl("https://video.twimg.com/tweet_video/CCC.mp4"),
     );
   });
 
@@ -459,10 +467,10 @@ describe("parseTweetResult", () => {
     );
     expect(preview?.tweet?.media).toHaveLength(2);
     expect(preview?.tweet?.media[0]?.url).toBe(
-      "https://pbs.twimg.com/media/DDD.jpg?name=small",
+      assetUrl("https://pbs.twimg.com/media/DDD.jpg?name=small"),
     );
     expect(preview?.tweet?.media[1]?.videoUrl).toBe(
-      "https://video.twimg.com/EEE.mp4",
+      assetUrl("https://video.twimg.com/EEE.mp4"),
     );
   });
 
@@ -476,5 +484,39 @@ describe("parseTweetResult", () => {
         "1",
       ),
     ).toBeNull();
+  });
+});
+
+describe("boundedResponseStream", () => {
+  const collect = async (stream: ReadableStream<Uint8Array>) => {
+    const reader = stream.getReader();
+    const chunks: number[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value.byteLength);
+    }
+    return chunks;
+  };
+
+  const sourceOf = (...sizes: number[]) =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const size of sizes) controller.enqueue(new Uint8Array(size));
+        controller.close();
+      },
+    });
+
+  it("passes chunks through under the cap", async () => {
+    const chunks = await collect(
+      boundedResponseStream(sourceOf(10, 20, 30), 100),
+    );
+    expect(chunks).toEqual([10, 20, 30]);
+  });
+
+  it("errors the stream once the cap is exceeded", async () => {
+    await expect(
+      collect(boundedResponseStream(sourceOf(60, 60), 100)),
+    ).rejects.toThrow();
   });
 });

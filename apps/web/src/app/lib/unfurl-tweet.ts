@@ -10,6 +10,7 @@ import type {
   ChatLinkTweetData,
   ChatLinkTweetMedia,
 } from "./link-embeds";
+import { toUnfurlAssetUrl } from "./unfurl-assets";
 
 const TWEET_HOSTS = new Set([
   "twitter.com",
@@ -142,19 +143,25 @@ const parseMediaDetails = (value: unknown): ChatLinkTweetMedia[] => {
     const height = asDimension(originalInfo?.height);
 
     if (type === "photo") {
-      media.push({ kind: "photo", url: smallPhotoUrl(stillUrl), width, height });
+      // Everything the embed renders goes through /api/unfurl/asset: images
+      // for privacy, and video because video.twimg.com 403s hotlinking.
+      const photoUrl = toUnfurlAssetUrl(smallPhotoUrl(stillUrl));
+      if (photoUrl) {
+        media.push({ kind: "photo", url: photoUrl, width, height });
+      }
       continue;
     }
     if (type === "video" || type === "animated_gif") {
       const videoInfo = asRecord(detail.video_info);
-      const videoUrl = pickMp4Variant(videoInfo?.variants);
-      if (!videoUrl) continue;
+      const posterUrl = toUnfurlAssetUrl(stillUrl);
+      const videoUrl = toUnfurlAssetUrl(pickMp4Variant(videoInfo?.variants) ?? "");
+      if (!posterUrl || !videoUrl) continue;
       const aspect = Array.isArray(videoInfo?.aspect_ratio)
         ? (videoInfo.aspect_ratio as unknown[])
         : [];
       media.push({
         kind: type === "video" ? "video" : "gif",
-        url: stillUrl,
+        url: posterUrl,
         videoUrl,
         width: asDimension(aspect[0]) ?? width,
         height: asDimension(aspect[1]) ?? height,
@@ -176,9 +183,11 @@ const parseLegacyMedia = (tweet: Record<string, unknown>): ChatLinkTweetMedia[] 
       const photo = asRecord(entry);
       const url = asMediaUrl(photo?.url);
       if (!url) continue;
+      const photoUrl = toUnfurlAssetUrl(smallPhotoUrl(url));
+      if (!photoUrl) continue;
       media.push({
         kind: "photo",
-        url: smallPhotoUrl(url),
+        url: photoUrl,
         width: asDimension(photo?.width),
         height: asDimension(photo?.height),
       });
@@ -197,14 +206,15 @@ const parseLegacyMedia = (tweet: Record<string, unknown>): ChatLinkTweetMedia[] 
           };
         })
       : [];
-    const videoUrl = pickMp4Variant(variants);
-    if (poster && videoUrl) {
+    const posterUrl = toUnfurlAssetUrl(poster ?? "");
+    const videoUrl = toUnfurlAssetUrl(pickMp4Variant(variants) ?? "");
+    if (posterUrl && videoUrl) {
       const aspect = Array.isArray(video.aspectRatio)
         ? (video.aspectRatio as unknown[])
         : [];
       media.push({
         kind: "video",
-        url: poster,
+        url: posterUrl,
         videoUrl,
         width: asDimension(aspect[0]),
         height: asDimension(aspect[1]),
@@ -285,7 +295,9 @@ export function parseTweetResult(
 
   const tweetId = asString(tweet.id_str) ?? requestedId;
   const canonicalUrl = `https://x.com/${authorHandle}/status/${tweetId}`;
-  const avatarUrl = asMediaUrl(user?.profile_image_url_https) ?? undefined;
+  const avatarUrl = toUnfurlAssetUrl(
+    asMediaUrl(user?.profile_image_url_https) ?? "",
+  );
   const createdAt = asString(tweet.created_at);
   const createdAtMs = createdAt ? Date.parse(createdAt) : Number.NaN;
 
@@ -306,7 +318,7 @@ export function parseTweetResult(
     title: `${authorName} (@${authorHandle})`,
     description: text || undefined,
     imageUrl: firstMedia?.url ?? avatarUrl,
-    faviconUrl: "https://abs.twimg.com/favicons/twitter.3.ico",
+    faviconUrl: toUnfurlAssetUrl("https://abs.twimg.com/favicons/twitter.3.ico"),
     imageLayout: firstMedia ? "large" : "thumb",
     tweet: data,
   };
