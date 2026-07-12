@@ -721,7 +721,6 @@ interface UseMeetSocketOptions {
   setHostUserIds: React.Dispatch<React.SetStateAction<string[]>>;
   setServerRestartNotice: (notice: string | null) => void;
   setAdminNotice: (notice: AdminNoticeNotification | null) => void;
-  setRoomAuthToken: (token: string | null) => void;
   setWebinarConfig: React.Dispatch<
     React.SetStateAction<WebinarConfigSnapshot | null>
   >;
@@ -827,7 +826,6 @@ export function useMeetSocket({
   setHostUserIds,
   setServerRestartNotice,
   setAdminNotice,
-  setRoomAuthToken,
   setWebinarConfig,
   setWebinarRole,
   setWebinarSpeakerUserId,
@@ -1527,7 +1525,6 @@ export function useMeetSocket({
         setHostUserIds([]);
         setWebinarRole(null);
         setWebinarSpeakerUserId(null);
-        setRoomAuthToken(null);
         setMusicState({ permission: "off", slowModeMs: 30_000, track: null });
         participantIdsRef.current = new Set([userId]);
         departedParticipantIdsRef.current.clear();
@@ -1659,7 +1656,6 @@ export function useMeetSocket({
       setHostUserIds,
       setWebinarRole,
       setWebinarSpeakerUserId,
-      setRoomAuthToken,
       setMusicState,
       setIsTtsDisabled,
       setIsDmEnabled,
@@ -4907,7 +4903,6 @@ export function useMeetSocket({
               tokenPromise,
               socketIoPromise,
             ]);
-            setRoomAuthToken(token);
             const socketUrl = sfuUrlOverride ?? sfuUrl;
 
             if (Array.isArray(iceServers)) {
@@ -6460,7 +6455,6 @@ export function useMeetSocket({
       setIsDmEnabled,
       setAreImageAttachmentsEnabled,
       setIsReactionsDisabled,
-      setRoomAuthToken,
       setMusicState,
       setHostUserId,
       setWebinarRole,
@@ -7360,6 +7354,25 @@ export function useMeetSocket({
       });
     }, [socketRef]);
 
+  const authorizeMomFinalize = useCallback((): Promise<string | null> => {
+    const socket = socketRef.current;
+    if (!socket) return Promise.resolve(null);
+
+    return new Promise((resolve) => {
+      socket.emit(
+        "mom:authorizeFinalize",
+        (response: { token: string; expiresIn?: number } | { error: string }) => {
+          if ("error" in response) {
+            console.error("[Meets] Failed to authorize MoM finalize:", response.error);
+            resolve(null);
+            return;
+          }
+          resolve(response.token);
+        },
+      );
+    });
+  }, [socketRef]);
+
   const getTranscriptSfuRelayStatus =
     useCallback((): Promise<TranscriptSfuRelayStatusResponse | null> => {
       const socket = socketRef.current;
@@ -7600,6 +7613,7 @@ export function useMeetSocket({
     toggleChatLock,
     endRoomForEveryone,
     getTranscriptToken,
+    authorizeMomFinalize,
     getTranscriptSfuRelayStatus,
     startTranscriptSfuRelay,
     stopTranscriptSfuRelay,

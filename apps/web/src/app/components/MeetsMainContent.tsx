@@ -286,7 +286,7 @@ interface MeetsMainContentProps {
   areImageAttachmentsEnabled: boolean;
   isReactionsDisabled: boolean;
   musicState: MeetingMusicState;
-  roomAuthToken: string | null;
+  onAuthorizeMomFinalize?: () => Promise<string | null>;
   meetingRequiresInviteCode: boolean;
   webinarConfig?: WebinarConfigSnapshot | null;
   webinarRole?: "attendee" | "participant" | "host" | null;
@@ -532,7 +532,7 @@ export default function MeetsMainContent({
   areImageAttachmentsEnabled,
   isReactionsDisabled,
   musicState,
-  roomAuthToken,
+  onAuthorizeMomFinalize,
   meetingRequiresInviteCode,
   webinarConfig,
   webinarRole,
@@ -2362,7 +2362,7 @@ export default function MeetsMainContent({
           initialTab={transcriptInitialTab}
           onPostRecap={canPostRecapToChat ? handlePostRecap : undefined}
           canFinalizeMom={isAdmin}
-          roomAuthToken={roomAuthToken}
+          onAuthorizeMomFinalize={onAuthorizeMomFinalize}
         />
       )}
 

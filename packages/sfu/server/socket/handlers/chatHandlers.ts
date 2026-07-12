@@ -1042,7 +1042,9 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
               );
               return;
             }
+            room.lastMusicRequestByUserId.set(sender.id, Date.now());
           }
+          const musicRevision = room.musicRevision;
           const resolved = await resolveMusicTrack({
             query: playMatch[1] ?? "",
             userId: sender.id,
@@ -1055,6 +1057,7 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           }
           if (
             room.musicPermission === "off" ||
+            room.musicRevision !== musicRevision ||
             !room.getClient(sender.id) ||
             (room.musicPermission === "admin" && !(sender instanceof Admin))
           ) {

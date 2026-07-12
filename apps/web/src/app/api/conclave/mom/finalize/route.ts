@@ -11,6 +11,7 @@ const RATE_LIMIT_MAX = 4;
 const rateLimit = new Map<string, { count: number; resetAt: number }>();
 
 type RoomAuthPayload = {
+  purpose?: string;
   userId?: string;
   email?: string;
   roomId?: string;
@@ -59,19 +60,19 @@ export async function POST(request: Request) {
 
   const body = (await request.json().catch(() => null)) as {
     roomId?: unknown;
-    roomAuthToken?: unknown;
+    finalizeToken?: unknown;
     markdown?: unknown;
     title?: unknown;
   } | null;
 
   const roomId = typeof body?.roomId === "string" ? body.roomId.trim() : "";
-  const roomAuthToken =
-    typeof body?.roomAuthToken === "string" ? body.roomAuthToken.trim() : "";
+  const finalizeToken =
+    typeof body?.finalizeToken === "string" ? body.finalizeToken.trim() : "";
   const markdown =
     typeof body?.markdown === "string" ? body.markdown.trim() : "";
-  if (!roomId || !roomAuthToken || !markdown) {
+  if (!roomId || !finalizeToken || !markdown) {
     return NextResponse.json(
-      { error: "roomId, roomAuthToken, and markdown are required." },
+      { error: "roomId, finalizeToken, and markdown are required." },
       { status: 400 },
     );
   }
@@ -89,7 +90,7 @@ export async function POST(request: Request) {
 
   let roomAuth: RoomAuthPayload;
   try {
-    roomAuth = jwt.verify(roomAuthToken, sfuSecret) as RoomAuthPayload;
+    roomAuth = jwt.verify(finalizeToken, sfuSecret) as RoomAuthPayload;
   } catch {
     return NextResponse.json(
       { error: "Invalid room authorization." },
@@ -99,7 +100,7 @@ export async function POST(request: Request) {
 
   if (
     roomAuth.roomId !== roomId ||
-    (!roomAuth.isHost && !roomAuth.isAdmin) ||
+    roomAuth.purpose !== "mom:finalize" ||
     roomAuth.email?.toLowerCase() !== sessionEmail
   ) {
     return NextResponse.json(

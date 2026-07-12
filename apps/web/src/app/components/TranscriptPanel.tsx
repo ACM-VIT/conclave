@@ -77,7 +77,7 @@ interface TranscriptPanelProps {
    */
   onPostRecap?: () => boolean;
   canFinalizeMom?: boolean;
-  roomAuthToken?: string | null;
+  onAuthorizeMomFinalize?: () => Promise<string | null>;
 }
 
 type TranscriptTab = "transcript" | "ask" | "minutes";
@@ -971,7 +971,7 @@ export default function TranscriptPanel({
   initialTab,
   onPostRecap,
   canFinalizeMom = false,
-  roomAuthToken = null,
+  onAuthorizeMomFinalize,
 }: TranscriptPanelProps) {
   const [activeTab, setActiveTab] = useState<TranscriptTab>(
     initialTab ?? "transcript",
@@ -1043,7 +1043,7 @@ export default function TranscriptPanel({
     if (
       !canExport ||
       !canFinalizeMom ||
-      !roomAuthToken ||
+      !onAuthorizeMomFinalize ||
       finalizeState.status === "saving"
     ) {
       return;
@@ -1055,13 +1055,17 @@ export default function TranscriptPanel({
     finalizeAbortRef.current = controller;
     setFinalizeState({ status: "saving" });
     try {
+      const finalizeToken = await onAuthorizeMomFinalize();
+      if (!finalizeToken) {
+        throw new Error("Only the current room host can finalize MoM.");
+      }
       const response = await fetch("/api/conclave/mom/finalize", {
         method: "POST",
         headers: { "content-type": "application/json" },
         signal: controller.signal,
         body: JSON.stringify({
           roomId: session.roomId,
-          roomAuthToken,
+          finalizeToken,
           title: `Meeting Minutes - ${session.roomId}`,
           markdown: transcript.exportMarkdown(),
         }),
@@ -1329,7 +1333,9 @@ export default function TranscriptPanel({
               <button
                 onClick={handleFinalizeMom}
                 disabled={
-                  !canExport || !roomAuthToken || finalizeState.status === "saving"
+                  !canExport ||
+                  !onAuthorizeMomFinalize ||
+                  finalizeState.status === "saving"
                 }
                 className="inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-lg border border-[#F95F4A]/35 bg-[#F95F4A]/10 px-3 text-[12px] font-semibold text-[#F95F4A] transition-colors hover:bg-[#F95F4A]/15 disabled:cursor-not-allowed disabled:opacity-50"
               >

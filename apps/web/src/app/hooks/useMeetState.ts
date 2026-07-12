@@ -80,7 +80,6 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     slowModeMs: 30_000,
     track: null,
   });
-  const [roomAuthToken, setRoomAuthToken] = useState<string | null>(null);
 
   return {
     connectionState,
@@ -151,7 +150,5 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     setAdminNotice,
     musicState,
     setMusicState,
-    roomAuthToken,
-    setRoomAuthToken,
   };
 }

@@ -182,6 +182,7 @@ export class Room {
   private _meetingInviteCodeHash: string | null = null;
   private _musicPermission: MeetingMusicPermission = "off";
   private _currentMusicTrack: MeetingMusicTrack | null = null;
+  private _musicRevision = 0;
   public readonly musicSlowModeMs = MUSIC_SLOW_MODE_MS;
   public lastMusicRequestByUserId: Map<string, number> = new Map();
   public appsState: { activeAppId: string | null; locked: boolean } = {
@@ -942,7 +943,11 @@ export class Room {
   }
 
   setMusicPermission(permission: MeetingMusicPermission): void {
+    if (this._musicPermission === permission) {
+      return;
+    }
     this._musicPermission = permission;
+    this._musicRevision += 1;
     if (permission === "off") {
       this._currentMusicTrack = null;
       this.lastMusicRequestByUserId.clear();
@@ -955,6 +960,11 @@ export class Room {
 
   setCurrentMusicTrack(track: MeetingMusicTrack | null): void {
     this._currentMusicTrack = track;
+    this._musicRevision += 1;
+  }
+
+  get musicRevision(): number {
+    return this._musicRevision;
   }
 
   getMusicState(): MeetingMusicState {
@@ -1590,6 +1600,7 @@ export class Room {
     this.lastMusicRequestByUserId.clear();
     this._musicPermission = "off";
     this._currentMusicTrack = null;
+    this._musicRevision += 1;
     this.blockedUsers.clear();
     this.webinarActiveSpeakerUserId = null;
     this.webinarDominantSpeakerUserId = null;
