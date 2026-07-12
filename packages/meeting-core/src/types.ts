@@ -50,6 +50,11 @@ export interface ChatMessage {
   dmTargetUserId?: string;
   dmTargetDisplayName?: string;
   replyTo?: ChatReplyPreview;
+  /**
+   * Set client-side by normalizeChatMessage on /tts messages so UIs can
+   * render them as spoken voice messages. Never sent over the wire.
+   */
+  isTts?: boolean;
   /** Encrypted capability for the sender's consented cloned TTS voice. */
   ttsVoiceToken?: string;
   /** Sender dismissed the link preview; clients must not render embeds. */

@@ -261,7 +261,9 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
     sideControls.push({
       id: "transcript",
       icon: FileText,
-      label: p.isTranscriptLive ? "Live transcript" : "Transcript",
+      // Label stays put; live state is signalled by the status dot/tint, not
+      // by renaming the control under the user.
+      label: "Transcript",
       showTooltipWithoutHotkey: true,
       variant:
         p.isTranscriptOpen || p.isTranscriptLive ? "active" : "default",

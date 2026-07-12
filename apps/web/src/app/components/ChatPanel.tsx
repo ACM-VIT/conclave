@@ -1,17 +1,27 @@
 "use client";
 
 import {
+  AudioLines,
   Check,
   ChevronDown,
   ExternalLink,
   Image as ImageIcon,
   Lock,
   Paperclip,
+  Play,
   Reply,
   Send,
+  Square,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import type { ConclaveAssistantApiKeyPromptState } from "../hooks/useMeetChat";
 import type {
@@ -20,7 +30,12 @@ import type {
   ChatReplyPreview,
   SendChatMessageOptions,
 } from "../lib/types";
-import { getActionText, getCommandSuggestions } from "../lib/chat-commands";
+import {
+  getActionText,
+  getCommandSuggestions,
+  getTtsMessageText,
+  TTS_MAX_TEXT_LENGTH,
+} from "../lib/chat-commands";
 import {
   CHAT_IMAGE_ACCEPT,
   CHAT_IMAGE_SIZE_MESSAGE,
@@ -96,6 +111,12 @@ interface ChatPanelProps {
   replyTarget?: ChatReplyPreview | null;
   onReply?: (message: ChatMessage) => void;
   onCancelReply?: () => void;
+  /** Chat message id currently being spoken aloud by the TTS engine. */
+  activeTtsMessageId?: string | null;
+  onReplayTtsMessage?: (message: ChatMessage) => void;
+  onStopTts?: () => void;
+  hasClonedTtsVoice?: boolean;
+  isTtsDisabled?: boolean;
 }
 
 type LocalRenderChatMessage = ChatMessage & {
@@ -104,6 +125,91 @@ type LocalRenderChatMessage = ChatMessage & {
 
 const getMessageRenderKey = (message: ChatMessage): string =>
   (message as LocalRenderChatMessage).clientRenderKey ?? message.id;
+
+function TtsEqualizer() {
+  return (
+    <span aria-hidden="true" className="flex h-3 items-center gap-[2.5px]">
+      {[0, 1, 2, 3].map((bar) => (
+        <span
+          key={bar}
+          className="web-chat-tts-eq-bar h-full w-[2.5px] rounded-full bg-current"
+        />
+      ))}
+    </span>
+  );
+}
+
+function TtsMessageBody({
+  message,
+  isOwn,
+  isSpeaking,
+  onReplay,
+  onStop,
+  renderContent,
+}: {
+  message: ChatMessage;
+  isOwn: boolean;
+  isSpeaking: boolean;
+  onReplay?: (message: ChatMessage) => void;
+  onStop?: () => void;
+  renderContent: (content: string) => ReactNode;
+}) {
+  const headerTone = isOwn ? "text-white/75" : "text-[#a1a1aa]";
+  const controlTone = isOwn
+    ? "bg-white/[0.16] text-white hover:bg-white/[0.26]"
+    : "bg-white/[0.08] text-[#fafafa] hover:bg-white/[0.14]";
+  const control = isSpeaking && onStop ? (
+    <button
+      type="button"
+      onClick={onStop}
+      aria-label="Stop speaking"
+      title="Stop speaking"
+      className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors ${controlTone}`}
+    >
+      <Square size={9} fill="currentColor" strokeWidth={0} />
+    </button>
+  ) : onReplay ? (
+    <button
+      type="button"
+      onClick={() => onReplay(message)}
+      aria-label="Play voice message"
+      title="Play again (only you will hear it)"
+      className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors ${controlTone}`}
+    >
+      <Play size={10} fill="currentColor" strokeWidth={0} className="translate-x-[0.5px]" />
+    </button>
+  ) : (
+    <span
+      aria-hidden="true"
+      className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
+        isOwn ? "bg-white/[0.16] text-white" : "bg-white/[0.08] text-[#fafafa]"
+      }`}
+    >
+      <AudioLines size={12} strokeWidth={2} />
+    </span>
+  );
+
+  return (
+    <div className="px-3.5 pb-2 pt-2.5">
+      <div className={`flex items-center gap-2 ${headerTone}`}>
+        {control}
+        <span className="text-[10px] font-semibold uppercase tracking-[0.09em]">
+          {isSpeaking ? "Speaking" : "Voice message"}
+        </span>
+        {isSpeaking ? <TtsEqualizer /> : null}
+      </div>
+      <div
+        className={`mt-1.5 text-[13.5px] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap ${
+          isOwn
+            ? "selection:bg-white/25 selection:text-white"
+            : "selection:bg-[#F95F4A]/40 selection:text-white"
+        }`}
+      >
+        {renderContent(getTtsMessageText(message.content))}
+      </div>
+    </div>
+  );
+}
 
 function ChatPanel({
   messages,
@@ -131,6 +237,11 @@ function ChatPanel({
   replyTarget = null,
   onReply,
   onCancelReply,
+  activeTtsMessageId = null,
+  onReplayTtsMessage,
+  onStopTts,
+  hasClonedTtsVoice = false,
+  isTtsDisabled = false,
 }: ChatPanelProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -195,6 +306,14 @@ function ChatPanel({
     !isChatDisabled && chatInput.startsWith("/") && commandSuggestions.length > 0;
   const isPickingCommand =
     showCommandSuggestions && !chatInput.slice(1).includes(" ");
+
+  // Live hint while composing a /tts message: voice used + character budget.
+  const ttsComposer = useMemo(() => {
+    const match = chatInput.match(/^\/tts(?:\s+([\s\S]*))?$/i);
+    if (!match || match[1] === undefined) return null;
+    const length = match[1].trim().length;
+    return { length, overLimit: length > TTS_MAX_TEXT_LENGTH };
+  }, [chatInput]);
 
   const mentionContext = useMemo(() => {
     if (isChatDisabled || !isDmEnabled) return null;
@@ -454,6 +573,9 @@ function ChatPanel({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isChatDisabled || isImageUploading) return;
+    // Keep the draft: the hint bar above the composer explains why the
+    // message can't go out yet (over the limit or host-disabled).
+    if (ttsComposer && (ttsComposer.overLimit || isTtsDisabled)) return;
     if (chatInput.trim() || pendingImage) {
       setIsSendAnimating(true);
       if (sendAnimationTimeoutRef.current !== null) {
@@ -947,6 +1069,19 @@ function ChatPanel({
                             image={msg.image}
                             caption={chatImageCaption(msg.content, msg.image)}
                           />
+                        ) : msg.isTts ? (
+                          <TtsMessageBody
+                            message={msg}
+                            isOwn={isOwn}
+                            isSpeaking={activeTtsMessageId === msg.id}
+                            onReplay={
+                              onReplayTtsMessage && !isTtsDisabled
+                                ? onReplayTtsMessage
+                                : undefined
+                            }
+                            onStop={onStopTts}
+                            renderContent={renderMessageContent}
+                          />
                         ) : (
                           <div
                             className={`px-3.5 py-2 text-[13.5px] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap ${
@@ -1299,6 +1434,39 @@ function ChatPanel({
               {imageUploadError}
             </p>
           ) : null}
+          {ttsComposer && !isChatDisabled ? (
+            <div className="mb-2 flex items-center gap-2 rounded-xl bg-white/[0.04] px-2.5 py-1.5">
+              <AudioLines
+                size={13}
+                strokeWidth={2}
+                className="shrink-0 text-[#F95F4A]"
+              />
+              <p className="min-w-0 flex-1 truncate text-[11.5px] text-[#a1a1aa]">
+                {isTtsDisabled
+                  ? "TTS is disabled by the host in this room."
+                  : (
+                    <>
+                      Spoken aloud to everyone
+                      <span className="text-[#a1a1aa]/60">
+                        {" · "}
+                        {hasClonedTtsVoice ? "your voice" : "system voice"}
+                      </span>
+                    </>
+                  )}
+              </p>
+              {!isTtsDisabled ? (
+                <span
+                  className={`shrink-0 text-[11px] tabular-nums ${
+                    ttsComposer.overLimit
+                      ? "font-semibold text-[#f97066]"
+                      : "text-[#a1a1aa]/70"
+                  }`}
+                >
+                  {ttsComposer.length} / {TTS_MAX_TEXT_LENGTH}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
           <div className="flex items-end gap-2 rounded-2xl border border-white/10 bg-white/[0.04] py-2 pl-3 pr-2 transition-colors focus-within:border-white/20 focus-within:bg-white/[0.055]">
             <input
               ref={imageInputRef}
@@ -1340,7 +1508,8 @@ function ChatPanel({
               disabled={
                 isChatDisabled ||
                 isImageUploading ||
-                (!chatInput.trim() && !pendingImage)
+                (!chatInput.trim() && !pendingImage) ||
+                Boolean(ttsComposer && (ttsComposer.overLimit || isTtsDisabled))
               }
               aria-label="Send message"
               title="Send message"

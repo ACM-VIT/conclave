@@ -75,7 +75,8 @@ import {
   getStoredVoiceAgentKey,
   storeVoiceAgentKey,
 } from "./lib/voice-agent-key";
-import type { JoinMode, PrejoinMediaHandoff } from "./lib/types";
+import type { ChatMessage, JoinMode, PrejoinMediaHandoff } from "./lib/types";
+import { getTtsMessageText } from "./lib/chat-commands";
 import {
   readStoredMeetViewSettings,
   writeStoredMeetViewSettings,
@@ -1034,7 +1035,10 @@ export default function MeetsClient({
 
   const {
     ttsSpeakerId,
+    activeTtsMessageId,
     handleTtsMessage,
+    replayTts,
+    stopTts,
     availableSystemVoices,
     selectedSystemVoiceUri,
     setSelectedSystemVoiceUri,
@@ -1047,6 +1051,19 @@ export default function MeetsClient({
     audioOutputDeviceId: selectedAudioOutputDeviceId,
   });
   const effectiveActiveSpeakerId = ttsSpeakerId ?? activeSpeakerId;
+
+  const handleReplayTtsMessage = useCallback(
+    (message: ChatMessage) => {
+      replayTts({
+        userId: message.userId,
+        displayName: message.displayName,
+        text: getTtsMessageText(message.content),
+        ttsVoiceToken: message.ttsVoiceToken,
+        messageId: message.id,
+      });
+    },
+    [replayTts],
+  );
 
   // Latest transcript snapshot for the "@Conclave" assistant. Updated from the
   // transcript hook below; read lazily so useMeetChat stays decoupled from it.
@@ -3185,6 +3202,10 @@ export default function MeetsClient({
         replyTarget={replyTarget}
         onReplyToMessage={startReply}
         onCancelReply={cancelReply}
+        activeTtsMessageId={activeTtsMessageId}
+        onReplayTtsMessage={handleReplayTtsMessage}
+        onStopTts={stopTts}
+        hasClonedTtsVoice={Boolean(clonedVoice)}
         assistantApiKeyPrompt={assistantApiKeyPrompt}
         onSubmitAssistantApiKey={submitAssistantApiKey}
         onCancelAssistantApiKey={cancelAssistantApiKeyPrompt}

@@ -243,14 +243,21 @@ function ActivityDock({
   activities,
   promoted,
   host,
+  onFlyoutOpenChange,
 }: {
   core: DockEntry[];
   activities: DockEntry[];
   /** The activity owning the shared slot's face right now (live beats open). */
   promoted?: DockEntry | null;
   host?: DockEntry | null;
+  /** Lets the bar hide dock coachmarks while the flyout is up — both float in
+   * the same spot above the dock, and the flyout must win. */
+  onFlyoutOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    onFlyoutOpenChange?.(open);
+  }, [open, onFlyoutOpenChange]);
   const segmentRef = useRef<HTMLDivElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trayId = useId();
@@ -290,13 +297,7 @@ function ActivityDock({
     setOpen(true);
   };
 
-  // Tap/keyboard path: hover never fired, so the face itself toggles the
-  // flyout and hands focus to the first activity row.
-  const toggleFromFace = () => {
-    if (open) {
-      setOpen(false);
-      return;
-    }
+  const openFlyoutWithFocus = () => {
     openFlyout();
     requestAnimationFrame(() => {
       segmentRef.current
@@ -309,13 +310,25 @@ function ActivityDock({
   const FaceIcon = face?.d.icon ?? Shapes;
   const faceLabel = face ? face.d.label : "Activities";
   const faceActive = face?.d.variant === "active";
+
+  // Clicking the face does what its icon promises: with a promoted activity
+  // it toggles that panel directly (the flyout is a hover reveal on pointer
+  // devices). Only the idle face — or any tap on a no-hover device, where the
+  // flyout is the sole way to reach the activities — toggles the flyout.
   const handleFaceClick = () => {
-    if (face?.d.onPress) {
+    const hoverCapable =
+      typeof window !== "undefined" &&
+      window.matchMedia("(hover: hover)").matches;
+    if (face && hoverCapable) {
       setOpen(false);
-      face.d.onPress();
+      face.d.onPress?.();
       return;
     }
-    toggleFromFace();
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    openFlyoutWithFocus();
   };
 
   return (
@@ -781,10 +794,12 @@ function ControlsBar(props: ControlsBarProps) {
           props.transcriptStatus === "error"
         ? "attention"
         : null;
+  const [dockFlyoutOpen, setDockFlyoutOpen] = useState(false);
   const panelCoachmarkVisible =
     !moreOpen &&
     !reactionsOpen &&
     !browserOpen &&
+    !dockFlyoutOpen &&
     !filtersTip.visible &&
     (watchTip.visible ||
       (gamesTip.visible && !props.isGamesOpen && !props.hasActiveGame) ||
@@ -831,11 +846,13 @@ function ControlsBar(props: ControlsBarProps) {
           ...transcriptItem,
           variant: props.isTranscriptOpen ? "active" : "default",
         },
+        // One dot language across the dock: the lone coral accent. A pulse —
+        // not a different hue — marks the needs-attention state.
         dot:
           transcriptClusterStatus === "live"
-            ? { color: "#32d583" }
+            ? { color: color.accent }
             : transcriptClusterStatus === "attention"
-              ? { color: "#f97066", pulse: true }
+              ? { color: color.accent, pulse: true }
               : null,
       }
     : null;
@@ -1233,6 +1250,7 @@ function ControlsBar(props: ControlsBarProps) {
               activities={dockActivities}
               promoted={promotedEntry}
               host={hostEntry}
+              onFlyoutOpenChange={setDockFlyoutOpen}
             />
             {panelCoachmarkVisible && watchTip.visible ? (
               <WatchTogetherTip
