@@ -678,6 +678,42 @@ select:focus {
   animation: web-chat-highlight-flash 900ms ease-out both;
 }
 
+/* Equalizer bars shown on a TTS voice message while it is being spoken. */
+@keyframes web-chat-tts-eq {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.web-chat-tts-eq-bar {
+  transform-origin: center;
+  animation: web-chat-tts-eq 0.85s ease-in-out infinite;
+}
+
+.web-chat-tts-eq-bar:nth-child(2) {
+  animation-delay: 0.14s;
+}
+
+.web-chat-tts-eq-bar:nth-child(3) {
+  animation-delay: 0.28s;
+}
+
+.web-chat-tts-eq-bar:nth-child(4) {
+  animation-delay: 0.42s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .web-chat-tts-eq-bar {
+    animation: none;
+    transform: scaleY(0.75);
+  }
+}
+
 /* Smooth height+fade collapse for Radix Collapsible surfaces (Conclave AI
    reasoning / chain-of-thought). Radix exposes the measured content height as
    --radix-collapsible-content-height, which lets us animate from/to 0. */

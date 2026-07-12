@@ -839,7 +839,7 @@ export default function DeviceSettingsPanel({
               </button>
             </Section>
 
-            <Section label="Text to speech">
+            <Section label="Voice messages">
               <TtsVoiceSettings
                 systemVoices={ttsSystemVoices}
                 selectedSystemVoiceUri={selectedTtsSystemVoiceUri}
@@ -850,6 +850,7 @@ export default function DeviceSettingsPanel({
                 getRecordingStream={micTest.getRecordingStream}
                 canCloneVoice={canCloneTtsVoice}
                 ownerName={ttsVoiceOwnerName}
+                audioOutputDeviceId={selectedAudioOutputDeviceId}
               />
             </Section>
           </div>

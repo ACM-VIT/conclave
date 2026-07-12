@@ -48,9 +48,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     durationSeconds > MAX_VOICE_SAMPLE_SECONDS
   ) {
     return errorResponse(
-      new Error(
-        `Record between ${MIN_VOICE_SAMPLE_SECONDS} and ${MAX_VOICE_SAMPLE_SECONDS} seconds.`,
-      ),
+      new Error("The voice sample must be about 1 to 2 minutes long."),
       400,
     );
   }

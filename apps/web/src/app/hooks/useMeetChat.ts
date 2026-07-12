@@ -15,6 +15,7 @@ import {
   getHelpText,
   normalizeChatMessage,
   parseChatCommand,
+  TTS_MAX_TEXT_LENGTH,
 } from "../lib/chat-commands";
 import {
   CHAT_IMAGE_MODERATION_BLOCKED_CODE,
@@ -90,6 +91,7 @@ interface UseMeetChatOptions {
     displayName: string;
     text: string;
     ttsVoiceToken?: string;
+    messageId?: string;
   }) => void;
   outgoingTtsVoiceToken?: string;
   isTtsDisabled?: boolean;
@@ -639,6 +641,7 @@ export function useMeetChat({
                   displayName: message.displayName,
                   text: ttsText,
                   ttsVoiceToken: message.ttsVoiceToken,
+                  messageId: message.id,
                 });
               }
               resolve(message);
@@ -723,6 +726,12 @@ export function useMeetChat({
           }
           if (!args) {
             appendLocalMessage("Usage: /tts <text>");
+            return;
+          }
+          if (args.length > TTS_MAX_TEXT_LENGTH) {
+            appendLocalMessage(
+              `TTS messages are limited to ${TTS_MAX_TEXT_LENGTH} characters. Yours is ${args.length}.`,
+            );
             return;
           }
           void sendChatInternal(`/tts ${args}`);
