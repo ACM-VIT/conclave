@@ -124,6 +124,10 @@ export default function MeetViewPanel({
     onSettingsChange((current) => ({ ...current, dataSaverMode }));
   };
 
+  const setAudioOnlyMode = (audioOnlyMode: boolean) => {
+    onSettingsChange((current) => ({ ...current, audioOnlyMode }));
+  };
+
   const setSelfViewMode = (selfViewMode: MeetSelfViewMode) => {
     onSettingsChange((current) => ({ ...current, selfViewMode }));
   };
@@ -232,6 +236,24 @@ export default function MeetViewPanel({
               label="Data saver"
               checked={settings.dataSaverMode}
               onChange={setDataSaverMode}
+            />
+          </div>
+        </section>
+
+        <section className="border-t border-white/10 px-4 py-3">
+          <div className="flex w-full items-center justify-between gap-3 px-1 py-1.5">
+            <div>
+              <span className="block text-[13px] font-medium text-[#fafafa]">
+                Audio only
+              </span>
+              <span className="block text-[11px] text-[#a1a1aa]">
+                Stop sending and receiving video
+              </span>
+            </div>
+            <Switch
+              label="Audio only"
+              checked={settings.audioOnlyMode}
+              onChange={setAudioOnlyMode}
             />
           </div>
         </section>

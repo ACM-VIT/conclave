@@ -1631,6 +1631,7 @@ export default function MeetsMainContent({
     isMuted,
     isMuteTogglePending,
     isCameraOff,
+    isAudioOnly: viewSettings.audioOnlyMode,
     isScreenSharing,
     activeScreenShareId,
     isChatOpen,
@@ -2039,6 +2040,10 @@ export default function MeetsMainContent({
             onVideoEffectsChange={onVideoEffectsChange}
             onPrejoinMediaCommit={onPrejoinMediaCommit}
             onEnterStart={onEnterMeetingStart}
+            audioOnlyMode={viewSettings.audioOnlyMode}
+            onAudioOnlyModeChange={(audioOnlyMode) =>
+              onViewSettingsChange((current) => ({ ...current, audioOnlyMode }))
+            }
           />
         )
       ) : isWebinarAttendee ? (
@@ -2228,6 +2233,15 @@ export default function MeetsMainContent({
               : null,
           ]}
         />
+      )}
+
+      {isJoined && viewSettings.audioOnlyMode && (
+        <div
+          role="status"
+          className="pointer-events-none fixed left-1/2 top-4 z-30 -translate-x-1/2 rounded-full border border-[#F95F4A]/40 bg-[#18181b]/95 px-3 py-1.5 text-[12px] font-medium text-[#fafafa] shadow-lg backdrop-blur"
+        >
+          Audio-only mode active
+        </div>
       )}
 
       {isJoined && !isWebinarAttendee && participantAudioBlocked && (

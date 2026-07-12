@@ -11,6 +11,7 @@ export interface MeetViewSettings {
   maxTiles: number;
   hideTilesWithoutVideo: boolean;
   dataSaverMode: boolean;
+  audioOnlyMode: boolean;
   selfViewMode: MeetSelfViewMode;
   selfViewCorner: MeetSelfViewCorner;
 }
@@ -23,6 +24,7 @@ export const DEFAULT_MEET_VIEW_SETTINGS: MeetViewSettings = {
   maxTiles: 16,
   hideTilesWithoutVideo: false,
   dataSaverMode: false,
+  audioOnlyMode: false,
   selfViewMode: "auto",
   selfViewCorner: "bottom-right",
 };
@@ -93,7 +95,7 @@ export const writeStoredMeetViewSettings = (settings: MeetViewSettings) => {
   } catch {}
 };
 
-function normalizeMeetViewSettings(value: unknown): MeetViewSettings {
+export function normalizeMeetViewSettings(value: unknown): MeetViewSettings {
   if (!isRecord(value)) return DEFAULT_MEET_VIEW_SETTINGS;
 
   return {
@@ -112,6 +114,10 @@ function normalizeMeetViewSettings(value: unknown): MeetViewSettings {
       typeof value.dataSaverMode === "boolean"
         ? value.dataSaverMode
         : DEFAULT_MEET_VIEW_SETTINGS.dataSaverMode,
+    audioOnlyMode:
+      typeof value.audioOnlyMode === "boolean"
+        ? value.audioOnlyMode
+        : DEFAULT_MEET_VIEW_SETTINGS.audioOnlyMode,
     selfViewMode: isMeetSelfViewMode(value.selfViewMode)
       ? value.selfViewMode
       : DEFAULT_MEET_VIEW_SETTINGS.selfViewMode,

@@ -1170,6 +1170,7 @@ export default function MeetsClient({
     setIsMuted,
     isCameraOff,
     setIsCameraOff,
+    cameraDisabled: viewSettings.audioOnlyMode,
     isScreenSharing,
     setIsScreenSharing,
     activeScreenShareId,
@@ -2277,6 +2278,7 @@ export default function MeetsClient({
     videoQualityRef: refs.videoQualityRef,
     connectionQualityRef: connectionQualityDebugRef,
     dataSaverMode: effectiveDataSaverMode,
+    audioOnlyMode: viewSettings.audioOnlyMode,
     isDocumentVisible,
     updateVideoQualityRef,
     requestMediaPermissions,
@@ -2301,6 +2303,10 @@ export default function MeetsClient({
     onLocalRoomEnded: handleLocalRoomEnded,
     bypassMediaPermissions,
   });
+
+  useEffect(() => {
+    if (viewSettings.audioOnlyMode && !isCameraOff) toggleCamera();
+  }, [isCameraOff, toggleCamera, viewSettings.audioOnlyMode]);
 
   useEffect(() => {
     ensureProducerTransportRef.current = socket.ensureProducerTransport;

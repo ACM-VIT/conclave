@@ -164,6 +164,16 @@ struct MeetingBannerOverlay: View {
                         )
                     }
                     .buttonStyle(.plain)
+                } else if viewModel.state.isAudioOnlyMode {
+                    MeetingBanner(
+                        iosIcon: "waveform",
+                        androidIcon: "headphones",
+                        iconTint: "accent",
+                        iconColor: ACMColors.primaryOrange,
+                        text: "Audio-only mode is active. Video is not being sent or received.",
+                        background: ACMColors.surfaceRaised,
+                        border: ACMColors.primaryOrange.opacity(0.34)
+                    )
                 } else if shouldShowQualityBanner, let info = qualityBannerInfo {
                     MeetingBanner(
                         iosIcon: info.iosIcon,

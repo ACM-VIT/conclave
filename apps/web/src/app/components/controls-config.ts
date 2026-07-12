@@ -52,6 +52,7 @@ export interface ControlsBarProps {
   isMuted: boolean;
   isMuteTogglePending?: boolean;
   isCameraOff: boolean;
+  isAudioOnly?: boolean;
   isScreenSharing: boolean;
   activeScreenShareId: string | null;
   isChatOpen: boolean;
@@ -300,9 +301,14 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
     {
       id: "camera",
       icon: p.isCameraOff ? VideoOff : Video,
-      label: p.isCameraOff ? "Turn on camera" : "Turn off camera",
+      label: p.isAudioOnly
+        ? "Camera disabled in audio-only mode"
+        : p.isCameraOff
+          ? "Turn on camera"
+          : "Turn off camera",
       hotkey: HOTKEYS.toggleCamera.keys,
       variant: p.isCameraOff ? "muted" : "default",
+      disabled: p.isAudioOnly,
       onPress: p.onToggleCamera,
     },
   ];

@@ -142,6 +142,8 @@ interface JoinScreenProps {
   onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   onEnterStart?: (action: "new" | "join") => void;
+  audioOnlyMode?: boolean;
+  onAudioOnlyModeChange?: (enabled: boolean) => void;
 }
 
 // Flat, Google-Meet-style lobby (dark Carbon, no gradients/marketing): a single
@@ -288,6 +290,8 @@ function JoinScreen({
   onVideoEffectsChange,
   onPrejoinMediaCommit,
   onEnterStart,
+  audioOnlyMode = false,
+  onAudioOnlyModeChange,
 }: JoinScreenProps) {
   const normalizedRoomId =
     roomId === "undefined" || roomId === "null" ? "" : roomId;
@@ -895,6 +899,12 @@ function JoinScreen({
     }
   };
 
+  const toggleAudioOnly = async () => {
+    const next = !audioOnlyMode;
+    if (next && isCameraOn) await toggleCamera();
+    onAudioOnlyModeChange?.(next);
+  };
+
   const toggleMic = async () => {
     if (toggleMicInFlightRef.current) {
       logJoinMedia("toggle_mic_ignored_in_flight", {
@@ -1325,10 +1335,11 @@ function JoinScreen({
                   </button>
                   <button
                     onClick={toggleCamera}
+                    disabled={audioOnlyMode}
                     aria-label={isCameraOn ? "Turn off camera" : "Turn on camera"}
                     className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
                       isCameraOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
-                    }`}
+                    } disabled:cursor-not-allowed disabled:opacity-45`}
                   >
                     {isCameraOn ? <Video size={18} /> : <VideoOff size={18} />}
                   </button>
@@ -1455,6 +1466,27 @@ function JoinScreen({
                   )}
                 </div>
               )}
+
+              <button
+                type="button"
+                onClick={() => void toggleAudioOnly()}
+                aria-pressed={audioOnlyMode}
+                className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left transition-colors ${
+                  audioOnlyMode
+                    ? "border-[#F95F4A]/50 bg-[#F95F4A]/10"
+                    : "border-white/10 bg-white/[0.03] hover:bg-white/[0.06]"
+                }`}
+              >
+                <span>
+                  <span className="block text-[14px] font-medium">Audio only</span>
+                  <span className="block text-[12px] text-[#fafafa]/55">
+                    Use less data by skipping all video
+                  </span>
+                </span>
+                <span className={`h-5 w-9 rounded-full p-0.5 transition-colors ${audioOnlyMode ? "bg-[#F95F4A]" : "bg-white/20"}`}>
+                  <span className={`block h-4 w-4 rounded-full bg-white transition-transform ${audioOnlyMode ? "translate-x-4" : ""}`} />
+                </span>
+              </button>
 
               {!isRoutedRoom && (
                   <button
