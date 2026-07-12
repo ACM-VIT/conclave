@@ -1038,7 +1038,11 @@ function ChatPanel({
                       </p>
                     ) : null}
                     <div
-                      className={`flex items-end gap-1.5 ${
+                      // max-w-full is load-bearing: in the own-message column
+                      // (items-end) this row is fit-content sized, and a reply
+                      // quote's nowrap text would otherwise set its intrinsic
+                      // width and blow the bubble past the panel edge.
+                      className={`flex max-w-full items-end gap-1.5 ${
                         isOwn ? "flex-row-reverse" : ""
                       }`}
                     >
