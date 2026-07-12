@@ -14,7 +14,12 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import type { ConclaveAssistantApiKeyPromptState } from "../hooks/useMeetChat";
-import type { ChatGifAttachment, ChatMessage, ChatReplyPreview } from "../lib/types";
+import type {
+  ChatGifAttachment,
+  ChatMessage,
+  ChatReplyPreview,
+  SendChatMessageOptions,
+} from "../lib/types";
 import { getActionText, getCommandSuggestions } from "../lib/chat-commands";
 import {
   CHAT_IMAGE_ACCEPT,
@@ -36,6 +41,7 @@ import {
   CONCLAVE_MENTION_TOKEN,
   isConclaveAssistantModel,
 } from "../lib/conclave-assistant";
+import { extractEmbedUrls } from "../lib/link-embeds";
 import { formatDisplayName, getChatMessageSegments } from "../lib/utils";
 import {
   Conversation,
@@ -44,6 +50,9 @@ import {
 } from "./ai-elements/conversation";
 import ChatGifAttachmentView from "./ChatGifAttachmentView";
 import ChatImageAttachmentView from "./ChatImageAttachmentView";
+import ChatLinkEmbedView, {
+  ChatComposerLinkPreview,
+} from "./ChatLinkEmbedView";
 import ConclaveMessage from "./ConclaveMessage";
 import GifPicker from "./GifPicker";
 
@@ -59,7 +68,7 @@ interface ChatPanelProps {
   messages: ChatMessage[];
   chatInput: string;
   onInputChange: (value: string) => void;
-  onSend: (content: string) => void;
+  onSend: (content: string, options?: SendChatMessageOptions) => void;
   onSendGif: (gif: ChatGifAttachment) => void;
   onSendImage: (
     file: File,
@@ -150,6 +159,13 @@ function ChatPanel({
   const [highlightedMessageId, setHighlightedMessageId] = useState<
     string | null
   >(null);
+  // First embeddable URL of the draft (debounced) drives the composer-side
+  // link preview; dismissing it remembers the URL so the preview stays away
+  // while that same link is in the draft, and the send carries the flag.
+  const [composerEmbedUrl, setComposerEmbedUrl] = useState<string | null>(null);
+  const [dismissedEmbedUrl, setDismissedEmbedUrl] = useState<string | null>(
+    null,
+  );
   const isChatDisabled = isChatLocked && !isAdmin;
   const isImagePickerDisabled =
     isChatDisabled || !areImageAttachmentsEnabled || isImageUploading;
@@ -334,6 +350,28 @@ function ChatPanel({
     textarea.style.height = `${Math.min(textarea.scrollHeight, 112)}px`;
   }, [chatInput]);
 
+  useEffect(() => {
+    const [firstUrl] = extractEmbedUrls(chatInput, 1);
+    if (!firstUrl) {
+      setComposerEmbedUrl(null);
+      return;
+    }
+    // Debounced so half-typed URLs don't hit the unfurl endpoint on every
+    // keystroke; pasted links settle within one tick.
+    const handle = window.setTimeout(() => setComposerEmbedUrl(firstUrl), 450);
+    return () => window.clearTimeout(handle);
+  }, [chatInput]);
+
+  useEffect(() => {
+    if (
+      dismissedEmbedUrl &&
+      composerEmbedUrl &&
+      composerEmbedUrl !== dismissedEmbedUrl
+    ) {
+      setDismissedEmbedUrl(null);
+    }
+  }, [composerEmbedUrl, dismissedEmbedUrl]);
+
   const clearPendingImage = useCallback(() => {
     if (pendingImageUrlRef.current) {
       URL.revokeObjectURL(pendingImageUrlRef.current);
@@ -437,13 +475,19 @@ function ChatPanel({
         if (sent) {
           clearPendingImage();
           onInputChange("");
+          setDismissedEmbedUrl(null);
         } else {
           setImageUploadError("Couldn’t send this image. Try again.");
         }
         return;
       }
-      onSend(chatInput);
+      // Recomputed from the draft (not the debounced state) so a fast
+      // paste-and-enter can't race the composer preview.
+      const [firstUrl] = extractEmbedUrls(chatInput, 1);
+      const suppressEmbeds = Boolean(firstUrl) && firstUrl === dismissedEmbedUrl;
+      onSend(chatInput, suppressEmbeds ? { suppressEmbeds: true } : undefined);
       onInputChange("");
+      setDismissedEmbedUrl(null);
     }
   };
 
@@ -451,6 +495,7 @@ function ChatPanel({
     if (isChatDisabled) return;
     onSendGif(gif);
     onInputChange("");
+    setDismissedEmbedUrl(null);
   };
 
   const applyMentionSuggestion = (index: number) => {
@@ -754,6 +799,11 @@ function ChatPanel({
                   ? "You"
                   : formatDisplayName(msg.replyTo.displayName));
 
+              const embedUrls =
+                msg.gif || msg.image || msg.suppressEmbeds
+                  ? []
+                  : extractEmbedUrls(msg.content);
+
               const nestedReplyQuote = msg.replyTo ? (
                 <button
                   type="button"
@@ -911,6 +961,17 @@ function ChatPanel({
                       </div>
                       {replyButton}
                     </div>
+                    {embedUrls.length > 0 ? (
+                      <div
+                        className={`mt-1 flex w-full min-w-0 flex-col gap-1 ${
+                          isOwn ? "items-end" : "items-start"
+                        }`}
+                      >
+                        {embedUrls.map((embedUrl) => (
+                          <ChatLinkEmbedView key={embedUrl} url={embedUrl} />
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               );
@@ -1185,6 +1246,15 @@ function ChatPanel({
               </button>
             </div>
           )}
+          {composerEmbedUrl &&
+          dismissedEmbedUrl !== composerEmbedUrl &&
+          !pendingImage &&
+          !isChatDisabled ? (
+            <ChatComposerLinkPreview
+              url={composerEmbedUrl}
+              onDismiss={() => setDismissedEmbedUrl(composerEmbedUrl)}
+            />
+          ) : null}
           {pendingImage && !isChatDisabled ? (
             <div className="mb-2 overflow-hidden rounded-xl border border-white/10 bg-white/[0.04]">
               <div className="flex items-center gap-3 p-2">

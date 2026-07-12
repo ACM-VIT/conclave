@@ -52,6 +52,14 @@
         "limit": 30,
         "period": 60
       }
+    },
+    {
+      "name": "UNFURL_RATE_LIMITER",
+      "namespace_id": "2004",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
     }
   ],
   "r2_buckets": [

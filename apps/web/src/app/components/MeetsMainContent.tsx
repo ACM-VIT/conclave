@@ -59,6 +59,7 @@ import type {
   Participant,
   ReconnectRecoveryStatus,
   ReactionOption,
+  SendChatMessageOptions,
   WebinarConfigSnapshot,
   WebinarLinkResponse,
   WebinarUpdateRequest,
@@ -209,7 +210,7 @@ interface MeetsMainContentProps {
   chatMessages: ChatMessage[];
   chatInput: string;
   setChatInput: Dispatch<SetStateAction<string>>;
-  sendChat: (content: string) => void;
+  sendChat: (content: string, options?: SendChatMessageOptions) => void;
   sendChatGif: (gif: ChatGifAttachment) => void;
   sendChatImage: (
     file: File,
@@ -1322,9 +1323,12 @@ export default function MeetsMainContent({
   useEffect(() => {
     sendChatRef.current = sendChat;
   }, [sendChat]);
-  const handleSendChat = useCallback((content: string) => {
-    sendChatRef.current(content);
-  }, []);
+  const handleSendChat = useCallback(
+    (content: string, options?: SendChatMessageOptions) => {
+      sendChatRef.current(content, options);
+    },
+    [],
+  );
   const sendChatGifRef = useRef(sendChatGif);
   useEffect(() => {
     sendChatGifRef.current = sendChatGif;

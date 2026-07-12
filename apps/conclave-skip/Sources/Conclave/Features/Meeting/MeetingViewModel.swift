@@ -535,6 +535,7 @@ final class MeetingViewModel {
     private var pendingProducerContexts: [String: SocketEventContext] = [:]
     private var producerInfosById: [String: ProducerInfo] = [:]
     private var consumingProducerIds: Set<String> = []
+    private var deferredProducerConsumes: [String: PendingProducerRetryItem] = [:]
     private var pendingProducerRetryAttempts: [String: Int] = [:]
     private var remoteProducerCloseGraceTasks: [String: Task<Void, Never>] = [:]
     private var remoteProducerCloseGraceProducers: [String: ProducerInfo] = [:]
@@ -2447,6 +2448,7 @@ final class MeetingViewModel {
         cancelPendingMediaLifecycleWork()
         producerInfosById.removeAll()
         consumingProducerIds.removeAll()
+        deferredProducerConsumes.removeAll()
         clearAllParticipantConnectionStatusTimers()
 
         state.activeScreenShareUserId = nil
@@ -4991,6 +4993,7 @@ final class MeetingViewModel {
         pendingProducers.removeValue(forKey: notification.producerId)
         pendingProducerContexts.removeValue(forKey: notification.producerId)
         pendingProducerRetryAttempts.removeValue(forKey: notification.producerId)
+        deferredProducerConsumes.removeValue(forKey: notification.producerId)
         webRTCClient.closeConsumer(producerId: notification.producerId, userId: producerUserId ?? "")
 
         guard let producerUserId, !state.isLocalIdentityUserId(producerUserId) else { return }
@@ -6040,9 +6043,21 @@ final class MeetingViewModel {
         }
 
         guard consumingProducerIds.insert(producer.producerId).inserted else {
+            let deferredContext = context ?? SocketEventContext(
+                roomId: state.roomId,
+                joinAttemptId: joinAttemptId ?? activeJoinAttemptId,
+                lifecycleGeneration: meetingLifecycleGeneration
+            )
+            deferredProducerConsumes[producer.producerId] = PendingProducerRetryItem(
+                producer: producer,
+                context: deferredContext
+            )
             return
         }
-        defer { consumingProducerIds.remove(producer.producerId) }
+        defer {
+            consumingProducerIds.remove(producer.producerId)
+            scheduleDeferredProducerConsume(producerId: producer.producerId)
+        }
 
         do {
             try await webRTCClient.consumeProducer(
@@ -6065,6 +6080,10 @@ final class MeetingViewModel {
                     return
                 }
             }
+            guard isTrackedRemoteProducer(producer) else {
+                discardStaleConsumedProducer(producer)
+                return
+            }
             if MeetingState.isBrowserAudioUserId(producer.producerUserId) {
                 refreshBrowserAudioPresence()
                 applyBrowserAudioMuteState()
@@ -6084,8 +6103,26 @@ final class MeetingViewModel {
             } else {
                 guard isCurrentJoinAttempt(joinAttemptId) else { return }
             }
+            guard isTrackedRemoteProducer(producer) else { return }
             debugLog("[Meeting] Failed to consume producer \(producer.producerId): \(error)")
             queueProducerConsumeRetry(producer, context: context, joinAttemptId: joinAttemptId)
+        }
+    }
+
+    private func isTrackedRemoteProducer(_ producer: ProducerInfo) -> Bool {
+        guard let tracked = producerInfosById[producer.producerId] else { return false }
+        return tracked.producerUserId == producer.producerUserId
+            && tracked.kind == producer.kind
+            && tracked.type == producer.type
+    }
+
+    private func scheduleDeferredProducerConsume(producerId: String) {
+        guard let item = deferredProducerConsumes.removeValue(forKey: producerId) else { return }
+        Task { @MainActor [weak self] in
+            guard let self,
+                  self.isCurrentSocketEvent(item.context, roomId: item.producer.roomId),
+                  self.isTrackedRemoteProducer(item.producer) else { return }
+            await self.consumeRemoteProducer(item.producer, context: item.context)
         }
     }
 
@@ -6097,6 +6134,7 @@ final class MeetingViewModel {
         pendingProducers.removeValue(forKey: producer.producerId)
         pendingProducerContexts.removeValue(forKey: producer.producerId)
         pendingProducerRetryAttempts.removeValue(forKey: producer.producerId)
+        deferredProducerConsumes.removeValue(forKey: producer.producerId)
         if pendingProducers.isEmpty {
             pendingProducerRetryTask?.cancel()
             pendingProducerRetryTask = nil
@@ -6819,6 +6857,7 @@ final class MeetingViewModel {
         clearAllParticipantConnectionStatusTimers()
         producerInfosById.removeAll()
         consumingProducerIds.removeAll()
+        deferredProducerConsumes.removeAll()
         clearPendingPreAckRoomEvents()
         currentJoinInfo = nil
         currentRoomAliases.removeAll()

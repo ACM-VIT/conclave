@@ -142,6 +142,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     )
 
     private val consumers: MutableMap<String, ConsumerInfo> = mutableMapOf()
+    private val remoteProducerClosureGenerations: MutableMap<String, Int> = mutableMapOf()
     private val remoteConsumerPreferenceSignatures: MutableMap<String, String> = mutableMapOf()
     private val remoteConsumerLayerPreferenceUnsupportedIds: MutableSet<String> = mutableSetOf()
     private val remoteConsumerPreferenceInFlightIds: MutableSet<String> = mutableSetOf()
@@ -1309,6 +1310,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         preferHighWebcamLayer: Boolean = false,
         initialReceiveConnectionQuality: ConnectionQuality = ConnectionQuality.unknown,
     ) {
+        val consumeConfigurationGeneration = configurationGeneration
+        val producerClosureGeneration = remoteProducerClosureGenerations[producerId] ?: 0
         createReceiveTransportIfNeeded()
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val rtpCapsJson = socket.routerRtpCapabilitiesJson ?: throw ErrorException("RTP caps missing")
@@ -1371,6 +1374,15 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             throw error
         }
 
+        if (
+            configurationGeneration != consumeConfigurationGeneration ||
+            (remoteProducerClosureGenerations[producerId] ?: 0) != producerClosureGeneration
+        ) {
+            consumer.close()
+            socket.closeConsumer(response.id)
+            throw ErrorException("WebRTC session or remote producer changed while consumer was starting")
+        }
+
         consumers[response.id] = ConsumerInfo(
             consumer = consumer,
             producerId = response.producerId,
@@ -1393,6 +1405,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal fun closeConsumer(producerId: String, userId: String) {
+        if (producerId.isNotEmpty()) {
+            remoteProducerClosureGenerations[producerId] =
+                (remoteProducerClosureGenerations[producerId] ?: 0) + 1
+        }
         if (producerId.isEmpty()) {
             val ids = consumers
                 .filterValues { consumerMatchesUser(it, userId) }
@@ -2459,6 +2475,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
         consumers.values.forEach { it.consumer.close() }
         consumers.clear()
+        remoteProducerClosureGenerations.clear()
         videoFreezeStats.clear()
         remoteConsumerPreferenceSignatures.clear()
         remoteConsumerLayerPreferenceUnsupportedIds.clear()

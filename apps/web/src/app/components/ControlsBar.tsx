@@ -309,6 +309,14 @@ function ActivityDock({
   const FaceIcon = face?.d.icon ?? Shapes;
   const faceLabel = face ? face.d.label : "Activities";
   const faceActive = face?.d.variant === "active";
+  const handleFaceClick = () => {
+    if (face?.d.onPress) {
+      setOpen(false);
+      face.d.onPress();
+      return;
+    }
+    toggleFromFace();
+  };
 
   return (
     <div className="flex items-center rounded-full bg-white/[0.05] p-1">
@@ -343,7 +351,7 @@ function ActivityDock({
                 title={faceLabel}
                 aria-expanded={open}
                 aria-controls={trayId}
-                onClick={toggleFromFace}
+                onClick={handleFaceClick}
                 className="relative inline-flex h-10 w-10 items-center justify-center rounded-full transition-[background-color,color] duration-[120ms] hover:bg-white/[0.08] hover:!text-[#fafafa]"
                 style={{ color: faceActive ? color.accent : color.textMuted }}
               >
