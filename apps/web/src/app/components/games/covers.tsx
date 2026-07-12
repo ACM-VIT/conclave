@@ -10,6 +10,7 @@ const GAME_ACCENTS: Record<string, string> = {
   imposter: "#E0863A",
   wordle: "#6AAA64",
   chess: "#C08552",
+  zip: "#F6C744",
 };
 
 const GAME_NAMES: Record<string, string> = {
@@ -21,6 +22,7 @@ const GAME_NAMES: Record<string, string> = {
   imposter: "Imposter",
   wordle: "Wordle",
   chess: "Chess",
+  zip: "Zip",
 };
 
 export const accentFor = (gameId?: string): string =>
