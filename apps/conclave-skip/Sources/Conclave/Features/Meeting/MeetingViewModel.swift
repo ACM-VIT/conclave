@@ -6880,6 +6880,7 @@ final class MeetingViewModel {
         state.isHandRaised = false
         state.isScreenSharing = false
         state.isMuted = true
+        state.isAudioOnlyMode = false
         setLocalCameraOffState(true)
         state.activeScreenShareUserId = nil
         state.activeSpeakerId = nil
