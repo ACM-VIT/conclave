@@ -298,6 +298,32 @@ describe("zip game module", () => {
     }
   });
 
+  it("finishes when all remaining active players have completed after a disconnect", () => {
+    const state = zipModule.setup(context(0));
+    const playing = zipModule.onMove(
+      state,
+      { playerId: "host", type: "start", payload: undefined },
+      context(1000),
+    );
+    const withHostFinished = zipModule.onMove(
+      playing,
+      { playerId: "host", type: "move", payload: { cells: playing.solutionPath } },
+      context(2000),
+    );
+    const withRemainingPlayersFinished = zipModule.onMove(
+      withHostFinished,
+      { playerId: "alice", type: "move", payload: { cells: playing.solutionPath } },
+      context(3000),
+    );
+
+    const completed = zipModule.onTick!(
+      withRemainingPlayersFinished,
+      context(4000, { currentPlayers: players.slice(0, 2) }),
+    );
+
+    expect(completed.players.bob.outcome).toBeNull();
+    expect(completed.phase).toBe("results");
+  });
   it("supports nextRound for multi-round games", () => {
     const ctx = (now: number): GameContext => ({
       players,

@@ -94,10 +94,9 @@ const computeWinnerId = (state: ZipState): string | null => {
   return winners[0]?.[0] ?? null;
 };
 
-const allPlayersFinished = (state: ZipState): boolean => {
-  const ids = Object.keys(state.players);
-  return ids.length > 0 && ids.every((id) => state.players[id].outcome != null);
-};
+const allPlayersFinished = (state: ZipState, ctx: GameContext): boolean =>
+  ctx.activePlayers.length > 0 &&
+  ctx.activePlayers.every((player) => state.players[player.id]?.outcome != null);
 
 const accumulateScores = (state: ZipState): Record<string, number> => {
   const scores = { ...state.scores };
@@ -107,8 +106,8 @@ const accumulateScores = (state: ZipState): Record<string, number> => {
   return scores;
 };
 
-const withResultsIfComplete = (state: ZipState): ZipState => {
-  if (!allPlayersFinished(state)) return state;
+const withResultsIfComplete = (state: ZipState, ctx: GameContext): ZipState => {
+  if (!allPlayersFinished(state, ctx)) return state;
   return {
     ...state,
     phase: "results",
@@ -330,7 +329,7 @@ export const zipModule: GameModule<ZipState> = {
           },
         };
 
-        return withResultsIfComplete(nextState);
+        return withResultsIfComplete(nextState, ctx);
       }
 
       case "hint": {
@@ -381,7 +380,7 @@ export const zipModule: GameModule<ZipState> = {
             [move.playerId]: nextBoard,
           },
         };
-        return withResultsIfComplete(nextState);
+        return withResultsIfComplete(nextState, ctx);
       }
 
       case "reset": {
@@ -428,11 +427,11 @@ export const zipModule: GameModule<ZipState> = {
     }
   },
 
-  onTick(state): ZipState {
+  onTick(state, ctx): ZipState {
     if (state.phase !== "playing") return state;
 
     // Early completion: all players finished.
-    if (allPlayersFinished(state)) {
+    if (allPlayersFinished(state, ctx)) {
       return {
         ...state,
         phase: "results",
