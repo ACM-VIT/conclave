@@ -4,6 +4,7 @@ import { existsSync } from "fs";
 import { createHash } from "crypto";
 import { fileURLToPath } from "url";
 import type { RouterRtpCodecCapability } from "mediasoup/types";
+import { resolveConfiguredSfuRegion } from "../server/regions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const sfuPackageRoot = path.resolve(__dirname, "..");
@@ -48,6 +49,14 @@ const sfuSecretFingerprint = (() => {
 // viable. Keep producers warm long enough for low-bandwidth recovery by default.
 const BACKGROUND_SOCKET_RECOVERY_WINDOW_MS = 120000;
 
+// The current maximum publish profile is 4.642 Mbps before transport overhead:
+// 1.95 Mbps webcam simulcast + 2.5 Mbps screen + two 96 kbps Opus tracks.
+// 6 Mbps leaves roughly 29% for RTP/RTCP/UDP/DTLS overhead and estimator
+// variance without silently clipping a healthy camera + screen-share session.
+export const DEFAULT_PRODUCER_MAX_INCOMING_BITRATE_BPS = 6_000_000;
+const MIN_CONFIGURED_WEBRTC_BITRATE_BPS = 128_000;
+const MAX_CONFIGURED_WEBRTC_BITRATE_BPS = 100_000_000;
+
 if (process.env.SFU_DEBUG_SECRET !== "0") {
   console.log(
     `[SFU env] loaded ${loadedEnvFiles.length} file(s); SFU_SECRET source: ${secretSource}; fingerprint: ${sfuSecretFingerprint}`,
@@ -81,6 +90,31 @@ const toNumber = (
 const toBoolean = (value: string | undefined): boolean => {
   if (!value) return false;
   return value === "1" || value.toLowerCase() === "true";
+};
+
+export const resolveWebRtcTransportProtocolPolicy = (
+  environment: {
+    SFU_WEBRTC_ENABLE_UDP?: string;
+    SFU_WEBRTC_ENABLE_TCP?: string;
+    SFU_WEBRTC_PREFER_UDP?: string;
+  } = process.env,
+) => {
+  const withDefault = (value: string | undefined, fallback: boolean) =>
+    value == null || value.trim() === "" ? fallback : toBoolean(value);
+  const enableUdp = withDefault(environment.SFU_WEBRTC_ENABLE_UDP, true);
+  const enableTcp = withDefault(environment.SFU_WEBRTC_ENABLE_TCP, true);
+  if (!enableUdp && !enableTcp) {
+    throw new Error(
+      "At least one of SFU_WEBRTC_ENABLE_UDP or SFU_WEBRTC_ENABLE_TCP must be enabled.",
+    );
+  }
+  return Object.freeze({
+    enableUdp,
+    enableTcp,
+    preferUdp:
+      enableUdp &&
+      withDefault(environment.SFU_WEBRTC_PREFER_UDP, true),
+  });
 };
 
 function resolveSfuSecret(): string {
@@ -266,6 +300,8 @@ const rtcMaxPort = parsedRtcMaxPort >= rtcMinPort ? parsedRtcMaxPort : rtcMinPor
 if (parsedRtcMaxPort < rtcMinPort) {
   console.warn("[SFU] RTC_MAX_PORT is lower than RTC_MIN_PORT; using a single-port range.");
 }
+const webRtcTransportProtocolPolicy =
+  resolveWebRtcTransportProtocolPolicy();
 
 const routerMediaCodecs: RouterRtpCodecCapability[] = [
   {
@@ -328,6 +364,7 @@ export const config = {
   }),
   instanceId: process.env.SFU_INSTANCE_ID || `sfu-${process.pid}`,
   instancePublicUrl,
+  region: resolveConfiguredSfuRegion(process.env.SFU_REGION),
   version: process.env.SFU_VERSION || "dev",
   draining: toBoolean(process.env.SFU_DRAINING),
   sfuSecret,
@@ -460,21 +497,30 @@ export const config = {
   },
   routerMediaCodecs,
   webRtcTransport: {
+    ...webRtcTransportProtocolPolicy,
     listenIps: [
       {
         ip: "0.0.0.0",
         announcedIp,
       },
     ],
-    maxIncomingBitrate: toNumber(
+    producerMaxIncomingBitrate: toNumber(
       process.env.SFU_WEBRTC_MAX_INCOMING_BITRATE,
-      4000000,
-      { min: 1 },
+      DEFAULT_PRODUCER_MAX_INCOMING_BITRATE_BPS,
+      {
+        integer: true,
+        min: MIN_CONFIGURED_WEBRTC_BITRATE_BPS,
+        max: MAX_CONFIGURED_WEBRTC_BITRATE_BPS,
+      },
     ),
     initialAvailableOutgoingBitrate: toNumber(
       process.env.SFU_WEBRTC_INITIAL_OUTGOING_BITRATE,
-      4000000,
-      { min: 1 },
+      4_000_000,
+      {
+        integer: true,
+        min: MIN_CONFIGURED_WEBRTC_BITRATE_BPS,
+        max: MAX_CONFIGURED_WEBRTC_BITRATE_BPS,
+      },
     ),
   },
   plainTransport: {

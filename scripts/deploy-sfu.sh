@@ -3,6 +3,8 @@ set -euo pipefail
 
 DEPLOY_BROWSER_LOCAL="false"
 FORCE_DRAIN="false"
+PREFLIGHT_ONLY="false"
+PREFLIGHT_CONFIG_ONLY="false"
 FORCE_DRAIN_NOTICE_MS="${FORCE_DRAIN_NOTICE_MS:-4000}"
 for arg in "$@"; do
   case $arg in
@@ -15,6 +17,13 @@ for arg in "$@"; do
     --force-drain-notice-ms=*)
       FORCE_DRAIN="true"
       FORCE_DRAIN_NOTICE_MS="${arg#*=}"
+      ;;
+    --preflight-only|--dry-run)
+      PREFLIGHT_ONLY="true"
+      ;;
+    --preflight-config-only)
+      PREFLIGHT_ONLY="true"
+      PREFLIGHT_CONFIG_ONLY="true"
       ;;
   esac
 done
@@ -58,8 +67,8 @@ if [[ -n "${UPSTASH_REDIS_REST_URL:-}" && -n "${UPSTASH_REDIS_REST_TOKEN:-}" ]];
   HAS_UPSTASH="true"
 fi
 
-if [[ "$HAS_UPSTASH" != "true" && -z "${REDIS_PASSWORD:-}" && -z "${REDIS_URL:-}" ]]; then
-  echo "REDIS_PASSWORD or REDIS_URL is required in .env when not using Upstash" >&2
+if [[ "$HAS_UPSTASH" != "true" && -z "${REDIS_PASSWORD:-}" && -z "${REDIS_URL:-}" && -z "${SFU_REDIS_URL:-}" ]]; then
+  echo "REDIS_PASSWORD, REDIS_URL, or SFU_REDIS_URL is required in .env when not using Upstash" >&2
   exit 1
 fi
 
@@ -177,7 +186,7 @@ json_field() {
 }
 
 redis_url_host() {
-  node -e "try{const value=process.env.REDIS_URL||'';const url=new URL(value);console.log(url.host||'configured Redis');}catch{console.log('configured Redis');}"
+  node -e "try{const value=process.env.SFU_REDIS_URL||process.env.REDIS_URL||'';const url=new URL(value);console.log(url.host||'configured Redis');}catch{console.log('configured Redis');}"
 }
 
 status_json() {
@@ -229,6 +238,30 @@ echo "Using SFU B deploy URL: ${SFU_B_URL}"
 echo "Using SFU A public URL: ${SFU_A_PUBLIC_URL:-<unset>}"
 echo "Using SFU B public URL: ${SFU_B_PUBLIC_URL:-<unset>}"
 
+run_deploy_preflight() {
+  local preflight=(node "${ROOT_DIR}/scripts/deploy-sfu-preflight.mjs" --compose-json -)
+  if [[ -n "${SFU_DEPLOY_SERVICES:-}" ]]; then
+    preflight+=(--services "${SFU_DEPLOY_SERVICES}")
+  fi
+  # A normal deployment must be able to revive a stopped inactive SFU, so its
+  # pre-mutation gate validates rendered configuration only. Explicit
+  # --preflight-only remains the operator-facing live route check.
+  if [[ "$PREFLIGHT_CONFIG_ONLY" == "true" || "$PREFLIGHT_ONLY" != "true" ]]; then
+    preflight+=(--config-only)
+  fi
+
+  # `docker compose config` only renders local configuration. In explicit live
+  # preflight mode, the Node probe makes GET-only health/status requests.
+  "${COMPOSE[@]}" config --format json | "${preflight[@]}"
+}
+
+echo "Running fail-closed SFU deployment preflight..."
+run_deploy_preflight
+if [[ "$PREFLIGHT_ONLY" == "true" ]]; then
+  echo "Preflight-only run complete; no code, container, drain, or DNS changes were made."
+  exit 0
+fi
+
 echo "Pulling latest code..."
 git -C "$ROOT_DIR" pull
 
@@ -238,7 +271,7 @@ git -C "$ROOT_DIR" pull
 
 if [[ "$HAS_UPSTASH" == "true" ]]; then
   echo "Using Upstash Redis; skipping local Redis container."
-elif [[ -n "${REDIS_URL:-}" ]]; then
+elif [[ -n "${SFU_REDIS_URL:-}" || -n "${REDIS_URL:-}" ]]; then
   echo "Using Redis at $(redis_url_host); skipping compose Redis container."
 elif [[ "$HAS_REDIS_SERVICE" == "true" ]]; then
   echo "Ensuring Redis is running..."

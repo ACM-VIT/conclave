@@ -6,6 +6,7 @@ import { useHotkey } from "@tanstack/react-hotkeys";
 import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import { HOTKEYS } from "./lib/hotkeys";
 import type { Socket } from "socket.io-client";
+import { SFU_EVENTS } from "@conclave/meeting-core/sfu-events";
 import type { RoomInfo } from "@/lib/sfu-types";
 import { useSession } from "@/lib/auth-client";
 import {
@@ -34,7 +35,11 @@ import { useMeetDisplayName } from "./hooks/useMeetDisplayName";
 import { useMeetHandRaise } from "./hooks/useMeetHandRaise";
 import { useMeetHandRaiseSound } from "./hooks/useMeetHandRaiseSound";
 import { useMeetLifecycle } from "./hooks/useMeetLifecycle";
-import { useMeetMedia } from "./hooks/useMeetMedia";
+import {
+  useMeetMedia,
+  type ProducerTransportEnsureOptions,
+  type ScreenShareRepublishOptions,
+} from "./hooks/useMeetMedia";
 import { useMeetMediaSettings } from "./hooks/useMeetMediaSettings";
 import { useLocalCameraPreview } from "./hooks/useLocalCameraPreview";
 import { useMeetPictureInPicture } from "./hooks/useMeetPictureInPicture";
@@ -45,6 +50,8 @@ import { useMeetRooms } from "./hooks/useMeetRooms";
 import { useMeetSocket } from "./hooks/useMeetSocket";
 import { useMeetState } from "./hooks/useMeetState";
 import { useMeetTts } from "./hooks/useMeetTts";
+import { useWebcamReceiverCapacityProof } from "./hooks/useWebcamReceiverCapacityProof";
+import { selectActiveWebcamReceiverCapacityProof } from "./lib/webcam-receiver-capacity-proof";
 import { useMeetingTranscript } from "./hooks/useMeetingTranscript";
 import { MeetVolumeProvider } from "./hooks/useMeetVolume";
 import {
@@ -58,6 +65,7 @@ import {
 import {
   useAdaptivePublishQuality,
   type AdaptivePublishQualityDebugSnapshot,
+  type ProducerTransportNetworkProfileApplication,
 } from "./hooks/useAdaptivePublishQuality";
 import {
   useConnectionQuality,
@@ -100,6 +108,7 @@ import {
   getBrowserNetworkInformation,
   getBrowserNetworkSnapshot,
 } from "./lib/network-information";
+import { hasBlockingPublishRecoveryTelemetry } from "./lib/connection-quality-policy";
 import {
   generateRoomCode,
   isSystemUserId,
@@ -121,10 +130,6 @@ type MeetVideoDebugWindow = Window & {
     reason?: string,
   ) => Promise<Record<string, unknown>>;
 };
-
-const PUBLISH_RECOVERY_RTT_POOR_MS = 500;
-const PUBLISH_RECOVERY_LOSS_POOR = 0.08;
-const PUBLISH_RECOVERY_JITTER_POOR_MS = 60;
 
 const VideoEffectsBridge = dynamic(
   () => import("./components/VideoEffectsBridge"),
@@ -279,6 +284,8 @@ const serializeMeetVideoDebugPayload = (payload: unknown) => {
     return String(payload);
   }
 };
+
+const PRODUCER_TRANSPORT_PROFILE_ACK_TIMEOUT_MS = 2_500;
 
 const logMeetVideo = (event: string, payload?: unknown) => {
   if (!isMeetVideoDebugEnabled()) return;
@@ -844,9 +851,15 @@ export default function MeetsClient({
   const toggleCameraCommandRef = useRef<(() => void | Promise<void>) | null>(
     null,
   );
-  const ensureProducerTransportRef = useRef<(() => Promise<boolean>) | null>(
-    null,
-  );
+  const ensureProducerTransportRef = useRef<
+    ((options?: ProducerTransportEnsureOptions) => Promise<boolean>) | null
+  >(null);
+  const republishScreenShareRef = useRef<
+    ((
+      reason: string,
+      options?: ScreenShareRepublishOptions,
+    ) => Promise<boolean>) | null
+  >(null);
   const setHandRaisedCommandRef = useRef<((raised: boolean) => void) | null>(
     null,
   );
@@ -1151,6 +1164,7 @@ export default function MeetsClient({
     handleVideoInputDeviceChange,
     handleAudioOutputDeviceChange,
     updateVideoQualityRef,
+    replaceWebcamProducerTopology,
     requestAudioProducerRecovery,
     requestCameraProducerRecovery,
     prepareAudioPublishTrack,
@@ -1185,6 +1199,7 @@ export default function MeetsClient({
     isNoiseCancellationEnabled,
     meetVolume,
     videoQualityRef: refs.videoQualityRef,
+    webcamCodecPolicyRef: refs.webcamCodecPolicyRef,
     dataSaverMode: effectiveDataSaverMode,
     activeVideoEffectsCount,
     shouldUsePreferredVideoPublishTrack: shouldPublishProcessedVideo,
@@ -1195,6 +1210,7 @@ export default function MeetsClient({
     deviceRef: refs.deviceRef,
     producerTransportRef: refs.producerTransportRef,
     ensureProducerTransportRef,
+    republishScreenShareRef,
     audioProducerRef: refs.audioProducerRef,
     videoProducerRef: refs.videoProducerRef,
     screenProducerRef: refs.screenProducerRef,
@@ -1745,6 +1761,11 @@ export default function MeetsClient({
         consumerTelemetry: Array.from(
           refs.consumerTelemetryRef.current.values(),
         ),
+        consumerGenerationResetVersion: 1,
+        consumerGenerationResets:
+          refs.consumerGenerationResetDebugRef.current.map((entry) => ({
+            ...entry,
+          })),
         isDocumentVisible,
         activeVideoEffectsCount,
         shouldDeferVideoEffectsPreload,
@@ -1811,6 +1832,7 @@ export default function MeetsClient({
       processedTrackReady,
       processedTrackVersion,
       refs.consumerTelemetryRef,
+      refs.consumerGenerationResetDebugRef,
       refs.localStreamRef,
       refs.processedVideoTrackRef,
       refs.videoProducerRef,
@@ -2238,6 +2260,7 @@ export default function MeetsClient({
     displayNameInput,
     localStream,
     setLocalStream,
+    selectedVideoInputDeviceId,
     getVideoPublishTrack,
     onPreferredVideoPublishTrackRejected:
       handlePreferredVideoPublishTrackRejected,
@@ -2310,6 +2333,15 @@ export default function MeetsClient({
       }
     };
   }, [socket.ensureProducerTransport]);
+
+  useEffect(() => {
+    republishScreenShareRef.current = socket.republishScreenShare;
+    return () => {
+      if (republishScreenShareRef.current === socket.republishScreenShare) {
+        republishScreenShareRef.current = null;
+      }
+    };
+  }, [socket.republishScreenShare]);
 
   useMeetAudioActivity({
     enabled: !serverActiveSpeakerAvailable,
@@ -2761,18 +2793,19 @@ export default function MeetsClient({
   });
   connectionQualityDebugRef.current = selfConnectionStats;
   const {
-    publishQuality: selfPublishQuality,
-    receiveQuality: selfReceiveQuality,
+    publishAdaptationQuality: selfPublishAdaptationQuality,
+    receiveAdaptationQuality: selfReceiveAdaptationQuality,
     publishEmergencyMode: selfPublishEmergencyMode,
     receiveEmergencyMode: selfReceiveEmergencyMode,
   } = selfConnectionStats;
-  const hasPoorPublishRecoverySignal =
-    (selfConnectionStats.publishRttMs !== null &&
-      selfConnectionStats.publishRttMs >= PUBLISH_RECOVERY_RTT_POOR_MS) ||
-    (selfConnectionStats.publishPacketLoss !== null &&
-      selfConnectionStats.publishPacketLoss >= PUBLISH_RECOVERY_LOSS_POOR) ||
-    (selfConnectionStats.publishJitterMs !== null &&
-      selfConnectionStats.publishJitterMs >= PUBLISH_RECOVERY_JITTER_POOR_MS);
+  // A fast recovery may use the browser path hint to break a self-imposed
+  // low-bitrate feedback loop, but fair/poor loss or jitter keeps the
+  // conservative recovery path in force.
+  const hasBlockingPublishRecoverySignal =
+    hasBlockingPublishRecoveryTelemetry({
+      packetLoss: selfConnectionStats.publishPacketLoss,
+      jitterMs: selfConnectionStats.publishJitterMs,
+    });
   const hasBrowserEmergencySignal =
     selfConnectionStats.browserNetwork.emergency === true;
   const browserPublishRecoveryQuality = (
@@ -2785,15 +2818,147 @@ export default function MeetsClient({
     selfConnectionStats.browserNetwork.saveData !== true &&
     (browserPublishRecoveryQuality === "good" ||
       browserPublishRecoveryQuality === "unknown");
+  const browserAllowsFairWebcamLayerRecovery =
+    !hasBrowserEmergencySignal &&
+    selfConnectionStats.browserNetwork.saveData !== true &&
+    browserPublishRecoveryQuality === "good";
   const selfPublishCapRecoveryQuality: ConnectionQuality =
-    browserAllowsPublishCapRecovery && !hasPoorPublishRecoverySignal
+    browserAllowsPublishCapRecovery && !hasBlockingPublishRecoverySignal
       ? "good"
-      : selfPublishQuality;
+      : selfPublishAdaptationQuality;
+  const webcamReceiverCapacityProofCache = useWebcamReceiverCapacityProof({
+    enabled: connectionState === "joined",
+    roomId,
+    socket: refs.socketRef.current,
+  });
+  const soleReceiverCapacityProof = selectActiveWebcamReceiverCapacityProof(
+    webcamReceiverCapacityProofCache,
+    {
+      roomId,
+      producerId: refs.videoProducerRef.current?.id ?? null,
+    },
+    typeof performance === "undefined" ? 0 : performance.now(),
+  );
+  const producerTransportId = refs.producerTransportRef.current?.id ?? null;
+  const setProducerTransportNetworkProfile = useCallback(
+    (
+      profile: ProducerTransportNetworkProfileApplication["profile"],
+    ): Promise<ProducerTransportNetworkProfileApplication> => {
+      const socket = refs.socketRef.current;
+      const transportId = refs.producerTransportRef.current?.id ?? null;
+      if (!socket?.connected) {
+        return Promise.reject(new Error("Socket not connected"));
+      }
+      if (!transportId) {
+        return Promise.reject(new Error("Producer transport not found"));
+      }
+
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const timeoutId = window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          reject(new Error("Producer transport profile acknowledgement timed out"));
+        }, PRODUCER_TRANSPORT_PROFILE_ACK_TIMEOUT_MS);
+        const settle = (
+          response:
+            | (ProducerTransportNetworkProfileApplication & { success: true })
+            | { error: string },
+        ) => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeoutId);
+          if ("error" in response) {
+            reject(new Error(response.error));
+            return;
+          }
+          resolve({
+            transportId: response.transportId,
+            profile: response.profile,
+            maxIncomingBitrate: response.maxIncomingBitrate,
+          });
+        };
+
+        try {
+          socket.emit(
+            SFU_EVENTS.clientToServer.setProducerTransportNetworkProfile,
+            { transportId, profile },
+            settle,
+          );
+        } catch (error) {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeoutId);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+    },
+    [refs.producerTransportRef, refs.socketRef],
+  );
+  const requestWebcamProducerKeyFrame = useCallback(
+    (producerId: string): Promise<void> => {
+      const socket = refs.socketRef.current;
+      const webcamProducer = refs.videoProducerRef.current;
+      if (!socket?.connected) {
+        return Promise.reject(new Error("Socket not connected"));
+      }
+      if (
+        !webcamProducer ||
+        webcamProducer.closed ||
+        webcamProducer.id !== producerId
+      ) {
+        return Promise.reject(new Error("Webcam producer not found"));
+      }
+
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const timeoutId = window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          reject(new Error("Producer key-frame acknowledgement timed out"));
+        }, PRODUCER_TRANSPORT_PROFILE_ACK_TIMEOUT_MS);
+        const settle = (response?: {
+          success?: true;
+          requestedConsumerCount?: number;
+          error?: string;
+        }) => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeoutId);
+          if (response?.error) {
+            reject(new Error(response.error));
+            return;
+          }
+          if (response?.success !== true) {
+            reject(new Error("Invalid producer key-frame acknowledgement"));
+            return;
+          }
+          resolve();
+        };
+
+        try {
+          socket.emit(
+            SFU_EVENTS.clientToServer.requestProducerKeyFrame,
+            { producerId },
+            settle,
+          );
+        } catch (error) {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeoutId);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+    },
+    [refs.socketRef, refs.videoProducerRef],
+  );
   useAdaptiveConsumerPreferences({
     refs,
     enabled: connectionState === "joined",
-    connectionQuality: selfReceiveQuality,
+    connectionQuality: selfReceiveAdaptationQuality,
     emergencyMode: selfReceiveEmergencyMode,
+    receiveContinuityRisk: selfConnectionStats.receiveContinuityRisk,
+    browserAllowsFairWebcamLayerRecovery,
     availableIncomingBitrateBps: selfConnectionStats.availableIncomingBitrate,
     activeSpeakerId: effectiveActiveSpeakerId,
     dataSaverMode: effectiveDataSaverMode,
@@ -2803,12 +2968,15 @@ export default function MeetsClient({
   });
   useAdaptivePublishQuality({
     enabled: connectionState === "joined",
-    connectionQuality: selfPublishQuality,
+    connectionQuality: selfPublishAdaptationQuality,
     capRecoveryQuality: selfPublishCapRecoveryQuality,
     emergencyMode: selfPublishEmergencyMode,
     availableOutgoingBitrateBps: selfConnectionStats.availableOutgoingBitrate,
     publishCpuLimited: selfConnectionStats.publishMedia.video.cpuLimited,
     dataSaverMode: effectiveDataSaverMode,
+    soleReceiverCapacityProof,
+    receiverCapacityProofCache: webcamReceiverCapacityProofCache,
+    roomId,
     isCameraOff,
     participantCount,
     audioProducerRef: refs.audioProducerRef,
@@ -2819,7 +2987,11 @@ export default function MeetsClient({
     networkManagedVideoQualityRef,
     setVideoQuality: setNetworkManagedVideoQuality,
     updateVideoQualityRef,
+    replaceWebcamProducerTopology,
     refreshScreenAudioProducerForNetworkProfile,
+    producerTransportId,
+    setProducerTransportNetworkProfile,
+    requestWebcamProducerKeyFrame,
     debugStateRef: adaptivePublishDebugRef,
   });
 

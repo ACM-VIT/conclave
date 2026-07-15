@@ -89,17 +89,56 @@ function Get-BoolText {
   return $DefaultValue
 }
 
-function Get-PoolUrl {
-  param([string]$Id)
+function Get-KeyedPoolUrl {
+  param(
+    [AllowNull()][string]$Pool,
+    [string]$Id
+  )
 
-  if (-not [string]::IsNullOrWhiteSpace($env:SFU_POOL)) {
-    $entries = $env:SFU_POOL.Split(",")
+  if (-not [string]::IsNullOrWhiteSpace($Pool)) {
+    $entries = $Pool.Split(",")
     foreach ($entry in $entries) {
       $trimmed = $entry.Trim()
       if ($trimmed.StartsWith("$Id=")) {
         return $trimmed.Substring($Id.Length + 1)
       }
     }
+  }
+  return ""
+}
+
+function Get-ListPoolUrl {
+  param(
+    [AllowNull()][string]$Pool,
+    [int]$Index
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Pool)) {
+    return ""
+  }
+  $current = 0
+  foreach ($entry in $Pool.Split(",")) {
+    $trimmed = $entry.Trim()
+    if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.Contains("=")) {
+      continue
+    }
+    $current += 1
+    if ($current -eq $Index) {
+      return $trimmed
+    }
+  }
+  return ""
+}
+
+function Get-DeployUrl {
+  param([string]$Id)
+
+  $pooled = Get-KeyedPoolUrl -Pool $env:SFU_DEPLOY_POOL -Id $Id
+  if ([string]::IsNullOrWhiteSpace($pooled)) {
+    $pooled = Get-KeyedPoolUrl -Pool $env:SFU_POOL -Id $Id
+  }
+  if (-not [string]::IsNullOrWhiteSpace($pooled)) {
+    return $pooled
   }
 
   if ($Id -eq "sfu-a") {
@@ -115,6 +154,53 @@ function Get-PoolUrl {
   return "http://127.0.0.1:3032"
 }
 
+function Test-LocalUrl {
+  param([string]$Url)
+
+  try {
+    $parsed = [Uri]$Url
+    return $parsed.Host -eq "localhost" -or $parsed.Host -eq "127.0.0.1" -or $parsed.Host -eq "::1"
+  } catch {
+    return $false
+  }
+}
+
+function Get-PublicUrl {
+  param(
+    [string]$Id,
+    [string]$DeployUrl,
+    [int]$ListIndex
+  )
+
+  $pooled = Get-KeyedPoolUrl -Pool $env:SFU_PUBLIC_POOL -Id $Id
+  if ([string]::IsNullOrWhiteSpace($pooled)) {
+    $pooled = Get-KeyedPoolUrl -Pool $env:SFU_PUBLIC_URLS -Id $Id
+  }
+  if ([string]::IsNullOrWhiteSpace($pooled)) {
+    $pooled = Get-KeyedPoolUrl -Pool $env:SFU_URLS -Id $Id
+  }
+  if ([string]::IsNullOrWhiteSpace($pooled)) {
+    $pooled = Get-ListPoolUrl -Pool $env:SFU_PUBLIC_URLS -Index $ListIndex
+  }
+  if ([string]::IsNullOrWhiteSpace($pooled)) {
+    $pooled = Get-ListPoolUrl -Pool $env:SFU_URLS -Index $ListIndex
+  }
+  if (-not [string]::IsNullOrWhiteSpace($pooled)) {
+    return $pooled
+  }
+
+  if ($Id -eq "sfu-a" -and -not [string]::IsNullOrWhiteSpace($env:SFU_A_PUBLIC_URL)) {
+    return $env:SFU_A_PUBLIC_URL
+  }
+  if ($Id -eq "sfu-b" -and -not [string]::IsNullOrWhiteSpace($env:SFU_B_PUBLIC_URL)) {
+    return $env:SFU_B_PUBLIC_URL
+  }
+  if (-not (Test-LocalUrl -Url $DeployUrl)) {
+    return $DeployUrl
+  }
+  return ""
+}
+
 function Get-StatusJson {
   param([string]$Url)
 
@@ -128,6 +214,8 @@ function Get-StatusJson {
 
 $deployBrowserLocal = $false
 $forceDrain = $false
+$preflightOnly = $false
+$preflightConfigOnly = $false
 $forceDrainNoticeMs = if (-not [string]::IsNullOrWhiteSpace($env:FORCE_DRAIN_NOTICE_MS)) {
   $env:FORCE_DRAIN_NOTICE_MS
 } else {
@@ -150,6 +238,17 @@ foreach ($arg in $args) {
     $forceDrainNoticeMs = $arg.Substring("--force-drain-notice-ms=".Length)
     continue
   }
+
+  if ($arg -eq "--preflight-only" -or $arg -eq "--dry-run") {
+    $preflightOnly = $true
+    continue
+  }
+
+  if ($arg -eq "--preflight-config-only") {
+    $preflightOnly = $true
+    $preflightConfigOnly = $true
+    continue
+  }
 }
 
 if ($forceDrainNoticeMs -notmatch "^[0-9]+$") {
@@ -158,6 +257,7 @@ if ($forceDrainNoticeMs -notmatch "^[0-9]+$") {
 
 $rootDir = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $envFile = Join-Path $rootDir ".env"
+$sfuEnvFile = Join-Path $rootDir "packages/sfu/.env"
 $composeFile = Join-Path $rootDir "docker-compose.sfu.yml"
 
 if (-not (Test-Path -Path $envFile -PathType Leaf)) {
@@ -169,6 +269,9 @@ if (-not (Test-Path -Path $composeFile -PathType Leaf)) {
 }
 
 Import-DotEnv -Path $envFile
+if (Test-Path -Path $sfuEnvFile -PathType Leaf) {
+  Import-DotEnv -Path $sfuEnvFile
+}
 
 if ([string]::IsNullOrWhiteSpace($env:SFU_SECRET)) {
   Exit-WithError "SFU_SECRET is required in .env"
@@ -177,11 +280,18 @@ if ([string]::IsNullOrWhiteSpace($env:SFU_SECRET)) {
 $hasUpstash = (-not [string]::IsNullOrWhiteSpace($env:UPSTASH_REDIS_REST_URL)) -and
   (-not [string]::IsNullOrWhiteSpace($env:UPSTASH_REDIS_REST_TOKEN))
 
-if (-not $hasUpstash -and [string]::IsNullOrWhiteSpace($env:REDIS_PASSWORD)) {
-  Exit-WithError "REDIS_PASSWORD is required in .env when not using Upstash"
+if (-not $hasUpstash -and
+    [string]::IsNullOrWhiteSpace($env:REDIS_PASSWORD) -and
+    [string]::IsNullOrWhiteSpace($env:REDIS_URL) -and
+    [string]::IsNullOrWhiteSpace($env:SFU_REDIS_URL)) {
+  Exit-WithError "REDIS_PASSWORD, REDIS_URL, or SFU_REDIS_URL is required in .env when not using Upstash"
 }
 
-$composeBaseArgs = @("compose", "--env-file", $envFile, "-f", $composeFile)
+$composeBaseArgs = @("compose", "--env-file", $envFile)
+if (Test-Path -Path $sfuEnvFile -PathType Leaf) {
+  $composeBaseArgs += @("--env-file", $sfuEnvFile)
+}
+$composeBaseArgs += @("-f", $composeFile)
 $servicesOutput = & docker @($composeBaseArgs + @("config", "--services")) 2>$null
 if ($LASTEXITCODE -ne 0) {
   Exit-WithError "Failed to read services from $composeFile"
@@ -195,11 +305,46 @@ foreach ($service in $servicesOutput) {
   }
 }
 
-$sfuAUrl = Get-PoolUrl -Id "sfu-a"
-$sfuBUrl = Get-PoolUrl -Id "sfu-b"
+$sfuAUrl = Get-DeployUrl -Id "sfu-a"
+$sfuBUrl = Get-DeployUrl -Id "sfu-b"
+$sfuAPublicUrl = Get-PublicUrl -Id "sfu-a" -DeployUrl $sfuAUrl -ListIndex 1
+$sfuBPublicUrl = Get-PublicUrl -Id "sfu-b" -DeployUrl $sfuBUrl -ListIndex 2
+[Environment]::SetEnvironmentVariable("SFU_A_PUBLIC_URL", $sfuAPublicUrl, "Process")
+[Environment]::SetEnvironmentVariable("SFU_B_PUBLIC_URL", $sfuBPublicUrl, "Process")
 
-Write-Host "Using SFU A: $sfuAUrl"
-Write-Host "Using SFU B: $sfuBUrl"
+Write-Host "Using SFU A deploy URL: $sfuAUrl"
+Write-Host "Using SFU B deploy URL: $sfuBUrl"
+Write-Host "Using SFU A public URL: $(if ($sfuAPublicUrl) { $sfuAPublicUrl } else { '<unset>' })"
+Write-Host "Using SFU B public URL: $(if ($sfuBPublicUrl) { $sfuBPublicUrl } else { '<unset>' })"
+
+$composeJsonLines = & docker @($composeBaseArgs + @("config", "--format", "json"))
+if ($LASTEXITCODE -ne 0) {
+  Exit-WithError "Failed to render $composeFile for deployment preflight"
+}
+$preflightArguments = @(
+  (Join-Path $rootDir "scripts/deploy-sfu-preflight.mjs"),
+  "--compose-json",
+  "-"
+)
+if (-not [string]::IsNullOrWhiteSpace($env:SFU_DEPLOY_SERVICES)) {
+  $preflightArguments += @("--services", $env:SFU_DEPLOY_SERVICES)
+}
+# A normal deployment must be able to revive a stopped inactive SFU, so its
+# pre-mutation gate validates rendered configuration only. Explicit
+# --preflight-only remains the operator-facing live route check.
+if ($preflightConfigOnly -or -not $preflightOnly) {
+  $preflightArguments += "--config-only"
+}
+
+Write-Host "Running fail-closed SFU deployment preflight..."
+($composeJsonLines -join [Environment]::NewLine) | & node @preflightArguments
+if ($LASTEXITCODE -ne 0) {
+  Exit-WithError "SFU deployment preflight failed"
+}
+if ($preflightOnly) {
+  Write-Host "Preflight-only run complete; no code, container, drain, or DNS changes were made."
+  exit 0
+}
 
 Write-Host "Pulling latest code..."
 Invoke-Checked -Command "git" -Arguments @("-C", $rootDir, "pull")
@@ -209,6 +354,9 @@ Invoke-Checked -Command "npm" -Arguments @("--prefix", (Join-Path $rootDir "pack
 
 if ($hasUpstash) {
   Write-Host "Using Upstash Redis; skipping local Redis container."
+} elseif (-not [string]::IsNullOrWhiteSpace($env:SFU_REDIS_URL) -or
+          -not [string]::IsNullOrWhiteSpace($env:REDIS_URL)) {
+  Write-Host "Using configured external Redis; skipping local Redis container."
 } elseif ($hasRedisService) {
   Write-Host "Ensuring Redis is running..."
   Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", "redis"))

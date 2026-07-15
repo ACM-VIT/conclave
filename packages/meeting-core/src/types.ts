@@ -248,6 +248,88 @@ export interface DisplayNameSnapshotEntry {
 
 export type VideoQuality = "low" | "standard";
 
+export type WebcamReceiverCapacityProofBasis =
+  | "simulcast-full-layer"
+  | "single-layer-transition"
+  | "single-layer";
+
+export type WebcamReceiverCapacityProofReason =
+  | "qualified"
+  | "transition_grace"
+  | "transition_timeout"
+  | "transition_invalid"
+  | "producer_missing"
+  | "producer_not_current"
+  | "producer_not_vp8_simulcast"
+  | "producer_not_vp8_single_layer"
+  | "producer_paused"
+  | "producer_score_low"
+  | "producer_replaced"
+  | "owner_missing"
+  | "owner_disconnected"
+  | "receiver_count"
+  | "receiver_observer"
+  | "receiver_disconnected"
+  | "consumer_count"
+  | "consumer_missing"
+  | "consumer_not_simulcast"
+  | "consumer_not_simple"
+  | "consumer_paused"
+  | "consumer_not_full_layer"
+  | "consumer_prefers_lower_layer"
+  | "consumer_score_low"
+  | "screen_share_active"
+  | "room_quality_low"
+  | "transport_disconnected"
+  | "evaluation_error"
+  | "producer_removed"
+  | "room_closed";
+
+export interface WebcamReceiverCapacityProofNotification {
+  roomId: string;
+  producerId: string;
+  revision: number;
+  eligible: boolean;
+  validForMs: number;
+  reason: WebcamReceiverCapacityProofReason;
+  basis: WebcamReceiverCapacityProofBasis;
+  replacementOffer?: {
+    nonce: string;
+    validForMs: number;
+    target: "vp8-single-layer";
+  };
+  replacesProducerId?: string;
+  transitionNonce?: string;
+  maxSpatialLayer?: number;
+  maxTemporalLayer?: number;
+  currentSpatialLayer?: number;
+  currentTemporalLayer?: number;
+  score?: number;
+}
+
+export type WebcamCodecCapability =
+  | "vp8"
+  | "h264-cb"
+  | "vp9-p0"
+  | "vp9-p0-l2t1";
+
+export interface ClientMediaCapabilities {
+  webcam: {
+    negotiationVersion: 3;
+    receive: WebcamCodecCapability[];
+    send: WebcamCodecCapability[];
+    preferredBaseline?: "vp8" | "h264";
+  };
+}
+
+export interface WebcamCodecPolicy {
+  codec: "vp8" | "h264" | "vp9";
+  mimeType: "video/VP8" | "video/H264" | "video/VP9";
+  profileId?: 0;
+  scalabilityMode?: "L2T1";
+  epoch: number;
+}
+
 export interface JoinRoomResponse {
   roomId?: string;
   rtpCapabilities: RtpCapabilities;
@@ -270,6 +352,7 @@ export interface JoinRoomResponse {
   webinarRequiresInviteCode?: boolean;
   webinarAttendeeCount?: number;
   webinarMaxAttendees?: number;
+  webcamCodecPolicy?: WebcamCodecPolicy;
 }
 
 export interface JoinRoomErrorResponse {
@@ -348,17 +431,62 @@ export interface RestartIceResponse {
   iceParameters: IceParameters;
 }
 
+export type ProducerTransportNetworkProfile =
+  | "good"
+  | "fair"
+  | "poor"
+  | "emergency";
+
+export interface SetProducerTransportNetworkProfileRequest {
+  transportId?: string;
+  profile: ProducerTransportNetworkProfile;
+}
+
+export interface SetProducerTransportNetworkProfileResponse {
+  success: true;
+  transportId: string;
+  profile: ProducerTransportNetworkProfile;
+  maxIncomingBitrate: number;
+}
+
+export interface PlannedConsumerHandoffRequest {
+  requestId: string;
+  predecessorConsumerId: string;
+}
+
+export interface AbortConsumerHandoffRequest
+  extends PlannedConsumerHandoffRequest {
+  producerId: string;
+}
+
+export interface AbortConsumerHandoffResponse {
+  success: true;
+  requestId: string;
+  status: "aborted" | "already_aborted" | "absent";
+  successorConsumerId?: string;
+  predecessorRestored: boolean;
+}
+
 export interface ConsumeResponse {
   id: string;
   producerId: string;
   kind: "audio" | "video";
   rtpParameters: RtpParameters;
   /**
+   * Authoritative mediasoup consumer topology. Optional for compatibility with
+   * older SFUs; clients must not infer simulcast-only behavior when absent.
+   */
+  consumerType?: "simple" | "simulcast" | "svc" | "pipe";
+  /**
    * Server-side consumer paused state at creation. Audio consumers are
    * created unpaused (#177), so `paused: false` means no resumeConsumer
    * round-trip is needed. Absent on older servers.
-   */
+  */
   paused?: boolean;
+  /** Producer pause state from the same ordered consume acknowledgement. */
+  producerPaused?: boolean;
+  /** Echoed only for request-scoped native planned consumer handoffs. */
+  plannedConsumerHandoffRequestId?: string;
 }
 
 export interface ProducerMapEntry {

@@ -26,7 +26,7 @@ import {
 } from "../../rooms.js";
 import {
   RoomOwnershipError,
-  type RoomOwnerRecord,
+  type RoomAssignmentRecord,
 } from "../../roomRegistry.js";
 import {
   emitWebinarAttendeeCountChanged,
@@ -245,7 +245,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const roomChannelId = getRoomChannelId(clientId, roomId);
         let room = state.rooms.get(roomChannelId);
         let createdRoom = false;
-        const respondWithRoomOwner = (owner: RoomOwnerRecord): void => {
+        const respondWithRoomOwner = (owner: RoomAssignmentRecord): void => {
           Logger.info(
             `Join for ${roomId} (${clientId}) routed to SFU instance ${owner.instanceId}`,
           );
@@ -288,17 +288,18 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
 
         if (!room) {
-          const owner = await state.roomRegistry.getOwner(roomChannelId);
-          if (owner && !state.roomRegistry.isLocalOwner(owner)) {
-            respondWithRoomOwner(owner);
+          const assignment = await state.roomRegistry.getAssignment(roomChannelId);
+          if (assignment && !state.roomRegistry.isLocalOwner(assignment)) {
+            respondWithRoomOwner(assignment);
             return;
           }
+          const hasReservedLocalPlacement = assignment?.kind === "placement";
 
           if (isWebinarAttendeeJoin && !scheduledWebinarForAttendee) {
             respond(callback, { error: "Webinar is not live." });
             return;
           }
-          if (state.isDraining) {
+          if (state.isDraining && !hasReservedLocalPlacement) {
             respond(callback, {
               error: "Meeting server is draining. Try again shortly.",
             });
@@ -602,6 +603,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             areImageAttachmentsEnabled: room.areImageAttachmentsEnabled,
             isReactionsDisabled: room.isReactionsDisabled,
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
+            webcamCodecPolicy: room.webcamCodecPolicy,
           });
           return;
         }
@@ -649,6 +651,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             areImageAttachmentsEnabled: room.areImageAttachmentsEnabled,
             isReactionsDisabled: room.isReactionsDisabled,
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
+            webcamCodecPolicy: room.webcamCodecPolicy,
           });
           return;
         }
@@ -731,17 +734,20 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           context.currentClient = new Admin({
             id: userId,
             socket,
+            mediaCapabilities: data?.mediaCapabilities,
           });
         } else if (isWebinarAttendeeJoin) {
           context.currentClient = new Client({
             id: userId,
             socket,
             mode: "webinar_attendee",
+            mediaCapabilities: data?.mediaCapabilities,
           });
         } else {
           context.currentClient = new Client({
             id: userId,
             socket,
+            mediaCapabilities: data?.mediaCapabilities,
           });
         }
 
@@ -961,6 +967,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           webinarRequiresInviteCode: webinarSnapshot.requiresInviteCode,
           webinarAttendeeCount: webinarSnapshot.attendeeCount,
           webinarMaxAttendees: webinarSnapshot.maxAttendees,
+          webcamCodecPolicy: context.currentRoom.webcamCodecPolicy,
         });
       } catch (error) {
         Logger.error("Error joining room:", error);

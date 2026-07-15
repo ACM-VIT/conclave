@@ -1,24 +1,34 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import {
+  closeSilentBrowser,
+  closeSilentBrowsers,
+  launchSilentBrowser,
+  navigateSilentBrowserPage,
+} from "./quality/silent-browser-contract.mjs";
 
 const chromePath =
   process.env.CHROME_PATH ??
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const chromeHeadlessFlag =
-  process.env.CONCLAVE_CHROME_HEADLESS_FLAG ?? "--headless";
+const chromeHeadlessFlag = "--headless=new";
+if (
+  process.env.CONCLAVE_CHROME_HEADLESS_FLAG &&
+  process.env.CONCLAVE_CHROME_HEADLESS_FLAG !== chromeHeadlessFlag
+) {
+  throw new Error(
+    "Low-bandwidth probes are safety-locked to --headless=new and cannot launch a visible browser",
+  );
+}
 const baseUrl = process.env.CONCLAVE_WEB_URL ?? "http://localhost:3000";
 const roomId =
   process.env.CONCLAVE_ROOM_ID ?? `low-bandwidth-probe-${Date.now()}`;
 const displayName =
   process.env.CONCLAVE_PROBE_NAME ?? "Low Bandwidth Probe";
 const clientId = process.env.CONCLAVE_SFU_CLIENT_ID ?? "";
-const chromePort = Number(
-  process.env.CONCLAVE_CHROME_DEBUG_PORT ??
-    String(9800 + Math.floor(Math.random() * 500)),
-);
+if (process.env.CONCLAVE_CHROME_DEBUG_PORT) {
+  throw new Error(
+    "Low-bandwidth probes use an isolated OS-selected DevTools port and cannot attach to a configured port",
+  );
+}
 const scenarioNameForTimeout = (
   process.env.CONCLAVE_LOW_BANDWIDTH_SCENARIO ?? "publish"
 ).toLowerCase();
@@ -37,9 +47,12 @@ const scenario = scenarioNameForTimeout;
 const requireCamera = !/^(0|false|no|off)$/i.test(
   process.env.CONCLAVE_LOW_BANDWIDTH_REQUIRE_CAMERA ?? "1",
 );
-const requireAudio = !/^(0|false|no|off)$/i.test(
-  process.env.CONCLAVE_LOW_BANDWIDTH_REQUIRE_AUDIO ?? "1",
-);
+if (/^(1|true|yes|on)$/i.test(process.env.CONCLAVE_LOW_BANDWIDTH_REQUIRE_AUDIO ?? "")) {
+  throw new Error(
+    "Low-bandwidth video probes never unmute a microphone; screen audio uses the synthetic zero fixture",
+  );
+}
+const requireAudio = false;
 const seedStoredVideoEffects = /^(1|true|yes|on)$/i.test(
   process.env.CONCLAVE_LOW_BANDWIDTH_RESTORE_EFFECTS ?? "0",
 );
@@ -311,79 +324,6 @@ const restoredVideoEffectsState = {
   customBackgroundName: null,
 };
 const restoredVideoEffectsStateJson = JSON.stringify(restoredVideoEffectsState);
-
-const shellEscape = (value) => {
-  const text = String(value);
-  if (/^[a-zA-Z0-9_/:=.,+@%-]+$/.test(text)) return text;
-  return `'${text.replace(/'/g, "'\\''")}'`;
-};
-
-const waitForJson = async (url, label, timeout = 30000) => {
-  const started = Date.now();
-  let lastError = null;
-  while (Date.now() - started < timeout) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) return response.json();
-      lastError = new Error(`${response.status} ${response.statusText}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await sleep(250);
-  }
-  throw new Error(`Timed out waiting for ${label}: ${lastError}`);
-};
-
-class CdpClient {
-  constructor(wsUrl) {
-    this.ws = new WebSocket(wsUrl);
-    this.nextId = 1;
-    this.pending = new Map();
-    this.listeners = new Map();
-  }
-
-  async open() {
-    await new Promise((resolve, reject) => {
-      this.ws.addEventListener("open", resolve, { once: true });
-      this.ws.addEventListener("error", reject, { once: true });
-      this.ws.addEventListener("message", (event) => {
-        const message = JSON.parse(String(event.data));
-        if (message.id && this.pending.has(message.id)) {
-          const { resolve: done, reject: fail } = this.pending.get(message.id);
-          this.pending.delete(message.id);
-          if (message.error) {
-            fail(new Error(message.error.message));
-          } else {
-            done(message.result);
-          }
-        } else if (message.method && this.listeners.has(message.method)) {
-          for (const listener of this.listeners.get(message.method)) {
-            listener(message.params ?? {});
-          }
-        }
-      });
-    });
-  }
-
-  send(method, params = {}) {
-    const id = this.nextId++;
-    this.ws.send(JSON.stringify({ id, method, params }));
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-    });
-  }
-
-  on(method, listener) {
-    const listeners = this.listeners.get(method) ?? [];
-    listeners.push(listener);
-    this.listeners.set(method, listeners);
-  }
-
-  close() {
-    this.ws.close();
-  }
-}
-
 const evalValue = async (cdp, expression, timeout = 5000) => {
   const result = await cdp.send("Runtime.evaluate", {
     expression,
@@ -2182,244 +2122,24 @@ const installRtcSdpDebug = (cdp) =>
     })();`,
   });
 
-const installFakeDisplayMediaOverride = async (cdp) => {
-  await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
-    source: `(() => {
-      const install = () => {
-        const mediaDevices = navigator.mediaDevices;
-        if (!mediaDevices || mediaDevices.__conclaveFakeDisplayMediaInstalled) {
-          return Boolean(mediaDevices?.__conclaveFakeDisplayMediaInstalled);
-        }
-
-        Object.defineProperty(mediaDevices, "__conclaveFakeDisplayMediaInstalled", {
-          configurable: true,
-          value: true,
-        });
-
-        const displayMediaCalls = [];
-        const sanitizeDisplayMediaOptions = (value, depth = 0) => {
-          if (depth > 6) return "[max-depth]";
-          if (
-            value === null ||
-            typeof value === "string" ||
-            typeof value === "number" ||
-            typeof value === "boolean"
-          ) {
-            return value;
-          }
-          if (Array.isArray(value)) {
-            return value.map((entry) =>
-              sanitizeDisplayMediaOptions(entry, depth + 1),
-            );
-          }
-          if (typeof value !== "object") return String(typeof value);
-          const output = {};
-          for (const [key, entry] of Object.entries(value)) {
-            if (key === "controller") continue;
-            output[key] = sanitizeDisplayMediaOptions(entry, depth + 1);
-          }
-          return output;
-        };
-        const readConstraintNumber = (constraint, preferredKey) => {
-          if (typeof constraint === "number" && Number.isFinite(constraint)) {
-            return constraint;
-          }
-          if (!constraint || typeof constraint !== "object") return null;
-          const preferred = constraint[preferredKey];
-          if (typeof preferred === "number" && Number.isFinite(preferred)) {
-            return preferred;
-          }
-          for (const key of ["max", "ideal"]) {
-            const value = constraint[key];
-            if (typeof value === "number" && Number.isFinite(value)) {
-              return value;
-            }
-          }
-          return null;
-        };
-        window.__conclaveGetDisplayMediaDebug = () => ({
-          callCount: displayMediaCalls.length,
-          calls: displayMediaCalls.slice(-5),
-        });
-
-        Object.defineProperty(mediaDevices, "getDisplayMedia", {
-          configurable: true,
-          value: async (options = {}) => {
-            displayMediaCalls.push(sanitizeDisplayMediaOptions(options));
-            const canvas = document.createElement("canvas");
-            canvas.width = 1920;
-            canvas.height = 1080;
-            const context = canvas.getContext("2d", { alpha: false });
-            const requestedFrameRate = Math.max(
-              1,
-              Math.min(
-                30,
-                readConstraintNumber(options?.video?.frameRate, "max") ?? 15,
-              ),
-            );
-            let frame = 0;
-            const paint = () => {
-              if (!context) return;
-              const now = new Date();
-              context.fillStyle = "#f8fafc";
-              context.fillRect(0, 0, canvas.width, canvas.height);
-              context.strokeStyle = "#0f172a";
-              context.lineWidth = 2;
-              for (let x = 0; x <= canvas.width; x += 120) {
-                context.beginPath();
-                context.moveTo(x, 0);
-                context.lineTo(x, canvas.height);
-                context.stroke();
-              }
-              for (let y = 0; y <= canvas.height; y += 90) {
-                context.beginPath();
-                context.moveTo(0, y);
-                context.lineTo(canvas.width, y);
-                context.stroke();
-              }
-              context.fillStyle = "#111827";
-              context.font = "700 76px system-ui, sans-serif";
-              context.fillText("Conclave screen share fixture", 80, 150);
-              context.font = "500 42px system-ui, sans-serif";
-              context.fillText("Small text should remain readable at low bandwidth.", 80, 235);
-              context.font = "500 32px ui-monospace, SFMono-Regular, Menlo, monospace";
-              context.fillText("Frame " + String(frame).padStart(5, "0") + " " + now.toISOString(), 80, 320);
-              const left = 80 + ((frame * 18) % 1200);
-              context.fillStyle = "#2563eb";
-              context.fillRect(left, 390, 260, 140);
-              context.fillStyle = "#16a34a";
-              context.fillRect(80, 610, 360, 180);
-              context.fillStyle = "#dc2626";
-              context.fillRect(520, 610, 360, 180);
-              context.fillStyle = "#ca8a04";
-              context.fillRect(960, 610, 360, 180);
-              context.fillStyle = "#111827";
-              context.font = "600 28px ui-monospace, SFMono-Regular, Menlo, monospace";
-              for (let index = 0; index < 12; index += 1) {
-                context.fillText(
-                  "row " + String(index + 1).padStart(2, "0") + "  ABCDEFGHIJKLMNOPQRSTUVWXYZ  0123456789",
-                  80,
-                  860 + index * 18,
-                );
-              }
-              frame += 1;
-            };
-
-            paint();
-            const interval = window.setInterval(
-              paint,
-              Math.max(16, Math.round(1000 / requestedFrameRate)),
-            );
-            const stream = canvas.captureStream(requestedFrameRate);
-            const [videoTrack] = stream.getVideoTracks();
-            if (videoTrack && "contentHint" in videoTrack) {
-              videoTrack.contentHint = "detail";
-            }
-
-            const cleanups = [() => window.clearInterval(interval)];
-            try {
-              const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-              if (AudioContextCtor) {
-                const audioContext = new AudioContextCtor();
-                const oscillator = audioContext.createOscillator();
-                const gain = audioContext.createGain();
-                const destination = audioContext.createMediaStreamDestination();
-                oscillator.type = "sine";
-                oscillator.frequency.value = 440;
-                gain.gain.value = 0.015;
-                oscillator.connect(gain);
-                gain.connect(destination);
-                oscillator.start();
-                const [audioTrack] = destination.stream.getAudioTracks();
-                if (audioTrack) {
-                  if ("contentHint" in audioTrack) audioTrack.contentHint = "music";
-                  stream.addTrack(audioTrack);
-                  cleanups.push(() => {
-                    try {
-                      audioTrack.stop();
-                    } catch {}
-                  });
-                }
-                cleanups.push(() => {
-                  try {
-                    oscillator.stop();
-                  } catch {}
-                  void audioContext.close().catch(() => {});
-                });
-              }
-            } catch {}
-
-            if (videoTrack) {
-              const originalStop = videoTrack.stop.bind(videoTrack);
-              let stopped = false;
-              const cleanup = () => {
-                if (stopped) return;
-                stopped = true;
-                for (const fn of cleanups) {
-                  try {
-                    fn();
-                  } catch {}
-                }
-              };
-              videoTrack.stop = () => {
-                cleanup();
-                originalStop();
-              };
-              videoTrack.addEventListener("ended", cleanup, { once: true });
-            }
-
-            window.__conclaveFakeDisplayMediaStream = stream;
-            return stream;
-          },
-        });
-        return true;
-      };
-
-      window.__conclaveInstallFakeDisplayMedia = install;
-      install();
-      document.addEventListener("DOMContentLoaded", install, { once: true });
-    })();`,
-  });
-  emit("fake_display_media_override_installed");
-};
 
 const launchProbePage = async ({
   label,
   url,
-  port,
   throttled,
   fakeDisplayMedia = false,
 }) => {
-  const userDataDir = mkdtempSync(join(tmpdir(), "conclave-low-bandwidth-"));
-  const args = [
-    chromeHeadlessFlag,
-    `--remote-debugging-port=${port}`,
-    `--user-data-dir=${userDataDir}`,
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-background-networking",
-    "--disable-component-update",
-    "--disable-extensions",
-    "--disable-sync",
-    "--disable-features=MediaRouter",
-    `--window-size=${viewport.width},${viewport.height}`,
-    "--autoplay-policy=no-user-gesture-required",
-    "--use-fake-device-for-media-stream",
-    "--use-fake-ui-for-media-stream",
-    ...(fakeDisplayMedia
-      ? [
-          "--allow-http-screen-capture",
-          "--auto-select-desktop-capture-source=Entire screen",
-          "--enable-usermedia-screen-capturing",
-        ]
-      : []),
-    "about:blank",
-  ];
-
+  const consoleRecorder = createPageConsoleRecorder(label);
+  const browserSession = await launchSilentBrowser({
+    chromePath,
+    label,
+    windowSize: `${viewport.width},${viewport.height}`,
+    syntheticDisplay: fakeDisplayMedia,
+    timeoutMs: 45_000,
+  });
   emit("chrome_launch", {
     label,
     chromePath,
-    chromePort: port,
     url,
     throttled,
     profileName,
@@ -2427,58 +2147,15 @@ const launchProbePage = async ({
     fakeDisplayMedia,
     viewportName,
     viewport,
-    command: `${shellEscape(chromePath)} ${args.map(shellEscape).join(" ")}`,
+    headless: browserSession.authority.exactHeadless,
+    muted: browserSession.authority.muted,
+    zeroAudioInput: browserSession.authority.zeroAudioInput,
+    isolatedProfile: browserSession.authority.isolatedProfile,
   });
 
-  const consoleRecorder = createPageConsoleRecorder(label);
-  const chrome = spawn(chromePath, args, {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let chromeExited = false;
-  const chromeExitPromise = new Promise((resolve) => {
-    chrome.once("exit", () => {
-      chromeExited = true;
-      resolve();
-    });
-  });
-  chrome.stdout.on("data", (chunk) => {
-    const text = String(chunk).trim();
-    if (text) emit("chrome_stdout", { label, text });
-  });
-  chrome.stderr.on("data", (chunk) => {
-    const text = String(chunk).trim();
-    if (text && !text.includes("INFO:CONSOLE")) {
-      const event = {
-        ts: new Date().toISOString(),
-        label,
-        type: "stderr",
-        text,
-      };
-      consoleRecorder.events.push(event);
-      if (consoleRecorder.events.length > 500) {
-        consoleRecorder.events.splice(0, consoleRecorder.events.length - 500);
-      }
-      emit("chrome_stderr", { label, text });
-    }
-  });
-
-  let cdp = null;
+  const cdp = browserSession.pageCdp;
   try {
-    const targets = await waitForJson(
-      `http://127.0.0.1:${port}/json/list`,
-      `${label} Chrome target list`,
-      45000,
-    );
-    const target = targets.find((item) => item.type === "page");
-    if (!target?.webSocketDebuggerUrl) {
-      throw new Error(`No debuggable Chrome page target found for ${label}`);
-    }
-
-    cdp = new CdpClient(target.webSocketDebuggerUrl);
-    await cdp.open();
-    await cdp.send("Runtime.enable");
     await cdp.send("Log.enable");
-    await cdp.send("Page.enable");
     await applyProbeViewport(cdp, label);
     await applyProbeUserAgent(cdp, label);
     cdp.on("Runtime.consoleAPICalled", (params) => {
@@ -2495,10 +2172,11 @@ const launchProbePage = async ({
     }
     await installRtcSdpDebug(cdp);
     await installDebugStorage(cdp);
-    if (fakeDisplayMedia) {
-      await installFakeDisplayMediaOverride(cdp);
-    }
-    await cdp.send("Page.navigate", { url });
+    await navigateSilentBrowserPage(browserSession, {
+      url,
+      label,
+      timeoutMs,
+    });
     emit("navigate", { label, url });
     if (fakeDisplayMedia) {
       await waitForEval(
@@ -2525,73 +2203,32 @@ const launchProbePage = async ({
     return {
       label,
       cdp,
-      chrome,
-      chromeExited: () => chromeExited,
-      chromeExitPromise,
       consoleEvents: consoleRecorder.events,
-      userDataDir,
+      browserSession,
     };
   } catch (error) {
     emit("chrome_launch_failed", { label, error: error.message });
     try {
-      cdp?.close();
-    } catch {}
-    if (!chromeExited) {
-      try {
-        chrome.kill("SIGTERM");
-        await Promise.race([chromeExitPromise, sleep(1500)]);
-        if (!chromeExited) {
-          chrome.kill("SIGKILL");
-          await Promise.race([chromeExitPromise, sleep(1000)]);
-        }
-      } catch {}
+      await closeSilentBrowser(browserSession);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        `Failed to launch and clean up ${label}`,
+      );
     }
-    try {
-      rmSync(userDataDir, {
-        recursive: true,
-        force: true,
-        maxRetries: 3,
-        retryDelay: 100,
-      });
-    } catch {}
     throw error;
   }
 };
 
 const closeProbePage = async (session) => {
   if (!session) return;
-  try {
-    session.cdp?.close();
-  } catch {}
-  if (!session.chromeExited()) {
-    try {
-      session.chrome.kill("SIGTERM");
-      await Promise.race([session.chromeExitPromise, sleep(1500)]);
-      if (!session.chromeExited()) {
-        session.chrome.kill("SIGKILL");
-        await Promise.race([session.chromeExitPromise, sleep(1000)]);
-      }
-    } catch (error) {
-      emit("chrome_shutdown_failed", {
-        label: session.label,
-        error: error.message,
-      });
-    }
-  }
-  try {
-    rmSync(session.userDataDir, {
-      recursive: true,
-      force: true,
-      maxRetries: 3,
-      retryDelay: 100,
-    });
-  } catch (error) {
-    emit("profile_cleanup_failed", {
-      label: session.label,
-      path: session.userDataDir,
-      error: error.message,
-    });
-  }
+  await closeSilentBrowser(session.browserSession);
+};
+
+const closeProbePages = async (...sessions) => {
+  await closeSilentBrowsers(
+    sessions.filter(Boolean).map((session) => session.browserSession),
+  );
 };
 
 const waitForJoined = (cdp, label) =>
@@ -2662,7 +2299,9 @@ const waitForRemoteConsumerPreferences = (
       return {
         ok: debug?.connectionState === "joined" &&
           videoEntries.length >= ${JSON.stringify(expectedRemotePublisherCount)} &&
-          audioEntries.length >= ${JSON.stringify(expectedRemotePublisherCount)},
+          (${JSON.stringify(requireAudio)}
+            ? audioEntries.length >= ${JSON.stringify(expectedRemotePublisherCount)}
+            : audioEntries.length === 0),
         connectionState: debug?.connectionState ?? null,
         adaptiveConsumers: debug?.adaptiveConsumers ?? null,
         videoEntries,
@@ -2703,7 +2342,9 @@ const waitForRemoteConsumerQuality = (
             ? debug?.adaptiveConsumers?.emergencyMode === true
             : debug?.adaptiveConsumers?.emergencyMode !== true) &&
           usableVideoEntries.length >= ${JSON.stringify(expectedRemotePublisherCount)} &&
-          usableAudioEntries.length >= ${JSON.stringify(expectedRemotePublisherCount)},
+          (${JSON.stringify(requireAudio)}
+            ? usableAudioEntries.length >= ${JSON.stringify(expectedRemotePublisherCount)}
+            : usableAudioEntries.length === 0),
         connectionState: debug?.connectionState ?? null,
         adaptiveConsumers: debug?.adaptiveConsumers ?? null,
         usableVideoEntries,
@@ -2782,7 +2423,7 @@ const validateReceiveSnapshot = (
   );
   const scoreAwareEntryErrors = getScoreAwareEntryErrors([
     ...usableVideoEntries,
-    ...usableAudioEntries,
+    ...(requireAudio ? usableAudioEntries : []),
   ]);
   const congestionFeedbackErrors = getInconsistentRtpCongestionFeedbackErrors(
     snapshot,
@@ -2828,17 +2469,23 @@ const validateReceiveSnapshot = (
   if (usableVideoEntries.length === 0) {
     errors.push("missing applied remote webcam consumer preference");
   }
-  if (usableAudioEntries.length === 0) {
-    errors.push("missing applied remote audio consumer preference");
-  }
   if (usableVideoEntries.length < expectedRemotePublisherCount) {
     errors.push(
       `expected at least ${expectedRemotePublisherCount} remote webcam preferences, got ${usableVideoEntries.length}`,
     );
   }
-  if (usableAudioEntries.length < expectedRemotePublisherCount) {
+  if (requireAudio) {
+    if (usableAudioEntries.length === 0) {
+      errors.push("missing applied remote audio consumer preference");
+    }
+    if (usableAudioEntries.length < expectedRemotePublisherCount) {
+      errors.push(
+        `expected at least ${expectedRemotePublisherCount} remote audio preferences, got ${usableAudioEntries.length}`,
+      );
+    }
+  } else if (audioEntries.length > 0) {
     errors.push(
-      `expected at least ${expectedRemotePublisherCount} remote audio preferences, got ${usableAudioEntries.length}`,
+      `video-only receive probe unexpectedly observed ${audioEntries.length} remote audio preferences`,
     );
   }
   if (visibleRenderedVideos.length < Math.min(1, expectedRemotePublisherCount)) {
@@ -2874,7 +2521,7 @@ const validateReceiveSnapshot = (
   }
   assertConsumerTelemetryEchoesPreferences(
     snapshot,
-    [...usableVideoEntries, ...usableAudioEntries],
+    [...usableVideoEntries, ...(requireAudio ? usableAudioEntries : [])],
     errors,
     context,
   );
@@ -3651,12 +3298,10 @@ const runScreenPublishScenario = async () => {
     page = await launchProbePage({
       label: "screen-publisher",
       url: buildRoomUrl(displayName),
-      port: chromePort,
       throttled: true,
       fakeDisplayMedia: true,
     });
     await waitForJoined(page.cdp, "screen-publisher");
-    await clickButton(page.cdp, "Unmute", 15000);
     await clickButton(page.cdp, "Share screen", 15000);
     await waitForScreenProducer(page.cdp, "screen-publisher");
 
@@ -3691,7 +3336,6 @@ const runScreenReceiveScenario = async () => {
     publisher = await launchProbePage({
       label: "screen-publisher",
       url: buildRoomUrl(publisherName),
-      port: chromePort,
       throttled: false,
       fakeDisplayMedia: true,
     });
@@ -3704,7 +3348,6 @@ const runScreenReceiveScenario = async () => {
     viewer = await launchProbePage({
       label: "screen-viewer",
       url: buildRoomUrl(viewerName),
-      port: chromePort + 1,
       throttled: true,
     });
     await waitForJoined(viewer.cdp, "screen-viewer");
@@ -3735,8 +3378,7 @@ const runScreenReceiveScenario = async () => {
     if (viewerSnapshot) {
       emit("final_snapshot", { label: "screen-viewer", snapshot: viewerSnapshot });
     }
-    await closeProbePage(viewer);
-    await closeProbePage(publisher);
+    await closeProbePages(viewer, publisher);
   }
 };
 
@@ -3756,20 +3398,17 @@ const runReceiveScenario = async () => {
             ? publisherName
             : `${publisherName} ${index + 1}`,
         ),
-        port: chromePort + index,
         throttled: false,
       });
       publishers.push(publisher);
       await waitForJoined(publisher.cdp, label);
       await clickButton(publisher.cdp, "Turn on camera", 15000);
-      await clickButton(publisher.cdp, "Unmute", 15000);
       await waitForCameraProducer(publisher.cdp, label);
     }
 
     viewer = await launchProbePage({
       label: "viewer",
       url: buildRoomUrl(viewerName),
-      port: chromePort + receivePublisherCount,
       throttled: true,
     });
     await waitForJoined(viewer.cdp, "viewer");
@@ -3801,10 +3440,7 @@ const runReceiveScenario = async () => {
     if (viewerSnapshot) {
       emit("final_snapshot", { label: "viewer", snapshot: viewerSnapshot });
     }
-    await closeProbePage(viewer);
-    for (const publisher of publishers.slice().reverse()) {
-      await closeProbePage(publisher);
-    }
+    await closeProbePages(viewer, ...publishers);
   }
 };
 
@@ -3825,20 +3461,17 @@ const runReceiveTransitionScenario = async () => {
             ? publisherName
             : `${publisherName} ${index + 1}`,
         ),
-        port: chromePort + index,
         throttled: false,
       });
       publishers.push(publisher);
       await waitForJoined(publisher.cdp, label);
       await clickButton(publisher.cdp, "Turn on camera", 15000);
-      await clickButton(publisher.cdp, "Unmute", 15000);
       await waitForCameraProducer(publisher.cdp, label);
     }
 
     viewer = await launchProbePage({
       label: "viewer",
       url: buildRoomUrl(viewerName),
-      port: chromePort + receivePublisherCount,
       throttled: true,
     });
     await waitForJoined(viewer.cdp, "viewer");
@@ -3915,10 +3548,7 @@ const runReceiveTransitionScenario = async () => {
     if (finalSnapshot) {
       emit("final_snapshot", { label: "viewer", snapshot: finalSnapshot });
     }
-    await closeProbePage(viewer);
-    for (const publisher of publishers.slice().reverse()) {
-      await closeProbePage(publisher);
-    }
+    await closeProbePages(viewer, ...publishers);
   }
 };
 
@@ -4016,7 +3646,7 @@ const validateTransitionSnapshot = (
       `expected webcam profile ${targetAdaptiveProfile} after transition, got ${webcamProfile}`,
     );
   }
-  if (audioProfile !== targetAdaptiveProfile) {
+  if (requireAudio && audioProfile !== targetAdaptiveProfile) {
     errors.push(
       `expected audio profile ${targetAdaptiveProfile} after transition, got ${audioProfile}`,
     );
@@ -4077,7 +3707,7 @@ const validateTransitionSnapshot = (
         `standard webcam capture framerate did not recover after transition: ${webcamCaptureFrameRate}`,
       );
     }
-    if (audioMaxBitrate < 40000) {
+    if (requireAudio && audioMaxBitrate < 40000) {
       errors.push(
         `audio cap did not recover after transition: ${audioMaxBitrate}`,
       );
@@ -4167,6 +3797,7 @@ const validateTransitionSnapshot = (
     }
 
     if (
+      requireAudio &&
       targetExpectedQuality !== "good" &&
       audioMaxBitrate >
         maxAllowedAudioBitrateFor(targetMicrophoneOpusMaxAverageBitrate)
@@ -4226,12 +3857,10 @@ const runTransitionScenario = async () => {
     page = await launchProbePage({
       label: "transition",
       url: buildRoomUrl(displayName),
-      port: chromePort,
       throttled: true,
     });
     await waitForJoined(page.cdp, "transition");
     await clickButton(page.cdp, "Turn on camera", 15000);
-    await clickButton(page.cdp, "Unmute", 15000);
     await waitForCameraProducer(page.cdp, "transition");
 
     emit("transition_initial_settle_start", { settleMs });
@@ -4309,158 +3938,34 @@ const run = async () => {
     return;
   }
 
-  const userDataDir = mkdtempSync(join(tmpdir(), "conclave-low-bandwidth-"));
-  const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
-  const url = new URL(`/${encodeURIComponent(roomId)}`, normalizedBaseUrl);
-  url.searchParams.set("autojoin", "1");
-  url.searchParams.set("recorder", "1");
-  url.searchParams.set("admin", "1");
-  url.searchParams.set("name", displayName);
-  if (clientId) url.searchParams.set("clientId", clientId);
-
-  const args = [
-    chromeHeadlessFlag,
-    `--remote-debugging-port=${chromePort}`,
-    `--user-data-dir=${userDataDir}`,
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-background-networking",
-    "--disable-component-update",
-    "--disable-extensions",
-    "--disable-sync",
-    "--disable-features=MediaRouter",
-    `--window-size=${viewport.width},${viewport.height}`,
-    "--autoplay-policy=no-user-gesture-required",
-    "--use-fake-device-for-media-stream",
-    "--use-fake-ui-for-media-stream",
-    "about:blank",
-  ];
-
-  emit("chrome_launch", {
-    chromePath,
-    chromePort,
-    url: String(url),
-    profileName,
-    profile,
-    viewportName,
-    viewport,
-    command: `${shellEscape(chromePath)} ${args.map(shellEscape).join(" ")}`,
-  });
-
-  const consoleRecorder = createPageConsoleRecorder();
-  const chrome = spawn(chromePath, args, {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let chromeExited = false;
-  const chromeExitPromise = new Promise((resolve) => {
-    chrome.once("exit", () => {
-      chromeExited = true;
-      resolve();
-    });
-  });
-  chrome.stdout.on("data", (chunk) => {
-    const text = String(chunk).trim();
-    if (text) emit("chrome_stdout", { text });
-  });
-  chrome.stderr.on("data", (chunk) => {
-    const text = String(chunk).trim();
-    if (text && !text.includes("INFO:CONSOLE")) {
-      const event = {
-        ts: new Date().toISOString(),
-        label: null,
-        type: "stderr",
-        text,
-      };
-      consoleRecorder.events.push(event);
-      if (consoleRecorder.events.length > 500) {
-        consoleRecorder.events.splice(0, consoleRecorder.events.length - 500);
-      }
-      emit("chrome_stderr", { text });
-    }
-  });
-
-  let cdp = null;
+  let page = null;
   let startupSnapshot = null;
   let finalSnapshot = null;
   try {
-    const targets = await waitForJson(
-      `http://127.0.0.1:${chromePort}/json/list`,
-      "Chrome target list",
-      30000,
-    );
-    const target = targets.find((item) => item.type === "page");
-    if (!target?.webSocketDebuggerUrl) {
-      throw new Error("No debuggable Chrome page target found");
-    }
-
-    cdp = new CdpClient(target.webSocketDebuggerUrl);
-    await cdp.open();
-    await cdp.send("Runtime.enable");
-    await cdp.send("Log.enable");
-    await cdp.send("Page.enable");
-    await applyProbeViewport(cdp);
-    await applyProbeUserAgent(cdp);
-    cdp.on("Runtime.consoleAPICalled", (params) => {
-      consoleRecorder.record(params);
+    page = await launchProbePage({
+      label: "publisher",
+      url: buildRoomUrl(displayName),
+      throttled: true,
     });
-
-    await applyNetworkProfile(cdp);
-    if (installBrowserNetworkInformation) {
-      await installNetworkInformationOverride(cdp);
-    } else {
-      await installNetworkInformationUnavailableOverride(cdp);
-    }
-    await installRtcSdpDebug(cdp);
-    await installDebugStorage(cdp);
-
-    await cdp.send("Page.navigate", { url: String(url) });
-    emit("navigate", { url: String(url) });
+    const { cdp } = page;
     await waitForEval(
       cdp,
       "Conclave debug getter",
       `(() => ({ ok: typeof window.__conclaveGetMeetVideoDebug === "function" }))()`,
       timeoutMs,
     );
-    await waitForEval(
-      cdp,
-      "meeting joined",
-      `(() => {
-        const debug = window.__conclaveGetMeetVideoDebug?.();
-        return {
-          ok: debug?.connectionState === "joined",
-          state: debug?.connectionState ?? null,
-          meetError: debug?.meetError ?? null,
-        };
-      })()`,
-      timeoutMs,
-    );
-
+    await waitForJoined(cdp, "publisher");
     await clickButton(cdp, "Turn on camera", 15000);
-    await clickButton(cdp, "Unmute", 15000);
 
     if (requireCamera) {
-      await waitForEval(
-        cdp,
-        "camera producer",
-        `(() => {
-          const debug = window.__conclaveGetMeetVideoDebug?.();
-          return {
-            ok: debug?.connectionState === "joined" &&
-              debug?.isCameraOff === false &&
-              Boolean(debug?.videoProducer && !debug.videoProducer.closed),
-            isCameraOff: debug?.isCameraOff ?? null,
-            videoProducer: debug?.videoProducer ?? null,
-          };
-        })()`,
-        30000,
-      );
+      await waitForCameraProducer(cdp, "publisher");
     }
 
     if (expectMobileNoNetworkInformationStartup) {
       startupSnapshot = await collectSnapshot(cdp);
       const startupValidation =
         validateMobileNoNetworkInformationStartupSnapshot(startupSnapshot, {
-          consoleEvents: consoleRecorder.events,
+          consoleEvents: page.consoleEvents,
         });
       emit("low_bandwidth_mobile_no_netinfo_startup_result", startupValidation);
       if (!startupValidation.ok) {
@@ -4480,46 +3985,26 @@ const run = async () => {
     await sleep(settleMs);
     finalSnapshot = await collectSnapshot(cdp);
     const validation = validateFinalSnapshot(finalSnapshot, {
-      consoleEvents: consoleRecorder.events,
+      consoleEvents: page.consoleEvents,
     });
     emit("low_bandwidth_probe_result", validation);
     if (!validation.ok) {
-      throw new Error(`Low-bandwidth probe failed: ${validation.errors.join("; ")}`);
+      throw new Error(
+        `Low-bandwidth probe failed: ${validation.errors.join("; ")}`,
+      );
     }
   } finally {
     if (startupSnapshot) emit("startup_snapshot", startupSnapshot);
     if (finalSnapshot) emit("final_snapshot", finalSnapshot);
-    if (cdp) cdp.close();
-    if (!chromeExited) {
-      try {
-        chrome.kill("SIGTERM");
-        await Promise.race([chromeExitPromise, sleep(1500)]);
-        if (!chromeExited) {
-          chrome.kill("SIGKILL");
-          await Promise.race([chromeExitPromise, sleep(1000)]);
-        }
-      } catch (error) {
-        emit("chrome_shutdown_failed", { error: error.message });
-      }
-    }
-    try {
-      rmSync(userDataDir, {
-        recursive: true,
-        force: true,
-        maxRetries: 3,
-        retryDelay: 100,
-      });
-    } catch (error) {
-      emit("profile_cleanup_failed", { path: userDataDir, error: error.message });
-    }
+    await closeProbePage(page);
   }
 };
 
 run()
   .then(() => {
-    process.stdout.write("", () => process.exit(0));
+    process.exitCode = 0;
   })
   .catch((error) => {
     emit("fatal", { error: error.message, stack: error.stack });
-    process.stdout.write("", () => process.exit(1));
+    process.exitCode = 1;
   });

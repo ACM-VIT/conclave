@@ -11,6 +11,11 @@ import type {
   DtlsParameters,
 } from "mediasoup/types";
 import type { Socket } from "socket.io";
+import type {
+  ClientMediaCapabilities,
+  WebcamCodecPolicy,
+} from "./server/webcamCodecPolicy.js";
+import type { ProducerTransportNetworkProfile } from "./server/producerTransportNetworkProfile.js";
 
 export interface RoomInfo {
   id: string;
@@ -52,6 +57,7 @@ export interface JoinRoomData {
   displayName?: string;
   webinarInviteCode?: string;
   meetingInviteCode?: string;
+  mediaCapabilities?: ClientMediaCapabilities;
 }
 
 export interface JoinRoomResponse {
@@ -76,6 +82,7 @@ export interface JoinRoomResponse {
   webinarRequiresInviteCode?: boolean;
   webinarAttendeeCount?: number;
   webinarMaxAttendees?: number;
+  webcamCodecPolicy?: WebcamCodecPolicy;
 }
 
 export interface JoinRoomErrorResponse {
@@ -89,6 +96,8 @@ export interface ActiveSpeakerChangedNotification {
   roomId: string;
   userId: string | null;
 }
+
+export type WebRtcTransportRole = "producer" | "consumer";
 
 export interface CreateTransportResponse {
   id: string;
@@ -111,11 +120,30 @@ export interface RestartIceResponse {
   iceParameters: object;
 }
 
+export interface SetProducerTransportNetworkProfileData {
+  transportId?: string;
+  profile: ProducerTransportNetworkProfile;
+}
+
+export interface SetProducerTransportNetworkProfileResponse {
+  success: true;
+  transportId: string;
+  profile: ProducerTransportNetworkProfile;
+  maxIncomingBitrate: number;
+}
+
 export interface ProduceData {
   transportId: string;
   kind: MediaKind;
   rtpParameters: RtpParameters;
-  appData: { type: "webcam" | "screen"; paused?: boolean };
+  appData: {
+    type: "webcam" | "screen";
+    paused?: boolean;
+    webcamReceiverCapacityTransition?: {
+      fromProducerId: string;
+      nonce: string;
+    };
+  };
 }
 
 export interface ProduceResponse {
@@ -128,10 +156,29 @@ export interface ConsumeData {
   rtpCapabilities: RtpCapabilities;
   preferredLayers?: ConsumerLayerPreference;
   priority?: number;
+  plannedConsumerHandoff?: PlannedConsumerHandoffRequest;
 }
 
 export interface CloseConsumerData {
   consumerId: string;
+}
+
+export interface PlannedConsumerHandoffRequest {
+  requestId: string;
+  predecessorConsumerId: string;
+}
+
+export interface AbortConsumerHandoffData
+  extends PlannedConsumerHandoffRequest {
+  producerId: string;
+}
+
+export interface AbortConsumerHandoffResponse {
+  success: true;
+  requestId: string;
+  status: "aborted" | "already_aborted" | "absent";
+  successorConsumerId?: string;
+  predecessorRestored: boolean;
 }
 
 export interface ConsumeResponse {
@@ -139,6 +186,8 @@ export interface ConsumeResponse {
   producerId: string;
   kind: MediaKind;
   rtpParameters: RtpParameters;
+  /** Authoritative mediasoup topology; optional for older client contracts. */
+  consumerType?: "simple" | "simulcast" | "svc" | "pipe";
   /**
    * Server-side consumer paused state at creation. Audio consumers are
    * created unpaused (#177), so `paused: false` tells the client no
@@ -150,6 +199,7 @@ export interface ConsumeResponse {
   preferredLayers?: ConsumerLayerPreference;
   currentLayers?: ConsumerLayerPreference;
   priority?: number;
+  plannedConsumerHandoffRequestId?: string;
 }
 
 export type ConsumerLayerPreference = ConsumerLayers;
@@ -590,6 +640,73 @@ export interface ConsumerTelemetryNotification {
   preferredLayers?: ConsumerLayerPreference;
   currentLayers?: ConsumerLayerPreference;
   timestamp: number;
+}
+
+export type WebcamReceiverCapacityProofReason =
+  | "qualified"
+  | "transition_grace"
+  | "transition_timeout"
+  | "transition_invalid"
+  | "producer_missing"
+  | "producer_not_current"
+  | "producer_not_vp8_simulcast"
+  | "producer_not_vp8_single_layer"
+  | "producer_paused"
+  | "producer_score_low"
+  | "producer_replaced"
+  | "owner_missing"
+  | "owner_disconnected"
+  | "receiver_count"
+  | "receiver_observer"
+  | "receiver_disconnected"
+  | "consumer_count"
+  | "consumer_missing"
+  | "consumer_not_simulcast"
+  | "consumer_not_simple"
+  | "consumer_paused"
+  | "consumer_not_full_layer"
+  | "consumer_prefers_lower_layer"
+  | "consumer_score_low"
+  | "screen_share_active"
+  | "room_quality_low"
+  | "transport_disconnected"
+  | "evaluation_error"
+  | "producer_removed"
+  | "room_closed";
+
+export type WebcamReceiverCapacityProofBasis =
+  | "simulcast-full-layer"
+  | "single-layer-transition"
+  | "single-layer";
+
+export interface WebcamReceiverCapacityReplacementOffer {
+  nonce: string;
+  validForMs: number;
+  target: "vp8-single-layer";
+}
+
+/**
+ * Short-lived, server-authoritative evidence that a webcam producer has one
+ * healthy receiver. A full-layer simulcast proof may offer one replay-safe
+ * transition to an exact VP8 simple successor; transition and steady simple
+ * proofs remain producer-bound and fail closed on expiry or revocation.
+ */
+export interface WebcamReceiverCapacityProofNotification {
+  roomId: string;
+  producerId: string;
+  revision: number;
+  eligible: boolean;
+  validForMs: number;
+  reason: WebcamReceiverCapacityProofReason;
+  basis: WebcamReceiverCapacityProofBasis;
+  replacementOffer?: WebcamReceiverCapacityReplacementOffer;
+  replacesProducerId?: string;
+  transitionNonce?: string;
+  maxSpatialLayer?: number;
+  maxTemporalLayer?: number;
+  currentSpatialLayer?: number;
+  currentTemporalLayer?: number;
+  score?: number;
 }
 
 export interface NewProducerNotification {

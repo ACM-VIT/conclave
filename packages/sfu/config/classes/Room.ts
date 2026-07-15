@@ -20,6 +20,7 @@ import type {
   ChatMessage,
   ProducerInfo,
   VideoQuality,
+  WebRtcTransportRole,
 } from "../../types.js";
 import { Logger } from "../../utilities/loggers.js";
 import { config } from "../config.js";
@@ -27,6 +28,21 @@ import { Admin } from "./Admin.js";
 import type { Client } from "./Client.js";
 import type { ProducerType } from "./Client.js";
 import type { GameSession } from "../../server/games/engine.js";
+import {
+  buildWebcamCodecPolicy,
+  participantsSupportWebcamCodec,
+  producerMatchesWebcamCodecPolicy,
+  selectRoomWebcamCodec,
+  type ClientMediaCapabilities,
+  type WebcamCodecPolicy,
+} from "../../server/webcamCodecPolicy.js";
+import {
+  evaluateWebcamReceiverCapacity,
+  isVp8SingleLayerProducer,
+  WebcamReceiverCapacityProofCoordinator,
+  type WebcamReceiverCapacityEvaluation,
+  type WebcamReceiverCapacityTransitionReservation,
+} from "../../server/webcamReceiverCapacityProof.js";
 
 export interface RoomOptions {
   id: string;
@@ -207,6 +223,11 @@ export class Room {
   private webinarFeedRefreshNotifier: ((room: Room) => void) | null = null;
   private webinarAttendeeCount = 0;
   private meetingParticipantCount = 0;
+  private currentWebcamCodecPolicy: WebcamCodecPolicy =
+    buildWebcamCodecPolicy("vp8", 0);
+  private webcamCodecPolicyUpgradeTimer: NodeJS.Timeout | null = null;
+  private readonly webcamReceiverCapacityProofCoordinator:
+    WebcamReceiverCapacityProofCoordinator;
 
   constructor(options: RoomOptions) {
     this.id = options.id;
@@ -214,6 +235,25 @@ export class Room {
     this.clientId = options.clientId;
     this.workerPid = options.workerPid;
     this.channelId = `${options.clientId}:${options.id}`;
+    this.webcamReceiverCapacityProofCoordinator =
+      new WebcamReceiverCapacityProofCoordinator({
+        roomId: this.id,
+        evaluate: (producerId) =>
+          this.evaluateWebcamReceiverCapacityProof(producerId),
+        getTransitionBinding: (producerId) =>
+          this.getWebcamReceiverCapacityTransitionBinding(producerId),
+        emit: (ownerClientId, proof) => {
+          this.clients
+            .get(ownerClientId)
+            ?.socket.emit("webcamReceiverCapacityProof", proof);
+        },
+        onError: (error) => {
+          Logger.warn(
+            `Room ${this.id}: webcam receiver capacity proof failed closed`,
+            error,
+          );
+        },
+      });
   }
 
   get rtpCapabilities(): RtpCapabilities {
@@ -245,6 +285,343 @@ export class Room {
     }
     this.clients.set(client.id, client);
     this.updateClientModeCounts(client, 1);
+    // A newly connected third client invalidates one-to-one topology before it
+    // can create a consumer, so revoke synchronously with room membership.
+    this.refreshWebcamReceiverCapacityProofs();
+    this.cancelWebcamCodecPolicyUpgrade();
+    this.reconcileWebcamCodecPolicy();
+  }
+
+  get webcamCodecPolicy(): WebcamCodecPolicy {
+    return { ...this.currentWebcamCodecPolicy };
+  }
+
+  updateClientMediaCapabilities(
+    clientId: string,
+    capabilities: ClientMediaCapabilities | undefined,
+  ): WebcamCodecPolicy | null {
+    const client = this.clients.get(clientId);
+    if (!client) return null;
+    if (!client.updateMediaCapabilities(capabilities)) return null;
+    this.cancelWebcamCodecPolicyUpgrade();
+    this.reconcileWebcamCodecPolicy();
+    return this.webcamCodecPolicy;
+  }
+
+  reportClientWebcamCodecFailure(
+    clientId: string,
+    codec: "vp9",
+    epoch: number,
+  ): WebcamCodecPolicy | null {
+    const client = this.clients.get(clientId);
+    if (
+      !client ||
+      codec !== "vp9" ||
+      this.currentWebcamCodecPolicy.codec !== codec ||
+      this.currentWebcamCodecPolicy.epoch !== epoch ||
+      !client.markWebcamCodecFailed(codec)
+    ) {
+      return null;
+    }
+    this.cancelWebcamCodecPolicyUpgrade();
+    this.reconcileWebcamCodecPolicy();
+    return this.webcamCodecPolicy;
+  }
+
+  private selectWebcamCodecPolicyCodec(): WebcamCodecPolicy["codec"] {
+    return selectRoomWebcamCodec(this.webcamCodecPolicyParticipants());
+  }
+
+  private webcamCodecPolicyParticipants() {
+    return Array.from(this.clients.values()).map((client) => ({
+      id: client.id,
+      isObserver: client.isObserver,
+      capabilities: client.mediaCapabilities,
+    }));
+  }
+
+  private reconcileWebcamCodecPolicy(): boolean {
+    const codec = this.selectWebcamCodecPolicyCodec();
+    if (codec === this.currentWebcamCodecPolicy.codec) return false;
+    const currentCodecRemainsCompatible = participantsSupportWebcamCodec(
+      this.webcamCodecPolicyParticipants(),
+      this.currentWebcamCodecPolicy.codec,
+    );
+    if (currentCodecRemainsCompatible && this.hasWebcamVideoProducer()) {
+      return false;
+    }
+    this.currentWebcamCodecPolicy = buildWebcamCodecPolicy(
+      codec,
+      this.currentWebcamCodecPolicy.epoch + 1,
+    );
+    for (const client of this.clients.values()) {
+      client.socket.emit("webcamCodecPolicyChanged", {
+        ...this.currentWebcamCodecPolicy,
+        roomId: this.id,
+      });
+    }
+    this.closeWebcamVideoProducersOutsidePolicy();
+    return true;
+  }
+
+  private hasWebcamVideoProducer(): boolean {
+    for (const client of this.clients.values()) {
+      const producer = client.getProducer("video", "webcam");
+      if (producer && !producer.closed) return true;
+    }
+    return false;
+  }
+
+  private closeWebcamVideoProducersOutsidePolicy(): void {
+    for (const client of this.clients.values()) {
+      const producer = client.getProducer("video", "webcam");
+      if (
+        !producer ||
+        producer.closed ||
+        this.rtpParametersMatchCurrentWebcamCodecPolicy(producer.rtpParameters)
+      ) {
+        continue;
+      }
+      try {
+        producer.close();
+      } catch (error) {
+        Logger.warn(
+          `Room ${this.id}: Failed to close webcam producer ${producer.id} after codec policy change`,
+          error,
+        );
+      }
+    }
+  }
+
+  private cancelWebcamCodecPolicyUpgrade(): void {
+    if (!this.webcamCodecPolicyUpgradeTimer) return;
+    clearTimeout(this.webcamCodecPolicyUpgradeTimer);
+    this.webcamCodecPolicyUpgradeTimer = null;
+  }
+
+  private scheduleWebcamCodecPolicyUpgrade(): void {
+    this.cancelWebcamCodecPolicyUpgrade();
+    const nextCodec = this.selectWebcamCodecPolicyCodec();
+    if (nextCodec === this.currentWebcamCodecPolicy.codec) return;
+    // Departures can only make a more efficient codec newly eligible. Do not
+    // interrupt active cameras merely to upgrade; a compatibility downgrade
+    // on add/update still happens immediately in reconcileWebcamCodecPolicy().
+    if (this.hasWebcamVideoProducer()) return;
+    // A departure can only make a stronger codec newly eligible. Debounce the
+    // upgrade so a socket reconnect does not churn every active camera from
+    // VP8 -> VP9 -> VP8 while the same participant reclaims its seat.
+    this.webcamCodecPolicyUpgradeTimer = setTimeout(() => {
+      this.webcamCodecPolicyUpgradeTimer = null;
+      if (this.hasWebcamVideoProducer()) return;
+      this.reconcileWebcamCodecPolicy();
+    }, 3000);
+    this.webcamCodecPolicyUpgradeTimer.unref?.();
+  }
+
+  private evaluateWebcamReceiverCapacityProof(
+    producerId: string,
+  ): WebcamReceiverCapacityEvaluation {
+    const entry = this.producerIndex.get(producerId);
+    const ownerClientId = entry?.userId ?? null;
+    const owner = ownerClientId ? this.clients.get(ownerClientId) : undefined;
+    const currentProducer = owner?.getProducer("video", "webcam") ?? null;
+    return evaluateWebcamReceiverCapacity({
+      producerId,
+      ownerClientId,
+      producer: entry?.producer ?? null,
+      producerIsCurrent: Boolean(
+        entry &&
+          !entry.system &&
+          entry.type === "webcam" &&
+          entry.producer.kind === "video" &&
+          currentProducer === entry.producer &&
+          currentProducer.id === producerId,
+      ),
+      clients: Array.from(this.clients.values()).map((client) => ({
+        id: client.id,
+        isObserver: client.isObserver,
+        connected:
+          client.socket.connected !== false &&
+          !this.hasPendingDisconnect(client.id),
+        transportConnected: this.isWebcamProofTransportConnected(
+          client.id === ownerClientId
+            ? client.producerTransport
+            : client.consumerTransport,
+        ),
+        consumer: client.getConsumer(producerId) ?? null,
+      })),
+      screenShareActive: this.currentScreenShareProducerId !== null,
+      roomQuality: this.currentQuality,
+    });
+  }
+
+  private isWebcamProofTransportConnected(
+    transport: WebRtcTransport | null,
+  ): boolean {
+    // A live current producer/consumer necessarily owns its corresponding
+    // transport. Missing or not-yet-connected transport state fails closed.
+    if (!transport) return false;
+    return (
+      !transport.closed &&
+      (transport.iceState === "connected" ||
+        transport.iceState === "completed") &&
+      transport.dtlsState === "connected"
+    );
+  }
+
+  private getWebcamReceiverCapacityTransitionBinding(producerId: string) {
+    const entry = this.producerIndex.get(producerId);
+    if (
+      !entry ||
+      entry.system ||
+      entry.type !== "webcam" ||
+      entry.producer.kind !== "video"
+    ) {
+      return null;
+    }
+    const owner = this.clients.get(entry.userId);
+    const transport = owner?.producerTransport;
+    if (
+      !owner ||
+      owner.isObserver ||
+      owner.getProducer("video", "webcam") !== entry.producer ||
+      !transport ||
+      transport.closed
+    ) {
+      return null;
+    }
+    return {
+      ownerClientId: owner.id,
+      ownerSocketId: owner.socket.id,
+      producerTransportId: transport.id,
+    };
+  }
+
+  reserveWebcamReceiverCapacityTransition(
+    ownerClientId: string,
+    fromProducerId: string,
+    nonce: string,
+  ): WebcamReceiverCapacityTransitionReservation | null {
+    const owner = this.clients.get(ownerClientId);
+    const transport = owner?.producerTransport;
+    const currentProducer = owner?.getProducer("video", "webcam");
+    if (
+      !owner ||
+      owner.isObserver ||
+      !transport ||
+      transport.closed ||
+      currentProducer?.id !== fromProducerId
+    ) {
+      return null;
+    }
+    return this.webcamReceiverCapacityProofCoordinator.reserveTransition({
+      predecessorProducerId: fromProducerId,
+      nonce,
+      ownerClientId,
+      ownerSocketId: owner.socket.id,
+      producerTransportId: transport.id,
+    });
+  }
+
+  cancelWebcamReceiverCapacityTransition(
+    reservation: WebcamReceiverCapacityTransitionReservation,
+  ): void {
+    this.webcamReceiverCapacityProofCoordinator.cancelTransition(reservation);
+  }
+
+  commitWebcamReceiverCapacityTransition(
+    ownerClientId: string,
+    producer: Producer,
+    reservation: WebcamReceiverCapacityTransitionReservation,
+  ): Producer | null {
+    const owner = this.clients.get(ownerClientId);
+    const predecessor = owner?.getProducer("video", "webcam");
+    const predecessorEntry = this.producerIndex.get(
+      reservation.predecessorProducerId,
+    );
+    if (
+      !owner ||
+      owner.isObserver ||
+      owner.socket.id !== reservation.ownerSocketId ||
+      owner.producerTransport?.id !== reservation.producerTransportId ||
+      predecessor?.id !== reservation.predecessorProducerId ||
+      !predecessorEntry ||
+      predecessorEntry.producer !== predecessor ||
+      predecessorEntry.userId !== ownerClientId ||
+      predecessorEntry.system ||
+      predecessorEntry.type !== "webcam" ||
+      !isVp8SingleLayerProducer(producer) ||
+      producer.paused ||
+      !this.webcamReceiverCapacityProofCoordinator.validateTransition(
+        reservation,
+      )
+    ) {
+      this.webcamReceiverCapacityProofCoordinator.cancelTransition(
+        reservation,
+      );
+      return null;
+    }
+
+    // No await is allowed between the final validation and transfer. This is
+    // the atomic point that binds the one-use predecessor lease to the exact
+    // mediasoup-assigned successor id.
+    const displacedProducer = owner.addProducer(producer);
+    this.indexProducer(
+      {
+        producer,
+        userId: ownerClientId,
+        type: "webcam",
+        system: false,
+      },
+      { skipWebcamReceiverCapacityRefresh: true },
+    );
+    const transferred =
+      this.webcamReceiverCapacityProofCoordinator.transferTransition(
+        reservation,
+        producer.id,
+      );
+    if (!transferred) {
+      this.removeProducerIndexById(producer.id, producer);
+      owner.addProducer(predecessor);
+      this.webcamReceiverCapacityProofCoordinator.cancelTransition(
+        reservation,
+      );
+      return null;
+    }
+    this.removeProducerIndexById(
+      reservation.predecessorProducerId,
+      predecessor,
+    );
+    return displacedProducer;
+  }
+
+  refreshWebcamReceiverCapacityProof(producerId: string): void {
+    const entry = this.producerIndex.get(producerId);
+    if (
+      !entry ||
+      entry.system ||
+      entry.type !== "webcam" ||
+      entry.producer.kind !== "video"
+    ) {
+      this.webcamReceiverCapacityProofCoordinator.remove(producerId);
+      return;
+    }
+    this.webcamReceiverCapacityProofCoordinator.refresh(producerId);
+  }
+
+  refreshWebcamReceiverCapacityProofs(): void {
+    const producerIds: string[] = [];
+    for (const [producerId, entry] of this.producerIndex) {
+      if (
+        !entry.system &&
+        entry.type === "webcam" &&
+        entry.producer.kind === "video" &&
+        this.isProducerIndexEntryActive(producerId, entry)
+      ) {
+        producerIds.push(producerId);
+      }
+    }
+    this.webcamReceiverCapacityProofCoordinator.refreshAll(producerIds);
   }
 
   setUserIdentity(
@@ -306,6 +683,8 @@ export class Room {
       this.removeClientProducerIndexes(clientId);
       client.close();
       this.clients.delete(clientId);
+      this.refreshWebcamReceiverCapacityProofs();
+      this.scheduleWebcamCodecPolicyUpgrade();
     }
     const departingUserKey = this.userKeysById.get(clientId);
     this.userKeysById.delete(clientId);
@@ -397,19 +776,26 @@ export class Room {
     return this.meetingParticipantCount;
   }
 
-  async createWebRtcTransport(): Promise<WebRtcTransport> {
+  async createWebRtcTransport(
+    role: WebRtcTransportRole,
+  ): Promise<WebRtcTransport> {
     const transport = await this.router.createWebRtcTransport({
       listenIps: config.webRtcTransport.listenIps,
-      enableUdp: true,
-      enableTcp: true,
-      preferUdp: true,
-      initialAvailableOutgoingBitrate:
-        config.webRtcTransport.initialAvailableOutgoingBitrate,
+      enableUdp: config.webRtcTransport.enableUdp,
+      enableTcp: config.webRtcTransport.enableTcp,
+      preferUdp: config.webRtcTransport.preferUdp,
+      appData: { role },
+      ...(role === "consumer"
+        ? {
+            initialAvailableOutgoingBitrate:
+              config.webRtcTransport.initialAvailableOutgoingBitrate,
+          }
+        : {}),
     });
 
-    if (config.webRtcTransport.maxIncomingBitrate) {
+    if (role === "producer") {
       await transport.setMaxIncomingBitrate(
-        config.webRtcTransport.maxIncomingBitrate,
+        config.webRtcTransport.producerMaxIncomingBitrate,
       );
     }
 
@@ -679,11 +1065,13 @@ export class Room {
 
   setScreenShareProducer(producerId: string) {
     this.currentScreenShareProducerId = producerId;
+    this.refreshWebcamReceiverCapacityProofs();
   }
 
   clearScreenShareProducer(producerId: string) {
     if (this.currentScreenShareProducerId === producerId) {
       this.currentScreenShareProducerId = null;
+      this.refreshWebcamReceiverCapacityProofs();
     }
   }
 
@@ -743,15 +1131,35 @@ export class Room {
     return Boolean(owner && !owner.isObserver);
   }
 
-  private indexProducer(entry: ProducerIndexEntry): void {
+  private indexProducer(
+    entry: ProducerIndexEntry,
+    options?: { skipWebcamReceiverCapacityRefresh?: boolean },
+  ): void {
     this.producerIndex.set(entry.producer.id, entry);
 
     const cleanup = () => {
       this.removeProducerIndexById(entry.producer.id, entry.producer);
+      if (
+        !entry.system &&
+        entry.type === "webcam" &&
+        entry.producer.kind === "video"
+      ) {
+        queueMicrotask(() => {
+          if (!this.router.closed) this.scheduleWebcamCodecPolicyUpgrade();
+        });
+      }
     };
 
     entry.producer.on("transportclose", cleanup);
     entry.producer.observer.on("close", cleanup);
+    if (
+      !options?.skipWebcamReceiverCapacityRefresh &&
+      !entry.system &&
+      entry.type === "webcam" &&
+      entry.producer.kind === "video"
+    ) {
+      this.refreshWebcamReceiverCapacityProof(entry.producer.id);
+    }
   }
 
   removeProducerIndexById(producerId: string, producer?: Producer): void {
@@ -762,13 +1170,20 @@ export class Room {
     if (producer && activeEntry.producer.id !== producer.id) {
       return;
     }
+    if (
+      !activeEntry.system &&
+      activeEntry.type === "webcam" &&
+      activeEntry.producer.kind === "video"
+    ) {
+      this.webcamReceiverCapacityProofCoordinator.remove(producerId);
+    }
     this.producerIndex.delete(producerId);
   }
 
   private removeClientProducerIndexes(userId: string): void {
     for (const [producerId, entry] of this.producerIndex) {
       if (!entry.system && entry.userId === userId) {
-        this.producerIndex.delete(producerId);
+        this.removeProducerIndexById(producerId, entry.producer);
       }
     }
   }
@@ -778,10 +1193,13 @@ export class Room {
 
     for (const [producerId, entry] of this.producerIndex) {
       if (!this.isProducerIndexEntryActive(producerId, entry)) {
-        this.producerIndex.delete(producerId);
+        this.removeProducerIndexById(producerId, entry.producer);
         continue;
       }
       if (excludeClientId && entry.userId === excludeClientId) {
+        continue;
+      }
+      if (!this.producerMatchesCurrentWebcamCodecPolicy(entry.producer, entry.type)) {
         continue;
       }
       producers.push(this.producerInfoFromIndexEntry(entry));
@@ -796,17 +1214,45 @@ export class Room {
       return null;
     }
     if (!this.isProducerIndexEntryActive(producerId, entry)) {
-      this.producerIndex.delete(producerId);
+      this.removeProducerIndexById(producerId, entry.producer);
       return null;
     }
     return this.producerInfoFromIndexEntry(entry);
+  }
+
+  producerMatchesCurrentWebcamCodecPolicy(
+    producer: Producer,
+    type: ProducerType,
+  ): boolean {
+    if (type !== "webcam" || producer.kind !== "video") return true;
+    return this.rtpParametersMatchCurrentWebcamCodecPolicy(
+      producer.rtpParameters,
+    );
+  }
+
+  rtpParametersMatchCurrentWebcamCodecPolicy(rtpParameters: unknown): boolean {
+    return producerMatchesWebcamCodecPolicy(
+      rtpParameters,
+      this.currentWebcamCodecPolicy,
+    );
+  }
+
+  producerIdMatchesCurrentWebcamCodecPolicy(producerId: string): boolean {
+    const entry = this.producerIndex.get(producerId);
+    if (!entry || !this.isProducerIndexEntryActive(producerId, entry)) {
+      return false;
+    }
+    return this.producerMatchesCurrentWebcamCodecPolicy(
+      entry.producer,
+      entry.type,
+    );
   }
 
   getTranscriptAudioProducerEntries(): TranscriptAudioProducerEntry[] {
     const entries: TranscriptAudioProducerEntry[] = [];
     for (const [producerId, entry] of this.producerIndex) {
       if (!this.isProducerIndexEntryActive(producerId, entry)) {
-        this.producerIndex.delete(producerId);
+        this.removeProducerIndexById(producerId, entry.producer);
         continue;
       }
       if (entry.producer.kind !== "audio") {
@@ -841,7 +1287,7 @@ export class Room {
         entry.producer.kind === producer.kind &&
         producerId !== producer.id
       ) {
-        this.producerIndex.delete(producerId);
+        this.removeProducerIndexById(producerId, entry.producer);
       }
     }
     this.indexProducer({ producer, userId, type, system: false });
@@ -1310,6 +1756,7 @@ export class Room {
     const target = this.getTargetVideoQuality();
     if (target !== this.currentQuality) {
       this.currentQuality = target;
+      this.refreshWebcamReceiverCapacityProofs();
       return target;
     }
     return null;
@@ -1511,6 +1958,8 @@ export class Room {
 
   close(): void {
     this.stopCleanupTimer();
+    this.cancelWebcamCodecPolicyUpgrade();
+    this.webcamReceiverCapacityProofCoordinator.close();
     for (const pending of this.pendingDisconnects.values()) {
       clearTimeout(pending.timeout);
       if (pending.notificationTimeout) {

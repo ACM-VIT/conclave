@@ -1,33 +1,51 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import {
+  closeSilentBrowser,
+  launchSilentBrowser,
+  navigateSilentBrowserPage,
+} from "./quality/silent-browser-contract.mjs";
 
 const chromePath =
   process.env.CHROME_PATH ??
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const meetUrl =
   process.env.MEET_URL ?? "https://meet.google.com/avj-ysfo-nbm";
-const headlessMode = !/^(0|false|no)$/i.test(
-  process.env.MEET_OBSERVER_HEADLESS ?? "true",
-);
-const attachPort = process.env.MEET_OBSERVER_ATTACH_PORT
-  ? Number(process.env.MEET_OBSERVER_ATTACH_PORT)
+if (
+  process.env.MEET_OBSERVER_HEADLESS &&
+  !/^(1|true|yes)$/i.test(process.env.MEET_OBSERVER_HEADLESS)
+) {
+  throw new Error(
+    "Meet observation probes are safety-locked to --headless=new and cannot launch visibly",
+  );
+}
+if (
+  process.env.MEET_OBSERVER_ATTACH_PORT ||
+  process.env.MEET_OBSERVER_CHROME_PORT
+) {
+  throw new Error(
+    "Meet observation probes use an isolated OS-selected DevTools port and cannot attach to or select a browser port",
+  );
+}
+const fakeVideoPath = process.env.MEET_OBSERVER_FAKE_VIDEO
+  ? resolve(process.env.MEET_OBSERVER_FAKE_VIDEO)
   : null;
-const chromePort = Number(
-  attachPort ??
-    process.env.MEET_OBSERVER_CHROME_PORT ??
-    String(9400 + Math.floor(Math.random() * 500)),
-);
-const fakeVideoPath = process.env.MEET_OBSERVER_FAKE_VIDEO ?? null;
-const useFakeMedia = !/^(1|true|yes)$/i.test(
-  process.env.MEET_OBSERVER_REAL_MEDIA ?? "",
-);
+if (/^(1|true|yes)$/i.test(process.env.MEET_OBSERVER_REAL_MEDIA ?? "")) {
+  throw new Error(
+    "Meet observation probes cannot request native media capture",
+  );
+}
 const configuredUserDataDir = process.env.MEET_OBSERVER_USER_DATA_DIR ?? null;
-const keepUserDataDir =
-  Boolean(configuredUserDataDir) ||
-  /^(1|true|yes)$/i.test(process.env.MEET_OBSERVER_KEEP_PROFILE ?? "");
+if (
+  configuredUserDataDir ||
+  /^(1|true|yes)$/i.test(process.env.MEET_OBSERVER_KEEP_PROFILE ?? "")
+) {
+  throw new Error(
+    "Meet observation probes require an ephemeral centrally owned browser profile",
+  );
+}
+
 const streamNetwork = /^(1|true|yes)$/i.test(
   process.env.MEET_OBSERVER_STREAM_NETWORK ?? "",
 );
@@ -63,56 +81,6 @@ const emit = (event, payload = {}) => {
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-class CdpClient {
-  constructor(wsUrl) {
-    this.ws = new WebSocket(wsUrl);
-    this.nextId = 1;
-    this.pending = new Map();
-    this.listeners = new Map();
-  }
-
-  async open() {
-    await new Promise((resolve, reject) => {
-      this.ws.addEventListener("open", resolve, { once: true });
-      this.ws.addEventListener("error", reject, { once: true });
-      this.ws.addEventListener("message", (event) => {
-        const message = JSON.parse(String(event.data));
-        if (message.id && this.pending.has(message.id)) {
-          const { resolve: done, reject: fail } = this.pending.get(message.id);
-          this.pending.delete(message.id);
-          if (message.error) {
-            fail(new Error(message.error.message));
-          } else {
-            done(message.result);
-          }
-        } else if (message.method && this.listeners.has(message.method)) {
-          for (const listener of this.listeners.get(message.method)) {
-            listener(message.params ?? {});
-          }
-        }
-      });
-    });
-  }
-
-  send(method, params = {}) {
-    const id = this.nextId++;
-    this.ws.send(JSON.stringify({ id, method, params }));
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-    });
-  }
-
-  close() {
-    this.ws.close();
-  }
-
-  on(method, listener) {
-    const listeners = this.listeners.get(method) ?? [];
-    listeners.push(listener);
-    this.listeners.set(method, listeners);
-  }
-}
 
 const installCdpLogForwarding = (cdp) => {
   cdp.on("Runtime.consoleAPICalled", (params) => {
@@ -331,22 +299,6 @@ const createNetworkRecorder = () => {
   };
 };
 
-const waitForJson = async (url, label, timeoutMs = 20000) => {
-  const startedAt = Date.now();
-  let lastError = null;
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) return await response.json();
-      lastError = new Error(`${label} returned HTTP ${response.status}`);
-    } catch (err) {
-      lastError = err;
-    }
-    await sleep(250);
-  }
-  throw lastError ?? new Error(`${label} timed out`);
-};
-
 const evalValue = async (cdp, expression) => {
   const result = await cdp.send("Runtime.evaluate", {
     expression,
@@ -540,86 +492,32 @@ if (fakeVideoPath && !existsSync(fakeVideoPath)) {
   throw new Error(`MEET_OBSERVER_FAKE_VIDEO does not exist: ${fakeVideoPath}`);
 }
 
-const spawnedChrome = attachPort === null;
-const createdUserDataDir = spawnedChrome && !configuredUserDataDir;
-const userDataDir = configuredUserDataDir ??
-  (createdUserDataDir ? mkdtempSync(join(tmpdir(), "meet-effects-observer-")) : null);
-const chromeArgs = [
-  `--remote-debugging-port=${chromePort}`,
-  "--no-first-run",
-  "--no-default-browser-check",
-  "--disable-background-networking",
-  "--disable-component-update",
-  "--disable-extensions",
-  "--disable-sync",
-  mobileMode
-    ? `--window-size=${mobileWidth},${mobileHeight}`
-    : "--window-size=1440,900",
-  "--autoplay-policy=no-user-gesture-required",
-  "--enable-logging=stderr",
-  "--v=0",
-  meetUrl,
-].filter(Boolean);
-if (userDataDir) {
-  chromeArgs.unshift(`--user-data-dir=${userDataDir}`);
-}
-if (useFakeMedia) {
-  chromeArgs.splice(
-    chromeArgs.length - 1,
-    0,
-    "--use-fake-device-for-media-stream",
-    "--use-fake-ui-for-media-stream",
-  );
-  if (fakeVideoPath) {
-    chromeArgs.splice(
-      chromeArgs.length - 1,
-      0,
-      `--use-file-for-fake-video-capture=${fakeVideoPath}`,
-    );
-  }
-}
-if (headlessMode) {
-  chromeArgs.unshift("--headless=new");
-}
-
-const chrome = spawnedChrome
-  ? spawn(chromePath, chromeArgs, { stdio: ["ignore", "ignore", "pipe"] })
-  : null;
-
-chrome?.stderr.on("data", (chunk) => {
-  const text = String(chunk).trim();
-  if (text && !text.includes("INFO:CONSOLE")) {
-    emit("chrome_stderr", { text });
-  }
-});
-
+let browserSession = null;
 let cdp = null;
 const networkRecorder = createNetworkRecorder();
 try {
-  const targets = await waitForJson(
-    `http://127.0.0.1:${chromePort}/json/list`,
-    "Chrome target list",
-  );
-  const pageTargets = targets.filter((candidate) => candidate.type === "page");
-  const target =
-    pageTargets.find((candidate) =>
-      String(candidate.url ?? "").includes("meet.google.com"),
-    ) ??
-    pageTargets.find((candidate) =>
-      !String(candidate.url ?? "").startsWith("chrome://"),
-    ) ??
-    pageTargets[0] ??
-    targets[0];
-  if (!target?.webSocketDebuggerUrl) {
-    throw new Error("No debuggable Meet page target found");
-  }
-  cdp = new CdpClient(target.webSocketDebuggerUrl);
-  await cdp.open();
+  browserSession = await launchSilentBrowser({
+    chromePath,
+    label: "meet-effects-observer",
+    windowSize: mobileMode
+      ? `${mobileWidth},${mobileHeight}`
+      : "1440,900",
+    syntheticVideoFilePath: fakeVideoPath,
+    timeoutMs: 30_000,
+  });
+  cdp = browserSession.pageCdp;
+  emit("chrome_launch", {
+    chromePath,
+    url: meetUrl,
+    fakeVideoPath,
+    headless: browserSession.authority.exactHeadless,
+    muted: browserSession.authority.muted,
+    zeroAudioInput: browserSession.authority.zeroAudioInput,
+    isolatedProfile: browserSession.authority.isolatedProfile,
+  });
   installCdpLogForwarding(cdp);
   networkRecorder.install(cdp);
-  await cdp.send("Runtime.enable");
   await cdp.send("Network.enable");
-  await cdp.send("Page.enable");
   await cdp.send("Log.enable");
   if (mobileMode) {
     await cdp.send("Network.setUserAgentOverride", {
@@ -648,7 +546,11 @@ try {
       userAgent: mobileUserAgent,
     });
   }
-  await cdp.send("Page.navigate", { url: meetUrl });
+  await navigateSilentBrowserPage(browserSession, {
+    url: meetUrl,
+    label: "Meet observer",
+    timeoutMs: 30_000,
+  });
   await waitFor(
     cdp,
     "Meet prejoin shell",
@@ -808,17 +710,5 @@ try {
     process.exitCode = 1;
   }
 } finally {
-  cdp?.close();
-  if (chrome && !chrome.killed) {
-    chrome.kill("SIGTERM");
-  }
-  if (chrome) {
-    await Promise.race([
-      new Promise((resolve) => chrome.once("exit", resolve)),
-      sleep(1500),
-    ]);
-  }
-  if (createdUserDataDir && userDataDir && !keepUserDataDir) {
-    rmSync(userDataDir, { recursive: true, force: true });
-  }
+  await closeSilentBrowser(browserSession);
 }
