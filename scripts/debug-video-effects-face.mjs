@@ -45,10 +45,37 @@ const child = spawn(
   },
 );
 
-child.on("exit", (code, signal) => {
-  if (signal) {
-    process.kill(process.pid, signal);
-    return;
-  }
-  process.exitCode = code ?? 1;
+let forwardedSignal = null;
+const signalHandlers = new Map();
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]) {
+  const handler = () => {
+    forwardedSignal ??= signal;
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill(signal);
+    }
+  };
+  signalHandlers.set(signal, handler);
+  process.on(signal, handler);
+}
+
+const childResult = await new Promise((resolve, reject) => {
+  child.once("error", reject);
+  child.once("exit", (code, signal) => resolve({ code, signal }));
 });
+for (const [signal, handler] of signalHandlers) {
+  process.removeListener(signal, handler);
+}
+if (forwardedSignal) {
+  process.exitCode =
+    forwardedSignal === "SIGINT"
+      ? 130
+      : forwardedSignal === "SIGHUP"
+        ? 129
+        : forwardedSignal === "SIGQUIT"
+          ? 131
+          : 143;
+} else if (childResult.signal) {
+  process.exitCode = childResult.signal === "SIGKILL" ? 137 : 1;
+} else {
+  process.exitCode = childResult.code ?? 1;
+}

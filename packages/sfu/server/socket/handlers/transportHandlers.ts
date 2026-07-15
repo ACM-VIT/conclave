@@ -3,8 +3,15 @@ import type {
   ConnectTransportData,
   RestartIceData,
   RestartIceResponse,
+  SetProducerTransportNetworkProfileData,
+  SetProducerTransportNetworkProfileResponse,
 } from "../../../types.js";
+import { config } from "../../../config/config.js";
 import { Logger } from "../../../utilities/loggers.js";
+import {
+  getProducerTransportMaxIncomingBitrate,
+  isProducerTransportNetworkProfile,
+} from "../../producerTransportNetworkProfile.js";
 import type { ConnectionContext } from "../context.js";
 import { connectWebRtcTransportOnce } from "../transportConnect.js";
 import { respond } from "./ack.js";
@@ -63,7 +70,8 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        const transport = await context.currentRoom.createWebRtcTransport();
+        const transport =
+          await context.currentRoom.createWebRtcTransport("producer");
         const previousTransport = context.currentClient.producerTransport;
         if (previousTransport && previousTransport.id !== transport.id) {
           try {
@@ -71,6 +79,18 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           } catch {}
         }
         context.currentClient.producerTransport = transport;
+        const refreshCapacityProofs = () => {
+          if (
+            context.currentRoom &&
+            context.currentClient?.producerTransport === transport
+          ) {
+            context.currentRoom.refreshWebcamReceiverCapacityProofs();
+          }
+        };
+        transport.on("icestatechange", refreshCapacityProofs);
+        transport.on("dtlsstatechange", refreshCapacityProofs);
+        transport.observer.on("close", refreshCapacityProofs);
+        refreshCapacityProofs();
 
         respond(callback, {
           id: transport.id,
@@ -110,7 +130,8 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        const transport = await context.currentRoom.createWebRtcTransport();
+        const transport =
+          await context.currentRoom.createWebRtcTransport("consumer");
         const previousTransport = context.currentClient.consumerTransport;
         if (previousTransport && previousTransport.id !== transport.id) {
           context.currentClient.closeConsumers();
@@ -119,6 +140,18 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           } catch {}
         }
         context.currentClient.consumerTransport = transport;
+        const refreshCapacityProofs = () => {
+          if (
+            context.currentRoom &&
+            context.currentClient?.consumerTransport === transport
+          ) {
+            context.currentRoom.refreshWebcamReceiverCapacityProofs();
+          }
+        };
+        transport.on("icestatechange", refreshCapacityProofs);
+        transport.on("dtlsstatechange", refreshCapacityProofs);
+        transport.observer.on("close", refreshCapacityProofs);
+        refreshCapacityProofs();
 
         respond(callback, {
           id: transport.id,
@@ -222,6 +255,84 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
         respond(callback, { success: true });
       } catch (error) {
         Logger.error("Error connecting consumer transport:", error);
+        respond(callback, { error: (error as Error).message });
+      }
+    },
+  );
+
+  socket.on(
+    "setProducerTransportNetworkProfile",
+    async (
+      data: SetProducerTransportNetworkProfileData,
+      callback: (
+        response:
+          | SetProducerTransportNetworkProfileResponse
+          | { error: string },
+      ) => void,
+    ) => {
+      try {
+        if (!context.currentRoom || !context.currentClient) {
+          respond(callback, { error: "Not in a room" });
+          return;
+        }
+        if (context.currentClient.isObserver) {
+          respond(callback, {
+            error: "Watch-only attendees cannot control producer transports",
+          });
+          return;
+        }
+        if (
+          !takeToken(
+            socket,
+            "setProducerTransportNetworkProfile",
+            RATE_LIMITS.producerTransportProfile,
+          )
+        ) {
+          respond(callback, {
+            error: "Too many producer transport profile requests; please retry shortly",
+          });
+          return;
+        }
+
+        const transport = context.currentClient.producerTransport;
+        if (!transport) {
+          respond(callback, { error: "Producer transport not found" });
+          return;
+        }
+        const transportId = normalizeTransportId(data?.transportId);
+        if (data?.transportId !== undefined && !transportId) {
+          respond(callback, { error: "Invalid transport ID" });
+          return;
+        }
+        if (transportId && transport.id !== transportId) {
+          respond(callback, { error: "Stale producer transport" });
+          return;
+        }
+        if (transport.closed) {
+          respond(callback, { error: "Producer transport is closed" });
+          return;
+        }
+        if (!isProducerTransportNetworkProfile(data?.profile)) {
+          respond(callback, { error: "Invalid producer transport profile" });
+          return;
+        }
+
+        const maxIncomingBitrate = getProducerTransportMaxIncomingBitrate(
+          data.profile,
+          config.webRtcTransport.producerMaxIncomingBitrate,
+        );
+        await transport.setMaxIncomingBitrate(maxIncomingBitrate);
+        respond(callback, {
+          success: true,
+          transportId: transport.id,
+          profile: data.profile,
+          maxIncomingBitrate,
+        });
+      } catch (error) {
+        Logger.error(
+          "Error setting producer transport network profile:",
+          error,
+        );
         respond(callback, { error: (error as Error).message });
       }
     },

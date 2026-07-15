@@ -529,6 +529,7 @@ final class MeetingViewModel {
     private var participantConnectionStatusTasks: [String: Task<Void, Never>] = [:]
     private var remoteConsumerBandwidthPolicyTask: Task<Void, Never>?
     private var appForegroundAllowsRemoteVideoReceive = true
+    private var webcamReceiverCapacityAuthorityGeneration = 0
     private var participantLeaveTokens: [String: UUID] = [:]
     private var departedParticipantUserIds: Set<String> = []
     private var pendingProducers: [String: ProducerInfo] = [:]
@@ -1119,6 +1120,10 @@ final class MeetingViewModel {
             let eventContext = self.currentSocketEventContext()
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext) else { return }
+                if !self.isIntentionalLeave {
+                    self.webcamReceiverCapacityAuthorityGeneration += 1
+                    self.webRTCClient.invalidateWebcamReceiverCapacityAuthority()
+                }
                 self.state.isNetworkOffline = self.effectiveNetworkOffline
                 if self.state.connectionState == ConnectionState.error,
                    self.state.errorMessage != nil {
@@ -1177,6 +1182,10 @@ final class MeetingViewModel {
             let eventContext = self.currentSocketEventContext()
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext) else { return }
+                if !self.isIntentionalLeave {
+                    self.webcamReceiverCapacityAuthorityGeneration += 1
+                    self.webRTCClient.invalidateWebcamReceiverCapacityAuthority()
+                }
                 if !self.isIntentionalLeave {
                     if self.state.connectionState == .joined ||
                         self.state.isRecoveringConnection ||
@@ -1477,6 +1486,34 @@ final class MeetingViewModel {
                     self.refreshPipVideo(requestKeyFrame: true)
                     #endif
                 }
+            }
+        }
+
+        socketManager.onWebcamReceiverCapacityProof = { [weak self] notification in
+            guard let self = self else { return }
+            let eventContext = self.currentSocketEventContext()
+            let authorityGeneration = self.webcamReceiverCapacityAuthorityGeneration
+            let permittedAtReceipt = WebcamReceiverCapacityAuthorityPolicy.canIngestAtReceipt(
+                isForeground: self.appForegroundAllowsRemoteVideoReceive,
+                isJoined: self.state.connectionState == .joined,
+                isConnected: self.socketManager.isConnected,
+                isIntentionalLeave: self.isIntentionalLeave
+            )
+            Task { @MainActor in
+                guard WebcamReceiverCapacityAuthorityPolicy.canIngestAfterHop(
+                    permittedAtReceipt: permittedAtReceipt,
+                    capturedGeneration: authorityGeneration,
+                    currentGeneration: self.webcamReceiverCapacityAuthorityGeneration,
+                    isForeground: self.appForegroundAllowsRemoteVideoReceive,
+                    isJoined: self.state.connectionState == .joined,
+                    isConnected: self.socketManager.isConnected,
+                    isIntentionalLeave: self.isIntentionalLeave
+                ),
+                      self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
+                self.webRTCClient.handleWebcamReceiverCapacityProof(
+                    notification,
+                    expectedRoomId: self.state.roomId
+                )
             }
         }
 
@@ -3231,7 +3268,7 @@ final class MeetingViewModel {
         let hasActiveConsumer = producerInfosById.values.contains { producer in
             producerMatches(producer) &&
                 (consumingProducerIds.contains(producer.producerId) ||
-                    webRTCClient.consumerId(forProducer: producer.producerId) != nil)
+                    webRTCClient.hasConsumerGeneration(forProducer: producer.producerId))
         }
         return hasActiveConsumer ||
             pendingProducers.values.contains(where: producerMatches)
@@ -4919,6 +4956,12 @@ final class MeetingViewModel {
         let producerUserId = notification.producerUserId
         guard producerUserId == nil || state.isLocalIdentityUserId(producerUserId ?? "") else { return false }
 
+        if webRTCClient.consumeIntentionalLocalVideoProducerClose(
+            producerId: notification.producerId
+        ) {
+            return true
+        }
+
         let wasMuted = state.isMuted
         if await webRTCClient.closeLocalMedia(
             kind: "audio",
@@ -6008,6 +6051,11 @@ final class MeetingViewModel {
             }
             if let consumerId = webRTCClient.consumerId(forProducer: producer.producerId) {
                 try? await socketManager.resumeConsumer(consumerId: consumerId, requestKeyFrame: false)
+            } else if webRTCClient.hasConsumerGeneration(forProducer: producer.producerId) {
+                // A planned make-before-break reset owns this producer. Its
+                // staged/displaced generations must not receive sync controls
+                // or be duplicated by a third consume.
+                continue
             } else {
                 await consumeRemoteProducer(producer, context: context)
             }
@@ -6035,7 +6083,7 @@ final class MeetingViewModel {
             discardStaleConsumedProducer(producer)
             return
         }
-        if webRTCClient.consumerId(forProducer: producer.producerId) != nil {
+        if webRTCClient.hasConsumerGeneration(forProducer: producer.producerId) {
             pendingProducers.removeValue(forKey: producer.producerId)
             pendingProducerContexts.removeValue(forKey: producer.producerId)
             pendingProducerRetryAttempts.removeValue(forKey: producer.producerId)
@@ -6066,7 +6114,10 @@ final class MeetingViewModel {
                 producerKind: producer.kind,
                 producerType: producer.type,
                 preferHighWebcamLayer: state.isWebinarAttendee,
-                initialReceiveConnectionQuality: receiveConnectionQuality
+                initialReceiveConnectionQuality: receiveConnectionQuality,
+                roomId: producer.roomId ?? state.roomId,
+                meetingLifecycleGeneration:
+                    context?.lifecycleGeneration ?? meetingLifecycleGeneration
             )
             if let context {
                 guard isCurrentSocketEvent(context, roomId: producer.roomId) else {
@@ -6561,6 +6612,9 @@ final class MeetingViewModel {
             return
         }
         let shouldRestoreRemoteVideo = !appForegroundAllowsRemoteVideoReceive
+        if shouldRestoreRemoteVideo {
+            webcamReceiverCapacityAuthorityGeneration += 1
+        }
         appForegroundAllowsRemoteVideoReceive = true
 
         switch state.connectionState {
@@ -6602,8 +6656,11 @@ final class MeetingViewModel {
 
     func handleAppEnteredBackground() {
         persistMeetingResumeSnapshot()
-        guard appForegroundAllowsRemoteVideoReceive else { return }
+        let wasForeground = appForegroundAllowsRemoteVideoReceive
+        webcamReceiverCapacityAuthorityGeneration += 1
         appForegroundAllowsRemoteVideoReceive = false
+        webRTCClient.invalidateWebcamReceiverCapacityAuthority()
+        guard wasForeground else { return }
         scheduleRemoteConsumerBandwidthPolicyUpdate()
     }
 

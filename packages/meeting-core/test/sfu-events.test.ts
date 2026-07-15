@@ -34,12 +34,13 @@ describe("SFU_EVENTS", () => {
     const serverEvents = new Set(Object.values(SFU_EVENTS.serverToClient));
 
     expect(Array.from(clientEvents)).toEqual(
-      expect.arrayContaining(["closeConsumer"]),
+      expect.arrayContaining(["closeConsumer", "requestProducerKeyFrame"]),
     );
     expect(Array.from(serverEvents)).toEqual(
       expect.arrayContaining([
         "participantConnectionState",
         "consumerTelemetry",
+        "webcamReceiverCapacityProof",
         "producerClosed",
       ]),
     );

@@ -35,6 +35,61 @@ export type BrowserNetworkSnapshot = {
   rttMs: number | null;
 };
 
+export const BROWSER_NETWORK_POLICY_OBSERVATION_VERSION = 1;
+
+export type BrowserNetworkPolicyObservation = {
+  version: typeof BROWSER_NETWORK_POLICY_OBSERVATION_VERSION;
+  source: "useConnectionQuality";
+  observedAtEpochMs: number;
+  browserNetwork: Readonly<BrowserNetworkSnapshot>;
+};
+
+export type BrowserNetworkPollAuthority = Readonly<{
+  begin: () => number;
+  isCurrent: (generation: number) => boolean;
+  invalidate: () => void;
+}>;
+
+/**
+ * Makes overlapping asynchronous stats polls latest-request-wins. A Network
+ * Information change can arrive while getStats() is pending; the older poll
+ * must not publish its stale browser snapshot after the newer request begins.
+ */
+export function createBrowserNetworkPollAuthority(): BrowserNetworkPollAuthority {
+  let latestGeneration = 0;
+  return Object.freeze({
+    begin: () => {
+      latestGeneration += 1;
+      return latestGeneration;
+    },
+    isCurrent: (generation) => generation === latestGeneration,
+    invalidate: () => {
+      latestGeneration += 1;
+    },
+  });
+}
+
+/**
+ * Product-owned evidence that the real connection-quality policy consumed a
+ * browser Network Information snapshot. The quality harness may inject the
+ * browser API, but it cannot mint this observation: only the application poll
+ * that drives publish/receive adaptation calls this helper.
+ */
+export function buildBrowserNetworkPolicyObservation(
+  browserNetwork: BrowserNetworkSnapshot,
+  observedAtEpochMs = Date.now(),
+): Readonly<BrowserNetworkPolicyObservation> {
+  if (!Number.isFinite(observedAtEpochMs) || observedAtEpochMs < 0) {
+    throw new TypeError("browser network observation epoch must be non-negative");
+  }
+  return Object.freeze({
+    version: BROWSER_NETWORK_POLICY_OBSERVATION_VERSION,
+    source: "useConnectionQuality",
+    observedAtEpochMs,
+    browserNetwork: Object.freeze({ ...browserNetwork }),
+  });
+}
+
 const isFinitePositiveNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value > 0;
 
@@ -181,11 +236,20 @@ export function getBrowserNetworkSnapshot(): BrowserNetworkSnapshot {
 export function shouldStartLowBandwidthVideo(
   connection = getBrowserNetworkInformation(),
 ): boolean {
-  const quality = getBrowserNetworkStartupQuality(connection);
+  if (!connection) return isLikelyMobileOrTabletNavigator();
+  if (connection.saveData === true) return true;
+  const effectiveType = connection.effectiveType?.toLowerCase();
+  if (
+    effectiveType === "slow-2g" ||
+    effectiveType === "2g" ||
+    effectiveType === "3g"
+  ) {
+    return true;
+  }
+  // Start conservatively only from capacity evidence. A long but otherwise
+  // clean network path cannot be repaired by discarding camera pixels.
   return (
-    isEmergencyBrowserNetwork(connection) ||
-    quality === "fair" ||
-    quality === "poor"
+    isFinitePositiveNumber(connection.downlink) && connection.downlink <= 1.5
   );
 }
 

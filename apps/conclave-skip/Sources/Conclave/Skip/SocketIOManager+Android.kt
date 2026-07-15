@@ -40,12 +40,15 @@ internal object SocketEvent {
     val createConsumerTransport = SfuClientEvent.createConsumerTransport.rawValue
     val connectProducerTransport = SfuClientEvent.connectProducerTransport.rawValue
     val connectConsumerTransport = SfuClientEvent.connectConsumerTransport.rawValue
+    val setProducerTransportNetworkProfile = SfuClientEvent.setProducerTransportNetworkProfile.rawValue
     val restartIce = SfuClientEvent.restartIce.rawValue
     val produce = SfuClientEvent.produce.rawValue
     val consume = SfuClientEvent.consume.rawValue
+    val abortConsumerHandoff = SfuClientEvent.abortConsumerHandoff.rawValue
     val resumeConsumer = SfuClientEvent.resumeConsumer.rawValue
     val setConsumerPreferences = SfuClientEvent.setConsumerPreferences.rawValue
     val setConsumerPreferencesBatch = SfuClientEvent.setConsumerPreferencesBatch.rawValue
+    val requestProducerKeyFrame = SfuClientEvent.requestProducerKeyFrame.rawValue
     val closeConsumer = SfuClientEvent.closeConsumer.rawValue
     val getRooms = SfuClientEvent.getRooms.rawValue
     val getProducers = SfuClientEvent.getProducers.rawValue
@@ -53,6 +56,7 @@ internal object SocketEvent {
     val toggleCamera = SfuClientEvent.toggleCamera.rawValue
     val closeProducer = SfuClientEvent.closeProducer.rawValue
     val sendChat = SfuClientEvent.sendChat.rawValue
+    val chatImageUploadAuthorize = SfuClientEvent.chatImageUploadAuthorize.rawValue
     val conclaveAuthorize = SfuClientEvent.conclaveAuthorize.rawValue
     val conclaveAnswer = SfuClientEvent.conclaveAnswer.rawValue
     val sendReaction = SfuClientEvent.sendReaction.rawValue
@@ -64,6 +68,7 @@ internal object SocketEvent {
     val setDmEnabled = SfuClientEvent.setDmEnabled.rawValue
     val setTtsDisabled = SfuClientEvent.setTtsDisabled.rawValue
     val setReactionsDisabled = SfuClientEvent.setReactionsDisabled.rawValue
+    val setImageAttachmentsEnabled = SfuClientEvent.setImageAttachmentsEnabled.rawValue
     val getRoomLockStatus = SfuClientEvent.getRoomLockStatus.rawValue
     val getChatLockStatus = SfuClientEvent.getChatLockStatus.rawValue
     val getDmEnabledStatus = SfuClientEvent.getDmEnabledStatus.rawValue
@@ -139,6 +144,7 @@ internal object SocketEvent {
     val newProducer = SfuServerEvent.newProducer.rawValue
     val producerClosed = SfuServerEvent.producerClosed.rawValue
     val consumerTelemetry = SfuServerEvent.consumerTelemetry.rawValue
+    val webcamReceiverCapacityProof = SfuServerEvent.webcamReceiverCapacityProof.rawValue
     val chatMessage = SfuServerEvent.chatMessage.rawValue
     val conclaveMessage = SfuServerEvent.conclaveMessage.rawValue
     val chatHistorySnapshot = SfuServerEvent.chatHistorySnapshot.rawValue
@@ -149,6 +155,7 @@ internal object SocketEvent {
     val chatLockChanged = SfuServerEvent.chatLockChanged.rawValue
     val noGuestsChanged = SfuServerEvent.noGuestsChanged.rawValue
     val dmStateChanged = SfuServerEvent.dmStateChanged.rawValue
+    val imageAttachmentsStateChanged = SfuServerEvent.imageAttachmentsStateChanged.rawValue
     val ttsDisabledChanged = SfuServerEvent.ttsDisabledChanged.rawValue
     val reactionsDisabledChanged = SfuServerEvent.reactionsDisabledChanged.rawValue
     val userRequestedJoin = SfuServerEvent.userRequestedJoin.rawValue
@@ -204,7 +211,18 @@ internal class ConsumeRawResult(
     internal val id: String,
     internal val producerId: String,
     internal val kind: String,
-    internal val rtpParametersJson: String
+    internal val rtpParametersJson: String,
+    internal val consumerType: String?,
+    internal val paused: Boolean?,
+    internal val producerPaused: Boolean?,
+    internal val preferredSpatialLayer: Int?,
+    internal val preferredTemporalLayer: Int?,
+    internal val currentSpatialLayer: Int?,
+    internal val currentTemporalLayer: Int?,
+    internal val priority: Int?,
+    internal val actualVideoCodecMimeType: String?,
+    internal val maxSpatialLayer: Int?,
+    internal val plannedConsumerHandoffRequestId: String?,
 )
 
 internal class SocketIOManager {
@@ -266,6 +284,7 @@ internal class SocketIOManager {
     internal var onNewProducer: ((ProducerInfo) -> Unit)? = null
     internal var onProducerClosed: ((ProducerClosedNotification) -> Unit)? = null
     internal var onConsumerTelemetry: ((ConsumerTelemetryNotification) -> Unit)? = null
+    internal var onWebcamReceiverCapacityProof: ((WebcamReceiverCapacityProofNotification) -> Unit)? = null
 
     internal var onChatMessage: ((ChatMessage) -> Unit)? = null
     internal var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Unit)? = null
@@ -631,7 +650,8 @@ internal class SocketIOManager {
         kind: String,
         rtpParametersJson: String,
         type: ProducerType,
-        paused: Boolean
+        paused: Boolean,
+        webcamReceiverCapacityTransition: WebcamReceiverCapacityTransition? = null,
     ): String {
         val request = JSONObject()
         request.put("transportId", transportId)
@@ -640,6 +660,14 @@ internal class SocketIOManager {
         val appData = JSONObject()
         appData.put("type", type.rawValue)
         appData.put("paused", paused)
+        webcamReceiverCapacityTransition?.let { transition ->
+            appData.put(
+                "webcamReceiverCapacityTransition",
+                JSONObject()
+                    .put("fromProducerId", transition.fromProducerId)
+                    .put("nonce", transition.nonce),
+            )
+        }
         request.put("appData", appData)
         val data = emit(SocketEvent.produce, request)
         val response = JSONDecoder().decode(ProduceResponse::class, from = data)
@@ -655,7 +683,10 @@ internal class SocketIOManager {
         transportId: String,
         preferredSpatialLayer: Int? = null,
         preferredTemporalLayer: Int? = null,
-        priority: Int? = null
+        priority: Int? = null,
+        plannedHandoffRequestId: String? = null,
+        plannedHandoffPredecessorConsumerId: String? = null,
+        timeoutMilliseconds: Int? = null,
     ): ConsumeRawResult {
         val request = JSONObject()
         request.put("transportId", transportId)
@@ -671,19 +702,130 @@ internal class SocketIOManager {
         if (priority != null) {
             request.put("priority", priority)
         }
-        val data = emit(SocketEvent.consume, request)
+        if (
+            !plannedHandoffRequestId.isNullOrBlank() &&
+            !plannedHandoffPredecessorConsumerId.isNullOrBlank()
+        ) {
+            request.put(
+                "plannedConsumerHandoff",
+                JSONObject()
+                    .put("requestId", plannedHandoffRequestId.trim())
+                    .put(
+                        "predecessorConsumerId",
+                        plannedHandoffPredecessorConsumerId.trim(),
+                    ),
+            )
+        }
+        val data = emit(
+            SocketEvent.consume,
+            request,
+            timeoutMs = (timeoutMilliseconds ?: ACK_TIMEOUT_MS.toInt()).coerceAtLeast(100).toLong(),
+        )
         val obj = JSONObject(dataToString(data))
+        val rtpParameters = obj.getJSONObject("rtpParameters")
+        val preferredLayers = obj.optJSONObject("preferredLayers")
+        val currentLayers = obj.optJSONObject("currentLayers")
         return ConsumeRawResult(
             id = obj.getString("id"),
             producerId = obj.getString("producerId"),
             kind = obj.getString("kind"),
-            rtpParametersJson = obj.getJSONObject("rtpParameters").toString()
+            rtpParametersJson = rtpParameters.toString(),
+            consumerType = stringField(obj, "consumerType"),
+            paused = boolField(obj, "paused"),
+            producerPaused = boolField(obj, "producerPaused"),
+            preferredSpatialLayer = preferredLayers?.let { intField(it, "spatialLayer") },
+            preferredTemporalLayer = preferredLayers?.let { intField(it, "temporalLayer") },
+            currentSpatialLayer = currentLayers?.let { intField(it, "spatialLayer") },
+            currentTemporalLayer = currentLayers?.let { intField(it, "temporalLayer") },
+            priority = intField(obj, "priority"),
+            actualVideoCodecMimeType = actualVideoCodecMimeType(rtpParameters),
+            maxSpatialLayer = intField(obj, "maxSpatialLayer")
+                ?: derivedMaxSpatialLayer(rtpParameters),
+            plannedConsumerHandoffRequestId = stringField(
+                obj,
+                "plannedConsumerHandoffRequestId",
+            ),
         )
     }
 
-    internal suspend fun resumeConsumer(consumerId: String, requestKeyFrame: Boolean = false) {
+    internal suspend fun abortConsumerHandoffAndWait(
+        requestId: String,
+        producerId: String,
+        predecessorConsumerId: String,
+        timeoutMilliseconds: Int = 1_000,
+    ) {
+        val normalizedRequestId = requestId.trim()
+        val payload = JSONObject()
+            .put("requestId", normalizedRequestId)
+            .put("producerId", producerId.trim())
+            .put("predecessorConsumerId", predecessorConsumerId.trim())
+        val data = emit(
+            SocketEvent.abortConsumerHandoff,
+            payload,
+            timeoutMs = timeoutMilliseconds.coerceAtLeast(100).toLong(),
+        )
+        val response = JSONObject(dataToString(data))
+        if (
+            response.optBoolean("success", false) != true ||
+            response.optBoolean("predecessorRestored", false) != true ||
+            !response.optString("requestId", "")
+                .equals(normalizedRequestId, ignoreCase = true)
+        ) {
+            throw ErrorException("Planned consumer handoff abort was not confirmed")
+        }
+    }
+
+    private fun actualVideoCodecMimeType(rtpParameters: JSONObject): String? {
+        val codecs = rtpParameters.optJSONArray("codecs") ?: return null
+        for (index in 0 until codecs.length()) {
+            val mimeType = codecs.optJSONObject(index)?.optString("mimeType")
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: continue
+            val normalized = mimeType.lowercase()
+            if (
+                normalized.startsWith("video/") &&
+                normalized != "video/rtx" &&
+                normalized != "video/red" &&
+                normalized != "video/ulpfec" &&
+                normalized != "video/flexfec-03"
+            ) {
+                return mimeType
+            }
+        }
+        return null
+    }
+
+    private fun derivedMaxSpatialLayer(rtpParameters: JSONObject): Int? {
+        val encodings = rtpParameters.optJSONArray("encodings") ?: return null
+        var maxSpatialLayer: Int? = if (encodings.length() > 1) encodings.length() - 1 else null
+        val scalabilityPattern = Regex("^[LS]([0-9]+)T", RegexOption.IGNORE_CASE)
+        for (index in 0 until encodings.length()) {
+            val mode = encodings.optJSONObject(index)?.optString("scalabilityMode")
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: continue
+            val layerCount = scalabilityPattern.find(mode)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                ?: continue
+            val candidate = layerCount - 1
+            if (candidate >= 0 && (maxSpatialLayer == null || candidate > maxSpatialLayer)) {
+                maxSpatialLayer = candidate
+            }
+        }
+        return maxSpatialLayer
+    }
+
+    internal suspend fun resumeConsumer(
+        consumerId: String,
+        requestKeyFrame: Boolean = false,
+        timeoutMilliseconds: Int? = null,
+    ) {
         val request = ResumeConsumerRequest(consumerId = consumerId, requestKeyFrame = requestKeyFrame)
-        emit(SocketEvent.resumeConsumer, request)
+        emit(
+            SocketEvent.resumeConsumer,
+            request,
+            timeoutMs = (timeoutMilliseconds ?: ACK_TIMEOUT_MS.toInt()).coerceAtLeast(100).toLong(),
+        )
     }
 
     internal fun closeConsumer(consumerId: String) {
@@ -694,6 +836,27 @@ internal class SocketIOManager {
             attempt = 0,
             startedAtMs = System.currentTimeMillis()
         )
+    }
+
+    internal suspend fun closeConsumerAndWait(
+        consumerId: String,
+        timeoutMilliseconds: Int = 1_250,
+    ) {
+        val trimmedConsumerId = consumerId.trim()
+        if (trimmedConsumerId.isEmpty()) return
+        try {
+            emit(
+                SocketEvent.closeConsumer,
+                JSONObject().put("consumerId", trimmedConsumerId),
+                timeoutMs = timeoutMilliseconds.coerceAtLeast(100).toLong(),
+            )
+        } catch (error: Throwable) {
+            val message = (error.message ?: error.toString()).lowercase()
+            if (message.contains("consumer not found") || message.contains("not_found")) {
+                return
+            }
+            throw error
+        }
     }
 
     internal suspend fun setConsumerPreferences(
@@ -3075,6 +3238,16 @@ internal class SocketIOManager {
             onConsumerTelemetry?.invoke(notification)
         })
 
+        socket.on(SocketEvent.webcamReceiverCapacityProof, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            if (activeRoomId == null) return@Listener
+            val notification = decode<WebcamReceiverCapacityProofNotification>(
+                args.firstOrNull(),
+            ) ?: return@Listener
+            if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
+            onWebcamReceiverCapacityProof?.invoke(notification)
+        })
+
         socket.on(SocketEvent.adminProducerClosed, Emitter.Listener { args ->
             if (this.socket !== socket) return@Listener
             val notification = decode<AdminProducerClosedNotification>( args.firstOrNull()) ?: return@Listener
@@ -3180,6 +3353,12 @@ internal class SocketIOManager {
             val notification = decode<DmStateChangedNotification>( args.firstOrNull()) ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
             onDmStateChanged?.invoke(notification)
+        })
+
+        socket.on(SocketEvent.imageAttachmentsStateChanged, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val notification = decode<DmStateChangedNotification>(args.firstOrNull()) ?: return@Listener
+            if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
         })
 
         socket.on(SocketEvent.ttsDisabledChanged, Emitter.Listener { args ->

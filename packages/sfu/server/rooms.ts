@@ -2,7 +2,10 @@ import { Room } from "../config/classes/Room.js";
 import { config } from "../config/config.js";
 import getWorker from "../utilities/getWorker.js";
 import { Logger } from "../utilities/loggers.js";
-import { RoomOwnershipError } from "./roomRegistry.js";
+import {
+  RoomLeaseExpiredError,
+  RoomOwnershipError,
+} from "./roomRegistry.js";
 import { cleanupRoomBrowser } from "./socket/handlers/sharedBrowserHandlers.js";
 import type { EndedRoom, SfuState } from "./state.js";
 import { clearWebinarLinkSlug } from "./webinar.js";
@@ -75,11 +78,22 @@ export const getOrCreateRoom = async (
   let room = state.rooms.get(channelId);
   if (room) {
     if (!room.router.closed) {
-      const ownership = await state.roomRegistry.claimRoom({
-        channelId,
-        clientId,
-        roomId,
-      });
+      let ownership;
+      try {
+        ownership = await state.roomRegistry.renewRoom({
+          channelId,
+          clientId,
+          roomId,
+        });
+      } catch (error) {
+        if (error instanceof RoomLeaseExpiredError) {
+          Logger.warn(
+            `Closing room ${roomId} (${clientId}) before its unconfirmed shared lease can expire`,
+          );
+          cleanupRoomState(state, channelId);
+        }
+        throw error;
+      }
       if (!ownership.ok) {
         Logger.warn(
           `Closing local room ${roomId} (${clientId}) because ownership belongs to ${ownership.owner.instanceId}`,
@@ -226,11 +240,23 @@ export const renewRoomOwnerships = async (state: SfuState): Promise<void> => {
       continue;
     }
 
-    const ownership = await state.roomRegistry.renewRoom({
-      channelId: room.channelId,
-      clientId: room.clientId,
-      roomId: room.id,
-    });
+    let ownership;
+    try {
+      ownership = await state.roomRegistry.renewRoom({
+        channelId: room.channelId,
+        clientId: room.clientId,
+        roomId: room.id,
+      });
+    } catch (error) {
+      if (error instanceof RoomLeaseExpiredError) {
+        Logger.warn(
+          `Closing room ${room.id} (${room.clientId}) before its unconfirmed shared lease can expire`,
+        );
+        cleanupRoomState(state, room.channelId);
+        continue;
+      }
+      throw error;
+    }
     if (ownership.ok) {
       continue;
     }

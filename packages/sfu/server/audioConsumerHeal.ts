@@ -102,12 +102,24 @@ export const healStuckAudioConsumers = async (
   let healed = 0;
   for (const { client, consumer, ageMs } of stuck) {
     // The awaited resumes above can interleave with socket handlers; re-check
-    // that the consumer was not closed or intentionally paused meanwhile.
-    if (consumer.closed || !consumer.paused || isConsumerClientPaused(consumer)) {
+    // that the consumer is still the current generation and was not closed or
+    // intentionally paused meanwhile.
+    if (
+      client.getConsumer(consumer.producerId) !== consumer ||
+      consumer.closed ||
+      !consumer.paused ||
+      isConsumerClientPaused(consumer)
+    ) {
       continue;
     }
     try {
       await consumer.resume();
+      // A successor may have displaced this consumer while resume awaited.
+      // Do not report a stale generation as healed; only current generations
+      // are allowed to produce health-success notifications.
+      if (client.getConsumer(consumer.producerId) !== consumer) {
+        continue;
+      }
       healed += 1;
       Logger.warn(
         `[audio-heal] Auto-resumed stuck audio consumer ${consumer.id} ` +

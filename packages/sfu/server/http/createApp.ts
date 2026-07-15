@@ -747,9 +747,9 @@ export const createSfuApp = ({
       const resolvedClientId = canonicalizeClientId(clientId);
       let roomId = requestedRoomId;
       let channelId = getRoomChannelId(resolvedClientId, roomId);
-      let owner = await state.roomRegistry.getOwner(channelId);
+      let assignment = await state.roomRegistry.getAssignment(channelId);
 
-      if (!owner) {
+      if (!assignment) {
         const webinarTarget = resolveWebinarLinkTarget(
           state.webinarLinks,
           requestedRoomId,
@@ -758,9 +758,12 @@ export const createSfuApp = ({
         if (webinarTarget) {
           roomId = webinarTarget.roomId;
           channelId = webinarTarget.roomChannelId;
-          owner = await state.roomRegistry.getOwner(channelId);
+          assignment = await state.roomRegistry.getAssignment(channelId);
         }
       }
+
+      const owner = assignment?.kind === "placement" ? null : assignment;
+      const placement = assignment?.kind === "placement" ? assignment : null;
 
       res.json({
         requestedRoomId,
@@ -768,12 +771,77 @@ export const createSfuApp = ({
         clientId: resolvedClientId,
         channelId,
         registryMode: state.roomRegistry.mode,
-        local: state.roomRegistry.isLocalOwner(owner),
+        local: state.roomRegistry.isLocalOwner(assignment),
         owner,
+        placement,
       });
     } catch (error) {
       Logger.warn("Room routing lookup failed", error);
       res.status(503).json({ error: "Room routing lookup failed" });
+    }
+  });
+
+  app.post("/routing/placements/:clientId/:roomId", async (req, res) => {
+    if (!requireSecret(req, res)) {
+      return;
+    }
+
+    const clientId = normalizeIdentifier(req.params.clientId);
+    const roomId = normalizeIdentifier(req.params.roomId);
+    if (!clientId) {
+      res.status(400).json({ error: "Client ID is required" });
+      return;
+    }
+    if (!roomId) {
+      res.status(400).json({ error: "Room ID is required" });
+      return;
+    }
+
+    const resolvedClientId = canonicalizeClientId(clientId);
+    let resolvedRoomId = roomId;
+    let channelId = getRoomChannelId(resolvedClientId, resolvedRoomId);
+    const webinarTarget = resolveWebinarLinkTarget(
+      state.webinarLinks,
+      roomId,
+      resolvedClientId,
+    );
+    if (webinarTarget) {
+      resolvedRoomId = webinarTarget.roomId;
+      channelId = webinarTarget.roomChannelId;
+    }
+
+    try {
+      // Draining instances keep routing established owners/placements but must
+      // not become the first assignment for a new room.
+      const existing = await state.roomRegistry.getAssignment(channelId);
+      if (state.isDraining && !existing) {
+        res.status(409).json({
+          error: "Meeting server is draining",
+          draining: true,
+        });
+        return;
+      }
+
+      const result = await state.roomRegistry.reservePlacement({
+        channelId,
+        clientId: resolvedClientId,
+        roomId: resolvedRoomId,
+      });
+      const assignment = result.ok ? result.placement : result.assignment;
+      res.set("Cache-Control", "no-store");
+      res.json({
+        clientId: resolvedClientId,
+        requestedRoomId: roomId,
+        roomId: resolvedRoomId,
+        channelId,
+        registryMode: state.roomRegistry.mode,
+        local: state.roomRegistry.isLocalOwner(assignment),
+        assignment,
+      });
+    } catch (error) {
+      Logger.warn("Room placement reservation failed", error);
+      res.set("Retry-After", "2");
+      res.status(503).json({ error: "Room placement registry unavailable" });
     }
   });
 
@@ -784,6 +852,7 @@ export const createSfuApp = ({
 
     return res.json({
       instanceId: config.instanceId,
+      region: config.region,
       version: config.version,
       draining: state.isDraining,
       rooms: state.rooms.size,

@@ -31,6 +31,206 @@ enum CallAudioRoutePolicy {
     }
 }
 
+enum WebcamVideoCodecPolicy {
+    static func googleStartBitrateKbps(
+        quality: VideoQuality,
+        connectionQuality: ConnectionQuality
+    ) -> Int {
+        switch connectionQuality {
+        case .emergency:
+            return 65
+        case .poor:
+            return 90
+        case .fair:
+            return 350
+        case .good, .unknown:
+            return quality == .standard ? 1_800 : 300
+        }
+    }
+}
+
+/// VP8 camera publishing intentionally uses spatial-only adaptation. A single
+/// temporal layer avoids the extra encoder/pacer dependencies that can inflate
+/// receive jitter after mediasoup switches between simulcast spatial layers.
+enum WebcamTemporalLayerPolicy {
+    static let temporalLayerCount = 1
+    static let receiveTemporalLayer = 0
+}
+
+#if !SKIP
+struct ConsumerGenerationIdentity: Hashable, Sendable {
+    let consumerId: String
+    let generation: Int
+}
+
+/// Removal must prove ownership of both the consumer map slot and the rendered
+/// track slot. During an overlapping handoff, predecessor and successor share
+/// a producer/participant track key, so key-only cleanup can erase the live
+/// successor when the predecessor's asynchronous close callback arrives.
+enum ConsumerGenerationRemovalPolicy {
+    static func ownsConsumerSlot(
+        expected: ConsumerGenerationIdentity,
+        current: ConsumerGenerationIdentity?
+    ) -> Bool {
+        current == expected
+    }
+
+    static func ownsTrackSlot(
+        expected: ConsumerGenerationIdentity,
+        current: ConsumerGenerationIdentity?
+    ) -> Bool {
+        current == expected
+    }
+}
+
+enum ConsumerGenerationLifecycleRole: String, Sendable {
+    case current
+    case staged
+    case displaced
+
+    var acceptsPeriodicControls: Bool { self == .current }
+}
+
+enum PlannedConsumerResetCoordinatorOwnershipPolicy {
+    static func ownsCompletion(
+        ownerToken: Int,
+        activeOwnerToken: Int?
+    ) -> Bool {
+        activeOwnerToken == ownerToken
+    }
+
+    static func shouldWake(
+        candidateRemoved: Bool,
+        activeCandidateMatches: Bool
+    ) -> Bool {
+        candidateRemoved || activeCandidateMatches
+    }
+}
+
+enum PlannedWebcamConsumerResetOutcome: String, Sendable {
+    case promoted
+    case promotedPredecessorCloseUnconfirmed = "promoted_predecessor_close_unconfirmed"
+    case rolledBack = "rolled_back"
+    case rollbackUnconfirmed = "rollback_unconfirmed"
+    case startupDeadlineExpired = "startup_deadline_expired"
+    case contextChanged = "context_changed"
+    case ineligibleSuccessor = "ineligible_successor"
+    case attemptsExhausted = "attempts_exhausted"
+}
+
+/// Pure policy for the native planned receive-generation reset. Runtime code
+/// deliberately feeds it only consume-response/RTP facts, never publisher
+/// declarations or UI assumptions.
+enum PlannedWebcamConsumerResetPolicy {
+    static let topLayerSustainMilliseconds: Int64 = 1_250
+    static let startupDeadlineMilliseconds: Int64 = 15_000
+    static let minimumAttemptBudgetMilliseconds: Int64 = 5_200
+    static let perAttemptDeadlineMilliseconds: Int64 = 6_500
+    static let signalingAcknowledgementTimeoutMilliseconds = 900
+    static let firstFrameTimeoutMilliseconds = 3_200
+    static let closeAcknowledgementTimeoutMilliseconds = 1_000
+    static let retryDelayMilliseconds: Int64 = 200
+    static let candidateStaggerMilliseconds: Int64 = 350
+    static let maxAttempts = 2
+
+    static func normalizedRoomId(_ roomId: String?) -> String? {
+        let normalized = roomId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    static func actualVideoCodecMimeType(_ rtpParameters: RtpParameters) -> String? {
+        rtpParameters.codecs.first { codec in
+            let mimeType = codec.mimeType.lowercased()
+            return mimeType.hasPrefix("video/") &&
+                mimeType != "video/rtx" &&
+                mimeType != "video/red" &&
+                mimeType != "video/ulpfec" &&
+                mimeType != "video/flexfec-03"
+        }?.mimeType
+    }
+
+    static func derivedMaxSpatialLayer(
+        explicit: Int?,
+        encodings: [RtpEncodingParameters]?
+    ) -> Int? {
+        if let explicit, explicit >= 0 {
+            return explicit
+        }
+        guard let encodings, !encodings.isEmpty else { return nil }
+        var maximum = encodings.count > 1 ? encodings.count - 1 : nil
+        for mode in encodings.compactMap(\.scalabilityMode) {
+            let upper = mode.uppercased()
+            guard upper.first == "L" || upper.first == "S",
+                  let temporalIndex = upper.firstIndex(of: "T"),
+                  temporalIndex > upper.startIndex else { continue }
+            let countStart = upper.index(after: upper.startIndex)
+            guard let layerCount = Int(upper[countStart..<temporalIndex]), layerCount > 0 else { continue }
+            maximum = max(maximum ?? 0, layerCount - 1)
+        }
+        return maximum
+    }
+
+    static func isEligible(
+        kind: String,
+        producerType: String,
+        consumerType: String?,
+        actualVideoCodecMimeType: String?,
+        maxSpatialLayer: Int?
+    ) -> Bool {
+        kind.lowercased() == "video" &&
+            producerType.lowercased() == ProducerType.webcam.rawValue &&
+            consumerType?.lowercased() == "simulcast" &&
+            actualVideoCodecMimeType?.lowercased() == "video/vp8" &&
+            (maxSpatialLayer ?? 0) > 0
+    }
+
+    static func isAtTopLayer(currentSpatialLayer: Int?, maxSpatialLayer: Int?) -> Bool {
+        guard let currentSpatialLayer, let maxSpatialLayer, maxSpatialLayer > 0 else { return false }
+        return currentSpatialLayer >= maxSpatialLayer
+    }
+
+    static func hasSustainedTopLayer(
+        firstObservedAtMs: Int64,
+        nowMs: Int64
+    ) -> Bool {
+        nowMs >= firstObservedAtMs &&
+            nowMs - firstObservedAtMs >= topLayerSustainMilliseconds
+    }
+
+    static func canStartAttempt(nowMs: Int64, startupDeadlineMs: Int64) -> Bool {
+        startupDeadlineMs >= nowMs &&
+            startupDeadlineMs - nowMs >= minimumAttemptBudgetMilliseconds
+    }
+
+    static func contextsMatch(
+        expectedRoomId: String,
+        actualRoomId: String?,
+        expectedLifecycleGeneration: Int,
+        actualLifecycleGeneration: Int,
+        expectedConfigurationGeneration: Int,
+        actualConfigurationGeneration: Int,
+        expectedProducerClosureGeneration: Int,
+        actualProducerClosureGeneration: Int,
+        expectedAdaptivePolicyRevision: Int,
+        actualAdaptivePolicyRevision: Int
+    ) -> Bool {
+        normalizedRoomId(expectedRoomId) == normalizedRoomId(actualRoomId) &&
+            expectedLifecycleGeneration == actualLifecycleGeneration &&
+            expectedConfigurationGeneration == actualConfigurationGeneration &&
+            expectedProducerClosureGeneration == actualProducerClosureGeneration &&
+            expectedAdaptivePolicyRevision == actualAdaptivePolicyRevision
+    }
+}
+#endif
+
+#if !SKIP
+enum NativeReceiveCapabilitiesPolicy {
+    static func decodeLoadedDeviceCapabilities(_ json: String) throws -> RtpCapabilities {
+        try JSONDecoder().decode(RtpCapabilities.self, from: Data(json.utf8))
+    }
+}
+#endif
+
 #if os(iOS) && !SKIP && canImport(WebRTC)
 import Combine
 @preconcurrency import AVFoundation
@@ -45,21 +245,142 @@ final class VideoTrackWrapper: ObservableObject, Identifiable {
     let id: String
     let userId: String
     let isLocal: Bool
+    let consumerGeneration: Int
 
     @Published var rtcVideoTrack: RTCVideoTrack?
 
     @Published var isEnabled: Bool = true
 
-    init(id: String, userId: String, isLocal: Bool, track: RTCVideoTrack? = nil) {
+    init(
+        id: String,
+        userId: String,
+        isLocal: Bool,
+        track: RTCVideoTrack? = nil,
+        consumerGeneration: Int = 0
+    ) {
         self.id = id
         self.userId = userId
         self.isLocal = isLocal
         self.rtcVideoTrack = track
+        self.consumerGeneration = consumerGeneration
     }
 
     func setTrack(_ track: RTCVideoTrack?) {
         self.rtcVideoTrack = track
         self.isEnabled = track?.isEnabled ?? false
+    }
+}
+
+private actor FirstDecodedVideoFrameSignal {
+    private var didDecode = false
+    private var isCancelled = false
+    private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
+
+    func wait() async throws {
+        if didDecode {
+            return
+        }
+        if isCancelled {
+            throw CancellationError()
+        }
+
+        let waiterId = UUID()
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            try await withCheckedThrowingContinuation { continuation in
+                if didDecode {
+                    continuation.resume()
+                } else if isCancelled || Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else {
+                    waiters[waiterId] = continuation
+                }
+            }
+        } onCancel: {
+            Task {
+                await self.cancelWaiter(waiterId)
+            }
+        }
+    }
+
+    func markDecoded() {
+        guard !didDecode, !isCancelled else { return }
+        didDecode = true
+        let pending = waiters.values
+        waiters.removeAll()
+        for continuation in pending {
+            continuation.resume()
+        }
+    }
+
+    func cancel() {
+        guard !isCancelled else { return }
+        isCancelled = true
+        let pending = waiters.values
+        waiters.removeAll()
+        for continuation in pending {
+            continuation.resume(throwing: CancellationError())
+        }
+    }
+
+    private func cancelWaiter(_ waiterId: UUID) {
+        waiters.removeValue(forKey: waiterId)?.resume(throwing: CancellationError())
+    }
+}
+
+/// A sink on the decoded `RTCVideoTrack`, not on the UI renderer. It latches
+/// exactly one decoded frame even when the tile is off-screen, then detaches so
+/// steady-state rendering and bandwidth behavior are unchanged.
+private final class FirstDecodedVideoFrameRenderer: NSObject, RTCVideoRenderer {
+    private let lock = NSLock()
+    private weak var track: RTCVideoTrack?
+    private let signal: FirstDecodedVideoFrameSignal
+    private var isFinished = false
+
+    init(track: RTCVideoTrack, signal: FirstDecodedVideoFrameSignal) {
+        self.track = track
+        self.signal = signal
+        super.init()
+    }
+
+    func setSize(_ size: CGSize) { }
+
+    func renderFrame(_ frame: RTCVideoFrame?) {
+        guard frame != nil else { return }
+        let trackToDetach: RTCVideoTrack?
+        lock.lock()
+        if isFinished {
+            trackToDetach = nil
+        } else {
+            isFinished = true
+            trackToDetach = track
+            track = nil
+        }
+        lock.unlock()
+
+        guard let trackToDetach else { return }
+        trackToDetach.remove(self)
+        Task {
+            await signal.markDecoded()
+        }
+    }
+
+    func cancel() {
+        let trackToDetach: RTCVideoTrack?
+        lock.lock()
+        if isFinished {
+            trackToDetach = nil
+        } else {
+            isFinished = true
+            trackToDetach = track
+            track = nil
+        }
+        lock.unlock()
+
+        trackToDetach?.remove(self)
+        Task {
+            await signal.cancel()
+        }
     }
 }
 
@@ -77,6 +398,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     var onCallAudioRouteChanged: (() -> Void)?
     var onLocalAudioProducerLost: (() -> Void)?
     var onLocalVideoProducerLost: (() -> Void)?
+    var onPlannedConsumerResetOutcome: ((String) -> Void)?
 
     /// When true, mutating localAudioEnabled/localVideoEnabled does NOT fire the
     /// onLocal*EnabledChanged callbacks. The binding handlers hop through
@@ -143,6 +465,18 @@ final class WebRTCClient: NSObject, ObservableObject {
         let userId: String
         let kind: String
         let type: String
+        let generation: Int
+        let roomId: String
+        let meetingLifecycleGeneration: Int
+        let createdAtMonotonicMs: Int64
+        let consumerType: String?
+        let actualVideoCodecMimeType: String?
+        let maxSpatialLayer: Int?
+        var isConsumerPaused: Bool
+        var isProducerPaused: Bool
+        var isAdaptivelyPaused: Bool
+        var lifecycleRole: ConsumerGenerationLifecycleRole
+        var plannedResetCompleted: Bool
         // Key under which the video track is stored in remoteVideoTracks:
         // "{userId}" for webcam, "{userId}-screen" for a screen-share - so a
         // user's webcam and screen tracks coexist instead of overwriting.
@@ -150,12 +484,39 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     var consumers: [String: ConsumerInfo] = [:]
+    private var nextConsumerGeneration = 0
+    private var firstDecodedVideoFrameSignals: [ConsumerGenerationIdentity: FirstDecodedVideoFrameSignal] = [:]
+    private var firstDecodedVideoFrameRenderers: [ConsumerGenerationIdentity: FirstDecodedVideoFrameRenderer] = [:]
     private var remoteProducerClosureGenerations: [String: Int] = [:]
     private var remoteConsumerPreferenceSignatures: [String: String] = [:]
     private var remoteConsumerLayerPreferenceUnsupportedIds: Set<String> = []
     private var remoteConsumerPreferenceInFlightIds: Set<String> = []
     private var remoteConsumerPreferenceRetryTask: Task<Void, Never>?
+    private var remoteConsumerPreferencePolicyRevision = 0
     private var remoteVideoReceiveEnabled = true
+    private struct PlannedConsumerResetCandidate {
+        let predecessor: ConsumerGenerationIdentity
+        let producerId: String
+        let userId: String
+        let roomId: String
+        let meetingLifecycleGeneration: Int
+        let configurationGeneration: Int
+        let producerClosureGeneration: Int
+        let adaptivePolicyRevision: Int
+        let firstTopLayerAtMs: Int64
+        let readyAtMs: Int64
+        let startupDeadlineMs: Int64
+        let sequence: Int
+    }
+    private var plannedConsumerResetCandidates: [String: PlannedConsumerResetCandidate] = [:]
+    private var plannedConsumerResetCoordinatorTask: Task<Void, Never>?
+    private var plannedConsumerResetCoordinatorOwnerToken: Int?
+    private var nextPlannedConsumerResetCoordinatorOwnerToken = 0
+    private var plannedConsumerResetActivePredecessorId: String?
+    private var plannedConsumerResetActiveOwnerToken: Int?
+    private var plannedConsumerResetSequence = 0
+    private var activeConsumerResetRoomId: String?
+    private var activeConsumerResetLifecycleGeneration: Int?
     private static let maxRemoteConsumerPreferenceUpdatesPerCycle = 8
     private static let remoteConsumerPreferenceEmitSpacingNanoseconds: UInt64 = 75_000_000
     private static let remoteConsumerPreferenceRetryDelayNanoseconds: UInt64 = 1_000_000_000
@@ -164,10 +525,81 @@ final class WebRTCClient: NSObject, ObservableObject {
     /// by consumer id, not producer id). Used by the producer-sync safety net to
     /// re-assert resume on a consumer that may have been left server-paused.
     func consumerId(forProducer producerId: String) -> String? {
-        for (id, info) in consumers where info.producerId == producerId {
-            return id
+        consumers
+            .filter {
+                $0.value.producerId == producerId &&
+                    $0.value.lifecycleRole.acceptsPeriodicControls
+            }
+            .max { $0.value.generation < $1.value.generation }?
+            .key
+    }
+
+    /// Presence check for producer-sync de-duplication. Unlike
+    /// consumerId(forProducer:), this intentionally counts staged/displaced
+    /// overlap generations without exposing either to periodic controls.
+    func hasConsumerGeneration(forProducer producerId: String) -> Bool {
+        consumers.values.contains { $0.producerId == producerId }
+    }
+
+    /// Await a decoded frame from the exact currently registered consumer.
+    /// A timeout returns `false`; task cancellation and consumer removal throw
+    /// `CancellationError`. The one-frame renderer is installed before resume,
+    /// so a fast decoder cannot beat observation registration.
+    func waitForFirstDecodedVideoFrame(
+        consumerId: String,
+        timeoutMilliseconds: Int
+    ) async throws -> Bool {
+        guard let info = consumers[consumerId], info.kind == "video" else {
+            throw WebRTCError.notConfigured
         }
-        return nil
+        let identity = ConsumerGenerationIdentity(
+            consumerId: consumerId,
+            generation: info.generation
+        )
+        guard let signal = firstDecodedVideoFrameSignals[identity] else {
+            throw WebRTCError.notConfigured
+        }
+        guard timeoutMilliseconds > 0 else { return false }
+
+        let didDecode = try await withThrowingTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                try await signal.wait()
+                return true
+            }
+            group.addTask {
+                try await Task.sleep(
+                    nanoseconds: UInt64(timeoutMilliseconds) * 1_000_000
+                )
+                return false
+            }
+            defer { group.cancelAll() }
+            return try await group.next() ?? false
+        }
+        guard didDecode else { return false }
+        try Task.checkCancellation()
+        let currentIdentity = consumers[consumerId].map {
+            ConsumerGenerationIdentity(
+                consumerId: consumerId,
+                generation: $0.generation
+            )
+        }
+        guard ConsumerGenerationRemovalPolicy.ownsConsumerSlot(
+            expected: identity,
+            current: currentIdentity
+        ) else {
+            throw CancellationError()
+        }
+        return true
+    }
+
+    func cancelFirstDecodedVideoFrameObservation(consumerId: String) {
+        guard let info = consumers[consumerId] else { return }
+        cancelFirstDecodedVideoFrameObservation(
+            identity: ConsumerGenerationIdentity(
+                consumerId: consumerId,
+                generation: info.generation
+            )
+        )
     }
 
     func closeConsumers(exceptProducerIds producerIds: [String]) {
@@ -195,8 +627,12 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     func applyConsumerTelemetry(_ notification: ConsumerTelemetryNotification) {
-        guard let info = consumers[notification.consumerId],
+        guard var info = consumers[notification.consumerId],
               info.producerId == notification.producerId else { return }
+        if !info.roomId.isEmpty,
+           PlannedWebcamConsumerResetPolicy.normalizedRoomId(notification.roomId) != info.roomId {
+            return
+        }
 
         if notification.event == "closed" {
             removeConsumer(
@@ -208,16 +644,690 @@ final class WebRTCClient: NSObject, ObservableObject {
             return
         }
 
-        remoteConsumerPreferenceSignatures[notification.consumerId] = RemoteConsumerPreference(
-            spatialLayer: notification.preferredLayers?.spatialLayer,
-            temporalLayer: notification.preferredLayers?.temporalLayer,
-            priority: notification.priority,
-            paused: notification.paused
-        ).signature
+        info.isConsumerPaused = notification.paused
+        info.isProducerPaused = notification.producerPaused
+        consumers[notification.consumerId] = info
+
+        if info.lifecycleRole.acceptsPeriodicControls {
+            remoteConsumerPreferenceSignatures[notification.consumerId] = RemoteConsumerPreference(
+                spatialLayer: notification.preferredLayers?.spatialLayer,
+                temporalLayer: notification.preferredLayers?.temporalLayer,
+                priority: notification.priority,
+                paused: notification.paused
+            ).signature
+        }
 
         if notification.paused || notification.producerPaused {
             videoFreezeStats.removeValue(forKey: notification.consumerId)
+            invalidatePlannedConsumerResetCandidate(
+                consumerId: notification.consumerId
+            )
+        } else {
+            observePlannedConsumerResetLayer(
+                consumerId: notification.consumerId,
+                roomId: notification.roomId ?? "",
+                currentSpatialLayer: notification.currentLayers?.spatialLayer
+            )
         }
+    }
+
+    private static func monotonicMilliseconds() -> Int64 {
+        Int64(ProcessInfo.processInfo.systemUptime * 1_000)
+    }
+
+    /// Cancel the current wait/attempt without clearing its owner slot. The
+    /// owner's completion path always reschedules queued work, including after
+    /// cancellation; its token prevents an older completion from clearing a
+    /// newer coordinator installed during teardown/reconfiguration.
+    private func wakePlannedConsumerResetCoordinator() {
+        if let plannedConsumerResetCoordinatorTask {
+            plannedConsumerResetCoordinatorTask.cancel()
+        } else {
+            schedulePlannedConsumerResetCoordinator()
+        }
+    }
+
+    private func invalidatePlannedConsumerResetCandidate(
+        consumerId: String
+    ) {
+        let removed = plannedConsumerResetCandidates.removeValue(
+            forKey: consumerId
+        ) != nil
+        let active = plannedConsumerResetActivePredecessorId == consumerId
+        if PlannedConsumerResetCoordinatorOwnershipPolicy.shouldWake(
+            candidateRemoved: removed,
+            activeCandidateMatches: active
+        ) {
+            wakePlannedConsumerResetCoordinator()
+        }
+    }
+
+    private func invalidatePlannedConsumerResets(
+        producerId: String
+    ) {
+        var removed = false
+        for (consumerId, candidate) in Array(plannedConsumerResetCandidates)
+            where candidate.producerId == producerId {
+            plannedConsumerResetCandidates.removeValue(forKey: consumerId)
+            removed = true
+        }
+        let active = plannedConsumerResetActivePredecessorId.flatMap {
+            consumers[$0]?.producerId
+        } == producerId
+        if PlannedConsumerResetCoordinatorOwnershipPolicy.shouldWake(
+            candidateRemoved: removed,
+            activeCandidateMatches: active
+        ) {
+            wakePlannedConsumerResetCoordinator()
+        }
+    }
+
+    private func updatePlannedConsumerResetContext(
+        roomId: String,
+        meetingLifecycleGeneration: Int
+    ) {
+        guard !roomId.isEmpty else { return }
+        if let activeRoomId = activeConsumerResetRoomId,
+           activeRoomId != roomId ||
+            activeConsumerResetLifecycleGeneration != meetingLifecycleGeneration {
+            plannedConsumerResetCoordinatorTask?.cancel()
+            plannedConsumerResetCandidates.removeAll()
+        }
+        activeConsumerResetRoomId = roomId
+        activeConsumerResetLifecycleGeneration = meetingLifecycleGeneration
+    }
+
+    private func observePlannedConsumerResetLayer(
+        consumerId: String,
+        roomId: String,
+        currentSpatialLayer: Int?
+    ) {
+        guard var info = consumers[consumerId],
+              info.lifecycleRole == .current,
+              !info.plannedResetCompleted,
+              !info.isConsumerPaused,
+              !info.isProducerPaused,
+              !info.isAdaptivelyPaused,
+              remoteVideoReceiveEnabled,
+              !info.roomId.isEmpty,
+              info.roomId == PlannedWebcamConsumerResetPolicy.normalizedRoomId(roomId),
+              PlannedWebcamConsumerResetPolicy.isEligible(
+                kind: info.kind,
+                producerType: info.type,
+                consumerType: info.consumerType,
+                actualVideoCodecMimeType: info.actualVideoCodecMimeType,
+                maxSpatialLayer: info.maxSpatialLayer
+              ) else {
+            invalidatePlannedConsumerResetCandidate(consumerId: consumerId)
+            return
+        }
+
+        guard PlannedWebcamConsumerResetPolicy.isAtTopLayer(
+            currentSpatialLayer: currentSpatialLayer,
+            maxSpatialLayer: info.maxSpatialLayer
+        ) else {
+            if currentSpatialLayer != nil {
+                invalidatePlannedConsumerResetCandidate(consumerId: consumerId)
+            }
+            return
+        }
+        guard plannedConsumerResetCandidates[consumerId] == nil else { return }
+
+        let now = Self.monotonicMilliseconds()
+        let startupDeadline = info.createdAtMonotonicMs +
+            PlannedWebcamConsumerResetPolicy.startupDeadlineMilliseconds
+        guard now < startupDeadline else {
+            info.plannedResetCompleted = true
+            consumers[consumerId] = info
+            emitPlannedConsumerResetOutcome(
+                .startupDeadlineExpired,
+                producerId: info.producerId,
+                predecessorId: consumerId,
+                successorId: nil,
+                attempt: 0,
+                startedAtMs: now
+            )
+            return
+        }
+
+        plannedConsumerResetSequence += 1
+        let candidate = PlannedConsumerResetCandidate(
+            predecessor: ConsumerGenerationIdentity(
+                consumerId: consumerId,
+                generation: info.generation
+            ),
+            producerId: info.producerId,
+            userId: info.userId,
+            roomId: info.roomId,
+            meetingLifecycleGeneration: info.meetingLifecycleGeneration,
+            configurationGeneration: configurationGeneration,
+            producerClosureGeneration: remoteProducerClosureGenerations[info.producerId, default: 0],
+            adaptivePolicyRevision: remoteConsumerPreferencePolicyRevision,
+            firstTopLayerAtMs: now,
+            readyAtMs: now + PlannedWebcamConsumerResetPolicy.topLayerSustainMilliseconds,
+            startupDeadlineMs: startupDeadline,
+            sequence: plannedConsumerResetSequence
+        )
+        plannedConsumerResetCandidates[consumerId] = candidate
+        schedulePlannedConsumerResetCoordinator()
+    }
+
+    private func schedulePlannedConsumerResetCoordinator() {
+        guard plannedConsumerResetCoordinatorTask == nil,
+              !plannedConsumerResetCandidates.isEmpty else { return }
+        nextPlannedConsumerResetCoordinatorOwnerToken += 1
+        let ownerToken = nextPlannedConsumerResetCoordinatorOwnerToken
+        plannedConsumerResetCoordinatorOwnerToken = ownerToken
+        plannedConsumerResetCoordinatorTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runPlannedConsumerResetCoordinator(
+                ownerToken: ownerToken
+            )
+        }
+    }
+
+    private func runPlannedConsumerResetCoordinator(
+        ownerToken: Int
+    ) async {
+        defer {
+            if PlannedConsumerResetCoordinatorOwnershipPolicy.ownsCompletion(
+                ownerToken: ownerToken,
+                activeOwnerToken: plannedConsumerResetCoordinatorOwnerToken
+            ) {
+                if PlannedConsumerResetCoordinatorOwnershipPolicy.ownsCompletion(
+                    ownerToken: ownerToken,
+                    activeOwnerToken: plannedConsumerResetActiveOwnerToken
+                ) {
+                    plannedConsumerResetActiveOwnerToken = nil
+                    plannedConsumerResetActivePredecessorId = nil
+                }
+                plannedConsumerResetCoordinatorTask = nil
+                plannedConsumerResetCoordinatorOwnerToken = nil
+                if !plannedConsumerResetCandidates.isEmpty {
+                    schedulePlannedConsumerResetCoordinator()
+                }
+            }
+        }
+
+        while !Task.isCancelled {
+            pruneInvalidPlannedConsumerResetCandidates()
+            guard let candidate = plannedConsumerResetCandidates.values.min(by: {
+                if $0.readyAtMs != $1.readyAtMs { return $0.readyAtMs < $1.readyAtMs }
+                return $0.sequence < $1.sequence
+            }) else { return }
+
+            let now = Self.monotonicMilliseconds()
+            if now < candidate.readyAtMs {
+                do {
+                    try await Task.sleep(
+                        nanoseconds: UInt64(candidate.readyAtMs - now) * 1_000_000
+                    )
+                } catch {
+                    return
+                }
+                continue
+            }
+            guard PlannedWebcamConsumerResetPolicy.hasSustainedTopLayer(
+                firstObservedAtMs: candidate.firstTopLayerAtMs,
+                nowMs: now
+            ) else { continue }
+
+            plannedConsumerResetCandidates.removeValue(
+                forKey: candidate.predecessor.consumerId
+            )
+            plannedConsumerResetActiveOwnerToken = ownerToken
+            plannedConsumerResetActivePredecessorId =
+                candidate.predecessor.consumerId
+            await performPlannedConsumerReset(candidate)
+            if PlannedConsumerResetCoordinatorOwnershipPolicy.ownsCompletion(
+                ownerToken: ownerToken,
+                activeOwnerToken: plannedConsumerResetActiveOwnerToken
+            ) {
+                plannedConsumerResetActiveOwnerToken = nil
+                plannedConsumerResetActivePredecessorId = nil
+            }
+            if Task.isCancelled { return }
+            if !plannedConsumerResetCandidates.isEmpty {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(
+                        PlannedWebcamConsumerResetPolicy.candidateStaggerMilliseconds
+                    ) * 1_000_000
+                )
+            }
+        }
+    }
+
+    private func pruneInvalidPlannedConsumerResetCandidates() {
+        let now = Self.monotonicMilliseconds()
+        for (consumerId, candidate) in Array(plannedConsumerResetCandidates) {
+            guard isPlannedConsumerResetCandidateCurrent(candidate) else {
+                plannedConsumerResetCandidates.removeValue(forKey: consumerId)
+                continue
+            }
+            if !PlannedWebcamConsumerResetPolicy.canStartAttempt(
+                nowMs: now,
+                startupDeadlineMs: candidate.startupDeadlineMs
+            ) {
+                plannedConsumerResetCandidates.removeValue(forKey: consumerId)
+                markPlannedConsumerResetCompleted(candidate.predecessor)
+                emitPlannedConsumerResetOutcome(
+                    .startupDeadlineExpired,
+                    producerId: candidate.producerId,
+                    predecessorId: consumerId,
+                    successorId: nil,
+                    attempt: 0,
+                    startedAtMs: candidate.firstTopLayerAtMs
+                )
+            }
+        }
+    }
+
+    private func isPlannedConsumerResetCandidateCurrent(
+        _ candidate: PlannedConsumerResetCandidate,
+        requiredRole: ConsumerGenerationLifecycleRole = .current
+    ) -> Bool {
+        guard let info = consumers[candidate.predecessor.consumerId],
+              info.generation == candidate.predecessor.generation,
+              info.producerId == candidate.producerId,
+              info.lifecycleRole == requiredRole,
+              !info.isConsumerPaused,
+              !info.isProducerPaused,
+              !info.isAdaptivelyPaused,
+              remoteVideoReceiveEnabled,
+              !info.plannedResetCompleted else { return false }
+        return PlannedWebcamConsumerResetPolicy.contextsMatch(
+            expectedRoomId: candidate.roomId,
+            actualRoomId: activeConsumerResetRoomId,
+            expectedLifecycleGeneration: candidate.meetingLifecycleGeneration,
+            actualLifecycleGeneration: activeConsumerResetLifecycleGeneration ?? -1,
+            expectedConfigurationGeneration: candidate.configurationGeneration,
+            actualConfigurationGeneration: configurationGeneration,
+            expectedProducerClosureGeneration: candidate.producerClosureGeneration,
+            actualProducerClosureGeneration: remoteProducerClosureGenerations[candidate.producerId, default: 0],
+            expectedAdaptivePolicyRevision: candidate.adaptivePolicyRevision,
+            actualAdaptivePolicyRevision: remoteConsumerPreferencePolicyRevision
+        )
+    }
+
+    private func performPlannedConsumerReset(
+        _ candidate: PlannedConsumerResetCandidate
+    ) async {
+        var attempt = 0
+        while attempt < PlannedWebcamConsumerResetPolicy.maxAttempts {
+            attempt += 1
+            let attemptStartedAt = Self.monotonicMilliseconds()
+            guard PlannedWebcamConsumerResetPolicy.canStartAttempt(
+                nowMs: attemptStartedAt,
+                startupDeadlineMs: candidate.startupDeadlineMs
+            ) else {
+                markPlannedConsumerResetCompleted(candidate.predecessor)
+                emitPlannedConsumerResetOutcome(
+                    .startupDeadlineExpired,
+                    producerId: candidate.producerId,
+                    predecessorId: candidate.predecessor.consumerId,
+                    successorId: nil,
+                    attempt: attempt,
+                    startedAtMs: candidate.firstTopLayerAtMs
+                )
+                return
+            }
+            guard isPlannedConsumerResetCandidateCurrent(candidate),
+                  var predecessorInfo = consumers[candidate.predecessor.consumerId] else {
+                emitPlannedConsumerResetOutcome(
+                    .contextChanged,
+                    producerId: candidate.producerId,
+                    predecessorId: candidate.predecessor.consumerId,
+                    successorId: nil,
+                    attempt: attempt,
+                    startedAtMs: attemptStartedAt
+                )
+                return
+            }
+
+            predecessorInfo.lifecycleRole = .displaced
+            consumers[candidate.predecessor.consumerId] = predecessorInfo
+            let attemptDeadline = min(
+                candidate.startupDeadlineMs,
+                attemptStartedAt + PlannedWebcamConsumerResetPolicy.perAttemptDeadlineMilliseconds
+            )
+            var successorIdentity: ConsumerGenerationIdentity?
+            let handoffRequestId = UUID().uuidString.lowercased()
+            var rollbackWasAlreadyAcknowledged = true
+            var failureWasIneligibleSuccessor = false
+            var failureWasContextChange = false
+
+            do {
+                try Task.checkCancellation()
+                let registeredSuccessor = try await registerConsumerGeneration(
+                    producerId: candidate.producerId,
+                    producerUserId: predecessorInfo.userId,
+                    producerKind: predecessorInfo.kind,
+                    producerType: predecessorInfo.type,
+                    preferHighWebcamLayer: true,
+                    initialReceiveConnectionQuality: .good,
+                    roomId: candidate.roomId,
+                    meetingLifecycleGeneration: candidate.meetingLifecycleGeneration,
+                    visibility: .staged,
+                    plannedResetCompleted: true,
+                    plannedHandoffRequestId: handoffRequestId,
+                    plannedHandoffPredecessorConsumerId:
+                        candidate.predecessor.consumerId,
+                    signalingTimeoutMilliseconds:
+                        PlannedWebcamConsumerResetPolicy.signalingAcknowledgementTimeoutMilliseconds
+                )
+                successorIdentity = registeredSuccessor
+                guard isPlannedConsumerResetCandidateCurrent(
+                    candidate,
+                    requiredRole: .displaced
+                ) else {
+                    throw PlannedConsumerResetFailure.contextChanged
+                }
+                guard let successorInfo = consumers[registeredSuccessor.consumerId],
+                      successorInfo.generation == registeredSuccessor.generation,
+                      !successorInfo.isConsumerPaused,
+                      !successorInfo.isProducerPaused,
+                      PlannedWebcamConsumerResetPolicy.isEligible(
+                        kind: successorInfo.kind,
+                        producerType: successorInfo.type,
+                        consumerType: successorInfo.consumerType,
+                        actualVideoCodecMimeType: successorInfo.actualVideoCodecMimeType,
+                        maxSpatialLayer: successorInfo.maxSpatialLayer
+                      ) else {
+                    throw PlannedConsumerResetFailure.ineligibleSuccessor
+                }
+
+                let remainingForFrame = attemptDeadline - Self.monotonicMilliseconds() -
+                    Int64(PlannedWebcamConsumerResetPolicy.closeAcknowledgementTimeoutMilliseconds) - 100
+                guard remainingForFrame > 0 else {
+                    throw PlannedConsumerResetFailure.firstFrameTimeout
+                }
+                let frameTimeout = min(
+                    PlannedWebcamConsumerResetPolicy.firstFrameTimeoutMilliseconds,
+                    Int(remainingForFrame)
+                )
+                let decoded = try await waitForFirstDecodedVideoFrame(
+                    consumerId: registeredSuccessor.consumerId,
+                    timeoutMilliseconds: frameTimeout
+                )
+                guard decoded else {
+                    throw PlannedConsumerResetFailure.firstFrameTimeout
+                }
+                try Task.checkCancellation()
+                guard Self.monotonicMilliseconds() <= attemptDeadline,
+                      isPlannedConsumerResetCandidateCurrent(
+                        candidate,
+                        requiredRole: .displaced
+                      ),
+                      promoteStagedConsumer(
+                        successor: registeredSuccessor,
+                        predecessor: candidate.predecessor
+                      ) else {
+                    throw PlannedConsumerResetFailure.contextChanged
+                }
+
+                cancelFirstDecodedVideoFrameObservation(
+                    identity: registeredSuccessor
+                )
+                let predecessorCloseConfirmed = await retirePromotedPredecessor(
+                    candidate.predecessor
+                )
+                emitPlannedConsumerResetOutcome(
+                    predecessorCloseConfirmed
+                        ? .promoted
+                        : .promotedPredecessorCloseUnconfirmed,
+                    producerId: candidate.producerId,
+                    predecessorId: candidate.predecessor.consumerId,
+                    successorId: registeredSuccessor.consumerId,
+                    attempt: attempt,
+                    startedAtMs: attemptStartedAt
+                )
+                return
+            } catch {
+                if let plannedFailure = error as? PlannedConsumerResetFailure {
+                    switch plannedFailure {
+                    case .ineligibleSuccessor:
+                        failureWasIneligibleSuccessor = true
+                    case .contextChanged:
+                        failureWasContextChange = true
+                    case .firstFrameTimeout:
+                        break
+                    }
+                }
+                if let registrationError = error as? ConsumerGenerationRegistrationError {
+                    rollbackWasAlreadyAcknowledged = registrationError.rollbackAcknowledged
+                } else if error.localizedDescription.lowercased().contains("timed out") ||
+                            error.localizedDescription.lowercased().contains("timeout") {
+                    // A consume ACK timeout can hide a server-created generation
+                    // whose id never reached us. Retrying would be unsafe.
+                    rollbackWasAlreadyAcknowledged = false
+                }
+            }
+
+            var rollbackConfirmed = rollbackWasAlreadyAcknowledged
+            if let successorIdentity {
+                rollbackConfirmed = await rollbackStagedConsumer(
+                    successorIdentity,
+                    predecessor: candidate.predecessor,
+                    producerId: candidate.producerId,
+                    handoffRequestId: handoffRequestId
+                )
+            } else {
+                restoreDisplacedPredecessor(candidate.predecessor)
+            }
+
+            let contextChanged = Task.isCancelled ||
+                !isPlannedConsumerResetCandidateCurrent(candidate) || {
+                    failureWasContextChange
+                }()
+
+            if contextChanged {
+                emitPlannedConsumerResetOutcome(
+                    .contextChanged,
+                    producerId: candidate.producerId,
+                    predecessorId: candidate.predecessor.consumerId,
+                    successorId: successorIdentity?.consumerId,
+                    attempt: attempt,
+                    startedAtMs: attemptStartedAt
+                )
+                return
+            }
+            if failureWasIneligibleSuccessor {
+                markPlannedConsumerResetCompleted(candidate.predecessor)
+                emitPlannedConsumerResetOutcome(
+                    .ineligibleSuccessor,
+                    producerId: candidate.producerId,
+                    predecessorId: candidate.predecessor.consumerId,
+                    successorId: successorIdentity?.consumerId,
+                    attempt: attempt,
+                    startedAtMs: attemptStartedAt
+                )
+                return
+            }
+            if !PlannedConsumerHandoffAbortRetryPolicy.permitsConsumerResetRetry(
+                rollbackConfirmed: rollbackConfirmed
+            ) {
+                markPlannedConsumerResetCompleted(candidate.predecessor)
+                emitPlannedConsumerResetOutcome(
+                    .rollbackUnconfirmed,
+                    producerId: candidate.producerId,
+                    predecessorId: candidate.predecessor.consumerId,
+                    successorId: successorIdentity?.consumerId,
+                    attempt: attempt,
+                    startedAtMs: attemptStartedAt
+                )
+                return
+            }
+
+            emitPlannedConsumerResetOutcome(
+                .rolledBack,
+                producerId: candidate.producerId,
+                predecessorId: candidate.predecessor.consumerId,
+                successorId: successorIdentity?.consumerId,
+                attempt: attempt,
+                startedAtMs: attemptStartedAt
+            )
+            if attempt < PlannedWebcamConsumerResetPolicy.maxAttempts {
+                do {
+                    try await Task.sleep(
+                        nanoseconds: UInt64(
+                            PlannedWebcamConsumerResetPolicy.retryDelayMilliseconds
+                        ) * 1_000_000
+                    )
+                } catch {
+                    return
+                }
+            }
+        }
+
+        markPlannedConsumerResetCompleted(candidate.predecessor)
+        emitPlannedConsumerResetOutcome(
+            .attemptsExhausted,
+            producerId: candidate.producerId,
+            predecessorId: candidate.predecessor.consumerId,
+            successorId: nil,
+            attempt: PlannedWebcamConsumerResetPolicy.maxAttempts,
+            startedAtMs: candidate.firstTopLayerAtMs
+        )
+    }
+
+    private func promoteStagedConsumer(
+        successor: ConsumerGenerationIdentity,
+        predecessor: ConsumerGenerationIdentity
+    ) -> Bool {
+        guard var successorInfo = consumers[successor.consumerId],
+              successorInfo.generation == successor.generation,
+              successorInfo.lifecycleRole == .staged,
+              !successorInfo.isConsumerPaused,
+              !successorInfo.isProducerPaused,
+              !successorInfo.isAdaptivelyPaused,
+              var predecessorInfo = consumers[predecessor.consumerId],
+              predecessorInfo.generation == predecessor.generation,
+              predecessorInfo.lifecycleRole == .displaced,
+              !predecessorInfo.isConsumerPaused,
+              !predecessorInfo.isProducerPaused,
+              !predecessorInfo.isAdaptivelyPaused,
+              successorInfo.producerId == predecessorInfo.producerId,
+              successorInfo.trackKey == predecessorInfo.trackKey,
+              let videoTrack = successorInfo.consumer.track as? RTCVideoTrack else {
+            return false
+        }
+        let visibleIdentity = remoteVideoTracks[predecessorInfo.trackKey].map {
+            ConsumerGenerationIdentity(
+                consumerId: $0.id,
+                generation: $0.consumerGeneration
+            )
+        }
+        guard visibleIdentity == predecessor else { return false }
+
+        successorInfo.lifecycleRole = .current
+        successorInfo.plannedResetCompleted = true
+        predecessorInfo.lifecycleRole = .displaced
+        consumers[successor.consumerId] = successorInfo
+        consumers[predecessor.consumerId] = predecessorInfo
+        remoteVideoTracks[successorInfo.trackKey] = VideoTrackWrapper(
+            id: successor.consumerId,
+            userId: successorInfo.trackKey,
+            isLocal: false,
+            track: videoTrack,
+            consumerGeneration: successor.generation
+        )
+        return true
+    }
+
+    private func rollbackStagedConsumer(
+        _ successor: ConsumerGenerationIdentity,
+        predecessor: ConsumerGenerationIdentity,
+        producerId: String,
+        handoffRequestId: String
+    ) async -> Bool {
+        if let info = consumers[successor.consumerId],
+           info.generation == successor.generation {
+            removeConsumer(
+                consumerId: successor.consumerId,
+                info: info,
+                closeConsumer: true,
+                notifyServer: false
+            )
+        }
+        let confirmed: Bool
+        if let socketManager {
+            confirmed = await abortServerConsumerHandoffAndConfirm(
+                requestId: handoffRequestId,
+                producerId: producerId,
+                predecessorConsumerId: predecessor.consumerId,
+                socket: socketManager
+            )
+        } else {
+            confirmed = false
+        }
+        restoreDisplacedPredecessor(predecessor)
+        return confirmed
+    }
+
+    private func restoreDisplacedPredecessor(
+        _ predecessor: ConsumerGenerationIdentity
+    ) {
+        guard var info = consumers[predecessor.consumerId],
+              info.generation == predecessor.generation else { return }
+        info.lifecycleRole = .current
+        consumers[predecessor.consumerId] = info
+    }
+
+    private func retirePromotedPredecessor(
+        _ predecessor: ConsumerGenerationIdentity
+    ) async -> Bool {
+        let confirmed: Bool
+        if let socketManager {
+            confirmed = await closeServerConsumerGenerationAndConfirm(
+                consumerId: predecessor.consumerId,
+                socket: socketManager
+            )
+        } else {
+            confirmed = false
+        }
+        if let info = consumers[predecessor.consumerId],
+           info.generation == predecessor.generation {
+            removeConsumer(
+                consumerId: predecessor.consumerId,
+                info: info,
+                closeConsumer: true,
+                notifyServer: false
+            )
+        }
+        return confirmed
+    }
+
+    private func markPlannedConsumerResetCompleted(
+        _ identity: ConsumerGenerationIdentity
+    ) {
+        guard var info = consumers[identity.consumerId],
+              info.generation == identity.generation else { return }
+        info.plannedResetCompleted = true
+        consumers[identity.consumerId] = info
+    }
+
+    private func emitPlannedConsumerResetOutcome(
+        _ outcome: PlannedWebcamConsumerResetOutcome,
+        producerId: String,
+        predecessorId: String,
+        successorId: String?,
+        attempt: Int,
+        startedAtMs: Int64
+    ) {
+        let elapsedMs = max(0, Self.monotonicMilliseconds() - startedAtMs)
+        let report = [
+            "outcome=\(outcome.rawValue)",
+            "producerId=\(producerId)",
+            "predecessorId=\(predecessorId)",
+            "successorId=\(successorId ?? "-")",
+            "attempt=\(attempt)",
+            "elapsedMs=\(elapsedMs)",
+            // Decoder proof is not UI-render proof. Keep this explicitly
+            // unmeasured until the visible renderer supplies timestamps.
+            "visibleInterruptionMs=unmeasured"
+        ].joined(separator: " ")
+        debugLog("[WebRTC][consumer-reset] \(report)")
+        onPlannedConsumerResetOutcome?(report)
     }
 
     private func removeConsumer(
@@ -226,6 +1336,23 @@ final class WebRTCClient: NSObject, ObservableObject {
         closeConsumer: Bool,
         notifyServer: Bool = true
     ) {
+        let expectedIdentity = ConsumerGenerationIdentity(
+            consumerId: consumerId,
+            generation: info.generation
+        )
+        let currentIdentity = consumers[consumerId].map {
+            ConsumerGenerationIdentity(
+                consumerId: consumerId,
+                generation: $0.generation
+            )
+        }
+        guard ConsumerGenerationRemovalPolicy.ownsConsumerSlot(
+            expected: expectedIdentity,
+            current: currentIdentity
+        ), consumers[consumerId]?.consumer === info.consumer else {
+            return
+        }
+
         if closeConsumer {
             info.consumer.close()
             if notifyServer {
@@ -233,14 +1360,40 @@ final class WebRTCClient: NSObject, ObservableObject {
             }
         }
         consumers.removeValue(forKey: consumerId)
+        if plannedConsumerResetCandidates.removeValue(forKey: consumerId) != nil {
+            wakePlannedConsumerResetCoordinator()
+        }
         videoFreezeStats.removeValue(forKey: consumerId)
         remoteConsumerPreferenceSignatures.removeValue(forKey: consumerId)
         remoteConsumerLayerPreferenceUnsupportedIds.remove(consumerId)
         remoteConsumerPreferenceInFlightIds.remove(consumerId)
+        cancelFirstDecodedVideoFrameObservation(identity: expectedIdentity)
 
         let key = info.trackKey.isEmpty ? info.userId : info.trackKey
         if info.kind == "video", !key.isEmpty {
-            remoteVideoTracks.removeValue(forKey: key)
+            let currentTrackIdentity = remoteVideoTracks[key].map {
+                ConsumerGenerationIdentity(
+                    consumerId: $0.id,
+                    generation: $0.consumerGeneration
+                )
+            }
+            if ConsumerGenerationRemovalPolicy.ownsTrackSlot(
+                expected: expectedIdentity,
+                current: currentTrackIdentity
+            ) {
+                remoteVideoTracks.removeValue(forKey: key)
+            }
+        }
+    }
+
+    private func cancelFirstDecodedVideoFrameObservation(
+        identity: ConsumerGenerationIdentity
+    ) {
+        firstDecodedVideoFrameRenderers.removeValue(forKey: identity)?.cancel()
+        if let signal = firstDecodedVideoFrameSignals.removeValue(forKey: identity) {
+            Task {
+                await signal.cancel()
+            }
         }
     }
 
@@ -275,6 +1428,8 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     private struct PendingRemoteConsumerPreferenceUpdate {
         let consumerId: String
+        let consumerGeneration: Int
+        let policyRevision: Int
         let effectivePreference: RemoteConsumerPreference
         let previousSignature: String?
         let signature: String
@@ -295,38 +1450,30 @@ final class WebRTCClient: NSObject, ObservableObject {
             case .good:
                 return InitialConsumerPreference(
                     spatialLayer: 2,
-                    temporalLayer: 2,
+                    temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer,
                     priority: 180
                 )
             case .fair:
                 return InitialConsumerPreference(
                     spatialLayer: 1,
-                    temporalLayer: 2,
+                    temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer,
                     priority: 150
                 )
             case .poor:
                 return InitialConsumerPreference(
                     spatialLayer: 0,
-                    temporalLayer: 1,
+                    temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer,
                     priority: 120
                 )
             case .emergency:
                 return InitialConsumerPreference(
                     spatialLayer: 0,
-                    temporalLayer: 0,
+                    temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer,
                     priority: 145
                 )
             case .unknown:
                 break
             }
-        }
-
-        let temporalLayer: Int
-        switch currentLocalBandwidthQuality {
-        case .emergency, .poor:
-            temporalLayer = 0
-        default:
-            temporalLayer = 1
         }
 
         let priority: Int
@@ -341,7 +1488,7 @@ final class WebRTCClient: NSObject, ObservableObject {
 
         return InitialConsumerPreference(
             spatialLayer: 0,
-            temporalLayer: temporalLayer,
+            temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer,
             priority: priority
         )
     }
@@ -435,17 +1582,43 @@ final class WebRTCClient: NSObject, ObservableObject {
         return 250
     }
 
+    private func recordAppliedRemoteConsumerPreference(
+        _ preference: RemoteConsumerPreference,
+        signature: String,
+        consumerId: String,
+        consumerGeneration: Int,
+        policyRevision: Int
+    ) {
+        guard remoteConsumerPreferencePolicyRevision == policyRevision,
+              var info = consumers[consumerId],
+              info.generation == consumerGeneration else { return }
+        info.isConsumerPaused = preference.paused
+        consumers[consumerId] = info
+        if preference.paused {
+            invalidatePlannedConsumerResetCandidate(consumerId: consumerId)
+        }
+        if info.lifecycleRole.acceptsPeriodicControls {
+            remoteConsumerPreferenceSignatures[consumerId] = signature
+        }
+    }
+
     private func scheduleRemoteConsumerPreferenceRetry(
         focusedUserIds: Set<String>,
         visibleUserIds: Set<String>,
         connectionQuality: ConnectionQuality,
-        videoQuality: VideoQuality
+        videoQuality: VideoQuality,
+        expectedPolicyRevision: Int
     ) {
-        guard remoteConsumerPreferenceRetryTask == nil else { return }
+        guard remoteConsumerPreferencePolicyRevision == expectedPolicyRevision,
+              remoteConsumerPreferenceRetryTask == nil else { return }
 
         remoteConsumerPreferenceRetryTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: WebRTCClient.remoteConsumerPreferenceRetryDelayNanoseconds)
             guard let self, !Task.isCancelled else { return }
+            guard self.remoteConsumerPreferencePolicyRevision == expectedPolicyRevision else {
+                self.remoteConsumerPreferenceRetryTask = nil
+                return
+            }
             self.remoteConsumerPreferenceRetryTask = nil
             await self.applyRemoteConsumerBandwidthPolicy(
                 focusedUserIds: focusedUserIds,
@@ -464,14 +1637,27 @@ final class WebRTCClient: NSObject, ObservableObject {
         videoQuality: VideoQuality,
         receiveVideo: Bool = true
     ) async {
+        remoteConsumerPreferenceRetryTask?.cancel()
+        remoteConsumerPreferenceRetryTask = nil
+        remoteConsumerPreferencePolicyRevision += 1
+        let policyRevision = remoteConsumerPreferencePolicyRevision
         remoteVideoReceiveEnabled = receiveVideo
+        // Policy generations are part of reset ownership. Cancel a sleeping or
+        // in-flight reset immediately so stale top-layer evidence cannot cross
+        // a receive-disable or adaptive downgrade boundary.
+        wakePlannedConsumerResetCoordinator()
         guard let socketManager else { return }
 
         let shouldReceiveVideo = receiveVideo
-        let consumerSnapshot = consumers
+        let consumerSnapshot = consumers.filter {
+            $0.value.lifecycleRole.acceptsPeriodicControls
+        }
+        let consumerTransitionInProgress = consumers.values.contains {
+            !$0.lifecycleRole.acceptsPeriodicControls
+        }
         let emergencyKeepWebcamUserId: String? = {
             guard connectionQuality == .emergency else { return nil }
-            let webcamInfos = consumerSnapshot.values
+            let webcamInfos = consumers.values
                 .filter { $0.kind == "video" && $0.type == ProducerType.webcam.rawValue }
                 .sorted { $0.userId < $1.userId }
             if let focused = webcamInfos.first(where: { focusedUserIds.contains($0.userId) }) {
@@ -482,9 +1668,25 @@ final class WebRTCClient: NSObject, ObservableObject {
             }
             return nil
         }()
+        for consumerId in Array(consumers.keys) {
+            guard var info = consumers[consumerId],
+                  info.kind == "video",
+                  info.type == ProducerType.webcam.rawValue else { continue }
+            info.isAdaptivelyPaused = remoteConsumerPreference(
+                for: info,
+                focusedUserIds: focusedUserIds,
+                visibleUserIds: visibleUserIds,
+                emergencyKeepWebcamUserId: emergencyKeepWebcamUserId,
+                connectionQuality: connectionQuality,
+                videoQuality: videoQuality,
+                receiveVideo: shouldReceiveVideo
+            )?.paused ?? false
+            consumers[consumerId] = info
+        }
         var pendingUpdates: [PendingRemoteConsumerPreferenceUpdate] = []
+        var skippedInFlightConsumer = false
         for (consumerId, info) in consumerSnapshot {
-            guard consumers[consumerId] != nil else { continue }
+            guard consumers[consumerId]?.lifecycleRole.acceptsPeriodicControls == true else { continue }
             guard let preference = remoteConsumerPreference(
                 for: info,
                 focusedUserIds: focusedUserIds,
@@ -494,7 +1696,10 @@ final class WebRTCClient: NSObject, ObservableObject {
                 videoQuality: videoQuality,
                 receiveVideo: shouldReceiveVideo
             ) else { continue }
-            guard !remoteConsumerPreferenceInFlightIds.contains(consumerId) else { continue }
+            guard !remoteConsumerPreferenceInFlightIds.contains(consumerId) else {
+                skippedInFlightConsumer = true
+                continue
+            }
 
             let effectivePreference = remoteConsumerLayerPreferenceUnsupportedIds.contains(consumerId)
                 ? preference.withoutLayerPreference
@@ -505,6 +1710,8 @@ final class WebRTCClient: NSObject, ObservableObject {
 
             pendingUpdates.append(PendingRemoteConsumerPreferenceUpdate(
                 consumerId: consumerId,
+                consumerGeneration: info.generation,
+                policyRevision: policyRevision,
                 effectivePreference: effectivePreference,
                 previousSignature: previousSignature,
                 signature: signature,
@@ -525,12 +1732,15 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
 
         let updatesToSend = Array(pendingUpdates.prefix(Self.maxRemoteConsumerPreferenceUpdatesPerCycle))
-        if pendingUpdates.count > updatesToSend.count {
+        if pendingUpdates.count > updatesToSend.count ||
+            skippedInFlightConsumer ||
+            consumerTransitionInProgress {
             scheduleRemoteConsumerPreferenceRetry(
                 focusedUserIds: focusedUserIds,
                 visibleUserIds: visibleUserIds,
                 connectionQuality: connectionQuality,
-                videoQuality: videoQuality
+                videoQuality: videoQuality,
+                expectedPolicyRevision: policyRevision
             )
         }
 
@@ -539,9 +1749,13 @@ final class WebRTCClient: NSObject, ObservableObject {
             if index > 0 {
                 try? await Task.sleep(nanoseconds: Self.remoteConsumerPreferenceEmitSpacingNanoseconds)
             }
+            guard remoteConsumerPreferencePolicyRevision == policyRevision else { return }
 
             let consumerId = update.consumerId
-            guard consumers[consumerId] != nil else { continue }
+            guard let currentInfo = consumers[consumerId],
+                  currentInfo.generation == update.consumerGeneration,
+                  update.policyRevision == policyRevision,
+                  currentInfo.lifecycleRole.acceptsPeriodicControls else { continue }
             remoteConsumerPreferenceInFlightIds.insert(consumerId)
             defer {
                 remoteConsumerPreferenceInFlightIds.remove(consumerId)
@@ -556,22 +1770,31 @@ final class WebRTCClient: NSObject, ObservableObject {
                     paused: update.effectivePreference.paused,
                     requestKeyFrame: update.previousSignature != nil && !update.effectivePreference.paused
                 )
-                if consumers[consumerId] != nil {
-                    remoteConsumerPreferenceSignatures[consumerId] = update.signature
-                }
+                recordAppliedRemoteConsumerPreference(
+                    update.effectivePreference,
+                    signature: update.signature,
+                    consumerId: consumerId,
+                    consumerGeneration: update.consumerGeneration,
+                    policyRevision: update.policyRevision
+                )
             } catch {
                 if isConsumerControlRateLimitError(error) {
                     scheduleRemoteConsumerPreferenceRetry(
                         focusedUserIds: focusedUserIds,
                         visibleUserIds: visibleUserIds,
                         connectionQuality: connectionQuality,
-                        videoQuality: videoQuality
+                        videoQuality: videoQuality,
+                        expectedPolicyRevision: policyRevision
                     )
                     continue
                 }
 
                 if update.effectivePreference.hasLayerPreference,
                    isUnsupportedConsumerLayerPreferenceError(error) {
+                    guard remoteConsumerPreferencePolicyRevision == policyRevision,
+                          let fallbackInfo = consumers[consumerId],
+                          fallbackInfo.generation == update.consumerGeneration,
+                          fallbackInfo.lifecycleRole.acceptsPeriodicControls else { continue }
                     remoteConsumerLayerPreferenceUnsupportedIds.insert(consumerId)
                     let fallbackPreference = update.effectivePreference.withoutLayerPreference
                     do {
@@ -583,16 +1806,21 @@ final class WebRTCClient: NSObject, ObservableObject {
                             paused: fallbackPreference.paused,
                             requestKeyFrame: update.previousSignature != nil && !fallbackPreference.paused
                         )
-                        if consumers[consumerId] != nil {
-                            remoteConsumerPreferenceSignatures[consumerId] = fallbackPreference.signature
-                        }
+                        recordAppliedRemoteConsumerPreference(
+                            fallbackPreference,
+                            signature: fallbackPreference.signature,
+                            consumerId: consumerId,
+                            consumerGeneration: update.consumerGeneration,
+                            policyRevision: update.policyRevision
+                        )
                     } catch {
                         if isConsumerControlRateLimitError(error) {
                             scheduleRemoteConsumerPreferenceRetry(
                                 focusedUserIds: focusedUserIds,
                                 visibleUserIds: visibleUserIds,
                                 connectionQuality: connectionQuality,
-                                videoQuality: videoQuality
+                                videoQuality: videoQuality,
+                                expectedPolicyRevision: policyRevision
                             )
                             continue
                         }
@@ -665,7 +1893,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         if isEmergency && !emergencyKeepVideo {
             return RemoteConsumerPreference(
                 spatialLayer: 0,
-                temporalLayer: 0,
+                temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer,
                 priority: 8,
                 paused: true
             )
@@ -674,7 +1902,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         if !isVisible && (isPoor || videoQuality == .low) {
             return RemoteConsumerPreference(
                 spatialLayer: 0,
-                temporalLayer: 0,
+                temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer,
                 priority: 8,
                 paused: true
             )
@@ -683,7 +1911,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         if isFocused {
             return RemoteConsumerPreference(
                 spatialLayer: isEmergency ? 0 : (isConstrained ? 1 : 2),
-                temporalLayer: isEmergency ? 0 : (isPoor ? 1 : 2),
+                temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer,
                 priority: isEmergency ? 145 : (isConstrained ? 150 : 180),
                 paused: false
             )
@@ -692,7 +1920,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         if isVisible {
             return RemoteConsumerPreference(
                 spatialLayer: isConstrained ? 0 : 1,
-                temporalLayer: isEmergency ? 0 : (isPoor ? 1 : 2),
+                temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer,
                 priority: isEmergency ? 70 : (isConstrained ? 80 : 105),
                 paused: false
             )
@@ -700,7 +1928,7 @@ final class WebRTCClient: NSObject, ObservableObject {
 
         return RemoteConsumerPreference(
             spatialLayer: 0,
-            temporalLayer: 1,
+            temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer,
             priority: 35,
             paused: false
         )
@@ -737,6 +1965,17 @@ final class WebRTCClient: NSObject, ObservableObject {
     var captureSession: AVCaptureSession?
     private var currentVideoQuality: VideoQuality = .standard
     private var currentLocalBandwidthQuality: ConnectionQuality = .unknown
+    private var webcamProducerTopology: WebcamProducerTopology = .other
+    private var webcamReceiverCapacityRoomId: String?
+    private var webcamReceiverCapacityAuthorityAvailable = false
+    private var webcamReceiverCapacityProofCache = WebcamReceiverCapacityProofCache()
+    private var webcamTopologyTransitionState = WebcamTopologyTransitionState.initial()
+    private var pendingWebcamTopologyCommand: WebcamTopologyReplacementCommand?
+    private var webcamTopologyCommandTask: Task<Void, Never>?
+    private var webcamTopologyWakeTask: Task<Void, Never>?
+    private var webcamTopologyControlGeneration = 0
+    private var intentionalLocalVideoProducerCloseIds: Set<String> = []
+    private var lastWebcamProducerSignalingError: Error?
     private var audioProducerBandwidthQuality: ConnectionQuality = .unknown
     private var screenProducerBandwidthQuality: ConnectionQuality = .unknown
     private var audioBandwidthRefreshInFlight = false
@@ -775,6 +2014,10 @@ final class WebRTCClient: NSObject, ObservableObject {
         let opusPtime: Int
     }
 
+    private struct WebcamVideoCodecOptions: Encodable {
+        let videoGoogleStartBitrate: Int
+    }
+
     // MARK: - Audio Session
 
     var audioSession = AVAudioSession.sharedInstance()
@@ -792,6 +2035,11 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     func configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities, iceServersJSON: String?) {
         configurationGeneration += 1
+        plannedConsumerResetCoordinatorTask?.cancel()
+        plannedConsumerResetCandidates.removeAll()
+        activeConsumerResetRoomId = nil
+        activeConsumerResetLifecycleGeneration = nil
+        resetWebcamTopologyControl()
         self.socketManager = socketManager
         self.serverRtpCapabilities = rtpCapabilities
         let trimmedIceServers = iceServersJSON?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1145,7 +2393,10 @@ final class WebRTCClient: NSObject, ObservableObject {
                         for: currentVideoQuality,
                         connectionQuality: currentLocalBandwidthQuality
                     ),
-                    codecOptions: nil,
+                    codecOptions: try webcamVideoCodecOptionsJSON(
+                        quality: currentVideoQuality,
+                        connectionQuality: currentLocalBandwidthQuality
+                    ),
                     codec: preferredVideoCodecJSON(),
                     appData: appData
                 ),
@@ -1163,6 +2414,7 @@ final class WebRTCClient: NSObject, ObservableObject {
 
             rtcLocalVideoTrack = track
             videoProducer = producer
+            webcamProducerTopology = .vp8Simulcast
             pendingProducer = nil
             localVideoEnabled = true
 
@@ -1236,9 +2488,9 @@ final class WebRTCClient: NSObject, ObservableObject {
             ]
         case .standard:
             return [
-                WebcamEncodingSpec(rid: "q", scaleResolutionDownBy: 4, maxBitrateBps: 90_000, maxFramerate: 12),
-                WebcamEncodingSpec(rid: "h", scaleResolutionDownBy: 2, maxBitrateBps: 260_000, maxFramerate: 20),
-                WebcamEncodingSpec(rid: "f", scaleResolutionDownBy: 1, maxBitrateBps: 1_500_000, maxFramerate: 30)
+                WebcamEncodingSpec(rid: "q", scaleResolutionDownBy: 4, maxBitrateBps: 80_000, maxFramerate: 12),
+                WebcamEncodingSpec(rid: "h", scaleResolutionDownBy: 2, maxBitrateBps: 220_000, maxFramerate: 20),
+                WebcamEncodingSpec(rid: "f", scaleResolutionDownBy: 1, maxBitrateBps: 1_650_000, maxFramerate: 30)
             ]
         }
     }
@@ -1314,9 +2566,29 @@ final class WebRTCClient: NSObject, ObservableObject {
             encoding.scaleResolutionDownBy = NSNumber(value: spec.scaleResolutionDownBy)
             encoding.maxBitrateBps = NSNumber(value: spec.maxBitrateBps)
             encoding.maxFramerate = NSNumber(value: spec.maxFramerate)
+            encoding.numTemporalLayers = NSNumber(value: WebcamTemporalLayerPolicy.temporalLayerCount)
             encoding.networkPriority = spec.rid == "f" ? .low : .veryLow
             return encoding
         }
+    }
+
+    /// A true mediasoup simple producer: one VP8 encoding, no RID fan-out, and
+    /// the same full-resolution camera track already feeding the predecessor.
+    private func webcamSingleReceiverEncodings() -> [RTCRtpEncodingParameters] {
+        let encoding = RTCRtpEncodingParameters()
+        encoding.isActive = true
+        encoding.scaleResolutionDownBy = NSNumber(value: 1.0)
+        encoding.maxBitrateBps = NSNumber(value: 1_650_000)
+        encoding.maxFramerate = NSNumber(value: 30.0)
+        encoding.numTemporalLayers = NSNumber(value: WebcamTemporalLayerPolicy.temporalLayerCount)
+        encoding.networkPriority = .low
+        return [encoding]
+    }
+
+    /// The compensating topology is always the known-good standard VP8 ladder.
+    /// Adaptive sender updates may constrain it later without changing topology.
+    private func restoredAdaptiveWebcamEncodings() -> [RTCRtpEncodingParameters] {
+        webcamEncodings(for: .standard, connectionQuality: .good)
     }
 
     private func webcamMaxSpatialLayer(
@@ -1435,23 +2707,81 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     // MARK: - Consume Remote Media
 
+    private enum ConsumerRegistrationVisibility {
+        case currentVisible
+        case staged
+    }
+
+    private struct ConsumerGenerationRegistrationError: LocalizedError {
+        let underlying: Error
+        let rollbackAcknowledged: Bool
+
+        var errorDescription: String? { underlying.localizedDescription }
+    }
+
+    private enum PlannedConsumerResetFailure: Error {
+        case firstFrameTimeout
+        case ineligibleSuccessor
+        case contextChanged
+    }
+
     func consumeProducer(
         producerId: String,
         producerUserId: String,
         producerKind: String? = nil,
         producerType: String = "webcam",
         preferHighWebcamLayer: Bool = false,
-        initialReceiveConnectionQuality: ConnectionQuality = .unknown
+        initialReceiveConnectionQuality: ConnectionQuality = .unknown,
+        roomId: String? = nil,
+        meetingLifecycleGeneration: Int = 0
     ) async throws {
+        let normalizedRoomId = PlannedWebcamConsumerResetPolicy.normalizedRoomId(roomId) ?? ""
+        updatePlannedConsumerResetContext(
+            roomId: normalizedRoomId,
+            meetingLifecycleGeneration: meetingLifecycleGeneration
+        )
+        _ = try await registerConsumerGeneration(
+            producerId: producerId,
+            producerUserId: producerUserId,
+            producerKind: producerKind,
+            producerType: producerType,
+            preferHighWebcamLayer: preferHighWebcamLayer,
+            initialReceiveConnectionQuality: initialReceiveConnectionQuality,
+            roomId: normalizedRoomId,
+            meetingLifecycleGeneration: meetingLifecycleGeneration,
+            visibility: .currentVisible,
+            plannedResetCompleted: false
+        )
+    }
+
+    private func registerConsumerGeneration(
+        producerId: String,
+        producerUserId: String,
+        producerKind: String?,
+        producerType: String,
+        preferHighWebcamLayer: Bool,
+        initialReceiveConnectionQuality: ConnectionQuality,
+        roomId: String,
+        meetingLifecycleGeneration: Int,
+        visibility: ConsumerRegistrationVisibility,
+        plannedResetCompleted: Bool,
+        plannedHandoffRequestId: String? = nil,
+        plannedHandoffPredecessorConsumerId: String? = nil,
+        signalingTimeoutMilliseconds: Int? = nil
+    ) async throws -> ConsumerGenerationIdentity {
         let consumeConfigurationGeneration = configurationGeneration
         let producerClosureGeneration = remoteProducerClosureGenerations[producerId, default: 0]
         try await createReceiveTransportIfNeeded()
         guard let socket = socketManager,
-              let rtpCaps = serverRtpCapabilities,
+              let device,
               let receiveTransport = receiveTransport,
               let receiveTransportId = receiveTransportId else {
             throw WebRTCError.notConfigured
         }
+
+        let rtpCaps = try NativeReceiveCapabilitiesPolicy.decodeLoadedDeviceCapabilities(
+            try device.rtpCapabilities()
+        )
 
         let initialPreference = initialConsumerPreference(
             producerKind: producerKind,
@@ -1460,25 +2790,75 @@ final class WebRTCClient: NSObject, ObservableObject {
             initialReceiveConnectionQuality: initialReceiveConnectionQuality
         )
 
-        let response = try await socket.consume(
-            producerId: producerId,
-            rtpCapabilities: rtpCaps,
-            transportId: receiveTransportId,
-            preferredSpatialLayer: initialPreference.spatialLayer,
-            preferredTemporalLayer: initialPreference.temporalLayer,
-            priority: initialPreference.priority
-        )
+        let response: ConsumeResponse
+        do {
+            response = try await socket.consume(
+                producerId: producerId,
+                rtpCapabilities: rtpCaps,
+                transportId: receiveTransportId,
+                preferredSpatialLayer: initialPreference.spatialLayer,
+                preferredTemporalLayer: initialPreference.temporalLayer,
+                priority: initialPreference.priority,
+                plannedHandoffRequestId: plannedHandoffRequestId,
+                plannedHandoffPredecessorConsumerId:
+                    plannedHandoffPredecessorConsumerId,
+                timeoutMilliseconds: signalingTimeoutMilliseconds
+            )
+        } catch {
+            let rollbackAcknowledged = await abortPlannedHandoffIfNeeded(
+                requestId: plannedHandoffRequestId,
+                producerId: producerId,
+                predecessorConsumerId: plannedHandoffPredecessorConsumerId,
+                socket: socket
+            )
+            throw ConsumerGenerationRegistrationError(
+                underlying: error,
+                rollbackAcknowledged: rollbackAcknowledged
+            )
+        }
+
+        if let plannedHandoffRequestId,
+           response.plannedConsumerHandoffRequestId?.caseInsensitiveCompare(
+            plannedHandoffRequestId
+           ) != .orderedSame {
+            let rollbackAcknowledged = await abortPlannedHandoffIfNeeded(
+                requestId: plannedHandoffRequestId,
+                producerId: producerId,
+                predecessorConsumerId: plannedHandoffPredecessorConsumerId,
+                socket: socket
+            )
+            throw ConsumerGenerationRegistrationError(
+                underlying: WebRTCError.staleConfiguration,
+                rollbackAcknowledged: rollbackAcknowledged
+            )
+        }
 
         let kind: MediaKind = response.kind == "video" ? .video : .audio
-        let rtpParameters = try encodeJSONString(response.rtpParameters)
-
-        let consumer = try receiveTransport.consume(
-            consumerId: response.id,
-            producerId: response.producerId,
-            kind: kind,
-            rtpParameters: rtpParameters,
-            appData: nil
-        )
+        let rtpParameters: String
+        let consumer: Consumer
+        do {
+            rtpParameters = try encodeJSONString(response.rtpParameters)
+            consumer = try receiveTransport.consume(
+                consumerId: response.id,
+                producerId: response.producerId,
+                kind: kind,
+                rtpParameters: rtpParameters,
+                appData: nil
+            )
+        } catch {
+            let rollbackAcknowledged = await rollbackServerConsumerGenerationAndConfirm(
+                consumerId: response.id,
+                producerId: producerId,
+                plannedHandoffRequestId: plannedHandoffRequestId,
+                plannedHandoffPredecessorConsumerId:
+                    plannedHandoffPredecessorConsumerId,
+                socket: socket
+            )
+            throw ConsumerGenerationRegistrationError(
+                underlying: error,
+                rollbackAcknowledged: rollbackAcknowledged
+            )
+        }
         consumer.delegate = self
         consumer.resume()
 
@@ -1486,11 +2866,73 @@ final class WebRTCClient: NSObject, ObservableObject {
         // under distinct keys so one never overwrites the other.
         let isScreenVideo = (producerType == "screen" && response.kind == "video")
         let trackKey = isScreenVideo ? "\(producerUserId)-screen" : producerUserId
+        nextConsumerGeneration += 1
+        let consumerGeneration = nextConsumerGeneration
+        let consumerIdentity = ConsumerGenerationIdentity(
+            consumerId: response.id,
+            generation: consumerGeneration
+        )
+        let actualVideoCodecMimeType = PlannedWebcamConsumerResetPolicy.actualVideoCodecMimeType(
+            response.rtpParameters
+        )
+        let maxSpatialLayer = PlannedWebcamConsumerResetPolicy.derivedMaxSpatialLayer(
+            explicit: response.maxSpatialLayer,
+            encodings: response.rtpParameters.encodings
+        )
+        let firstFrameSignal: FirstDecodedVideoFrameSignal?
+        let firstFrameRenderer: FirstDecodedVideoFrameRenderer?
+        if response.kind == "video", let videoTrack = consumer.track as? RTCVideoTrack {
+            let signal = FirstDecodedVideoFrameSignal()
+            let renderer = FirstDecodedVideoFrameRenderer(
+                track: videoTrack,
+                signal: signal
+            )
+            firstFrameSignal = signal
+            firstFrameRenderer = renderer
+            videoTrack.add(renderer)
+        } else {
+            firstFrameSignal = nil
+            firstFrameRenderer = nil
+        }
+
+        let isResetEligible = PlannedWebcamConsumerResetPolicy.isEligible(
+            kind: response.kind,
+            producerType: producerType,
+            consumerType: response.consumerType,
+            actualVideoCodecMimeType: actualVideoCodecMimeType,
+            maxSpatialLayer: maxSpatialLayer
+        )
+        consumers[response.id] = ConsumerInfo(
+            consumer: consumer,
+            producerId: response.producerId,
+            userId: producerUserId,
+            kind: response.kind,
+            type: producerType,
+            generation: consumerGeneration,
+            roomId: roomId,
+            meetingLifecycleGeneration: meetingLifecycleGeneration,
+            createdAtMonotonicMs: Self.monotonicMilliseconds(),
+            consumerType: response.consumerType,
+            actualVideoCodecMimeType: actualVideoCodecMimeType,
+            maxSpatialLayer: maxSpatialLayer,
+            isConsumerPaused: response.paused ?? false,
+            isProducerPaused: response.producerPaused ?? false,
+            isAdaptivelyPaused: false,
+            lifecycleRole: visibility == .currentVisible ? .current : .staged,
+            plannedResetCompleted: plannedResetCompleted || !isResetEligible,
+            trackKey: trackKey
+        )
+
+        if let firstFrameSignal, let firstFrameRenderer {
+            firstDecodedVideoFrameSignals[consumerIdentity] = firstFrameSignal
+            firstDecodedVideoFrameRenderers[consumerIdentity] = firstFrameRenderer
+        }
 
         // Request a keyframe on the initial video consume so the decoder gets a
         // fresh IDR immediately instead of showing nothing/garbage until the
         // producer's next natural keyframe.
-        if response.kind == "video",
+        if visibility == .currentVisible,
+           response.kind == "video",
            producerType == ProducerType.webcam.rawValue {
             let initialPreference = initialWebcamConsumerPreference(
                 preferHighWebcamLayer: preferHighWebcamLayer
@@ -1505,49 +2947,176 @@ final class WebRTCClient: NSObject, ObservableObject {
         do {
             try await socket.resumeConsumer(
                 consumerId: response.id,
-                requestKeyFrame: response.kind == "video"
+                requestKeyFrame: response.kind == "video",
+                timeoutMilliseconds: signalingTimeoutMilliseconds
             )
+            if var resumedInfo = consumers[response.id],
+               resumedInfo.generation == consumerGeneration {
+                resumedInfo.isConsumerPaused = false
+                consumers[response.id] = resumedInfo
+            }
         } catch {
             // A consumer is not usable until the SFU has resumed its server
             // half. Do not leave a locally registered, server-paused track
             // behind: MeetingViewModel must be able to retry this producer.
-            consumer.close()
-            socket.closeConsumer(consumerId: response.id)
-            throw error
+            if let info = consumers[response.id] {
+                removeConsumer(
+                    consumerId: response.id,
+                    info: info,
+                    closeConsumer: true,
+                    notifyServer: false
+                )
+            }
+            let rollbackAcknowledged = await rollbackServerConsumerGenerationAndConfirm(
+                consumerId: response.id,
+                producerId: producerId,
+                plannedHandoffRequestId: plannedHandoffRequestId,
+                plannedHandoffPredecessorConsumerId:
+                    plannedHandoffPredecessorConsumerId,
+                socket: socket
+            )
+            throw ConsumerGenerationRegistrationError(
+                underlying: error,
+                rollbackAcknowledged: rollbackAcknowledged
+            )
         }
 
         guard configurationGeneration == consumeConfigurationGeneration,
               remoteProducerClosureGenerations[producerId, default: 0] == producerClosureGeneration else {
-            consumer.close()
-            socket.closeConsumer(consumerId: response.id)
-            throw WebRTCError.staleConfiguration
+            if let info = consumers[response.id] {
+                removeConsumer(
+                    consumerId: response.id,
+                    info: info,
+                    closeConsumer: true,
+                    notifyServer: false
+                )
+            }
+            let rollbackAcknowledged = await rollbackServerConsumerGenerationAndConfirm(
+                consumerId: response.id,
+                producerId: producerId,
+                plannedHandoffRequestId: plannedHandoffRequestId,
+                plannedHandoffPredecessorConsumerId:
+                    plannedHandoffPredecessorConsumerId,
+                socket: socket
+            )
+            throw ConsumerGenerationRegistrationError(
+                underlying: WebRTCError.staleConfiguration,
+                rollbackAcknowledged: rollbackAcknowledged
+            )
         }
 
-        consumers[response.id] = ConsumerInfo(
-            consumer: consumer,
-            producerId: response.producerId,
-            userId: producerUserId,
-            kind: response.kind,
-            type: producerType,
-            trackKey: trackKey
-        )
-
-        if response.kind == "video", let videoTrack = consumer.track as? RTCVideoTrack {
+        if visibility == .currentVisible,
+           response.kind == "video",
+           let videoTrack = consumer.track as? RTCVideoTrack {
             let trackWrapper = VideoTrackWrapper(
                 id: response.id,
                 userId: trackKey,
                 isLocal: false,
-                track: videoTrack
+                track: videoTrack,
+                consumerGeneration: consumerGeneration
             )
             remoteVideoTracks[trackKey] = trackWrapper
         }
 
+        if visibility == .currentVisible,
+           let currentSpatialLayer = response.currentLayers?.spatialLayer {
+            observePlannedConsumerResetLayer(
+                consumerId: response.id,
+                roomId: roomId,
+                currentSpatialLayer: currentSpatialLayer
+            )
+        }
+
         debugLog("[WebRTC] Consuming \(producerType) producer \(producerId) for user \(producerUserId)")
+        return consumerIdentity
+    }
+
+    private func abortPlannedHandoffIfNeeded(
+        requestId: String?,
+        producerId: String,
+        predecessorConsumerId: String?,
+        socket: SocketIOManager
+    ) async -> Bool {
+        guard let requestId else { return true }
+        guard let predecessorConsumerId else { return false }
+        return await abortServerConsumerHandoffAndConfirm(
+            requestId: requestId,
+            producerId: producerId,
+            predecessorConsumerId: predecessorConsumerId,
+            socket: socket
+        )
+    }
+
+    private func rollbackServerConsumerGenerationAndConfirm(
+        consumerId: String,
+        producerId: String,
+        plannedHandoffRequestId: String?,
+        plannedHandoffPredecessorConsumerId: String?,
+        socket: SocketIOManager
+    ) async -> Bool {
+        if let plannedHandoffRequestId,
+           let plannedHandoffPredecessorConsumerId {
+            return await abortServerConsumerHandoffAndConfirm(
+                requestId: plannedHandoffRequestId,
+                producerId: producerId,
+                predecessorConsumerId:
+                    plannedHandoffPredecessorConsumerId,
+                socket: socket
+            )
+        }
+        return await closeServerConsumerGenerationAndConfirm(
+            consumerId: consumerId,
+            socket: socket
+        )
+    }
+
+    private func abortServerConsumerHandoffAndConfirm(
+        requestId: String,
+        producerId: String,
+        predecessorConsumerId: String,
+        socket: SocketIOManager
+    ) async -> Bool {
+        // Run cleanup in an unstructured MainActor task so cancellation of the
+        // reset coordinator cannot cancel the bounded abort-ACK retry sequence
+        // that fences a late consume completion. The caller still waits for
+        // the result before another consumer-reset attempt can begin.
+        let confirmation = Task { @MainActor in
+            do {
+                _ = try await socket.abortConsumerHandoffAndWait(
+                    requestId: requestId,
+                    producerId: producerId,
+                    predecessorConsumerId: predecessorConsumerId,
+                    timeoutMilliseconds:
+                        PlannedWebcamConsumerResetPolicy.closeAcknowledgementTimeoutMilliseconds
+                )
+                return true
+            } catch {
+                return false
+            }
+        }
+        return await confirmation.value
+    }
+
+    private func closeServerConsumerGenerationAndConfirm(
+        consumerId: String,
+        socket: SocketIOManager
+    ) async -> Bool {
+        do {
+            try await socket.closeConsumerAndWait(
+                consumerId: consumerId,
+                timeoutMilliseconds: PlannedWebcamConsumerResetPolicy.closeAcknowledgementTimeoutMilliseconds
+            )
+            return true
+        } catch {
+            socket.closeConsumer(consumerId: consumerId)
+            return false
+        }
     }
 
     func closeConsumer(producerId: String, userId: String) {
         if !producerId.isEmpty {
             remoteProducerClosureGenerations[producerId, default: 0] += 1
+            invalidatePlannedConsumerResets(producerId: producerId)
         }
         if producerId.isEmpty {
             let consumerIds = consumers
@@ -1558,8 +3127,17 @@ final class WebRTCClient: NSObject, ObservableObject {
                     removeConsumer(consumerId: id, info: info, closeConsumer: true)
                 }
             }
-        } else if let entry = consumers.first(where: { $0.value.producerId == producerId }) {
-            removeConsumer(consumerId: entry.key, info: entry.value, closeConsumer: true)
+        } else {
+            let matchingConsumers = consumers.filter {
+                $0.value.producerId == producerId
+            }
+            for (consumerId, info) in matchingConsumers {
+                removeConsumer(
+                    consumerId: consumerId,
+                    info: info,
+                    closeConsumer: true
+                )
+            }
         }
 
         // User left entirely (empty producerId path) - clear both their slots.
@@ -1568,6 +3146,18 @@ final class WebRTCClient: NSObject, ObservableObject {
                 remoteVideoTracks.removeValue(forKey: key)
             }
         }
+    }
+
+    /// Close one exact consumer generation without invalidating the producer.
+    /// This is the predecessor-close primitive required by a future overlapping
+    /// consumer handoff after its successor has decoded a frame.
+    func closeConsumer(consumerId: String) {
+        guard let info = consumers[consumerId] else { return }
+        removeConsumer(
+            consumerId: consumerId,
+            info: info,
+            closeConsumer: true
+        )
     }
 
     private func consumerMatchesUser(_ info: ConsumerInfo, userId: String) -> Bool {
@@ -1711,6 +3301,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             rtcLocalVideoTrack?.isEnabled = enabled
             localVideoEnabled = enabled
             localVideoTrack?.isEnabled = enabled
+            evaluateWebcamTopologyTransition()
 
             if !enabled {
                 await videoCapturer?.stopCapture()
@@ -1734,6 +3325,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     /// capturer before suspension so replacement media cannot be stopped if
     /// reconnect setup completes while `stopCapture()` is awaiting.
     func suspendLocalVideoForRecovery() async {
+        invalidateWebcamReceiverCapacityAuthority()
         let capturer = videoCapturer
         videoProducer?.pause()
         rtcLocalVideoTrack?.isEnabled = false
@@ -1764,6 +3356,8 @@ final class WebRTCClient: NSObject, ObservableObject {
             return
         }
 
+        resetWebcamTopologyControl()
+
         _ = await closeLocalMedia(
             kind: "video",
             type: ProducerType.webcam.rawValue,
@@ -1778,6 +3372,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     private func clearLocalWebcamCaptureState() async {
+        resetWebcamTopologyControl()
         videoProducer?.close()
         videoProducer = nil
         rtcLocalVideoTrack?.isEnabled = false
@@ -1820,6 +3415,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
 
         if kind == "video", isWebcam, matchesProducer(videoProducer, producerId: producerId) {
+            resetWebcamTopologyControl()
             videoProducer?.close()
             videoProducer = nil
             rtcLocalVideoTrack?.isEnabled = false
@@ -1890,8 +3486,444 @@ final class WebRTCClient: NSObject, ObservableObject {
         return codecJSON
     }
 
+    private func webcamVideoCodecOptionsJSON(
+        quality: VideoQuality,
+        connectionQuality: ConnectionQuality
+    ) throws -> String {
+        try encodeJSONString(
+            WebcamVideoCodecOptions(
+                videoGoogleStartBitrate: WebcamVideoCodecPolicy.googleStartBitrateKbps(
+                    quality: quality,
+                    connectionQuality: connectionQuality
+                )
+            )
+        )
+    }
+
+    func handleWebcamReceiverCapacityProof(
+        _ notification: WebcamReceiverCapacityProofNotification,
+        expectedRoomId: String
+    ) {
+        guard notification.roomId == expectedRoomId else { return }
+        if webcamReceiverCapacityRoomId != expectedRoomId {
+            let existingTopology = webcamProducerTopology
+            resetWebcamTopologyControl()
+            webcamReceiverCapacityRoomId = expectedRoomId
+            webcamReceiverCapacityProofCache.reset(roomId: expectedRoomId)
+            webcamProducerTopology = videoProducer == nil ? .other : existingTopology
+        }
+        let now = Self.webcamTopologyMonotonicMs()
+        guard webcamReceiverCapacityProofCache.apply(
+            notification,
+            expectedRoomId: expectedRoomId,
+            nowMonotonicMs: now
+        ) else { return }
+        webcamReceiverCapacityAuthorityAvailable = true
+        evaluateWebcamTopologyTransition(nowMonotonicMs: now)
+    }
+
+    func invalidateWebcamReceiverCapacityAuthority() {
+        webcamReceiverCapacityAuthorityAvailable = false
+        webcamReceiverCapacityProofCache.reset(roomId: webcamReceiverCapacityRoomId)
+        evaluateWebcamTopologyTransition()
+    }
+
+    /// The SFU may broadcast predecessor closure before the new produce call
+    /// returns. Consume the marker before MeetingViewModel clears camera state
+    /// or schedules recovery; the successor reference is committed separately.
+    func consumeIntentionalLocalVideoProducerClose(producerId: String) -> Bool {
+        intentionalLocalVideoProducerCloseIds.remove(producerId) != nil
+    }
+
+    private static func webcamTopologyMonotonicMs() -> Double {
+        ProcessInfo.processInfo.systemUptime * 1_000.0
+    }
+
+    private func resetWebcamTopologyControl() {
+        webcamTopologyControlGeneration += 1
+        webcamTopologyCommandTask?.cancel()
+        webcamTopologyCommandTask = nil
+        webcamTopologyWakeTask?.cancel()
+        webcamTopologyWakeTask = nil
+        pendingWebcamTopologyCommand = nil
+        webcamReceiverCapacityRoomId = nil
+        webcamReceiverCapacityAuthorityAvailable = false
+        webcamReceiverCapacityProofCache.reset()
+        webcamTopologyTransitionState = .initial(
+            nowMonotonicMs: Self.webcamTopologyMonotonicMs()
+        )
+        webcamProducerTopology = .other
+        intentionalLocalVideoProducerCloseIds.removeAll()
+        lastWebcamProducerSignalingError = nil
+    }
+
+    private var hardSingleReceiverConditionsMet: Bool {
+        webcamReceiverCapacityAuthorityAvailable &&
+            currentVideoQuality == .standard &&
+            currentLocalBandwidthQuality == .good &&
+            localVideoEnabled &&
+            rtcLocalVideoTrack?.isEnabled == true &&
+            videoProducer?.closed == false &&
+            screenProducer == nil
+    }
+
+    private func webcamTopologyTransitionInput(
+        nowMonotonicMs: Double
+    ) -> WebcamTopologyTransitionInput {
+        guard let roomId = webcamReceiverCapacityRoomId else {
+            return WebcamTopologyTransitionInput(
+                nowMonotonicMs: nowMonotonicMs,
+                producerId: videoProducer?.id,
+                producerTopology: webcamProducerTopology,
+                hardSingleReceiverConditionsMet: false,
+                sourceProofActive: false,
+                sourceRevocationReason: nil,
+                replacementOffer: nil,
+                successorProof: nil,
+                currentSingleProofActive: false,
+                currentSingleProofRevocationReason: nil
+            )
+        }
+
+        let producerId = videoProducer?.id
+        let sourceProducerId = webcamTopologyTransitionState.fromProducerId ?? producerId
+        let sourceProof = webcamReceiverCapacityProofCache.activeProof(
+            roomId: roomId,
+            producerId: sourceProducerId,
+            nowMonotonicMs: nowMonotonicMs
+        )
+        let currentProof = webcamReceiverCapacityProofCache.activeProof(
+            roomId: roomId,
+            producerId: producerId,
+            nowMonotonicMs: nowMonotonicMs
+        )
+        let successorProof: ActiveWebcamReceiverCapacityProof?
+        if let fromProducerId = webcamTopologyTransitionState.fromProducerId,
+           let nonce = webcamTopologyTransitionState.nonce {
+            successorProof = webcamReceiverCapacityProofCache.stagedSuccessor(
+                roomId: roomId,
+                fromProducerId: fromProducerId,
+                nonce: nonce,
+                nowMonotonicMs: nowMonotonicMs
+            )
+        } else {
+            successorProof = nil
+        }
+        let currentTransitionProofMatches =
+            currentProof?.basis == .singleLayerTransition &&
+            currentProof?.replacesProducerId == webcamTopologyTransitionState.fromProducerId &&
+            currentProof?.transitionNonce == webcamTopologyTransitionState.nonce
+        let currentSingleProofActive =
+            currentProof?.basis == .singleLayer || currentTransitionProofMatches
+
+        return WebcamTopologyTransitionInput(
+            nowMonotonicMs: nowMonotonicMs,
+            producerId: producerId,
+            producerTopology: webcamProducerTopology,
+            hardSingleReceiverConditionsMet: hardSingleReceiverConditionsMet,
+            sourceProofActive: sourceProof?.basis == .simulcastFullLayer,
+            sourceRevocationReason: webcamReceiverCapacityProofCache.revocation(
+                roomId: roomId,
+                producerId: sourceProducerId
+            )?.reason,
+            replacementOffer: sourceProof?.basis == .simulcastFullLayer
+                ? sourceProof?.replacementOffer
+                : nil,
+            successorProof: successorProof,
+            currentSingleProofActive: currentSingleProofActive,
+            currentSingleProofRevocationReason: webcamReceiverCapacityProofCache.revocation(
+                roomId: roomId,
+                producerId: producerId
+            )?.reason
+        )
+    }
+
+    private func evaluateWebcamTopologyTransition(
+        nowMonotonicMs suppliedNowMonotonicMs: Double? = nil
+    ) {
+        let nowMonotonicMs = suppliedNowMonotonicMs ?? Self.webcamTopologyMonotonicMs()
+        guard webcamReceiverCapacityRoomId != nil else {
+            webcamTopologyWakeTask?.cancel()
+            webcamTopologyWakeTask = nil
+            return
+        }
+        let input = webcamTopologyTransitionInput(nowMonotonicMs: nowMonotonicMs)
+        let step = WebcamTopologyTransitionMachine.advance(
+            state: webcamTopologyTransitionState,
+            input: input
+        )
+        webcamTopologyTransitionState = step.state
+        if let command = step.command {
+            enqueueWebcamTopologyCommand(command)
+        }
+        scheduleWebcamTopologyWake(nowMonotonicMs: nowMonotonicMs)
+    }
+
+    private func scheduleWebcamTopologyWake(nowMonotonicMs: Double) {
+        webcamTopologyWakeTask?.cancel()
+        webcamTopologyWakeTask = nil
+
+        let input = webcamTopologyTransitionInput(nowMonotonicMs: nowMonotonicMs)
+        let currentSingleProofExpiresAtMonotonicMs: Double?
+        if let roomId = webcamReceiverCapacityRoomId,
+           let proof = webcamReceiverCapacityProofCache.activeProof(
+                roomId: roomId,
+                producerId: videoProducer?.id,
+                nowMonotonicMs: nowMonotonicMs
+           ) {
+            currentSingleProofExpiresAtMonotonicMs = proof.expiresAtMonotonicMs
+        } else {
+            currentSingleProofExpiresAtMonotonicMs = nil
+        }
+
+        guard let dueAt = WebcamTopologyWakePolicy.nextWakeAt(
+            state: webcamTopologyTransitionState,
+            input: input,
+            currentSingleProofExpiresAtMonotonicMs: currentSingleProofExpiresAtMonotonicMs
+        ) else { return }
+        let generation = webcamTopologyControlGeneration
+        let delayMs = max(1.0, dueAt - nowMonotonicMs)
+        webcamTopologyWakeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delayMs * 1_000_000.0))
+            guard let self,
+                  !Task.isCancelled,
+                  self.webcamTopologyControlGeneration == generation else { return }
+            self.webcamTopologyWakeTask = nil
+            self.evaluateWebcamTopologyTransition()
+        }
+    }
+
+    private func enqueueWebcamTopologyCommand(
+        _ command: WebcamTopologyReplacementCommand
+    ) {
+        pendingWebcamTopologyCommand = WebcamTopologyTransitionMachine.latestPending(
+            pendingWebcamTopologyCommand,
+            command
+        )
+        guard webcamTopologyCommandTask == nil else { return }
+        let generation = webcamTopologyControlGeneration
+        webcamTopologyCommandTask = Task { @MainActor [weak self] in
+            await self?.drainWebcamTopologyCommands(generation: generation)
+        }
+    }
+
+    private func drainWebcamTopologyCommands(generation: Int) async {
+        while let command = pendingWebcamTopologyCommand {
+            guard !Task.isCancelled,
+                  webcamTopologyControlGeneration == generation else { break }
+            pendingWebcamTopologyCommand = nil
+            let result = await applyWebcamTopologyReplacement(
+                command,
+                topologyGeneration: generation
+            )
+            guard !Task.isCancelled,
+                  webcamTopologyControlGeneration == generation else { break }
+            let now = Self.webcamTopologyMonotonicMs()
+            let step = WebcamTopologyTransitionMachine.settle(
+                state: webcamTopologyTransitionState,
+                command: command,
+                result: result,
+                input: webcamTopologyTransitionInput(nowMonotonicMs: now)
+            )
+            webcamTopologyTransitionState = step.state
+            if let command = step.command {
+                pendingWebcamTopologyCommand = WebcamTopologyTransitionMachine.latestPending(
+                    pendingWebcamTopologyCommand,
+                    command
+                )
+            }
+            scheduleWebcamTopologyWake(nowMonotonicMs: now)
+        }
+        guard webcamTopologyControlGeneration == generation else { return }
+        webcamTopologyCommandTask = nil
+        if pendingWebcamTopologyCommand != nil {
+            let command = pendingWebcamTopologyCommand
+            pendingWebcamTopologyCommand = nil
+            if let command { enqueueWebcamTopologyCommand(command) }
+        }
+    }
+
+    private func applyWebcamTopologyReplacement(
+        _ command: WebcamTopologyReplacementCommand,
+        topologyGeneration: Int
+    ) async -> WebcamTopologyReplacementResult {
+        let targetTopology: WebcamProducerTopology = command.target == .singleReceiver
+            ? .vp8SingleLayer
+            : .vp8Simulcast
+        guard let oldProducer = videoProducer,
+              oldProducer.id == command.expectedProducerId else {
+            if videoProducer?.id == command.expectedProducerId,
+               webcamProducerTopology == targetTopology {
+                return WebcamTopologyReplacementResult(
+                    status: .noop,
+                    producerId: videoProducer?.id,
+                    topology: webcamProducerTopology,
+                    retryable: false,
+                    ambiguousOrPostCommit: false
+                )
+            }
+            return WebcamTopologyReplacementResult(
+                status: .failed,
+                producerId: videoProducer?.id,
+                topology: webcamProducerTopology,
+                retryable: true,
+                ambiguousOrPostCommit: false
+            )
+        }
+        if webcamProducerTopology == targetTopology && !command.forceReplacement {
+            return WebcamTopologyReplacementResult(
+                status: .noop,
+                producerId: oldProducer.id,
+                topology: webcamProducerTopology,
+                retryable: false,
+                ambiguousOrPostCommit: false
+            )
+        }
+        guard let socketManager,
+              let sendTransport,
+              !sendTransport.closed,
+              let track = rtcLocalVideoTrack,
+              track.isEnabled,
+              localVideoEnabled else {
+            return WebcamTopologyReplacementResult(
+                status: .failed,
+                producerId: oldProducer.id,
+                topology: webcamProducerTopology,
+                retryable: true,
+                ambiguousOrPostCommit: false
+            )
+        }
+        if command.target == .singleReceiver {
+            guard command.transition?.fromProducerId == oldProducer.id,
+                  command.transition?.nonce.isEmpty == false else {
+                return WebcamTopologyReplacementResult(
+                    status: .failed,
+                    producerId: oldProducer.id,
+                    topology: webcamProducerTopology,
+                    retryable: false,
+                    ambiguousOrPostCommit: false
+                )
+            }
+        }
+
+        let configurationGeneration = self.configurationGeneration
+        var pendingProducer: Producer?
+        lastWebcamProducerSignalingError = nil
+        do {
+            let appData = try encodeJSONString(
+                ProducerAppData(
+                    type: ProducerType.webcam.rawValue,
+                    paused: false,
+                    webcamReceiverCapacityTransition: command.target == .singleReceiver
+                        ? command.transition
+                        : nil
+                )
+            )
+            if intentionalLocalVideoProducerCloseIds.count >= 32 {
+                intentionalLocalVideoProducerCloseIds.removeAll()
+            }
+            // Must precede createProducer: server replacement can broadcast the
+            // predecessor close before the callback returns its successor id.
+            intentionalLocalVideoProducerCloseIds.insert(oldProducer.id)
+            let producer = try requireRegisteredProducer(
+                sendTransport.createProducer(
+                    for: track,
+                    encodings: command.target == .singleReceiver
+                        ? webcamSingleReceiverEncodings()
+                        : restoredAdaptiveWebcamEncodings(),
+                    codecOptions: try webcamVideoCodecOptionsJSON(
+                        quality: .standard,
+                        connectionQuality: .good
+                    ),
+                    codec: preferredVideoCodecJSON(),
+                    appData: appData
+                ),
+                label: command.target == .singleReceiver
+                    ? "single-receiver camera"
+                    : "adaptive camera recovery"
+            )
+            pendingProducer = producer
+            producer.delegate = self
+            producer.resume()
+            if targetTopology == .vp8Simulcast {
+                try? producer.setMaxSpatialLayer(2)
+            }
+
+            guard self.webcamTopologyControlGeneration == topologyGeneration,
+                  self.configurationGeneration == configurationGeneration,
+                  self.sendTransport?.id == sendTransport.id,
+                  self.rtcLocalVideoTrack === track,
+                  track.isEnabled,
+                  localVideoEnabled else {
+                throw WebRTCError.staleConfiguration
+            }
+
+            // Commit successor first. Any queued predecessor notification now
+            // cannot clear this producer even if its intentional marker was used.
+            videoProducer = producer
+            webcamProducerTopology = targetTopology
+            localVideoTrack = VideoTrackWrapper(
+                id: producer.id,
+                userId: "local",
+                isLocal: true,
+                track: track
+            )
+            pendingProducer = nil
+
+            do {
+                try await socketManager.closeProducer(producerId: oldProducer.id)
+            } catch {
+                debugLog("[WebRTC] Predecessor camera close after topology handoff: \(error)")
+            }
+            oldProducer.close()
+            lastAppliedLocalBandwidthSignature = nil
+            return WebcamTopologyReplacementResult(
+                status: .applied,
+                producerId: producer.id,
+                topology: targetTopology,
+                retryable: false,
+                ambiguousOrPostCommit: false
+            )
+        } catch {
+            if let pendingProducer {
+                do {
+                    try await socketManager.closeProducer(producerId: pendingProducer.id)
+                } catch {
+                    debugLog("[WebRTC] Failed to close uncommitted topology producer: \(error)")
+                }
+                pendingProducer.close()
+            }
+            let signalingError = lastWebcamProducerSignalingError ?? error
+            let ambiguous = pendingProducer != nil || isAmbiguousWebcamTopologyError(signalingError)
+            if !ambiguous {
+                intentionalLocalVideoProducerCloseIds.remove(oldProducer.id)
+            }
+            return WebcamTopologyReplacementResult(
+                status: .failed,
+                producerId: videoProducer?.id,
+                topology: webcamProducerTopology,
+                retryable: ambiguous,
+                ambiguousOrPostCommit: ambiguous
+            )
+        }
+    }
+
+    private func isAmbiguousWebcamTopologyError(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        let definitiveRejections = [
+            "invalid webcam receiver-capacity transition",
+            "codec policy changed",
+            "transition invalid",
+            "transition expired",
+            "transition already used",
+            "producer not current"
+        ]
+        return !definitiveRejections.contains { message.contains($0) }
+    }
+
     func updateVideoQuality(_ quality: VideoQuality) {
         currentVideoQuality = quality
+        evaluateWebcamTopologyTransition()
         lastAppliedLocalBandwidthSignature = nil
         applyLocalBandwidthProfile(connectionQuality: currentLocalBandwidthQuality)
     }
@@ -1901,6 +3933,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         guard lastAppliedLocalBandwidthSignature != signature else { return }
         currentLocalBandwidthQuality = connectionQuality
         lastAppliedLocalBandwidthSignature = signature
+        evaluateWebcamTopologyTransition()
 
         if let audioProducer, !audioProducer.closed {
             let audioBitrate = opusMaxAverageBitrate(connectionQuality: connectionQuality)
@@ -1917,7 +3950,8 @@ final class WebRTCClient: NSObject, ObservableObject {
             }
         }
 
-        if let producer = videoProducer {
+        if let producer = videoProducer,
+           webcamProducerTopology != .vp8SingleLayer {
             let specs = webcamEncodingSpecs(
                 for: currentVideoQuality,
                 connectionQuality: connectionQuality
@@ -1943,6 +3977,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                         encodings[index].maxBitrateBps = spec.maxBitrateBps
                         encodings[index].maxFramerate = spec.maxFramerate
                         encodings[index].scaleResolutionDownBy = spec.scaleResolutionDownBy
+                        encodings[index].numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount
                     }
                     next.encodings = encodings
                 }
@@ -2431,12 +4466,16 @@ final class WebRTCClient: NSObject, ObservableObject {
             previousReceiveMediaCounterSample = receiveMediaSample
         }
 
-        let publishTransportQuality = hasPublishStats ? Self.deriveConnectionQuality(
+        let publishTransportQuality = hasPublishStats ? RTCConnectionQualityPolicy.transportQuality(
             rttMs: publish.rttMs,
             packetLoss: publishPacketLoss,
             jitterMs: publish.jitterMs
         ) : .unknown
-        let receiveTransportQuality = hasReceiveStats ? Self.deriveConnectionQuality(
+        let publishMediaPressureQuality = hasPublishStats ? RTCConnectionQualityPolicy.publishMediaPressureQuality(
+            packetLoss: publishPacketLoss,
+            jitterMs: publish.jitterMs
+        ) : .unknown
+        let receiveTransportQuality = hasReceiveStats ? RTCConnectionQualityPolicy.transportQuality(
             rttMs: receive.rttMs,
             packetLoss: receivePacketLoss,
             jitterMs: receive.jitterMs
@@ -2461,7 +4500,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         )
 
         let publishQuality = Self.worstConnectionQuality(
-            publishTransportQuality,
+            publishMediaPressureQuality,
             publishBandwidthQuality
         )
         let receiveQuality = Self.worstConnectionQuality(
@@ -2475,7 +4514,11 @@ final class WebRTCClient: NSObject, ObservableObject {
         return ConnectionQualitySample(
             publishQuality: publishQuality,
             receiveQuality: receiveQuality,
-            overallQuality: Self.worstConnectionQuality(publishQuality, receiveQuality),
+            overallQuality: Self.worstConnectionQuality(
+                publishTransportQuality,
+                publishQuality,
+                receiveQuality
+            ),
             screenSharePublishQuality: screenSharePublishQuality
         )
     }
@@ -2637,23 +4680,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         return deltaTotal > 0 ? deltaLost / deltaTotal : 0
     }
 
-    private static func deriveConnectionQuality(rttMs: Double?, packetLoss: Double?, jitterMs: Double?) -> ConnectionQuality {
-        if rttMs == nil && packetLoss == nil && jitterMs == nil {
-            return .unknown
-        }
-
-        if (rttMs ?? 0) >= 850 || (packetLoss ?? 0) >= 0.15 || (jitterMs ?? 0) >= 120 {
-            return .emergency
-        }
-        if (rttMs ?? 0) >= 500 || (packetLoss ?? 0) >= 0.08 || (jitterMs ?? 0) >= 60 {
-            return .poor
-        }
-        if (rttMs ?? 0) >= 250 || (packetLoss ?? 0) >= 0.05 || (jitterMs ?? 0) >= 30 {
-            return .fair
-        }
-        return .good
-    }
-
     private static func deriveAvailableBitrateQuality(
         availableBitrate: Double?,
         mediaBitrate: Double?,
@@ -2811,7 +4837,8 @@ final class WebRTCClient: NSObject, ObservableObject {
         let minStallByteDelta: Double = 8000
         let stallSamplesBeforePLI = 2
         var active = Set<String>()
-        for (consumerId, info) in consumers where info.kind == "video" {
+        for (consumerId, info) in consumers where
+            info.kind == "video" && info.lifecycleRole.acceptsPeriodicControls {
             active.insert(consumerId)
             guard let sample = Self.parseInboundVideoDecode(info.consumer.stats) else { continue }
             let prev = videoFreezeStats[consumerId]
@@ -2846,6 +4873,17 @@ final class WebRTCClient: NSObject, ObservableObject {
         preserveCallAudioRouting: Bool = false
     ) async {
         configurationGeneration += 1
+        let consumerResetTask = plannedConsumerResetCoordinatorTask
+        consumerResetTask?.cancel()
+        await consumerResetTask?.value
+        plannedConsumerResetCoordinatorTask = nil
+        plannedConsumerResetCoordinatorOwnerToken = nil
+        plannedConsumerResetActiveOwnerToken = nil
+        plannedConsumerResetActivePredecessorId = nil
+        plannedConsumerResetCandidates.removeAll()
+        activeConsumerResetRoomId = nil
+        activeConsumerResetLifecycleGeneration = nil
+        resetWebcamTopologyControl()
         await videoCapturer?.stopCapture()
         videoCapturer = nil
 
@@ -2872,6 +4910,9 @@ final class WebRTCClient: NSObject, ObservableObject {
         for (_, info) in consumers {
             info.consumer.close()
         }
+        for identity in Array(firstDecodedVideoFrameSignals.keys) {
+            cancelFirstDecodedVideoFrameObservation(identity: identity)
+        }
         consumers.removeAll()
         remoteProducerClosureGenerations.removeAll()
         videoFreezeStats.removeAll()
@@ -2880,6 +4921,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         remoteConsumerPreferenceInFlightIds.removeAll()
         remoteConsumerPreferenceRetryTask?.cancel()
         remoteConsumerPreferenceRetryTask = nil
+        remoteConsumerPreferencePolicyRevision += 1
         previousPublishConnectionLossSample = nil
         previousReceiveConnectionLossSample = nil
         previousPublishMediaCounterSample = nil
@@ -3052,10 +5094,15 @@ extension WebRTCClient: SendTransportDelegate, ReceiveTransportDelegate, Produce
                     kind: kind == .audio ? "audio" : "video",
                     rtpParameters: params,
                     type: type,
-                    paused: appDataPayload?.paused ?? false
+                    paused: appDataPayload?.paused ?? false,
+                    webcamReceiverCapacityTransition: appDataPayload?.webcamReceiverCapacityTransition
                 )
                 callback(producerId)
             } catch {
+                if kind == .video,
+                   (try? self.decodeJSONString(appData, as: ProducerAppData.self))?.type == ProducerType.webcam.rawValue {
+                    self.lastWebcamProducerSignalingError = error
+                }
                 debugLog("[WebRTC] Produce failed: \(error)")
                 callback(nil)
             }
@@ -3088,6 +5135,7 @@ extension WebRTCClient: SendTransportDelegate, ReceiveTransportDelegate, Produce
                 self.suppressLocalStateCallbacks = previousSuppressLocalStateCallbacks
                 self.onLocalAudioProducerLost?()
             } else if producer.id == self.videoProducer?.id {
+                self.resetWebcamTopologyControl()
                 self.videoProducer = nil
                 let previousSuppressLocalStateCallbacks = self.suppressLocalStateCallbacks
                 self.suppressLocalStateCallbacks = true
@@ -3098,25 +5146,21 @@ extension WebRTCClient: SendTransportDelegate, ReceiveTransportDelegate, Produce
                 self.screenProducer = nil
                 self.screenProducerBandwidthQuality = .unknown
                 self.resetScreenFrameLimiter()
+                self.evaluateWebcamTopologyTransition()
             }
         }
     }
 
     nonisolated func onTransportClose(in consumer: Consumer) {
         Task { @MainActor in
-            let entry = self.consumers.first { $0.value.consumer.id == consumer.id }
+            let entry = self.consumers.first { $0.value.consumer === consumer }
             if let entry {
-                self.consumers.removeValue(forKey: entry.key)
-                self.videoFreezeStats.removeValue(forKey: entry.key)
-                self.remoteConsumerPreferenceSignatures.removeValue(forKey: entry.key)
-                self.remoteConsumerLayerPreferenceUnsupportedIds.remove(entry.key)
-                self.remoteConsumerPreferenceInFlightIds.remove(entry.key)
-                if entry.value.kind == "video" {
-                    let trackKey = entry.value.trackKey.isEmpty ? entry.value.userId : entry.value.trackKey
-                    if !trackKey.isEmpty {
-                        self.remoteVideoTracks.removeValue(forKey: trackKey)
-                    }
-                }
+                self.removeConsumer(
+                    consumerId: entry.key,
+                    info: entry.value,
+                    closeConsumer: false,
+                    notifyServer: false
+                )
             }
         }
     }
@@ -3578,6 +5622,7 @@ extension WebRTCClient {
 
             screenProducer = producer
             screenProducerBandwidthQuality = currentLocalBandwidthQuality
+            evaluateWebcamTopologyTransition()
 
             debugLog("[WebRTC] Screen sharing producer created: \(producer.id)")
         } catch {
@@ -3595,6 +5640,7 @@ extension WebRTCClient {
         screenProducer?.close()
         screenProducer = nil
         screenProducerBandwidthQuality = .unknown
+        evaluateWebcamTopologyTransition()
         
         rtcScreenTrack?.isEnabled = false
         rtcScreenTrack = nil

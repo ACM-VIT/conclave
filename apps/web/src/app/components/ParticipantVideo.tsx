@@ -2,7 +2,7 @@
 
 import { errorName } from "../lib/utils";
 import { Crop, Hand, Info, Maximize2, MicOff, Pin, PinOff } from "lucide-react";
-import { memo, useEffect, useRef } from "react";
+import { memo, useLayoutEffect, useRef } from "react";
 import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
 import {
   getRenderableParticipantVideoStream,
@@ -19,6 +19,7 @@ import { Avatar } from "@conclave/ui-tokens/web";
 import { color } from "@conclave/ui-tokens";
 import { useElementSize } from "../hooks/useElementSize";
 import { computeTileChrome } from "../lib/tile-chrome";
+import { observeRemoteVideoPresentation } from "../lib/remote-video-presentation";
 
 interface ParticipantVideoProps {
   participant: Participant;
@@ -91,7 +92,7 @@ function ParticipantVideo({
   const connectionStatus = participant.connectionStatus;
   const isReconnecting = connectionStatus?.state === "reconnecting";
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
@@ -105,6 +106,10 @@ function ParticipantVideo({
     if (video.srcObject !== videoStream) {
       video.srcObject = videoStream;
     }
+    const stopPresentationObservation = observeRemoteVideoPresentation(
+      video,
+      videoStream,
+    );
 
     let cancelled = false;
 
@@ -172,6 +177,7 @@ function ParticipantVideo({
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("orientationchange", handleOrientationChange);
       playbackRecovery.clear();
+      stopPresentationObservation();
       if (video.srcObject === videoStream) {
         video.srcObject = null;
       }

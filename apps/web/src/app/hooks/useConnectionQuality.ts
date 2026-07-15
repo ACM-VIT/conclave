@@ -2,12 +2,26 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  buildBrowserNetworkPolicyObservation,
+  createBrowserNetworkPollAuthority,
   getBrowserNetworkSnapshot,
+  getBrowserNetworkInformation,
   type BrowserNetworkSnapshot,
+  type BrowserNetworkPolicyObservation,
 } from "../lib/network-information";
+import {
+  getPublishAdaptationQuality,
+  getReceiveAdaptationQuality,
+  getSustainedReceiveEmergencyLoss,
+  hasBrowserMediaEmergencyEvidence,
+  hasReceiveContinuityRisk,
+  updateRollingPacketLoss,
+  type NetworkQuality,
+  type PacketLossWindowSample,
+} from "../lib/connection-quality-policy";
 import type { Transport } from "../lib/types";
 
-export type ConnectionQuality = "good" | "fair" | "poor" | "unknown";
+export type ConnectionQuality = NetworkQuality;
 
 export interface MediaTrackQualityStats {
   /** Actual media bitrate over the most recent stats window, in bits/sec. */
@@ -36,19 +50,28 @@ interface DirectionMediaQualityStats {
 export interface ConnectionQualityStats {
   /** Worst observed tier across publishing and receiving. */
   quality: ConnectionQuality;
-  /** Send-side quality, used for camera/screen-share adaptation. */
+  /** User-facing send-side quality, including latency-only degradation. */
   publishQuality: ConnectionQuality;
+  /**
+   * Send-side media adaptation tier. Unlike publishQuality, an otherwise
+   * healthy RTT-only path can remain good so latency does not discard pixels.
+   */
+  publishAdaptationQuality: ConnectionQuality;
   /** Receive-side quality, used for remote consumer layer selection. */
   receiveQuality: ConnectionQuality;
+  /** Receive-side media adaptation tier with latency-only pressure removed. */
+  receiveAdaptationQuality: ConnectionQuality;
+  /** Prefer a lower temporal layer while retaining focus-camera resolution. */
+  receiveContinuityRisk: boolean;
   /** Send-side quality from WebRTC stats before browser-network hinting. */
   rtcPublishQuality: ConnectionQuality;
   /** Receive-side quality from WebRTC stats before browser-network hinting. */
   rtcReceiveQuality: ConnectionQuality;
   /** True when either browser hints or WebRTC stats indicate an emergency-grade link. */
   emergencyMode: boolean;
-  /** Send-side emergency signal from browser hints or WebRTC stats. */
+  /** Send-side media emergency; clean high RTT alone is intentionally excluded. */
   publishEmergencyMode: boolean;
-  /** Receive-side emergency signal from browser hints or WebRTC stats. */
+  /** Receive-side media emergency; clean high RTT alone is intentionally excluded. */
   receiveEmergencyMode: boolean;
   /** Worst observed round-trip time in milliseconds, if observable. */
   rttMs: number | null;
@@ -64,7 +87,7 @@ export interface ConnectionQualityStats {
   publishJitterMs: number | null;
   /** Receive-side round-trip time in milliseconds, if observable. */
   receiveRttMs: number | null;
-  /** Receive-side packet loss fraction (0-1) over the most recent window. */
+  /** Receive-side packet loss fraction (0-1) over the rolling ~6s window. */
   receivePacketLoss: number | null;
   /** Receive-side jitter in milliseconds, if observable. */
   receiveJitterMs: number | null;
@@ -74,6 +97,8 @@ export interface ConnectionQualityStats {
   availableIncomingBitrate: number | null;
   /** Browser Network Information API snapshot used as an early/fallback hint. */
   browserNetwork: BrowserNetworkSnapshot;
+  /** Product-owned proof that this hook consumed the browser-network snapshot. */
+  browserNetworkObservation: Readonly<BrowserNetworkPolicyObservation> | null;
   /** Actual send-side audio/video media stats over the latest polling window. */
   publishMedia: DirectionMediaQualityStats;
   /** Actual receive-side audio/video media stats over the latest polling window. */
@@ -143,7 +168,10 @@ const UNKNOWN_BROWSER_NETWORK_SNAPSHOT: BrowserNetworkSnapshot = {
 const UNKNOWN_STATS: ConnectionQualityStats = {
   quality: "unknown",
   publishQuality: "unknown",
+  publishAdaptationQuality: "unknown",
   receiveQuality: "unknown",
+  receiveAdaptationQuality: "unknown",
+  receiveContinuityRisk: false,
   rtcPublishQuality: "unknown",
   rtcReceiveQuality: "unknown",
   emergencyMode: false,
@@ -161,6 +189,7 @@ const UNKNOWN_STATS: ConnectionQualityStats = {
   availableOutgoingBitrate: null,
   availableIncomingBitrate: null,
   browserNetwork: UNKNOWN_BROWSER_NETWORK_SNAPSHOT,
+  browserNetworkObservation: null,
   publishMedia: EMPTY_DIRECTION_MEDIA_STATS,
   receiveMedia: EMPTY_DIRECTION_MEDIA_STATS,
 };
@@ -536,10 +565,10 @@ const isLowAvailableBitrate = (
   return mediaBitrate >= threshold * AVAILABLE_BITRATE_SATURATION_RATIO;
 };
 
-function windowedPacketLoss(
+function windowedPacketLossSample(
   current: LossSample,
   previous: LossSample | null,
-): number | null {
+): LossSample | null {
   if (!previous) return null;
   const deltaLost = Math.max(0, current.packetsLost - previous.packetsLost);
   const deltaReceived = Math.max(
@@ -547,9 +576,18 @@ function windowedPacketLoss(
     current.packetsReceived - previous.packetsReceived,
   );
   const deltaTotal = deltaLost + deltaReceived;
-  if (deltaTotal <= 0) return 0;
-  return deltaLost / deltaTotal;
+  if (deltaTotal <= 0) return null;
+  return {
+    packetsLost: deltaLost,
+    packetsReceived: deltaReceived,
+  };
 }
+
+const getPacketLossFraction = (sample: LossSample | null): number | null => {
+  if (!sample) return null;
+  const packetCount = sample.packetsLost + sample.packetsReceived;
+  return packetCount > 0 ? sample.packetsLost / packetCount : null;
+};
 
 const windowedBitrate = (
   currentBytes: number | null,
@@ -810,6 +848,7 @@ export function useConnectionQuality({
   const [stats, setStats] = useState<ConnectionQualityStats>(UNKNOWN_STATS);
   const prevPublishLossRef = useRef<LossSample | null>(null);
   const prevReceiveLossRef = useRef<LossSample | null>(null);
+  const receiveLossWindowRef = useRef<PacketLossWindowSample[]>([]);
   const prevPublishMediaRef = useRef<MediaCounterSample | null>(null);
   const prevReceiveMediaRef = useRef<MediaCounterSample | null>(null);
 
@@ -817,6 +856,7 @@ export function useConnectionQuality({
     if (!enabled || typeof window === "undefined") {
       prevPublishLossRef.current = null;
       prevReceiveLossRef.current = null;
+      receiveLossWindowRef.current = [];
       prevPublishMediaRef.current = null;
       prevReceiveMediaRef.current = null;
       setStats(UNKNOWN_STATS);
@@ -824,9 +864,14 @@ export function useConnectionQuality({
     }
 
     let cancelled = false;
+    const pollAuthority = createBrowserNetworkPollAuthority();
 
     const poll = async () => {
+      const pollGeneration = pollAuthority.begin();
       const browserNetwork = getBrowserNetworkSnapshot();
+      const browserNetworkObservation = buildBrowserNetworkPolicyObservation(
+        browserNetwork,
+      );
       const startupBrowserQualityHint =
         browserNetwork.quality === "unknown"
           ? browserNetwork.startupQuality
@@ -856,22 +901,31 @@ export function useConnectionQuality({
       );
 
       if (transportEntries.length === 0) {
-        if (!cancelled) {
+        if (!cancelled && pollAuthority.isCurrent(pollGeneration)) {
+          const browserMediaEmergency = hasBrowserMediaEmergencyEvidence({
+            effectiveType: browserNetwork.effectiveType,
+            saveData: browserNetwork.saveData,
+            downlinkMbps: browserNetwork.downlinkMbps,
+          });
           prevPublishLossRef.current = null;
           prevReceiveLossRef.current = null;
+          receiveLossWindowRef.current = [];
           prevPublishMediaRef.current = null;
           prevReceiveMediaRef.current = null;
           setStats({
             ...UNKNOWN_STATS,
             quality: startupBrowserQualityHint,
             publishQuality: startupBrowserQualityHint,
+            publishAdaptationQuality: startupBrowserQualityHint,
             receiveQuality: startupBrowserQualityHint,
+            receiveAdaptationQuality: startupBrowserQualityHint,
             rtcPublishQuality: "unknown",
             rtcReceiveQuality: "unknown",
             emergencyMode: browserNetwork.emergency,
-            publishEmergencyMode: browserNetwork.emergency,
-            receiveEmergencyMode: browserNetwork.emergency,
+            publishEmergencyMode: browserMediaEmergency,
+            receiveEmergencyMode: browserMediaEmergency,
             browserNetwork,
+            browserNetworkObservation,
           });
         }
         return;
@@ -882,6 +936,7 @@ export function useConnectionQuality({
       }
       if (!hasReceiveTransport) {
         prevReceiveLossRef.current = null;
+        receiveLossWindowRef.current = [];
         prevReceiveMediaRef.current = null;
       }
 
@@ -903,6 +958,8 @@ export function useConnectionQuality({
       };
       let publishMedia = createEmptyMediaCounterSample(Date.now());
       let receiveMedia = createEmptyMediaCounterSample(Date.now());
+      let observedPublishReport = false;
+      let observedReceiveReport = false;
 
       for (const { direction, transport } of transportEntries) {
         let report: RTCStatsReport;
@@ -911,9 +968,11 @@ export function useConnectionQuality({
         } catch {
           continue;
         }
+        if (cancelled || !pollAuthority.isCurrent(pollGeneration)) return;
 
         const parsed = readReport(report);
         if (direction === "publish") {
+          observedPublishReport = true;
           publish.rttMs = maxNullable(publish.rttMs, parsed.rttMs);
           publish.jitterMs = maxNullable(
             publish.jitterMs,
@@ -931,6 +990,7 @@ export function useConnectionQuality({
           );
           publishMedia = parsed.outboundMedia;
         } else {
+          observedReceiveReport = true;
           receive.rttMs = maxNullable(receive.rttMs, parsed.rttMs);
           receive.jitterMs = maxNullable(
             receive.jitterMs,
@@ -946,53 +1006,63 @@ export function useConnectionQuality({
         }
       }
 
-      if (cancelled) return;
+      if (cancelled || !pollAuthority.isCurrent(pollGeneration)) return;
 
-      const publishWindowLoss = hasPublishTransport
-        ? windowedPacketLoss(
+      const publishWindowLossSample =
+        hasPublishTransport && observedPublishReport
+          ? windowedPacketLossSample(
             {
               packetsLost: publish.packetsLost,
               packetsReceived: publish.packetsReceived,
             },
             prevPublishLossRef.current,
           )
-        : null;
-      const receiveWindowLoss = hasReceiveTransport
-        ? windowedPacketLoss(
+          : null;
+      const receiveWindowLossSample =
+        hasReceiveTransport && observedReceiveReport
+          ? windowedPacketLossSample(
             {
               packetsLost: receive.packetsLost,
               packetsReceived: receive.packetsReceived,
             },
             prevReceiveLossRef.current,
           )
-        : null;
-      if (hasPublishTransport) {
+          : null;
+      if (hasPublishTransport && observedPublishReport) {
         prevPublishLossRef.current = {
           packetsLost: publish.packetsLost,
           packetsReceived: publish.packetsReceived,
         };
       }
-      if (hasReceiveTransport) {
+      if (hasReceiveTransport && observedReceiveReport) {
         prevReceiveLossRef.current = {
           packetsLost: receive.packetsLost,
           packetsReceived: receive.packetsReceived,
         };
       }
-      const publishMediaStats = hasPublishTransport
+      const receiveLossSnapshot = updateRollingPacketLoss({
+        samples: receiveLossWindowRef.current,
+        sample: receiveWindowLossSample,
+        nowMs: Date.now(),
+      });
+      receiveLossWindowRef.current = receiveLossSnapshot.samples;
+
+      const publishMediaStats = observedPublishReport
         ? buildDirectionMediaStats(publishMedia, prevPublishMediaRef.current)
         : EMPTY_DIRECTION_MEDIA_STATS;
-      const receiveMediaStats = hasReceiveTransport
+      const receiveMediaStats = observedReceiveReport
         ? buildDirectionMediaStats(receiveMedia, prevReceiveMediaRef.current)
         : EMPTY_DIRECTION_MEDIA_STATS;
-      if (hasPublishTransport) {
+      if (hasPublishTransport && observedPublishReport) {
         prevPublishMediaRef.current = publishMedia;
       }
-      if (hasReceiveTransport) {
+      if (hasReceiveTransport && observedReceiveReport) {
         prevReceiveMediaRef.current = receiveMedia;
       }
 
-      const publishLoss = publish.lossFraction ?? publishWindowLoss;
-      const receiveLoss = receiveWindowLoss;
+      const publishLoss =
+        publish.lossFraction ?? getPacketLossFraction(publishWindowLossSample);
+      const receiveLoss = receiveLossSnapshot.fraction;
       const publishMediaBitrate = getDirectionMediaBitrate(publishMediaStats);
       const receiveMediaBitrate = getDirectionMediaBitrate(receiveMediaStats);
       const observedPublishQuality = deriveDirectionalQuality({
@@ -1016,7 +1086,7 @@ export function useConnectionQuality({
         fairBitrate: INCOMING_BW_FAIR_BPS,
         poorBitrate: INCOMING_BW_POOR_BPS,
       });
-      const observedPublishEmergencyMode = deriveDirectionalEmergencyMode({
+      const observedPublishTransportEmergencyMode = deriveDirectionalEmergencyMode({
         rttMs: publish.rttMs,
         packetLoss: publishLoss,
         jitterMs: publish.jitterMs,
@@ -1027,9 +1097,9 @@ export function useConnectionQuality({
           publishMediaStats.video.qualityLimitationReason,
         bandwidthLimited: publishMediaStats.video.bandwidthLimited,
       });
-      const observedReceiveEmergencyMode = deriveDirectionalEmergencyMode({
+      const observedReceiveTransportEmergencyMode = deriveDirectionalEmergencyMode({
         rttMs: receive.rttMs,
-        packetLoss: receiveLoss,
+        packetLoss: getSustainedReceiveEmergencyLoss(receiveLossSnapshot),
         jitterMs: receive.jitterMs,
         availableBitrate: receive.availableBitrate,
         mediaBitrate: receiveMediaBitrate,
@@ -1043,18 +1113,65 @@ export function useConnectionQuality({
         observedReceiveQuality,
         browserNetwork,
       );
+      const publishAdaptationQuality = getPublishAdaptationQuality({
+        publishQuality,
+        packetLoss: publishLoss,
+        jitterMs: publish.jitterMs,
+        availableOutgoingBitrate: publish.availableBitrate,
+        bandwidthLimited: publishMediaStats.video.bandwidthLimited,
+      });
+      const receiveAdaptationQuality = getReceiveAdaptationQuality({
+        receiveQuality,
+        packetLoss: receiveLoss,
+        jitterMs: receive.jitterMs,
+        availableIncomingBitrate: receive.availableBitrate,
+      });
+      const receiveContinuityRisk = hasReceiveContinuityRisk({
+        rttMs: receive.rttMs,
+        rollingLoss: receiveLoss,
+      });
+      const browserMediaEmergency = hasBrowserMediaEmergencyEvidence({
+        effectiveType: browserNetwork.effectiveType,
+        saveData: browserNetwork.saveData,
+        downlinkMbps: browserNetwork.downlinkMbps,
+      });
       const publishEmergencyMode =
-        browserNetwork.emergency || observedPublishEmergencyMode;
+        browserMediaEmergency ||
+        deriveDirectionalEmergencyMode({
+          rttMs: null,
+          packetLoss: publishLoss,
+          jitterMs: publish.jitterMs,
+          availableBitrate: publish.availableBitrate,
+          mediaBitrate: publishMediaBitrate,
+          emergencyBitrate: OUTGOING_BW_EMERGENCY_BPS,
+          qualityLimitationReason:
+            publishMediaStats.video.qualityLimitationReason,
+          bandwidthLimited: publishMediaStats.video.bandwidthLimited,
+        });
       const receiveEmergencyMode =
-        browserNetwork.emergency || observedReceiveEmergencyMode;
+        browserMediaEmergency ||
+        deriveDirectionalEmergencyMode({
+          rttMs: null,
+          packetLoss: getSustainedReceiveEmergencyLoss(receiveLossSnapshot),
+          jitterMs: receive.jitterMs,
+          availableBitrate: receive.availableBitrate,
+          mediaBitrate: receiveMediaBitrate,
+          emergencyBitrate: INCOMING_BW_EMERGENCY_BPS,
+        });
 
       setStats({
         quality: worstQuality(publishQuality, receiveQuality),
         publishQuality,
+        publishAdaptationQuality,
         receiveQuality,
+        receiveAdaptationQuality,
+        receiveContinuityRisk,
         rtcPublishQuality: observedPublishQuality,
         rtcReceiveQuality: observedReceiveQuality,
-        emergencyMode: publishEmergencyMode || receiveEmergencyMode,
+        emergencyMode:
+          browserNetwork.emergency ||
+          observedPublishTransportEmergencyMode ||
+          observedReceiveTransportEmergencyMode,
         publishEmergencyMode,
         receiveEmergencyMode,
         rttMs: maxNullable(publish.rttMs, receive.rttMs),
@@ -1069,19 +1186,33 @@ export function useConnectionQuality({
         availableOutgoingBitrate: publish.availableBitrate,
         availableIncomingBitrate: receive.availableBitrate,
         browserNetwork,
+        browserNetworkObservation,
         publishMedia: publishMediaStats,
         receiveMedia: receiveMediaStats,
       });
     };
 
     void poll();
+    const browserNetworkInformation = getBrowserNetworkInformation();
+    const handleBrowserNetworkChange = () => {
+      void poll();
+    };
+    browserNetworkInformation?.addEventListener?.(
+      "change",
+      handleBrowserNetworkChange,
+    );
     const handle = window.setInterval(() => {
       void poll();
     }, intervalMs);
 
     return () => {
       cancelled = true;
+      pollAuthority.invalidate();
       window.clearInterval(handle);
+      browserNetworkInformation?.removeEventListener?.(
+        "change",
+        handleBrowserNetworkChange,
+      );
     };
   }, [enabled, intervalMs, producerTransportRef, consumerTransportRef]);
 

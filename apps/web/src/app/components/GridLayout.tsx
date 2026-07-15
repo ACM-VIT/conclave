@@ -39,6 +39,7 @@ import {
 } from "../lib/participant-media";
 import type { Participant } from "../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../lib/utils";
+import { observeRemoteVideoPresentation } from "../lib/remote-video-presentation";
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
 import ParticipantVideo from "./ParticipantVideo";
@@ -1057,7 +1058,7 @@ function GridLayout({
   // NEXT share starts fresh rather than carrying over the last choice.
   const [selfPresentationView, setSelfPresentationView] =
     useState<SelfPresentationView>("placeholder");
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!isLocalPresenter) {
       setSelfPresentationView("placeholder");
     }
@@ -4196,6 +4197,10 @@ const OverflowGalleryTile = memo(function OverflowGalleryTile({
     if (video.srcObject !== videoStream) {
       video.srcObject = videoStream;
     }
+    const stopPresentationObservation = observeRemoteVideoPresentation(
+      video,
+      videoStream,
+    );
 
     let cancelled = false;
 
@@ -4247,6 +4252,7 @@ const OverflowGalleryTile = memo(function OverflowGalleryTile({
       window.removeEventListener("resize", handleWindowChange);
       window.removeEventListener("orientationchange", handleWindowChange);
       playbackRecovery.clear();
+      stopPresentationObservation();
       if (video.srcObject === videoStream) {
         video.srcObject = null;
       }

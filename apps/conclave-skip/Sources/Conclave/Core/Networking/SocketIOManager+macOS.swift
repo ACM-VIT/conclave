@@ -53,6 +53,7 @@ final class SocketIOManager {
     var onNewProducer: ((ProducerInfo) -> Void)?
     var onProducerClosed: ((ProducerClosedNotification) -> Void)?
     var onConsumerTelemetry: ((ConsumerTelemetryNotification) -> Void)?
+    var onWebcamReceiverCapacityProof: ((WebcamReceiverCapacityProofNotification) -> Void)?
 
     var onChatMessage: ((ChatMessage) -> Void)?
     var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Void)?
@@ -107,16 +108,36 @@ final class SocketIOManager {
         kind: String,
         rtpParameters: RtpParameters,
         type: ProducerType,
-        paused: Bool
+        paused: Bool,
+        webcamReceiverCapacityTransition: WebcamReceiverCapacityTransition? = nil
     ) async throws -> String {
         throw NSError(domain: "Conclave", code: -1, userInfo: [NSLocalizedDescriptionKey: "SocketIO not available on macOS"])
     }
 
-    func consume(producerId: String, rtpCapabilities: RtpCapabilities, transportId: String?) async throws -> ConsumeResponse {
+    func consume(
+        producerId: String,
+        rtpCapabilities: RtpCapabilities,
+        transportId: String?,
+        preferredSpatialLayer: Int? = nil,
+        preferredTemporalLayer: Int? = nil,
+        priority: Int? = nil,
+        plannedHandoffRequestId: String? = nil,
+        plannedHandoffPredecessorConsumerId: String? = nil,
+        timeoutMilliseconds: Int? = nil
+    ) async throws -> ConsumeResponse {
         throw NSError(domain: "Conclave", code: -1, userInfo: [NSLocalizedDescriptionKey: "SocketIO not available on macOS"])
     }
-    func resumeConsumer(consumerId: String, requestKeyFrame: Bool = false) async throws { }
+    func abortConsumerHandoffAndWait(
+        requestId: String,
+        producerId: String,
+        predecessorConsumerId: String,
+        timeoutMilliseconds: Int = 1_000
+    ) async throws -> AbortConsumerHandoffResponse {
+        throw NSError(domain: "Conclave", code: -1, userInfo: [NSLocalizedDescriptionKey: "SocketIO not available on macOS"])
+    }
+    func resumeConsumer(consumerId: String, requestKeyFrame: Bool = false, timeoutMilliseconds: Int? = nil) async throws { }
     func closeConsumer(consumerId: String) { }
+    func closeConsumerAndWait(consumerId: String, timeoutMilliseconds: Int = 1_250) async throws { }
     func setConsumerPreferences(
         consumerId: String,
         spatialLayer: Int? = nil,

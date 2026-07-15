@@ -34,7 +34,9 @@ const LOW_QUALITY_CONSTRAINTS = {
 const POOR_QUALITY_CONSTRAINTS = {
   width: { ideal: 426, max: 426 },
   height: { ideal: 240, max: 240 },
-  frameRate: { ideal: 15, max: 15 },
+  // Match the poor-network sender cap so capture does not generate frames the
+  // encoder must immediately discard.
+  frameRate: { ideal: 12, max: 12 },
 };
 
 const EMERGENCY_QUALITY_CONSTRAINTS = {
@@ -78,7 +80,7 @@ export const DEFAULT_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   sampleSize: { ideal: 16 },
 };
 
-export const STANDARD_VIDEO_MAX_BITRATE = 1500000;
+export const STANDARD_VIDEO_MAX_BITRATE = 1650000;
 export const LOW_VIDEO_MAX_BITRATE = 260000;
 export const SCREEN_SHARE_MAX_BITRATE = 2500000;
 export const SCREEN_SHARE_MAX_FRAMERATE = 24;

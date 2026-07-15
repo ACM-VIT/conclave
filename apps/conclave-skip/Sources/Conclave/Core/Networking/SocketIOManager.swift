@@ -20,6 +20,59 @@ enum SocketRoomEventPolicy {
     }
 }
 
+/// Pure, bounded retry policy for an exact planned-handoff abort. The request
+/// value is created once and retained by the state so every wire attempt uses
+/// the same request, producer, and predecessor identity.
+enum PlannedConsumerHandoffAbortRetryPolicy {
+    static let maximumAttempts = 3
+    static let baseBackoffMilliseconds: Int64 = 75
+    static let maximumBackoffMilliseconds: Int64 = 150
+
+    static func backoffMilliseconds(afterFailedAttempt attempt: Int) -> Int64? {
+        guard attempt > 0, attempt < maximumAttempts else { return nil }
+        return min(
+            maximumBackoffMilliseconds,
+            baseBackoffMilliseconds * Int64(attempt)
+        )
+    }
+
+    static func permitsConsumerResetRetry(rollbackConfirmed: Bool) -> Bool {
+        rollbackConfirmed
+    }
+}
+
+struct PlannedConsumerHandoffAbortRetryState {
+    let request: AbortConsumerHandoffRequest
+    private(set) var attemptCount = 0
+    private(set) var isConfirmed = false
+
+    mutating func nextRequest() -> AbortConsumerHandoffRequest? {
+        guard !isConfirmed,
+              attemptCount < PlannedConsumerHandoffAbortRetryPolicy.maximumAttempts else {
+            return nil
+        }
+        attemptCount += 1
+        return request
+    }
+
+    mutating func recordAcknowledgement(confirmed: Bool) {
+        isConfirmed = isConfirmed || confirmed
+    }
+
+    var nextBackoffMilliseconds: Int64? {
+        guard !isConfirmed else { return nil }
+        return PlannedConsumerHandoffAbortRetryPolicy.backoffMilliseconds(
+            afterFailedAttempt: attemptCount
+        )
+    }
+
+    var permitsConsumerResetRetry: Bool {
+        PlannedConsumerHandoffAbortRetryPolicy.permitsConsumerResetRetry(
+            rollbackConfirmed: isConfirmed
+        )
+    }
+}
+
 #if os(iOS) && !SKIP && canImport(SocketIO)
 import Combine
 import SocketIO
@@ -31,12 +84,15 @@ private enum SocketEvent {
     static let createConsumerTransport = SfuClientEvent.createConsumerTransport.rawValue
     static let connectProducerTransport = SfuClientEvent.connectProducerTransport.rawValue
     static let connectConsumerTransport = SfuClientEvent.connectConsumerTransport.rawValue
+    static let setProducerTransportNetworkProfile = SfuClientEvent.setProducerTransportNetworkProfile.rawValue
     static let restartIce = SfuClientEvent.restartIce.rawValue
     static let produce = SfuClientEvent.produce.rawValue
     static let consume = SfuClientEvent.consume.rawValue
+    static let abortConsumerHandoff = SfuClientEvent.abortConsumerHandoff.rawValue
     static let resumeConsumer = SfuClientEvent.resumeConsumer.rawValue
     static let setConsumerPreferences = SfuClientEvent.setConsumerPreferences.rawValue
     static let setConsumerPreferencesBatch = SfuClientEvent.setConsumerPreferencesBatch.rawValue
+    static let requestProducerKeyFrame = SfuClientEvent.requestProducerKeyFrame.rawValue
     static let closeConsumer = SfuClientEvent.closeConsumer.rawValue
     static let getRooms = SfuClientEvent.getRooms.rawValue
     static let getProducers = SfuClientEvent.getProducers.rawValue
@@ -44,6 +100,7 @@ private enum SocketEvent {
     static let toggleCamera = SfuClientEvent.toggleCamera.rawValue
     static let closeProducer = SfuClientEvent.closeProducer.rawValue
     static let sendChat = SfuClientEvent.sendChat.rawValue
+    static let chatImageUploadAuthorize = SfuClientEvent.chatImageUploadAuthorize.rawValue
     static let conclaveAuthorize = SfuClientEvent.conclaveAuthorize.rawValue
     static let conclaveAnswer = SfuClientEvent.conclaveAnswer.rawValue
     static let sendReaction = SfuClientEvent.sendReaction.rawValue
@@ -55,6 +112,7 @@ private enum SocketEvent {
     static let setDmEnabled = SfuClientEvent.setDmEnabled.rawValue
     static let setTtsDisabled = SfuClientEvent.setTtsDisabled.rawValue
     static let setReactionsDisabled = SfuClientEvent.setReactionsDisabled.rawValue
+    static let setImageAttachmentsEnabled = SfuClientEvent.setImageAttachmentsEnabled.rawValue
     static let getRoomLockStatus = SfuClientEvent.getRoomLockStatus.rawValue
     static let getChatLockStatus = SfuClientEvent.getChatLockStatus.rawValue
     static let getDmEnabledStatus = SfuClientEvent.getDmEnabledStatus.rawValue
@@ -130,6 +188,7 @@ private enum SocketEvent {
     static let newProducer = SfuServerEvent.newProducer.rawValue
     static let producerClosed = SfuServerEvent.producerClosed.rawValue
     static let consumerTelemetry = SfuServerEvent.consumerTelemetry.rawValue
+    static let webcamReceiverCapacityProof = SfuServerEvent.webcamReceiverCapacityProof.rawValue
     static let chatMessage = SfuServerEvent.chatMessage.rawValue
     static let conclaveMessage = SfuServerEvent.conclaveMessage.rawValue
     static let chatHistorySnapshot = SfuServerEvent.chatHistorySnapshot.rawValue
@@ -140,6 +199,7 @@ private enum SocketEvent {
     static let chatLockChanged = SfuServerEvent.chatLockChanged.rawValue
     static let noGuestsChanged = SfuServerEvent.noGuestsChanged.rawValue
     static let dmStateChanged = SfuServerEvent.dmStateChanged.rawValue
+    static let imageAttachmentsStateChanged = SfuServerEvent.imageAttachmentsStateChanged.rawValue
     static let ttsDisabledChanged = SfuServerEvent.ttsDisabledChanged.rawValue
     static let reactionsDisabledChanged = SfuServerEvent.reactionsDisabledChanged.rawValue
     static let userRequestedJoin = SfuServerEvent.userRequestedJoin.rawValue
@@ -284,6 +344,7 @@ final class SocketIOManager {
     var onNewProducer: ((ProducerInfo) -> Void)?
     var onProducerClosed: ((ProducerClosedNotification) -> Void)?
     var onConsumerTelemetry: ((ConsumerTelemetryNotification) -> Void)?
+    var onWebcamReceiverCapacityProof: ((WebcamReceiverCapacityProofNotification) -> Void)?
 
     // Chat/Reactions
     var onChatMessage: ((ChatMessage) -> Void)?
@@ -642,13 +703,18 @@ final class SocketIOManager {
         kind: String,
         rtpParameters: RtpParameters,
         type: ProducerType,
-        paused: Bool
+        paused: Bool,
+        webcamReceiverCapacityTransition: WebcamReceiverCapacityTransition? = nil
     ) async throws -> String {
         let request = ProduceRequest(
             transportId: transportId,
             kind: kind,
             rtpParameters: rtpParameters,
-            appData: ProducerAppData(type: type.rawValue, paused: paused)
+            appData: ProducerAppData(
+                type: type.rawValue,
+                paused: paused,
+                webcamReceiverCapacityTransition: webcamReceiverCapacityTransition
+            )
         )
         let data = try await emit(event: SocketEvent.produce, payload: request)
         let response = try JSONDecoder().decode(ProduceResponse.self, from: data)
@@ -661,8 +727,24 @@ final class SocketIOManager {
         transportId: String?,
         preferredSpatialLayer: Int? = nil,
         preferredTemporalLayer: Int? = nil,
-        priority: Int? = nil
+        priority: Int? = nil,
+        plannedHandoffRequestId: String? = nil,
+        plannedHandoffPredecessorConsumerId: String? = nil,
+        timeoutMilliseconds: Int? = nil
     ) async throws -> ConsumeResponse {
+        let plannedConsumerHandoff: PlannedConsumerHandoffRequest?
+        if let requestId = plannedHandoffRequestId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let predecessorConsumerId = plannedHandoffPredecessorConsumerId?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !requestId.isEmpty,
+           !predecessorConsumerId.isEmpty {
+            plannedConsumerHandoff = PlannedConsumerHandoffRequest(
+                requestId: requestId,
+                predecessorConsumerId: predecessorConsumerId
+            )
+        } else {
+            plannedConsumerHandoff = nil
+        }
         let request = ConsumeRequest(
             producerId: producerId,
             rtpCapabilities: rtpCapabilities,
@@ -673,15 +755,80 @@ final class SocketIOManager {
                     temporalLayer: preferredTemporalLayer
                 )
             },
-            priority: priority
+            priority: priority,
+            plannedConsumerHandoff: plannedConsumerHandoff
         )
-        let data = try await emit(event: SocketEvent.consume, payload: request)
+        let data = try await emit(
+            event: SocketEvent.consume,
+            payload: request,
+            timeoutSeconds: timeoutMilliseconds.map { max(0.1, Double($0) / 1_000.0) } ?? 30
+        )
         return try JSONDecoder().decode(ConsumeResponse.self, from: data)
     }
 
-    func resumeConsumer(consumerId: String, requestKeyFrame: Bool = false) async throws {
+    func abortConsumerHandoffAndWait(
+        requestId: String,
+        producerId: String,
+        predecessorConsumerId: String,
+        timeoutMilliseconds: Int = 1_000
+    ) async throws -> AbortConsumerHandoffResponse {
+        let request = AbortConsumerHandoffRequest(
+            requestId: requestId,
+            producerId: producerId,
+            predecessorConsumerId: predecessorConsumerId
+        )
+        var retryState = PlannedConsumerHandoffAbortRetryState(request: request)
+        var lastError: Error?
+
+        while let attemptRequest = retryState.nextRequest() {
+            do {
+                let data = try await emit(
+                    event: SocketEvent.abortConsumerHandoff,
+                    payload: attemptRequest,
+                    timeoutSeconds: max(0.1, Double(timeoutMilliseconds) / 1_000.0)
+                )
+                let response = try JSONDecoder().decode(
+                    AbortConsumerHandoffResponse.self,
+                    from: data
+                )
+                guard response.success,
+                      response.predecessorRestored,
+                      response.requestId.caseInsensitiveCompare(
+                        attemptRequest.requestId
+                      ) == .orderedSame else {
+                    throw SocketError.serverError(
+                        "Planned consumer handoff abort was not confirmed"
+                    )
+                }
+                retryState.recordAcknowledgement(confirmed: true)
+                return response
+            } catch {
+                lastError = error
+                guard let backoffMilliseconds = retryState.nextBackoffMilliseconds else {
+                    break
+                }
+                try await Task.sleep(
+                    nanoseconds: UInt64(backoffMilliseconds) * 1_000_000
+                )
+            }
+        }
+
+        throw lastError ?? SocketError.serverError(
+            "Planned consumer handoff abort was not confirmed"
+        )
+    }
+
+    func resumeConsumer(
+        consumerId: String,
+        requestKeyFrame: Bool = false,
+        timeoutMilliseconds: Int? = nil
+    ) async throws {
         let request = ResumeConsumerRequest(consumerId: consumerId, requestKeyFrame: requestKeyFrame)
-        _ = try await emit(event: SocketEvent.resumeConsumer, payload: request)
+        _ = try await emit(
+            event: SocketEvent.resumeConsumer,
+            payload: request,
+            timeoutSeconds: timeoutMilliseconds.map { max(0.1, Double($0) / 1_000.0) } ?? 30
+        )
     }
 
     func closeConsumer(consumerId: String) {
@@ -694,6 +841,34 @@ final class SocketIOManager {
                 attempt: 0,
                 startedAt: Date()
             )
+        }
+    }
+
+    /// Close one exact server Consumer generation and wait for the SFU to
+    /// confirm it. Planned make-before-break rollback must not create another
+    /// successor until this acknowledgement has restored the predecessor as
+    /// the server-current generation.
+    func closeConsumerAndWait(
+        consumerId: String,
+        timeoutMilliseconds: Int = 1_250
+    ) async throws {
+        let trimmedConsumerId = consumerId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedConsumerId.isEmpty else { return }
+        let timeoutSeconds = max(0.1, Double(timeoutMilliseconds) / 1_000.0)
+        do {
+            _ = try await emit(
+                event: SocketEvent.closeConsumer,
+                payload: CloseConsumerRequest(consumerId: trimmedConsumerId),
+                timeoutSeconds: timeoutSeconds
+            )
+        } catch {
+            // An already-absent exact generation is equivalent to an
+            // acknowledged close for rollback/retirement purposes.
+            let message = error.localizedDescription.lowercased()
+            if message.contains("consumer not found") || message.contains("not_found") {
+                return
+            }
+            throw error
         }
     }
 
@@ -1906,6 +2081,15 @@ final class SocketIOManager {
             self.onConsumerTelemetry?(notification)
         }
 
+        socket.on(SocketEvent.webcamReceiverCapacityProof) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  self.activeRoomId != nil,
+                  let notification = self.decode(WebcamReceiverCapacityProofNotification.self, from: first),
+                  self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
+            self.onWebcamReceiverCapacityProof?(notification)
+        }
+
         socket.on(SocketEvent.adminProducerClosed) { [weak self] data, _ in
             guard let self, let first = data.first,
                   self.socket === socket,
@@ -2034,6 +2218,13 @@ final class SocketIOManager {
                   let notification = self.decode(DmStateChangedNotification.self, from: first),
                   self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
             self.onDmStateChanged?(notification)
+        }
+
+        socket.on(SocketEvent.imageAttachmentsStateChanged) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let notification = self.decode(DmStateChangedNotification.self, from: first),
+                  self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
         }
 
         socket.on(SocketEvent.ttsDisabledChanged) { [weak self] data, _ in

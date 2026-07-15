@@ -1,5 +1,7 @@
-import type { Consumer, ConsumerLayers } from "mediasoup/types";
+import type { Consumer, ConsumerLayers, Producer } from "mediasoup/types";
 import type {
+  AbortConsumerHandoffData,
+  AbortConsumerHandoffResponse,
   CloseConsumerData,
   ConsumeData,
   ConsumeResponse,
@@ -20,20 +22,41 @@ import {
   initConsumerHealState,
   markConsumerClientPausedIntent,
 } from "../../audioConsumerHeal.js";
+import {
+  getVideoKeyFrameRequestDelayMs,
+  parseConsumerPriority,
+  shouldExplicitlyRequestConsumerKeyFrame,
+} from "../../mediaPolicy.js";
 import { emitWebinarFeedChanged } from "../../webinarNotifications.js";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
+import type { ClientMediaCapabilities } from "../../webcamCodecPolicy.js";
+import type { WebcamReceiverCapacityTransitionReservation } from "../../webcamReceiverCapacityProof.js";
 
 type ParseResult<T> = { ok: true; value: T | undefined } | { ok: false; error: string };
 
 const MAX_CONSUMER_LAYER = 10;
-const MIN_CONSUMER_PRIORITY = 0;
-const MAX_CONSUMER_PRIORITY = 255;
 const MAX_MEDIA_ID_LENGTH = 256;
 const MAX_CONSUMER_PREFERENCE_BATCH_SIZE = 24;
-const DISPLACED_CONSUMER_CLOSE_DELAY_MS = 3000;
+// A consume acknowledgement can remain in flight for twelve seconds, and the
+// receiver's generation handoff has its own absolute fifteen-second window.
+// Keep the predecessor alive beyond both bounds so an unusually delayed ACK
+// can still be rolled back without a visible blackout. Healthy clients close
+// the predecessor explicitly as soon as the successor is proven, so this long
+// fail-safe grace does not extend the normal overlap.
+export const DISPLACED_CONSUMER_CLOSE_DELAY_MS = 30_000;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+const TRANSITION_NONCE_PATTERN = /^[A-Za-z0-9_-]{20,128}$/;
+const PLANNED_HANDOFF_REQUEST_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+class ConsumerGenerationDisplacedError extends Error {
+  constructor() {
+    super("Consumer generation displaced");
+    this.name = "ConsumerGenerationDisplacedError";
+  }
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -49,6 +72,49 @@ const normalizeMediaId = (value: unknown): string | null => {
     return null;
   }
   return normalized;
+};
+
+const parseWebcamReceiverCapacityTransition = (
+  value: unknown,
+): { fromProducerId: string; nonce: string } | null => {
+  if (!isRecord(value)) return null;
+  const fromProducerId = normalizeMediaId(value.fromProducerId);
+  const nonce = value.nonce;
+  if (
+    !fromProducerId ||
+    typeof nonce !== "string" ||
+    !TRANSITION_NONCE_PATTERN.test(nonce)
+  ) {
+    return null;
+  }
+  return { fromProducerId, nonce };
+};
+
+const isRequestedVp8SingleLayer = (rtpParameters: unknown): boolean => {
+  if (!isRecord(rtpParameters)) return false;
+  const encodings = rtpParameters.encodings;
+  const codecs = rtpParameters.codecs;
+  const mediaCodecs = Array.isArray(codecs)
+    ? codecs.filter((codec) => {
+        if (!isRecord(codec) || typeof codec.mimeType !== "string") {
+          return true;
+        }
+        return ![
+          "video/rtx",
+          "video/red",
+          "video/ulpfec",
+          "video/flexfec-03",
+        ].includes(codec.mimeType.toLowerCase());
+      })
+    : [];
+  return (
+    Array.isArray(encodings) &&
+    encodings.length === 1 &&
+    mediaCodecs.length === 1 &&
+    isRecord(mediaCodecs[0]) &&
+    typeof mediaCodecs[0].mimeType === "string" &&
+    mediaCodecs[0].mimeType.toLowerCase() === "video/vp8"
+  );
 };
 
 const parseConsumerLayers = (
@@ -91,27 +157,30 @@ const parseConsumerLayers = (
   };
 };
 
-const parseConsumerPriority = (
+const parsePlannedConsumerHandoff = (
   value: unknown,
-  options: { allowNull?: boolean } = {},
-): ParseResult<number | null> => {
+): ParseResult<{ requestId: string; predecessorConsumerId: string }> => {
   if (value === undefined) {
     return { ok: true, value: undefined };
   }
-  if (value === null && options.allowNull) {
-    return { ok: true, value: null };
+  if (!isRecord(value)) {
+    return { ok: false, error: "Invalid planned consumer handoff" };
   }
-
-  const priority = Number(value);
+  const requestId =
+    typeof value.requestId === "string" ? value.requestId.trim() : "";
+  const predecessorConsumerId = normalizeMediaId(
+    value.predecessorConsumerId,
+  );
   if (
-    !Number.isInteger(priority) ||
-    priority < MIN_CONSUMER_PRIORITY ||
-    priority > MAX_CONSUMER_PRIORITY
+    !PLANNED_HANDOFF_REQUEST_ID_PATTERN.test(requestId) ||
+    !predecessorConsumerId
   ) {
-    return { ok: false, error: "Invalid consumer priority" };
+    return { ok: false, error: "Invalid planned consumer handoff" };
   }
-
-  return { ok: true, value: priority };
+  return {
+    ok: true,
+    value: { requestId: requestId.toLowerCase(), predecessorConsumerId },
+  };
 };
 
 const isLayerCapableConsumer = (consumer: Consumer): boolean =>
@@ -140,11 +209,11 @@ const getDefaultConsumerLayers = (
   }
 
   if (client.isWebinarAttendee) {
-    return { spatialLayer: 0, temporalLayer: 1 };
+    return { spatialLayer: 0, temporalLayer: 0 };
   }
 
   if (room.currentQuality === "low") {
-    return { spatialLayer: 0, temporalLayer: 1 };
+    return { spatialLayer: 0, temporalLayer: 0 };
   }
 
   return undefined;
@@ -175,11 +244,30 @@ type ConsumerTelemetryTarget = {
   consumer: Consumer;
 };
 
+const isCurrentConsumerGeneration = (
+  client: Client,
+  consumer: Consumer,
+): boolean =>
+  !consumer.closed && client.getConsumer(consumer.producerId) === consumer;
+
+const assertCurrentConsumerGeneration = (
+  target: ConsumerTelemetryTarget,
+): void => {
+  if (!isCurrentConsumerGeneration(target.client, target.consumer)) {
+    throw new ConsumerGenerationDisplacedError();
+  }
+};
+
 const emitConsumerTelemetry = (
   target: ConsumerTelemetryTarget,
   event: ConsumerTelemetryNotification["event"],
 ): void => {
   const { room, client, consumer } = target;
+
+  // Capacity proof is derived from the live mediasoup Consumer, not the
+  // receiver-facing telemetry cache. Refresh even if this event belongs to a
+  // displaced consumer and updateConsumerTelemetry() rejects its snapshot.
+  room.refreshWebcamReceiverCapacityProof(consumer.producerId);
 
   const snapshot = client.updateConsumerTelemetry(consumer);
   if (!snapshot) {
@@ -214,6 +302,7 @@ const applyConsumerPreferences = async (
   },
 ): Promise<void> => {
   const { consumer } = target;
+  assertCurrentConsumerGeneration(target);
 
   if (options.preferredLayers) {
     if (isLayerCapableConsumer(consumer)) {
@@ -227,20 +316,24 @@ const applyConsumerPreferences = async (
           `Could not set default layers for consumer ${consumer.id}: ${(error as Error).message}`,
         );
       }
+      assertCurrentConsumerGeneration(target);
     } else if (options.explicitLayers) {
       throw new Error("Consumer does not support layer preferences");
     }
   }
 
   if (options.priority !== undefined) {
+    assertCurrentConsumerGeneration(target);
     if (options.priority === null) {
       await consumer.unsetPriority();
     } else {
       await consumer.setPriority(options.priority);
     }
+    assertCurrentConsumerGeneration(target);
   }
 
   if (options.paused !== undefined) {
+    assertCurrentConsumerGeneration(target);
     // Explicit pause/resume from the owning client. Recorded so the audio
     // heal sweep never resumes a consumer the client intentionally paused.
     markConsumerClientPausedIntent(consumer, options.paused);
@@ -249,12 +342,16 @@ const applyConsumerPreferences = async (
     } else {
       await consumer.resume();
     }
+    assertCurrentConsumerGeneration(target);
   }
 
   if (options.requestKeyFrame && consumer.kind === "video") {
+    assertCurrentConsumerGeneration(target);
     await consumer.requestKeyFrame();
+    assertCurrentConsumerGeneration(target);
   }
 
+  assertCurrentConsumerGeneration(target);
   emitConsumerTelemetry(target, "preferences");
 };
 
@@ -271,6 +368,26 @@ const buildSetConsumerPreferencesResponse = (
   currentLayers: consumer.currentLayers,
 });
 
+const buildConsumeResponse = (
+  consumer: Consumer,
+  plannedConsumerHandoffRequestId?: string,
+): ConsumeResponse => ({
+  id: consumer.id,
+  producerId: consumer.producerId,
+  kind: consumer.kind,
+  rtpParameters: consumer.rtpParameters,
+  consumerType: consumer.type,
+  paused: consumer.paused,
+  producerPaused: consumer.producerPaused,
+  score: consumer.score,
+  preferredLayers: consumer.preferredLayers,
+  currentLayers: consumer.currentLayers,
+  priority: consumer.priority,
+  ...(plannedConsumerHandoffRequestId
+    ? { plannedConsumerHandoffRequestId }
+    : {}),
+});
+
 const applyConsumerPreferencesData = async (
   room: Room,
   currentClient: Client,
@@ -285,6 +402,9 @@ const applyConsumerPreferencesData = async (
   if (!consumer) {
     return { error: "Consumer not found", consumerId };
   }
+  if (!isCurrentConsumerGeneration(currentClient, consumer)) {
+    return { error: "Consumer generation displaced", consumerId };
+  }
 
   const requestedLayers = parseConsumerLayers(data.preferredLayers);
   if (!requestedLayers.ok) {
@@ -298,27 +418,124 @@ const applyConsumerPreferencesData = async (
     return { error: requestedPriority.error, consumerId };
   }
 
-  await applyConsumerPreferences({ room, client: currentClient, consumer }, {
-    preferredLayers: requestedLayers.value,
-    priority: requestedPriority.value,
-    paused:
-      typeof data?.paused === "boolean" ? data.paused : undefined,
-    requestKeyFrame: data?.requestKeyFrame === true,
-    explicitLayers: requestedLayers.value !== undefined,
-  });
+  try {
+    await applyConsumerPreferences({ room, client: currentClient, consumer }, {
+      preferredLayers: requestedLayers.value,
+      priority: requestedPriority.value,
+      paused:
+        typeof data?.paused === "boolean" ? data.paused : undefined,
+      requestKeyFrame: data?.requestKeyFrame === true,
+      explicitLayers: requestedLayers.value !== undefined,
+    });
+  } catch (error) {
+    if (error instanceof ConsumerGenerationDisplacedError) {
+      return { error: error.message, consumerId };
+    }
+    throw error;
+  }
+
+  if (!isCurrentConsumerGeneration(currentClient, consumer)) {
+    return { error: "Consumer generation displaced", consumerId };
+  }
 
   return buildSetConsumerPreferencesResponse(consumer);
 };
 
 export const registerMediaHandlers = (context: ConnectionContext): void => {
   const { socket, state, io } = context;
+
+  socket.on(
+    "updateMediaCapabilities",
+    (
+      data: { mediaCapabilities?: ClientMediaCapabilities },
+      callback: (
+        response:
+          | { success: true; webcamCodecPolicy: Room["webcamCodecPolicy"] }
+          | { error: string },
+      ) => void,
+    ) => {
+      const room = context.currentRoom;
+      const client = context.currentClient;
+      if (!room || !client) {
+        respond(callback, { error: "Not in a room" });
+        return;
+      }
+      if (
+        !takeToken(
+          socket,
+          "updateMediaCapabilities",
+          RATE_LIMITS.mediaCapabilities,
+        )
+      ) {
+        respond(callback, { error: "Media capability update rate limited" });
+        return;
+      }
+      const webcamCodecPolicy = room.updateClientMediaCapabilities(
+        client.id,
+        data?.mediaCapabilities,
+      );
+      if (!webcamCodecPolicy) {
+        respond(callback, { error: "Invalid media capability update" });
+        return;
+      }
+      respond(callback, { success: true, webcamCodecPolicy });
+    },
+  );
+
+  socket.on(
+    "reportWebcamCodecFailure",
+    (
+      data: { codec?: unknown; epoch?: unknown },
+      callback: (
+        response:
+          | { success: true; webcamCodecPolicy: Room["webcamCodecPolicy"] }
+          | { error: string },
+      ) => void,
+    ) => {
+      const room = context.currentRoom;
+      const client = context.currentClient;
+      if (!room || !client) {
+        respond(callback, { error: "Not in a room" });
+        return;
+      }
+      if (
+        !takeToken(
+          socket,
+          "reportWebcamCodecFailure",
+          RATE_LIMITS.mediaCodecFailure,
+        )
+      ) {
+        respond(callback, { error: "Codec failure report rate limited" });
+        return;
+      }
+      if (
+        data?.codec !== "vp9" ||
+        !Number.isInteger(data?.epoch) ||
+        Number(data.epoch) < 0
+      ) {
+        respond(callback, { error: "Invalid codec failure report" });
+        return;
+      }
+
+      const webcamCodecPolicy = room.reportClientWebcamCodecFailure(
+        client.id,
+        "vp9",
+        Number(data.epoch),
+      );
+      if (!webcamCodecPolicy) {
+        respond(callback, { error: "Stale or unsupported codec failure report" });
+        return;
+      }
+      respond(callback, { success: true, webcamCodecPolicy });
+    },
+  );
   const requestVideoKeyFrameForProducer = async (
     roomChannelId: string,
     producerId: string,
     ownerUserId: string,
-  ): Promise<void> => {
+  ): Promise<number> => {
     const activeRoom = state.rooms.get(roomChannelId);
-    if (!activeRoom) return;
+    if (!activeRoom) return 0;
 
     const keyFrameRequests: Promise<void>[] = [];
     for (const [targetClientId, targetClient] of activeRoom.clients.entries()) {
@@ -337,7 +554,55 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
       );
     }
     await Promise.all(keyFrameRequests);
+    return keyFrameRequests.length;
   };
+
+  socket.on(
+    "requestProducerKeyFrame",
+    async (
+      data: { producerId?: unknown },
+      callback: (
+        response:
+          | { success: true; requestedConsumerCount: number }
+          | { error: string },
+      ) => void,
+    ) => {
+      const room = context.currentRoom;
+      const currentClient = context.currentClient;
+      if (!room || !currentClient) {
+        respond(callback, { error: "Not in a room" });
+        return;
+      }
+      if (
+        !takeToken(
+          socket,
+          "requestProducerKeyFrame",
+          RATE_LIMITS.producerKeyFrame,
+        )
+      ) {
+        respond(callback, { error: "Producer key-frame request rate limited" });
+        return;
+      }
+
+      const producerId = normalizeMediaId(data?.producerId);
+      if (!producerId) {
+        respond(callback, { error: "Invalid producer ID" });
+        return;
+      }
+      const producer = currentClient.getProducer("video", "webcam");
+      if (!producer || producer.closed || producer.id !== producerId) {
+        respond(callback, { error: "Video producer not found" });
+        return;
+      }
+
+      const requestedConsumerCount = await requestVideoKeyFrameForProducer(
+        room.channelId,
+        producerId,
+        currentClient.id,
+      );
+      respond(callback, { success: true, requestedConsumerCount });
+    },
+  );
 
   socket.on(
     "produce",
@@ -345,6 +610,9 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
       data: ProduceData,
       callback: (response: ProduceResponse | { error: string }) => void,
     ) => {
+      let capacityTransitionReservation:
+        | WebcamReceiverCapacityTransitionReservation
+        | null = null;
       try {
         const room = context.currentRoom;
         const currentClient = context.currentClient;
@@ -399,6 +667,39 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         }
         const paused = appData.paused === true;
         const rtpParameters = data.rtpParameters;
+        const transitionValue = appData.webcamReceiverCapacityTransition;
+        const transitionIntent =
+          transitionValue === undefined
+            ? null
+            : parseWebcamReceiverCapacityTransition(transitionValue);
+        if (
+          transitionValue !== undefined &&
+          (!transitionIntent ||
+            type !== "webcam" ||
+            kind !== "video" ||
+            paused ||
+            !isRequestedVp8SingleLayer(rtpParameters))
+        ) {
+          respond(callback, {
+            error: "Invalid webcam receiver-capacity transition",
+          });
+          return;
+        }
+
+        if (
+          type === "webcam" &&
+          kind === "video" &&
+          !room.rtpParametersMatchCurrentWebcamCodecPolicy(rtpParameters)
+        ) {
+          respond(callback, {
+            error:
+              `Webcam codec policy changed; expected ${room.webcamCodecPolicy.mimeType}` +
+              (room.webcamCodecPolicy.scalabilityMode
+                ? ` ${room.webcamCodecPolicy.scalabilityMode}`
+                : ""),
+          });
+          return;
+        }
 
         const isScreenShareVideo = type === "screen" && kind === "video";
         const isScreenShareAudio = type === "screen" && kind === "audio";
@@ -430,12 +731,58 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           }
         }
 
+        if (transitionIntent) {
+          capacityTransitionReservation =
+            room.reserveWebcamReceiverCapacityTransition(
+              currentClient.id,
+              transitionIntent.fromProducerId,
+              transitionIntent.nonce,
+            );
+          if (!capacityTransitionReservation) {
+            respond(callback, {
+              error: "Webcam receiver-capacity transition is stale or already used",
+            });
+            return;
+          }
+        }
+
         const producer = await currentClient.producerTransport.produce({
           kind,
           rtpParameters,
           appData: { type },
           paused,
+          // mediasoup forwards the first request immediately, then coalesces
+          // repeat PLIs per SSRC. Webcam gets a short recovery window; screen
+          // keyframes are much larger, so a longer window avoids fanout bursts.
+          ...(kind === "video"
+            ? { keyFrameRequestDelay: getVideoKeyFrameRequestDelayMs(type) }
+            : {}),
         });
+
+        // The room policy can change while mediasoup is creating the producer
+        // (for example, an incompatible late join). Revalidate the actual
+        // negotiated RTP before indexing or advertising it.
+        if (
+          type === "webcam" &&
+          kind === "video" &&
+          !room.rtpParametersMatchCurrentWebcamCodecPolicy(
+            producer.rtpParameters,
+          )
+        ) {
+          if (capacityTransitionReservation) {
+            room.cancelWebcamReceiverCapacityTransition(
+              capacityTransitionReservation,
+            );
+            capacityTransitionReservation = null;
+          }
+          try {
+            producer.close();
+          } catch {}
+          respond(callback, {
+            error: "Webcam codec policy changed during producer creation",
+          });
+          return;
+        }
 
         const roomChannelId = room.channelId;
         const clientId = currentClient.id;
@@ -451,6 +798,9 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
           if (producer.id === activeRoom.screenShareProducerId) {
             activeRoom.clearScreenShareProducer(producer.id);
+          }
+          if (type === "webcam" && kind === "video") {
+            activeRoom.refreshWebcamReceiverCapacityProof(producer.id);
           }
 
           if (producerAdvertised) {
@@ -490,6 +840,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             });
           } else if (type === "webcam" && kind === "video") {
             ownerClient.isCameraOff = producer.paused;
+            activeRoom.refreshWebcamReceiverCapacityProof(producer.id);
             socket.to(activeRoom.channelId).emit("participantCameraOff", {
               userId: clientId,
               cameraOff: producer.paused,
@@ -515,13 +866,38 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         producer.observer.on("resume", () => {
           void syncProducerPausedState();
         });
+        if (type === "webcam" && kind === "video") {
+          producer.observer.on("score", () => {
+            const activeRoom = state.rooms.get(roomChannelId);
+            activeRoom?.refreshWebcamReceiverCapacityProof(producer.id);
+          });
+        }
 
         if (isScreenShareVideo) {
           room.setScreenShareProducer(producer.id);
         }
 
-        const displacedProducer = currentClient.addProducer(producer);
-        room.indexClientProducer(currentClient.id, producer, type);
+        let displacedProducer: Producer | null;
+        if (capacityTransitionReservation) {
+          displacedProducer = room.commitWebcamReceiverCapacityTransition(
+            currentClient.id,
+            producer,
+            capacityTransitionReservation,
+          );
+          capacityTransitionReservation = null;
+          if (!displacedProducer) {
+            try {
+              producer.close();
+            } catch {}
+            respond(callback, {
+              error: "Webcam receiver-capacity transition became invalid",
+            });
+            return;
+          }
+        } else {
+          displacedProducer = currentClient.addProducer(producer);
+          room.indexClientProducer(currentClient.id, producer, type);
+        }
         await room.registerWebinarAudioProducer(
           currentClient.id,
           producer,
@@ -574,6 +950,11 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         respond(callback, { producerId: producer.id });
       } catch (error) {
+        if (capacityTransitionReservation) {
+          context.currentRoom?.cancelWebcamReceiverCapacityTransition(
+            capacityTransitionReservation,
+          );
+        }
         Logger.error("Error producing:", error);
         respond(callback, { error: (error as Error).message });
       }
@@ -584,8 +965,13 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
     "consume",
     async (
       data: ConsumeData,
-      callback: (response: ConsumeResponse | { error: string }) => void,
+      callback: (
+        response: ConsumeResponse | { error: string; code?: string },
+      ) => void,
     ) => {
+      let ownedHandoff:
+        | { client: Client; requestId: string }
+        | undefined;
       try {
         const room = context.currentRoom;
         const currentClient = context.currentClient;
@@ -607,6 +993,12 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         const producerInfo = room.getProducerInfoById(producerId);
         if (!producerInfo) {
           respond(callback, { error: "Producer not found" });
+          return;
+        }
+        if (!room.producerIdMatchesCurrentWebcamCodecPolicy(producerId)) {
+          respond(callback, {
+            error: "Webcam producer is being replaced for room codec policy",
+          });
           return;
         }
 
@@ -633,6 +1025,64 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           respond(callback, { error: requestedPriority.error });
           return;
         }
+        const parsedHandoff = parsePlannedConsumerHandoff(
+          data.plannedConsumerHandoff,
+        );
+        if (!parsedHandoff.ok) {
+          respond(callback, { error: parsedHandoff.error });
+          return;
+        }
+        const plannedHandoff = parsedHandoff.value;
+        if (
+          plannedHandoff &&
+          (producerInfo.kind !== "video" || producerInfo.type !== "webcam")
+        ) {
+          respond(callback, {
+            error: "Planned consumer handoff requires a webcam video producer",
+          });
+          return;
+        }
+        if (plannedHandoff) {
+          const reservation = currentClient.reserveConsumerHandoff({
+            requestId: plannedHandoff.requestId,
+            producerId,
+            predecessorConsumerId:
+              plannedHandoff.predecessorConsumerId,
+          });
+          if (!reservation.isOwner) {
+            const completion = await reservation.completion;
+            if (!completion.ok) {
+              respond(callback, {
+                error: completion.error,
+                ...(completion.code ? { code: completion.code } : {}),
+              });
+              return;
+            }
+            const duplicateConsumer = completion.consumer;
+            if (
+              duplicateConsumer.closed ||
+              currentClient.getConsumer(producerId) !== duplicateConsumer
+            ) {
+              respond(callback, {
+                error: "Planned consumer handoff is no longer current",
+                code: "displaced",
+              });
+              return;
+            }
+            respond(
+              callback,
+              buildConsumeResponse(
+                duplicateConsumer,
+                plannedHandoff.requestId,
+              ),
+            );
+            return;
+          }
+          ownedHandoff = {
+            client: currentClient,
+            requestId: plannedHandoff.requestId,
+          };
+        }
 
         // Video consumers start paused so the client can resume once its local
         // consumer exists and receive a clean keyframe. Audio needs no keyframe
@@ -645,9 +1095,25 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           rtpCapabilities,
           paused: producerInfo.kind !== "audio",
         });
+        if (
+          plannedHandoff &&
+          !currentClient.attachConsumerHandoff(
+            plannedHandoff.requestId,
+            consumer,
+          )
+        ) {
+          try {
+            consumer.close();
+          } catch {}
+          respond(callback, {
+            error: "Planned consumer handoff was aborted during setup",
+            code: "aborted",
+          });
+          return;
+        }
         initConsumerHealState(consumer);
 
-        const displacedConsumer = currentClient.addConsumer(consumer, {
+        currentClient.addConsumer(consumer, {
           producerUserId: producerInfo.producerUserId,
           type: producerInfo.type,
         });
@@ -672,21 +1138,47 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           emitConsumerTelemetry(telemetryTarget, "resume");
         });
 
-        await applyConsumerPreferences(telemetryTarget, {
-          preferredLayers:
-            requestedLayers.value ??
-            getDefaultConsumerLayers(room, currentClient, consumer, producerInfo),
-          priority:
-            requestedPriority.value ??
-            getDefaultConsumerPriority(consumer, producerInfo),
-          // Initial consume-time layer preferences are startup hints. If a
-          // browser/producer cannot expose layers, keep the consumer alive and let
-          // the later explicit setConsumerPreferences path report/fallback.
-          explicitLayers: false,
-        });
+        try {
+          await applyConsumerPreferences(telemetryTarget, {
+            preferredLayers:
+              requestedLayers.value ??
+              getDefaultConsumerLayers(room, currentClient, consumer, producerInfo),
+            priority:
+              requestedPriority.value ??
+              getDefaultConsumerPriority(consumer, producerInfo),
+            // Initial consume-time layer preferences are startup hints. If a
+            // browser/producer cannot expose layers, keep the consumer alive and let
+            // the later explicit setConsumerPreferences path report/fallback.
+            explicitLayers: false,
+          });
+        } catch (error) {
+          try {
+            consumer.close();
+          } catch {}
+          if (!(error instanceof ConsumerGenerationDisplacedError)) {
+            throw error;
+          }
+          if (plannedHandoff) {
+            currentClient.failConsumerHandoff(
+              plannedHandoff.requestId,
+              "Consumer displaced during setup",
+              "displaced",
+            );
+          }
+          respond(callback, {
+            error: "Consumer displaced during setup",
+            code: "displaced",
+          });
+          return;
+        }
 
         consumer.on("transportclose", () => {
           Logger.info(`Consumer transport closed: ${consumer.id}`);
+          room.refreshWebcamReceiverCapacityProof(producerId);
+        });
+
+        consumer.observer.on("close", () => {
+          room.refreshWebcamReceiverCapacityProof(producerId);
         });
 
         consumer.on("producerclose", () => {
@@ -700,17 +1192,28 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         // A concurrent consume for the same producer can displace this
         // consumer while applyConsumerPreferences awaited above. Responding
-        // with a displaced consumer id would hand the client a consumer that
-        // no longer resolves via getConsumerById (resume fails "not found")
-        // and gets force-closed shortly after — a silent dead end. Error out
-        // instead so the client's retry path re-consumes cleanly.
+        // with a displaced consumer id would hand the client a generation that
+        // remains addressable only for targeted cleanup and cannot accept
+        // controls. Error out so the client's retry path re-consumes cleanly.
         if (
           consumer.closed ||
-          currentClient.getConsumerById(consumer.id) !== consumer
+          currentClient.getConsumer(consumer.producerId) !== consumer ||
+          (plannedHandoff &&
+            !currentClient.isConsumerHandoffActive(
+              plannedHandoff.requestId,
+              consumer,
+            ))
         ) {
           try {
             consumer.close();
           } catch {}
+          if (plannedHandoff) {
+            currentClient.failConsumerHandoff(
+              plannedHandoff.requestId,
+              "Consumer displaced during setup",
+              "displaced",
+            );
+          }
           respond(callback, {
             error: "Consumer displaced during setup",
             code: "displaced",
@@ -720,31 +1223,45 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         emitConsumerTelemetry(telemetryTarget, "created");
 
-        respond(callback, {
-          id: consumer.id,
-          producerId: consumer.producerId,
-          kind: consumer.kind,
-          rtpParameters: consumer.rtpParameters,
-          // Tells the client whether a resumeConsumer round-trip is required.
-          // Audio consumers start unpaused, so clients can skip the resume.
-          paused: consumer.paused,
-          producerPaused: consumer.producerPaused,
-          score: consumer.score,
-          preferredLayers: consumer.preferredLayers,
-          currentLayers: consumer.currentLayers,
-          priority: consumer.priority,
-        });
+        const displacedRetirements =
+          currentClient.captureDisplacedConsumerRetirements(consumer);
 
-        if (displacedConsumer && !displacedConsumer.closed) {
+        if (
+          plannedHandoff &&
+          !currentClient.completeConsumerHandoff(
+            plannedHandoff.requestId,
+            consumer,
+          )
+        ) {
+          try {
+            consumer.close();
+          } catch {}
+          respond(callback, {
+            error: "Planned consumer handoff was aborted before acknowledgement",
+            code: "aborted",
+          });
+          return;
+        }
+
+        respond(
+          callback,
+          buildConsumeResponse(consumer, plannedHandoff?.requestId),
+        );
+
+        for (const displacedGeneration of displacedRetirements) {
           setTimeout(() => {
             try {
-              if (!displacedConsumer.closed) {
-                displacedConsumer.close();
-              }
+              currentClient.retireDisplacedConsumer(displacedGeneration);
             } catch {}
           }, DISPLACED_CONSUMER_CLOSE_DELAY_MS).unref?.();
         }
       } catch (error) {
+        if (ownedHandoff) {
+          ownedHandoff.client.failConsumerHandoff(
+            ownedHandoff.requestId,
+            (error as Error).message,
+          );
+        }
         Logger.error("Error consuming:", error);
         respond(callback, { error: (error as Error).message });
       }
@@ -809,6 +1326,13 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           respond(callback, { error: "Consumer not found", code: "not_found" });
           return;
         }
+        if (!isCurrentConsumerGeneration(currentClient, consumer)) {
+          respond(callback, {
+            error: "Consumer generation displaced",
+            code: "displaced",
+          });
+          return;
+        }
 
         markConsumerClientPausedIntent(consumer, false);
         const wasPaused = consumer.paused;
@@ -816,9 +1340,20 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           await consumer.resume();
         }
 
+        if (!isCurrentConsumerGeneration(currentClient, consumer)) {
+          respond(callback, {
+            error: "Consumer generation displaced",
+            code: "displaced",
+          });
+          return;
+        }
+
         if (
-          consumer.kind === "video" &&
-          (data.requestKeyFrame === true || wasPaused)
+          shouldExplicitlyRequestConsumerKeyFrame({
+            kind: consumer.kind,
+            wasPaused,
+            requested: data.requestKeyFrame === true,
+          })
         ) {
           try {
             await consumer.requestKeyFrame();
@@ -831,11 +1366,70 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           }
         }
 
+        if (!isCurrentConsumerGeneration(currentClient, consumer)) {
+          respond(callback, {
+            error: "Consumer generation displaced",
+            code: "displaced",
+          });
+          return;
+        }
+
         emitConsumerTelemetry(
           { room, client: currentClient, consumer },
           wasPaused ? "resume" : "preferences",
         );
         respond(callback, { success: true });
+      } catch (error) {
+        respond(callback, { error: (error as Error).message });
+      }
+    },
+  );
+
+  socket.on(
+    "abortConsumerHandoff",
+    (
+      data: AbortConsumerHandoffData,
+      callback: (
+        response: AbortConsumerHandoffResponse | { error: string },
+      ) => void,
+    ) => {
+      try {
+        const currentClient = context.currentClient;
+        if (!context.currentRoom || !currentClient) {
+          respond(callback, { error: "Not in a room" });
+          return;
+        }
+        const producerId = normalizeMediaId(data?.producerId);
+        const parsedHandoff = parsePlannedConsumerHandoff({
+          requestId: data?.requestId,
+          predecessorConsumerId: data?.predecessorConsumerId,
+        });
+        if (!producerId || !parsedHandoff.ok || !parsedHandoff.value) {
+          respond(callback, { error: "Invalid planned consumer handoff abort" });
+          return;
+        }
+
+        const handoff = parsedHandoff.value;
+        const result = currentClient.abortConsumerHandoff({
+          requestId: handoff.requestId,
+          producerId,
+          predecessorConsumerId: handoff.predecessorConsumerId,
+        });
+        if (!result.safe) {
+          respond(callback, {
+            error: "Planned consumer handoff predecessor was not safely restored",
+          });
+          return;
+        }
+        respond(callback, {
+          success: true,
+          requestId: handoff.requestId,
+          status: result.status,
+          ...(result.successorConsumerId
+            ? { successorConsumerId: result.successorConsumerId }
+            : {}),
+          predecessorRestored: result.predecessorRestored,
+        });
       } catch (error) {
         respond(callback, { error: (error as Error).message });
       }
@@ -1079,6 +1673,10 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         } else {
           await videoProducer.resume();
         }
+
+        context.currentRoom.refreshWebcamReceiverCapacityProof(
+          videoProducer.id,
+        );
 
         const cameraOff = videoProducer.paused;
         context.currentClient.isCameraOff = cameraOff;
