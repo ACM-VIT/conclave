@@ -109,6 +109,7 @@ import {
   getBrowserNetworkSnapshot,
 } from "./lib/network-information";
 import { hasBlockingPublishRecoveryTelemetry } from "./lib/connection-quality-policy";
+import { resolveEffectiveCameraPublishSettings } from "./lib/media-quality-settings";
 import {
   generateRoomCode,
   isSystemUserId,
@@ -929,6 +930,9 @@ export default function MeetsClient({
 
   const {
     setNetworkManagedVideoQuality,
+    mediaQualitySettings,
+    mediaQualitySettingsRef,
+    setMediaQualitySettings,
     isMirrorCamera,
     setIsMirrorCamera,
     selectedAudioInputDeviceId,
@@ -946,11 +950,21 @@ export default function MeetsClient({
       connectionState === "disconnected" || connectionState === "waiting",
   });
 
+  const cameraPublishSettings = useMemo(
+    () =>
+      resolveEffectiveCameraPublishSettings(
+        mediaQualitySettings.camera,
+        activeVideoEffectsCount > 0,
+      ),
+    [activeVideoEffectsCount, mediaQualitySettings.camera],
+  );
+
   // Local-only camera preview for the Settings/effects panels: acquired with a
   // plain getUserMedia and never attached to a producer, so nothing reaches
   // the room while the real camera stays off.
   const cameraPreview = useLocalCameraPreview({
     deviceId: selectedVideoInputDeviceId,
+    publishSettings: cameraPublishSettings,
   });
   const stopCameraPreview = cameraPreview.stop;
   const localStreamHasLiveVideo = hasLiveVideoTrack(localStream);
@@ -1199,6 +1213,8 @@ export default function MeetsClient({
     isNoiseCancellationEnabled,
     meetVolume,
     videoQualityRef: refs.videoQualityRef,
+    mediaQualitySettings,
+    mediaQualitySettingsRef,
     webcamCodecPolicyRef: refs.webcamCodecPolicyRef,
     dataSaverMode: effectiveDataSaverMode,
     activeVideoEffectsCount,
@@ -2298,6 +2314,8 @@ export default function MeetsClient({
     setServerActiveSpeakerAvailable,
     setNetworkManagedVideoQuality,
     videoQualityRef: refs.videoQualityRef,
+    mediaQualitySettingsRef,
+    activeVideoEffectsCount,
     connectionQualityRef: connectionQualityDebugRef,
     dataSaverMode: effectiveDataSaverMode,
     isDocumentVisible,
@@ -2984,6 +3002,9 @@ export default function MeetsClient({
     screenProducerRef: refs.screenProducerRef,
     screenAudioProducerRef: refs.screenAudioProducerRef,
     videoQualityRef: refs.videoQualityRef,
+    localStreamRef: refs.localStreamRef,
+    mediaQualitySettingsRef,
+    activeVideoEffectsCount,
     networkManagedVideoQualityRef,
     setVideoQuality: setNetworkManagedVideoQuality,
     updateVideoQualityRef,
@@ -3317,6 +3338,8 @@ export default function MeetsClient({
         isMirrorCamera={isMirrorCamera}
         mirrorLocalPreview={mirrorLocalPreview}
         onToggleMirror={() => setIsMirrorCamera((prev) => !prev)}
+        mediaQualitySettings={mediaQualitySettings}
+        onMediaQualitySettingsChange={setMediaQualitySettings}
         selectedAudioInputDeviceId={selectedAudioInputDeviceId}
         selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
         ttsSystemVoices={availableSystemVoices}

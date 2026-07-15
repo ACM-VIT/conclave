@@ -4,6 +4,7 @@ import {
   getPublishProducerEncodingDebugSnapshot,
   getImmediateVp8TopologyReversionProfile,
   getAuthoritativeLiveProducerProfile,
+  getCameraCaptureRestoreMinimums,
   getStandardCaptureRestoreRetryAfter,
   hasUsableWebcamSingleLayerReplacementOffer,
   hasStableBidirectionalPublishRecovery,
@@ -11,6 +12,7 @@ import {
   isReceiverCapacityProofUsableForProducer,
   isVp8SingleReceiverTopologyApplied,
   isStandardCaptureRestoreRetryDue,
+  needsConfiguredCameraCaptureRestore,
   shouldDowngradeStandardPublishQuality,
   shouldOptimizeVp8ForSingleReceiver,
   shouldRequestProducerTransportRecoveryKeyFrame,
@@ -291,6 +293,53 @@ describe("standard capture restoration retries", () => {
     expect(getStandardCaptureRestoreRetryAfter(now, false)).toBe(
       now + 120_000,
     );
+  });
+
+  it("uses the configured cadence instead of a hard-coded 24 fps floor", () => {
+    const customFifteenFps = {
+      width: 1280,
+      height: 720,
+      frameRate: 15,
+      maxBitrate: 1_000_000,
+      contentHint: "motion" as const,
+      degradationPreference: "balanced" as const,
+    };
+
+    expect(getCameraCaptureRestoreMinimums(customFifteenFps)).toEqual({
+      width: 960,
+      height: 540,
+      frameRate: 15,
+    });
+    expect(
+      needsConfiguredCameraCaptureRestore(
+        { width: 1280, height: 720, frameRate: 15 },
+        customFifteenFps,
+      ),
+    ).toBe(false);
+  });
+
+  it("restores a manually selected data-saver target after constrained startup", () => {
+    const dataSaver = {
+      width: 640,
+      height: 360,
+      frameRate: 20,
+      maxBitrate: 260_000,
+      contentHint: "motion" as const,
+      degradationPreference: "maintain-framerate" as const,
+    };
+
+    expect(
+      needsConfiguredCameraCaptureRestore(
+        { width: 426, height: 240, frameRate: 12 },
+        dataSaver,
+      ),
+    ).toBe(true);
+    expect(
+      needsConfiguredCameraCaptureRestore(
+        { width: 640, height: 360, frameRate: 20 },
+        dataSaver,
+      ),
+    ).toBe(false);
   });
 });
 

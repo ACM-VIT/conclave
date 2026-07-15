@@ -57,6 +57,12 @@ import {
 } from "../lib/media-capture-timeout";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 import type { VideoEffectsBridgeState } from "./VideoEffectsBridge";
+import {
+  getCameraBaseVideoQuality,
+  readStoredMediaQualitySettings,
+  resolveCameraPublishSettings,
+  resolveEffectiveCameraPublishSettings,
+} from "../lib/media-quality-settings";
 
 const normalizeGuestName = (value: string): string =>
   value.trim().replace(/\s+/g, " ");
@@ -78,8 +84,9 @@ const VIDEO_EFFECTS_OFF_STATE: VideoEffectsBridgeState = {
   debugStats: null,
 };
 
-const getPrejoinVideoConstraints = () => {
+const getPrejoinVideoConstraints = (effectsActive = false) => {
   const snapshot = getBrowserNetworkSnapshot();
+  const mediaQualitySettings = readStoredMediaQualitySettings();
   const profile = snapshot.emergency
     ? "emergency"
     : snapshot.startupQuality === "poor"
@@ -87,7 +94,23 @@ const getPrejoinVideoConstraints = () => {
     : snapshot.startupQuality === "fair"
     ? "fair"
     : "good";
-  return buildCameraVideoConstraints("standard", profile);
+  return buildCameraVideoConstraints(
+    getCameraBaseVideoQuality(mediaQualitySettings.camera),
+    profile,
+    undefined,
+    resolveEffectiveCameraPublishSettings(
+      mediaQualitySettings.camera,
+      effectsActive,
+    ),
+  );
+};
+
+const applyPrejoinCameraContentHint = (
+  track: MediaStreamTrack | null | undefined,
+) => {
+  if (!track || !("contentHint" in track)) return;
+  const settings = readStoredMediaQualitySettings();
+  track.contentHint = resolveCameraPublishSettings(settings.camera).contentHint;
 };
 
 const createGuestId = (): string => {
@@ -505,9 +528,7 @@ function JoinScreen({
     );
 
     acceptedTracks.forEach((track) => {
-      if (track.kind === "video" && "contentHint" in track) {
-        track.contentHint = "motion";
-      }
+      if (track.kind === "video") applyPrejoinCameraContentHint(track);
     });
     const preservedTracks =
       localStreamRef.current
@@ -568,7 +589,9 @@ function JoinScreen({
     setIsRequestingPermissions(true);
     setPermissionRequestError(null);
     try {
-      const videoConstraints = getPrejoinVideoConstraints();
+      const videoConstraints = getPrejoinVideoConstraints(
+        shouldRunPreviewVideoEffects,
+      );
       logJoinMedia("get_user_media_full_request", {
         audio: DEFAULT_AUDIO_CONSTRAINTS,
         video: videoConstraints,
@@ -605,7 +628,9 @@ function JoinScreen({
           },
         ),
         getUserMediaWithTimeout(
-          { video: getPrejoinVideoConstraints() },
+          {
+            video: getPrejoinVideoConstraints(shouldRunPreviewVideoEffects),
+          },
           {
             label: "prejoin camera fallback permission request",
             timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
@@ -830,7 +855,9 @@ function JoinScreen({
         return;
       }
       try {
-        const videoConstraints = getPrejoinVideoConstraints();
+        const videoConstraints = getPrejoinVideoConstraints(
+          shouldRunPreviewVideoEffects,
+        );
         logJoinMedia("get_user_media_video_request", {
           constraints: videoConstraints,
         });
@@ -857,7 +884,7 @@ function JoinScreen({
           });
           return;
         }
-        if ("contentHint" in videoTrack) videoTrack.contentHint = "motion";
+        applyPrejoinCameraContentHint(videoTrack);
         const latestStream = localStreamRef.current;
         if (latestStream) {
           const nextStream = new MediaStream([
@@ -1156,7 +1183,7 @@ function JoinScreen({
     const requestGeneration = beginPrejoinMediaRequest(["video"]);
     toggleCameraInFlightRef.current = true;
     try {
-      const base = getPrejoinVideoConstraints();
+      const base = getPrejoinVideoConstraints(shouldRunPreviewVideoEffects);
       const videoConstraints =
         base && typeof base === "object"
           ? { ...base, deviceId: { exact: deviceId } }
@@ -1181,7 +1208,7 @@ function JoinScreen({
         });
         return;
       }
-      if ("contentHint" in newTrack) newTrack.contentHint = "motion";
+      applyPrejoinCameraContentHint(newTrack);
       const current = localStreamRef.current;
       const oldTrack = current?.getVideoTracks()[0] ?? null;
       oldTrack?.stop();

@@ -6,11 +6,13 @@ import type {
 } from "mediasoup-client/types";
 import {
   applyScreenShareProducerNetworkProfile,
+  applyWebcamTrackNetworkProfile,
   applyWebcamProducerNetworkProfile,
   buildWebcamCodecOptions,
   getWebcamSenderRtpPriority,
   getWebcamEncodingCountForQuality,
   getWebcamProducerTopology,
+  getWebcamCaptureFrameRateForNetworkProfile,
   getPreferredScreenShareCodec,
   isVp9SvcWebcamProducer,
   produceScreenShareTrack,
@@ -18,6 +20,53 @@ import {
   requestVideoSenderKeyFrame,
   shouldRecreateWebcamProducerForQuality,
 } from "../src/app/lib/webcam-codec";
+
+describe("camera capture cadence profiles", () => {
+  const publishSettings = {
+    width: 1920,
+    height: 1080,
+    frameRate: 60,
+    maxBitrate: 4_000_000,
+    contentHint: "motion" as const,
+    degradationPreference: "maintain-framerate" as const,
+  };
+
+  it("caps and restores the raw capture cadence with network pressure", async () => {
+    let frameRate = 60;
+    const applyConstraints = vi.fn(
+      async (constraints: MediaTrackConstraints) => {
+        const constraint = constraints.frameRate;
+        if (
+          constraint &&
+          typeof constraint !== "number" &&
+          typeof constraint.max === "number"
+        ) {
+          frameRate = constraint.max;
+        }
+      },
+    );
+    const track = {
+      readyState: "live",
+      getSettings: () => ({ frameRate }),
+      applyConstraints,
+    } as unknown as MediaStreamTrack;
+
+    expect(
+      getWebcamCaptureFrameRateForNetworkProfile("poor", publishSettings),
+    ).toBe(12);
+    expect(
+      getWebcamCaptureFrameRateForNetworkProfile(
+        "emergency",
+        publishSettings,
+      ),
+    ).toBe(8);
+    await applyWebcamTrackNetworkProfile(track, "poor", publishSettings);
+    expect(frameRate).toBe(12);
+    await applyWebcamTrackNetworkProfile(track, "good", publishSettings);
+    expect(frameRate).toBe(60);
+    expect(applyConstraints).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("video sender key-frame requests", () => {
   it("requests every active encoding through the WebRTC extension", async () => {
@@ -943,7 +992,7 @@ describe("webcam encoding topology", () => {
     ]);
   });
 
-  it("changes only bitrate across a good-start live VP8 transition", async () => {
+  it("applies and restores bitrate plus cadence across a live VP8 transition", async () => {
     let currentParameters = {
       degradationPreference: "maintain-framerate" as RTCDegradationPreference,
       encodings: [
@@ -1004,13 +1053,13 @@ describe("webcam encoding topology", () => {
         rid: "h",
         active: true,
         maxBitrate: 25_000,
-        maxFramerate: 20,
+        maxFramerate: 5,
       }),
       expect.objectContaining({
         rid: "f",
         active: true,
         maxBitrate: 15_000,
-        maxFramerate: 30,
+        maxFramerate: 3,
       }),
     ]);
 
@@ -1038,6 +1087,62 @@ describe("webcam encoding topology", () => {
       }),
     ]);
     expect(producer.setMaxSpatialLayer).not.toHaveBeenCalled();
+  });
+
+  it("serializes network profile mutations for the same producer", async () => {
+    let releaseFirstMutation: (() => void) | null = null;
+    const firstMutation = new Promise<void>((resolve) => {
+      releaseFirstMutation = resolve;
+    });
+    let currentParameters = {
+      encodings: [
+        { rid: "q", maxBitrate: 80_000, maxFramerate: 12 },
+        { rid: "h", maxBitrate: 220_000, maxFramerate: 20 },
+        { rid: "f", maxBitrate: 1_650_000, maxFramerate: 30 },
+      ],
+    };
+    const setParameters = vi.fn(async (next) => {
+      if (setParameters.mock.calls.length === 1) {
+        await firstMutation;
+      }
+      currentParameters = next;
+    });
+    const producer = {
+      kind: "video",
+      closed: false,
+      track: { getSettings: () => ({ width: 1280, height: 720 }) },
+      rtpSender: {
+        getParameters: () => currentParameters,
+        setParameters,
+      },
+      rtpParameters: {
+        codecs: [{ mimeType: "video/VP8", clockRate: 90_000 }],
+        encodings: [{ rid: "q" }, { rid: "h" }, { rid: "f" }],
+      },
+    } as unknown as Producer;
+
+    const poor = applyWebcamProducerNetworkProfile(
+      producer,
+      "standard",
+      "poor",
+    );
+    const good = applyWebcamProducerNetworkProfile(
+      producer,
+      "standard",
+      "good",
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(setParameters).toHaveBeenCalledTimes(1);
+    releaseFirstMutation?.();
+    await Promise.all([poor, good]);
+
+    expect(setParameters).toHaveBeenCalledTimes(2);
+    expect(currentParameters.encodings[2]).toMatchObject({
+      maxBitrate: 1_650_000,
+      maxFramerate: 30,
+    });
   });
 
   it("does not apply a two-layer low cap table to a live three-layer producer", async () => {

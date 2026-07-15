@@ -6,10 +6,12 @@ import type {
 import type { Producer, ProducerType, Transport, VideoQuality } from "./types";
 import type { WebcamCodecPolicy } from "./types";
 import {
+  LOW_VIDEO_MAX_BITRATE,
   MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE,
   SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE,
   SCREEN_SHARE_MAX_BITRATE,
   SCREEN_SHARE_MAX_FRAMERATE,
+  STANDARD_VIDEO_MAX_BITRATE,
 } from "./constants";
 import {
   buildWebcamSimulcastEncodings,
@@ -18,6 +20,33 @@ import {
 } from "./video-encodings";
 import type { WebcamProducerTopology } from "./webcam-topology-transition";
 import { toError } from "./utils";
+import type {
+  ResolvedCameraPublishSettings,
+  ResolvedScreenSharePublishSettings,
+} from "./media-quality-settings";
+
+const producerProfileMutationTails = new WeakMap<Producer, Promise<void>>();
+
+const serializeProducerProfileMutation = (
+  producer: Producer,
+  mutate: () => Promise<void>,
+): Promise<void> => {
+  const previous = producerProfileMutationTails.get(producer);
+  const operation = (previous ?? Promise.resolve())
+    .catch(() => {})
+    .then(mutate);
+  const settled = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  producerProfileMutationTails.set(producer, settled);
+  void settled.then(() => {
+    if (producerProfileMutationTails.get(producer) === settled) {
+      producerProfileMutationTails.delete(producer);
+    }
+  });
+  return operation;
+};
 
 // Desktop Chromium/Firefox generally get the strongest simulcast behavior with
 // VP8. Safari/iOS/Android are more sensitive to software video paths, so prefer
@@ -192,6 +221,7 @@ type ProduceWebcamTrackOptions = {
   forceSimulcast?: boolean;
   receiverCapacityTransition?: WebcamReceiverCapacityTransition;
   codecPolicy?: WebcamCodecPolicy | null;
+  publishSettings?: ResolvedCameraPublishSettings;
 };
 
 export type WebcamReceiverCapacityTransition = {
@@ -204,6 +234,7 @@ type ProduceScreenShareTrackOptions = {
   track: MediaStreamTrack;
   networkProfile: WebcamProducerNetworkProfile;
   preferredCodec?: RtpCodecCapability;
+  publishSettings?: ResolvedScreenSharePublishSettings;
 };
 
 export type WebcamProducerNetworkProfile =
@@ -211,6 +242,47 @@ export type WebcamProducerNetworkProfile =
   | "fair"
   | "poor"
   | "emergency";
+
+const WEBCAM_CAPTURE_FRAMERATE_CAPS: Record<
+  WebcamProducerNetworkProfile,
+  number
+> = {
+  good: Number.POSITIVE_INFINITY,
+  fair: 20,
+  poor: 12,
+  emergency: 8,
+};
+
+export const getWebcamCaptureFrameRateForNetworkProfile = (
+  profile: WebcamProducerNetworkProfile,
+  publishSettings: ResolvedCameraPublishSettings,
+): number =>
+  Math.min(
+    publishSettings.frameRate,
+    WEBCAM_CAPTURE_FRAMERATE_CAPS[profile],
+  );
+
+export async function applyWebcamTrackNetworkProfile(
+  track: MediaStreamTrack | null | undefined,
+  profile: WebcamProducerNetworkProfile,
+  publishSettings: ResolvedCameraPublishSettings,
+): Promise<void> {
+  if (!track || track.readyState !== "live") return;
+  const frameRate = getWebcamCaptureFrameRateForNetworkProfile(
+    profile,
+    publishSettings,
+  );
+  const currentFrameRate = track.getSettings().frameRate;
+  if (
+    typeof currentFrameRate === "number" &&
+    Math.abs(currentFrameRate - frameRate) < 0.5
+  ) {
+    return;
+  }
+  await track.applyConstraints({
+    frameRate: { ideal: frameRate, max: frameRate },
+  });
+}
 
 type ScreenProducerAppData = {
   type: ProducerType;
@@ -279,11 +351,10 @@ const VP8_SINGLE_RECEIVER_STANDBY_CAPS = [
   { maxBitrate: 1_750_000, maxFramerate: 30 },
 ] as const;
 // A live simulcast encoder is a topology, not a quality switch. Chromium can
-// stall every RID when setMaxSpatialLayer(), `active`, frame cadence, or RTP
-// priority changes force it to rebuild that topology. Keep every independent
-// encoder alive at its canonical raster/cadence and turn unused layers into
-// low-bitrate standbys. Initial constrained publishes still use the full caps;
-// live transitions only need to change bitrate.
+// stall every RID when setMaxSpatialLayer(), `active`, scale, or RTP priority
+// changes rebuild that topology. Keep every independent encoder alive and use
+// bitrate plus max-framerate ceilings for pressure relief without changing the
+// negotiated RID set.
 const VP8_STABLE_SIMULCAST_PROFILE_CAPS = {
   fair: [
     { maxBitrate: 80_000, maxFramerate: 12 },
@@ -371,20 +442,34 @@ const getEncodingRanks = (
 const getBaseEncodingCaps = (
   quality: VideoQuality,
   encodingCount: number,
+  publishSettings?: ResolvedCameraPublishSettings,
 ): WebcamEncodingCap[] => {
   const baseEncodings =
     encodingCount > 1
       ? buildWebcamSimulcastEncodings(quality)
       : [buildWebcamSingleLayerEncoding(quality)];
 
-  return baseEncodings.map((encoding) => ({
-    maxBitrate: encoding.maxBitrate,
-    maxFramerate: encoding.maxFramerate,
-    ...("scaleResolutionDownBy" in encoding &&
-    typeof encoding.scaleResolutionDownBy === "number"
-      ? { scaleResolutionDownBy: encoding.scaleResolutionDownBy }
-      : {}),
-  }));
+  const defaultMaximumBitrate =
+    quality === "low" ? LOW_VIDEO_MAX_BITRATE : STANDARD_VIDEO_MAX_BITRATE;
+
+  return baseEncodings.map((encoding, index) => {
+    const bitrateRatio = encoding.maxBitrate / defaultMaximumBitrate;
+    const isHighestLayer = index === baseEncodings.length - 1;
+    return {
+      maxBitrate: publishSettings
+        ? Math.max(20000, Math.round(publishSettings.maxBitrate * bitrateRatio))
+        : encoding.maxBitrate,
+      maxFramerate: publishSettings
+        ? isHighestLayer
+          ? publishSettings.frameRate
+          : Math.min(encoding.maxFramerate, publishSettings.frameRate)
+        : encoding.maxFramerate,
+      ...("scaleResolutionDownBy" in encoding &&
+      typeof encoding.scaleResolutionDownBy === "number"
+        ? { scaleResolutionDownBy: encoding.scaleResolutionDownBy }
+        : {}),
+    };
+  });
 };
 
 const capAt = (values: readonly number[], index: number): number =>
@@ -540,18 +625,18 @@ const applyNetworkProfileToInitialWebcamEncodings = <
   quality: VideoQuality,
   profile: WebcamProducerNetworkProfile,
   captureSize: CaptureSize,
+  publishSettings?: ResolvedCameraPublishSettings,
 ): T[] => {
   const layerRanks = getEncodingRanks(encodings);
+  const configuredCaps = getBaseEncodingCaps(
+    quality,
+    encodings.length,
+    publishSettings,
+  );
   return encodings.map((encoding, index) => {
     const layerRank = layerRanks[index] ?? index;
-    const base = {
-      maxBitrate: encoding.maxBitrate,
-      maxFramerate: encoding.maxFramerate,
-      ...("scaleResolutionDownBy" in encoding &&
-      typeof encoding.scaleResolutionDownBy === "number"
-        ? { scaleResolutionDownBy: encoding.scaleResolutionDownBy }
-        : {}),
-    };
+    const base =
+      configuredCaps[layerRank] ?? configuredCaps[index] ?? configuredCaps[0];
     const adjusted =
       encodings.length > 1
         ? getStableSimulcastProfileCap(base, profile, layerRank)
@@ -749,32 +834,40 @@ export const getWebcamProducerTopology = (
 const getVp9SvcEncodingCap = (
   quality: VideoQuality,
   profile: WebcamProducerNetworkProfile,
+  publishSettings?: ResolvedCameraPublishSettings,
 ): { maxBitrate: number; maxFramerate: number } => {
   const base = buildWebcamSingleLayerEncoding(quality);
+  const configuredBase = publishSettings
+    ? {
+        maxBitrate: publishSettings.maxBitrate,
+        maxFramerate: publishSettings.frameRate,
+      }
+    : base;
   if (profile === "fair") {
     return {
-      maxBitrate: Math.min(base.maxBitrate, 900000),
-      maxFramerate: Math.min(base.maxFramerate, 24),
+      maxBitrate: Math.min(configuredBase.maxBitrate, 900000),
+      maxFramerate: Math.min(configuredBase.maxFramerate, 24),
     };
   }
   if (profile === "poor") {
     return {
-      maxBitrate: Math.min(base.maxBitrate, 160000),
-      maxFramerate: Math.min(base.maxFramerate, 12),
+      maxBitrate: Math.min(configuredBase.maxBitrate, 160000),
+      maxFramerate: Math.min(configuredBase.maxFramerate, 12),
     };
   }
   if (profile === "emergency") {
     return {
-      maxBitrate: Math.min(base.maxBitrate, 90000),
-      maxFramerate: Math.min(base.maxFramerate, 8),
+      maxBitrate: Math.min(configuredBase.maxBitrate, 90000),
+      maxFramerate: Math.min(configuredBase.maxFramerate, 8),
     };
   }
   return {
-    maxBitrate:
-      quality === "standard"
+    maxBitrate: publishSettings
+      ? publishSettings.maxBitrate
+      : quality === "standard"
         ? VP9_SVC_STANDARD_MAX_BITRATE
         : base.maxBitrate,
-    maxFramerate: base.maxFramerate,
+    maxFramerate: configuredBase.maxFramerate,
   };
 };
 
@@ -785,6 +878,7 @@ const applyWebcamEncodingCaps = async (
   quality: VideoQuality,
   profile: WebcamProducerNetworkProfile,
   optimizeForSingleReceiver: boolean,
+  publishSettings?: ResolvedCameraPublishSettings,
 ): Promise<void> => {
   const sender = producer.rtpSender;
   const vp9Svc = isVp9SvcWebcamProducer(producer);
@@ -798,7 +892,7 @@ const applyWebcamEncodingCaps = async (
     const encodings = parameters.encodings ?? [];
     if (encodings.length > 0) {
       if (vp9Svc) {
-        const cap = getVp9SvcEncodingCap(quality, profile);
+        const cap = getVp9SvcEncodingCap(quality, profile, publishSettings);
         const scaleResolutionDownBy = getVp9SvcScaleResolutionDownBy();
         await setSenderParametersWithPreferences(
           sender,
@@ -813,7 +907,11 @@ const applyWebcamEncodingCaps = async (
               scalabilityMode: VP9_SVC_SCALABILITY_MODE,
             })),
           },
-          { degradationPreference: VP9_WEBCAM_DEGRADATION_PREFERENCE },
+          {
+            degradationPreference:
+              publishSettings?.degradationPreference ??
+              VP9_WEBCAM_DEGRADATION_PREFERENCE,
+          },
         );
         return;
       }
@@ -836,7 +934,11 @@ const applyWebcamEncodingCaps = async (
         throw topologyError;
       }
       const captureSize = getTrackCaptureSize(producer.track);
-      const baseCaps = getBaseEncodingCaps(quality, encodings.length);
+      const baseCaps = getBaseEncodingCaps(
+        quality,
+        encodings.length,
+        publishSettings,
+      );
       const layerRanks = getEncodingRanks(encodings);
       const highestLayerRank = Math.max(...layerRanks);
       const canMutateSenderPriorityWithoutRebuildingTopology =
@@ -851,22 +953,21 @@ const applyWebcamEncodingCaps = async (
           encodings.length > 1
             ? getStableSimulcastProfileCap(base, profile, layerRank)
             : getProfileAdjustedCap(base, quality, profile, layerRank);
-        const standbyCap = singleReceiverVp8
-          ? (VP8_SINGLE_RECEIVER_STANDBY_CAPS[layerRank] ??
-            VP8_SINGLE_RECEIVER_STANDBY_CAPS[highestLayerRank])
-          : null;
+        const hasCustomGoodCameraCeiling =
+          Boolean(publishSettings) &&
+          (publishSettings?.maxBitrate !== STANDARD_VIDEO_MAX_BITRATE ||
+            publishSettings.frameRate !== 30);
+        const standbyCap =
+          singleReceiverVp8 &&
+          !(hasCustomGoodCameraCeiling && layerRank === highestLayerRank)
+            ? (VP8_SINGLE_RECEIVER_STANDBY_CAPS[layerRank] ??
+              VP8_SINGLE_RECEIVER_STANDBY_CAPS[highestLayerRank])
+            : null;
         return {
           ...encoding,
           active: true,
           maxBitrate: standbyCap?.maxBitrate ?? adjusted.maxBitrate,
-          // Preserve the cadence of an existing simulcast topology. A sender
-          // created under a constrained profile already carries that cadence;
-          // a normal good-start sender therefore changes bitrate only.
-          maxFramerate:
-            encodings.length > 1 &&
-            typeof encoding.maxFramerate === "number"
-              ? encoding.maxFramerate
-              : standbyCap?.maxFramerate ?? adjusted.maxFramerate,
+          maxFramerate: standbyCap?.maxFramerate ?? adjusted.maxFramerate,
           scaleResolutionDownBy:
             encodings.length > 1
               ? base.scaleResolutionDownBy
@@ -891,7 +992,9 @@ const applyWebcamEncodingCaps = async (
         sender,
         { ...parameters, encodings: nextEncodings },
         {
-          degradationPreference: WEBCAM_DEGRADATION_PREFERENCE,
+          degradationPreference:
+            publishSettings?.degradationPreference ??
+            WEBCAM_DEGRADATION_PREFERENCE,
           ...(senderPriority ? { priority: senderPriority } : {}),
         },
       );
@@ -899,9 +1002,9 @@ const applyWebcamEncodingCaps = async (
     }
   }
 
-  const [base] = getBaseEncodingCaps(quality, 1);
+  const [base] = getBaseEncodingCaps(quality, 1, publishSettings);
   const adjusted = vp9Svc
-    ? getVp9SvcEncodingCap(quality, profile)
+    ? getVp9SvcEncodingCap(quality, profile, publishSettings)
     : getProfileAdjustedCap(base, quality, profile, 0);
   const captureSize = getTrackCaptureSize(producer.track);
   const fallbackScaleResolutionDownBy = getCaptureAdjustedScaleResolutionDownBy(
@@ -970,6 +1073,35 @@ const SCREEN_SHARE_CAPS: Record<WebcamProducerNetworkProfile, ScreenShareCap> = 
   },
 };
 
+const getScreenShareCap = (
+  profile: WebcamProducerNetworkProfile,
+  publishSettings?: ResolvedScreenSharePublishSettings,
+): ScreenShareCap => {
+  const base = SCREEN_SHARE_CAPS[profile];
+  if (!publishSettings) return base;
+  const preserveManualCeiling = profile === "good";
+  return {
+    maxBitrate: preserveManualCeiling
+      ? publishSettings.maxBitrate
+      : Math.min(base.maxBitrate, publishSettings.maxBitrate),
+    maxFramerate: preserveManualCeiling
+      ? publishSettings.frameRate
+      : Math.min(base.maxFramerate, publishSettings.frameRate),
+    idealWidth: preserveManualCeiling
+      ? publishSettings.idealWidth
+      : Math.min(base.idealWidth, publishSettings.idealWidth),
+    idealHeight: preserveManualCeiling
+      ? publishSettings.idealHeight
+      : Math.min(base.idealHeight, publishSettings.idealHeight),
+    maxWidth: preserveManualCeiling
+      ? publishSettings.maxWidth
+      : Math.min(base.maxWidth, publishSettings.maxWidth),
+    maxHeight: preserveManualCeiling
+      ? publishSettings.maxHeight
+      : Math.min(base.maxHeight, publishSettings.maxHeight),
+  };
+};
+
 const getCaptureScaleToFit = (
   captureSize: CaptureSize,
   target: { width: number; height: number },
@@ -990,9 +1122,9 @@ const getCaptureScaleToFit = (
 const getScreenShareScaleResolutionDownBy = (
   profile: WebcamProducerNetworkProfile,
   captureSize: CaptureSize,
+  publishSettings?: ResolvedScreenSharePublishSettings,
 ): number => {
-  if (profile === "good") return 1;
-  const cap = SCREEN_SHARE_CAPS[profile];
+  const cap = getScreenShareCap(profile, publishSettings);
   return (
     getCaptureScaleToFit(captureSize, {
       width: cap.maxWidth,
@@ -1003,13 +1135,14 @@ const getScreenShareScaleResolutionDownBy = (
 
 export function buildScreenShareVideoConstraintsForNetworkProfile(
   profile: WebcamProducerNetworkProfile,
+  publishSettings?: ResolvedScreenSharePublishSettings,
 ): MediaTrackConstraints & { cursor?: "always" | "motion" | "never" } {
-  const cap = SCREEN_SHARE_CAPS[profile];
+  const cap = getScreenShareCap(profile, publishSettings);
   return {
     frameRate: { ideal: cap.maxFramerate, max: cap.maxFramerate },
     width: { ideal: cap.idealWidth, max: cap.maxWidth },
     height: { ideal: cap.idealHeight, max: cap.maxHeight },
-    cursor: "always",
+    cursor: publishSettings?.cursor ?? "always",
   };
 }
 
@@ -1054,16 +1187,21 @@ export async function applyAudioProducerNetworkProfile(
   });
 }
 
-export async function applyScreenShareProducerNetworkProfile(
+const applyScreenShareProducerNetworkProfileNow = async (
   producer: Producer,
   profile: WebcamProducerNetworkProfile,
-): Promise<void> {
+  publishSettings?: ResolvedScreenSharePublishSettings,
+): Promise<void> => {
   if (producer.kind !== "video" || producer.closed) return;
 
-  const cap = SCREEN_SHARE_CAPS[profile];
+  const cap = getScreenShareCap(profile, publishSettings);
   let trackProfileError: Error | null = null;
   try {
-    await applyScreenShareTrackNetworkProfile(producer.track, profile);
+    await applyScreenShareTrackNetworkProfile(
+      producer.track,
+      profile,
+      publishSettings,
+    );
   } catch (error) {
     // RTP caps can still protect the connection when a browser rejects one of
     // the capture constraints, but the caller must not cache this profile as
@@ -1073,6 +1211,7 @@ export async function applyScreenShareProducerNetworkProfile(
   const scaleResolutionDownBy = getScreenShareScaleResolutionDownBy(
     profile,
     getTrackCaptureSize(producer.track),
+    publishSettings,
   );
   const sender = producer.rtpSender;
   if (sender) {
@@ -1091,7 +1230,9 @@ export async function applyScreenShareProducerNetworkProfile(
           })),
         },
         {
-          degradationPreference: SCREEN_SHARE_DEGRADATION_PREFERENCE,
+          degradationPreference:
+            publishSettings?.degradationPreference ??
+            SCREEN_SHARE_DEGRADATION_PREFERENCE,
           priority: SCREEN_SHARE_RTP_PRIORITY,
         },
       );
@@ -1106,16 +1247,32 @@ export async function applyScreenShareProducerNetworkProfile(
     scaleResolutionDownBy,
   });
   if (trackProfileError) throw trackProfileError;
+};
+
+export function applyScreenShareProducerNetworkProfile(
+  producer: Producer,
+  profile: WebcamProducerNetworkProfile,
+  publishSettings?: ResolvedScreenSharePublishSettings,
+): Promise<void> {
+  return serializeProducerProfileMutation(producer, () =>
+    applyScreenShareProducerNetworkProfileNow(
+      producer,
+      profile,
+      publishSettings,
+    ),
+  );
 }
 
 export async function applyScreenShareTrackNetworkProfile(
   track: MediaStreamTrack | null | undefined,
   profile: WebcamProducerNetworkProfile,
+  publishSettings?: ResolvedScreenSharePublishSettings,
 ): Promise<void> {
   if (!track || track.readyState !== "live") return;
 
   const constraints = buildScreenShareVideoConstraintsForNetworkProfile(
     profile,
+    publishSettings,
   );
   let constraintError: Error | null = null;
 
@@ -1164,17 +1321,25 @@ export async function applyScreenShareTrackNetworkProfile(
 function buildScreenShareEncodingForNetworkProfile(
   profile: WebcamProducerNetworkProfile,
   track?: MediaStreamTrack | null,
+  publishSettings?: ResolvedScreenSharePublishSettings,
 ): ScreenShareEncoding {
   const base = buildScreenShareEncoding();
-  const cap = SCREEN_SHARE_CAPS[profile];
+  const cap = getScreenShareCap(profile, publishSettings);
   const scaleResolutionDownBy = getScreenShareScaleResolutionDownBy(
     profile,
     getTrackCaptureSize(track),
+    publishSettings,
   );
   return {
     ...base,
-    maxBitrate: Math.min(base.maxBitrate, cap.maxBitrate),
-    maxFramerate: Math.min(base.maxFramerate, cap.maxFramerate),
+    maxBitrate:
+      profile === "good" && publishSettings
+        ? cap.maxBitrate
+        : Math.min(base.maxBitrate, cap.maxBitrate),
+    maxFramerate:
+      profile === "good" && publishSettings
+        ? cap.maxFramerate
+        : Math.min(base.maxFramerate, cap.maxFramerate),
     scaleResolutionDownBy,
   };
 }
@@ -1191,10 +1356,12 @@ export async function produceScreenShareTrack({
   track,
   networkProfile,
   preferredCodec,
+  publishSettings,
 }: ProduceScreenShareTrackOptions): Promise<Producer> {
   const encoding = buildScreenShareEncodingForNetworkProfile(
     networkProfile,
     track,
+    publishSettings,
   );
   const buildOptions = (
     nextEncoding: ScreenShareEncoding | FallbackScreenShareEncoding,
@@ -1318,6 +1485,7 @@ export async function produceWebcamTrack({
   forceSimulcast = false,
   receiverCapacityTransition,
   codecPolicy = null,
+  publishSettings,
 }: ProduceWebcamTrackOptions): Promise<Producer> {
   const captureSize = getTrackCaptureSize(track);
   const buildOptions = (
@@ -1332,6 +1500,7 @@ export async function produceWebcamTrack({
       quality,
       networkProfile,
       captureSize,
+      publishSettings,
     ),
     codecOptions: buildWebcamCodecOptions(quality, networkProfile),
     // The effects pipeline may replace the producer track with a processed
@@ -1360,7 +1529,11 @@ export async function produceWebcamTrack({
     if (!preferredCodec) {
       throw new Error("Room requires VP9 profile 0, but the sender codec is unavailable");
     }
-    const cap = getVp9SvcEncodingCap(quality, networkProfile);
+    const cap = getVp9SvcEncodingCap(
+      quality,
+      networkProfile,
+      publishSettings,
+    );
     return finishProducer(
       await transport.produce({
         track,
@@ -1423,12 +1596,15 @@ export async function produceWebcamTrack({
   );
 }
 
-export async function applyWebcamProducerNetworkProfile(
+const applyWebcamProducerNetworkProfileNow = async (
   producer: Producer,
   quality: VideoQuality,
   profile: WebcamProducerNetworkProfile,
-  options: { optimizeForSingleReceiver?: boolean } = {},
-): Promise<void> {
+  options: {
+    optimizeForSingleReceiver?: boolean;
+    publishSettings?: ResolvedCameraPublishSettings;
+  } = {},
+): Promise<void> => {
   if (producer.kind !== "video" || producer.closed) return;
 
   // Never call producer.setMaxSpatialLayer() here. mediasoup-client implements
@@ -1441,5 +1617,20 @@ export async function applyWebcamProducerNetworkProfile(
     quality,
     profile,
     options.optimizeForSingleReceiver === true,
+    options.publishSettings,
+  );
+};
+
+export function applyWebcamProducerNetworkProfile(
+  producer: Producer,
+  quality: VideoQuality,
+  profile: WebcamProducerNetworkProfile,
+  options: {
+    optimizeForSingleReceiver?: boolean;
+    publishSettings?: ResolvedCameraPublishSettings;
+  } = {},
+): Promise<void> {
+  return serializeProducerProfileMutation(producer, () =>
+    applyWebcamProducerNetworkProfileNow(producer, quality, profile, options),
   );
 }

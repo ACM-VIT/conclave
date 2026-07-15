@@ -5,10 +5,14 @@ import {
   Camera,
   ChevronDown,
   FlipHorizontal2,
+  Gauge,
   LoaderCircle,
   Mic,
+  MonitorUp,
   Play,
+  RotateCcw,
   ScanFace,
+  SlidersHorizontal,
   Square,
   Video,
   Volume2,
@@ -16,7 +20,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { color, font } from "@conclave/ui-tokens";
 import { SwitchRow } from "@conclave/ui-tokens/web";
 import type {
@@ -31,6 +35,22 @@ import type {
 } from "../hooks/useMeetTts";
 import { useEnumeratedDevices } from "./DeviceCaretMenu";
 import TtsVoiceSettings from "./TtsVoiceSettings";
+import {
+  CAMERA_FRAME_RATE_OPTIONS,
+  DEFAULT_MEDIA_QUALITY_SETTINGS,
+  MEDIA_RESOLUTIONS,
+  SCREEN_SHARE_FRAME_RATE_OPTIONS,
+  applyCameraQualityPreset,
+  applyScreenSharePickerPreferences,
+  applyScreenShareQualityPreset,
+  normalizeMediaQualitySettings,
+  resolveEffectiveCameraPublishSettings,
+  resolveCameraPublishSettings,
+  resolveScreenSharePublishSettings,
+  type CameraQualityPreset,
+  type MediaQualitySettings,
+  type ScreenShareQualityPreset,
+} from "../lib/media-quality-settings";
 
 type SettingsTab = "video" | "audio" | "connection";
 
@@ -45,6 +65,11 @@ interface DeviceSettingsPanelProps {
   mirrorLocalPreview: boolean;
   isMirrorCamera?: boolean;
   onToggleMirror?: () => void;
+  activeVideoEffectsCount?: number;
+  mediaQualitySettings: MediaQualitySettings;
+  onMediaQualitySettingsChange: Dispatch<
+    SetStateAction<MediaQualitySettings>
+  >;
   selectedAudioInputDeviceId?: string;
   selectedAudioOutputDeviceId?: string;
   ttsSystemVoices?: TtsSystemVoiceOption[];
@@ -162,6 +187,200 @@ function Section({
     </section>
   );
 }
+
+const CAMERA_PRESET_OPTIONS: Array<{
+  id: Exclude<CameraQualityPreset, "custom">;
+  label: string;
+  detail: string;
+}> = [
+  { id: "auto", label: "Auto", detail: "720p · 30 fps" },
+  { id: "data-saver", label: "Data saver", detail: "360p · 20 fps" },
+  { id: "high-definition", label: "HD", detail: "1080p · 30 fps" },
+  { id: "studio", label: "Studio", detail: "1080p · 60 fps" },
+];
+
+const SCREEN_SHARE_PRESET_OPTIONS: Array<{
+  id: Exclude<ScreenShareQualityPreset, "custom">;
+  label: string;
+  detail: string;
+}> = [
+  { id: "auto", label: "Auto", detail: "Balanced" },
+  { id: "presentation", label: "Presentation", detail: "Crisp text" },
+  { id: "motion", label: "Motion", detail: "Smooth video" },
+];
+
+function PresetButton({
+  label,
+  detail,
+  selected,
+  onClick,
+  testId,
+}: {
+  label: string;
+  detail: string;
+  selected: boolean;
+  onClick: () => void;
+  testId: string;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      aria-pressed={selected}
+      onClick={onClick}
+      className="min-w-0 rounded-xl border px-3 py-2.5 text-left transition-[background-color,border-color,box-shadow] duration-[120ms]"
+      style={{
+        borderColor: selected ? "rgba(249,95,74,0.72)" : color.border,
+        backgroundColor: selected ? "rgba(249,95,74,0.11)" : color.bgAlt,
+        boxShadow: selected ? "inset 0 0 0 1px rgba(249,95,74,0.16)" : "none",
+      }}
+    >
+      <span className="block truncate text-[12.5px] font-semibold text-[#fafafa]">
+        {label}
+      </span>
+      <span
+        className="mt-0.5 block truncate text-[10.5px]"
+        style={{ color: selected ? "rgba(250,250,250,0.68)" : color.textFaint }}
+      >
+        {detail}
+      </span>
+    </button>
+  );
+}
+
+function AdvancedToggle({
+  open,
+  onClick,
+  label = "Advanced",
+}: {
+  open: boolean;
+  onClick: () => void;
+  label?: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      onClick={onClick}
+      className="mt-2.5 flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-left text-[12px] font-medium transition-colors duration-[120ms] hover:text-[#fafafa]"
+      style={{ color: color.textMuted }}
+    >
+      <SlidersHorizontal size={14} strokeWidth={ICON_STROKE} />
+      <span className="flex-1">{label}</span>
+      <ChevronDown
+        size={14}
+        className={`transition-transform duration-[120ms] ${open ? "rotate-180" : ""}`}
+      />
+    </button>
+  );
+}
+
+function SettingsSelect<T extends string | number>({
+  label,
+  value,
+  options,
+  onChange,
+  ariaLabel,
+}: {
+  label: string;
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  onChange: (value: T) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <label className="grid grid-cols-[1fr_148px] items-center gap-3 py-1.5">
+      <span className="text-[12px]" style={{ color: color.textMuted }}>
+        {label}
+      </span>
+      <span className="relative">
+        <select
+          aria-label={ariaLabel}
+          value={String(value)}
+          onChange={(event) => {
+            const option = options.find(
+              (candidate) => String(candidate.value) === event.target.value,
+            );
+            if (option) onChange(option.value);
+          }}
+          className="h-8 w-full appearance-none rounded-lg border border-white/10 bg-white/[0.035] pl-2.5 pr-7 text-[11.5px] text-[#fafafa] outline-none transition-colors hover:bg-white/[0.06] focus:border-[#F95F4A]/60"
+        >
+          {options.map((option) => (
+            <option
+              key={String(option.value)}
+              value={String(option.value)}
+              className="bg-[#18181b] text-[#fafafa]"
+            >
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDown
+          size={13}
+          className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-white/40"
+        />
+      </span>
+    </label>
+  );
+}
+
+function BitrateControl({
+  value,
+  minimum,
+  maximum,
+  onChange,
+  ariaLabel,
+  label = "Maximum bitrate",
+}: {
+  value: number;
+  minimum: number;
+  maximum: number;
+  onChange: (value: number) => void;
+  ariaLabel: string;
+  label?: string;
+}) {
+  return (
+    <div className="py-1.5">
+      <div className="mb-1.5 flex items-center justify-between gap-3">
+        <span className="text-[12px]" style={{ color: color.textMuted }}>
+          {label}
+        </span>
+        <span className="text-[11.5px] font-medium tabular-nums text-[#fafafa]">
+          {value >= 1000
+            ? `${Number((value / 1000).toFixed(2))} Mbps`
+            : `${value} kbps`}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={minimum}
+        max={maximum}
+        step={50}
+        value={value}
+        aria-label={ariaLabel}
+        onChange={(event) => onChange(Number(event.currentTarget.value))}
+        className="h-2 w-full accent-[#F95F4A]"
+      />
+    </div>
+  );
+}
+
+const formatQualitySummary = ({
+  width,
+  height,
+  frameRate,
+  maxBitrate,
+}: {
+  width: number;
+  height: number;
+  frameRate: number;
+  maxBitrate: number;
+}) =>
+  `${width}×${height} · ${frameRate} fps · up to ${
+    maxBitrate >= 1_000_000
+      ? `${Number((maxBitrate / 1_000_000).toFixed(2))} Mbps`
+      : `${Math.round(maxBitrate / 1000)} kbps`
+  }`;
 
 /** Native select styled to match the prejoin device pickers. */
 function DeviceSelect({
@@ -425,6 +644,9 @@ export default function DeviceSettingsPanel({
   mirrorLocalPreview,
   isMirrorCamera,
   onToggleMirror,
+  activeVideoEffectsCount = 0,
+  mediaQualitySettings,
+  onMediaQualitySettingsChange,
   selectedAudioInputDeviceId,
   selectedAudioOutputDeviceId,
   ttsSystemVoices = [],
@@ -453,6 +675,8 @@ export default function DeviceSettingsPanel({
 }: DeviceSettingsPanelProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [isPlayingTestSound, setIsPlayingTestSound] = useState(false);
+  const [cameraAdvancedOpen, setCameraAdvancedOpen] = useState(false);
+  const [screenShareAdvancedOpen, setScreenShareAdvancedOpen] = useState(false);
   const hasLiveVideo = Boolean(
     localStream
       ?.getVideoTracks()
@@ -523,6 +747,75 @@ export default function DeviceSettingsPanel({
         : overallQuality === "poor"
           ? "Your connection is struggling. Quality is reduced automatically."
           : "Measuring your connection";
+  const configuredCameraSettings = resolveCameraPublishSettings(
+    mediaQualitySettings.camera,
+  );
+  const resolvedCameraSettings = resolveEffectiveCameraPublishSettings(
+    mediaQualitySettings.camera,
+    activeVideoEffectsCount > 0,
+  );
+  const cameraQualityLimitedByEffects =
+    configuredCameraSettings.width !== resolvedCameraSettings.width ||
+    configuredCameraSettings.height !== resolvedCameraSettings.height ||
+    configuredCameraSettings.frameRate !== resolvedCameraSettings.frameRate;
+  const resolvedScreenShareSettings = resolveScreenSharePublishSettings(
+    mediaQualitySettings.screenShare,
+  );
+
+  const chooseCameraPreset = (preset: CameraQualityPreset) => {
+    onMediaQualitySettingsChange((current) => ({
+      ...current,
+      camera: applyCameraQualityPreset(current.camera, preset),
+    }));
+  };
+  const updateCameraSettings = (
+    update: Partial<MediaQualitySettings["camera"]>,
+  ) => {
+    onMediaQualitySettingsChange((current) => ({
+      ...current,
+      camera: {
+        ...current.camera,
+        ...update,
+        preset: "custom",
+      },
+    }));
+  };
+  const chooseScreenSharePreset = (preset: ScreenShareQualityPreset) => {
+    onMediaQualitySettingsChange((current) => ({
+      ...current,
+      screenShare: applyScreenShareQualityPreset(current.screenShare, preset),
+    }));
+  };
+  const updateScreenShareSettings = (
+    update: Partial<MediaQualitySettings["screenShare"]>,
+  ) => {
+    onMediaQualitySettingsChange((current) => ({
+      ...current,
+      screenShare: {
+        ...current.screenShare,
+        ...update,
+        preset: "custom",
+      },
+    }));
+  };
+  const updateScreenSharePickerSettings = (
+    update: Partial<
+      Pick<MediaQualitySettings["screenShare"], "cursor" | "includeAudio">
+    >,
+  ) => {
+    onMediaQualitySettingsChange((current) => ({
+      ...current,
+      screenShare: applyScreenSharePickerPreferences(
+        current.screenShare,
+        update,
+      ),
+    }));
+  };
+  const resetQualitySettings = () => {
+    onMediaQualitySettingsChange(
+      normalizeMediaQualitySettings(DEFAULT_MEDIA_QUALITY_SETTINGS),
+    );
+  };
 
   return (
     <aside
@@ -676,6 +969,295 @@ export default function DeviceSettingsPanel({
                   />
                 </div>
               ) : null}
+            </Section>
+
+            <Section label="Camera quality">
+              <div className="grid grid-cols-2 gap-2">
+                {CAMERA_PRESET_OPTIONS.map((preset) => (
+                  <PresetButton
+                    key={preset.id}
+                    label={preset.label}
+                    detail={preset.detail}
+                    selected={mediaQualitySettings.camera.preset === preset.id}
+                    onClick={() => chooseCameraPreset(preset.id)}
+                    testId={`camera-quality-preset-${preset.id}`}
+                  />
+                ))}
+              </div>
+              <div
+                className="mt-2.5 rounded-xl border px-3 py-2.5"
+                style={{ borderColor: color.border, backgroundColor: color.bgAlt }}
+              >
+                <div className="flex items-center gap-2">
+                  <Gauge
+                    size={14}
+                    strokeWidth={ICON_STROKE}
+                    className="shrink-0 text-[#F95F4A]"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-[#fafafa]">
+                    {formatQualitySummary(resolvedCameraSettings)}
+                  </span>
+                  {mediaQualitySettings.camera.preset === "custom" ? (
+                    <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[9.5px] font-medium text-white/60">
+                      Custom
+                    </span>
+                  ) : null}
+                </div>
+                <p
+                  className="mt-1 text-[10.5px] leading-snug"
+                  style={{ color: color.textFaint }}
+                >
+                  {cameraQualityLimitedByEffects
+                    ? "Effects currently publish at up to 720p and 30 fps. Your configured ceiling returns automatically when effects are off."
+                    : "Conclave can step below this ceiling when the connection or device is under pressure."}
+                </p>
+              </div>
+              <AdvancedToggle
+                open={cameraAdvancedOpen}
+                onClick={() => setCameraAdvancedOpen((current) => !current)}
+              />
+              {cameraAdvancedOpen ? (
+                <div
+                  data-testid="camera-quality-advanced"
+                  className="mt-1 rounded-xl border px-3 py-2"
+                  style={{ borderColor: color.border, backgroundColor: color.bgAlt }}
+                >
+                  <SettingsSelect
+                    label="Resolution"
+                    ariaLabel="Camera resolution"
+                    value={mediaQualitySettings.camera.resolution}
+                    options={MEDIA_RESOLUTIONS.map((resolution) => ({
+                      value: resolution.id,
+                      label: resolution.label,
+                    }))}
+                    onChange={(resolution) =>
+                      updateCameraSettings({ resolution })
+                    }
+                  />
+                  <SettingsSelect
+                    label="Frame rate"
+                    ariaLabel="Camera frame rate"
+                    value={mediaQualitySettings.camera.frameRate}
+                    options={CAMERA_FRAME_RATE_OPTIONS.map((frameRate) => ({
+                      value: frameRate,
+                      label: `${frameRate} fps`,
+                    }))}
+                    onChange={(frameRate) =>
+                      updateCameraSettings({ frameRate })
+                    }
+                  />
+                  <SettingsSelect
+                    label="Optimize for"
+                    ariaLabel="Camera content optimization"
+                    value={mediaQualitySettings.camera.contentHint}
+                    options={[
+                      { value: "motion" as const, label: "Natural motion" },
+                      { value: "detail" as const, label: "Fine detail" },
+                    ]}
+                    onChange={(contentHint) =>
+                      updateCameraSettings({ contentHint })
+                    }
+                  />
+                  <SettingsSelect
+                    label="Under pressure"
+                    ariaLabel="Camera degradation preference"
+                    value={mediaQualitySettings.camera.degradationPreference}
+                    options={[
+                      {
+                        value: "maintain-framerate" as const,
+                        label: "Keep motion smooth",
+                      },
+                      { value: "balanced" as const, label: "Balance both" },
+                      {
+                        value: "maintain-resolution" as const,
+                        label: "Keep image sharp",
+                      },
+                    ]}
+                    onChange={(degradationPreference) =>
+                      updateCameraSettings({ degradationPreference })
+                    }
+                  />
+                  <BitrateControl
+                    value={mediaQualitySettings.camera.maxBitrateKbps}
+                    minimum={100}
+                    maximum={12000}
+                    ariaLabel="Camera maximum bitrate"
+                    label="Full-quality bitrate"
+                    onChange={(maxBitrateKbps) =>
+                      updateCameraSettings({ maxBitrateKbps })
+                    }
+                  />
+                </div>
+              ) : null}
+            </Section>
+
+            <Section label="Screen share">
+              <div className="grid grid-cols-3 gap-2">
+                {SCREEN_SHARE_PRESET_OPTIONS.map((preset) => (
+                  <PresetButton
+                    key={preset.id}
+                    label={preset.label}
+                    detail={preset.detail}
+                    selected={
+                      mediaQualitySettings.screenShare.preset === preset.id
+                    }
+                    onClick={() => chooseScreenSharePreset(preset.id)}
+                    testId={`screen-share-quality-preset-${preset.id}`}
+                  />
+                ))}
+              </div>
+              <div
+                className="mt-2.5 rounded-xl border px-3 py-2.5"
+                style={{ borderColor: color.border, backgroundColor: color.bgAlt }}
+              >
+                <div className="flex items-center gap-2">
+                  <MonitorUp
+                    size={14}
+                    strokeWidth={ICON_STROKE}
+                    className="shrink-0 text-[#F95F4A]"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-[#fafafa]">
+                    {formatQualitySummary({
+                      width: resolvedScreenShareSettings.maxWidth,
+                      height: resolvedScreenShareSettings.maxHeight,
+                      frameRate: resolvedScreenShareSettings.frameRate,
+                      maxBitrate: resolvedScreenShareSettings.maxBitrate,
+                    })}
+                  </span>
+                  {mediaQualitySettings.screenShare.preset === "custom" ? (
+                    <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[9.5px] font-medium text-white/60">
+                      Custom
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <div className="mt-1.5">
+                <SwitchRow
+                  icon={Volume2}
+                  label="Include system audio when available"
+                  checked={mediaQualitySettings.screenShare.includeAudio}
+                  onChange={() =>
+                    updateScreenSharePickerSettings({
+                      includeAudio:
+                        !mediaQualitySettings.screenShare.includeAudio,
+                    })
+                  }
+                  className="rounded-lg"
+                />
+              </div>
+              <AdvancedToggle
+                open={screenShareAdvancedOpen}
+                onClick={() =>
+                  setScreenShareAdvancedOpen((current) => !current)
+                }
+              />
+              {screenShareAdvancedOpen ? (
+                <div
+                  data-testid="screen-share-quality-advanced"
+                  className="mt-1 rounded-xl border px-3 py-2"
+                  style={{ borderColor: color.border, backgroundColor: color.bgAlt }}
+                >
+                  <SettingsSelect
+                    label="Maximum size"
+                    ariaLabel="Screen share maximum resolution"
+                    value={mediaQualitySettings.screenShare.resolution}
+                    options={MEDIA_RESOLUTIONS.slice(1).map((resolution) => ({
+                      value: resolution.id,
+                      label: resolution.label,
+                    }))}
+                    onChange={(resolution) =>
+                      updateScreenShareSettings({ resolution })
+                    }
+                  />
+                  <SettingsSelect
+                    label="Frame rate"
+                    ariaLabel="Screen share frame rate"
+                    value={mediaQualitySettings.screenShare.frameRate}
+                    options={SCREEN_SHARE_FRAME_RATE_OPTIONS.map(
+                      (frameRate) => ({
+                        value: frameRate,
+                        label: `${frameRate} fps`,
+                      }),
+                    )}
+                    onChange={(frameRate) =>
+                      updateScreenShareSettings({ frameRate })
+                    }
+                  />
+                  <SettingsSelect
+                    label="Optimize for"
+                    ariaLabel="Screen share content optimization"
+                    value={mediaQualitySettings.screenShare.contentHint}
+                    options={[
+                      { value: "text" as const, label: "Text and slides" },
+                      { value: "detail" as const, label: "Fine detail" },
+                      { value: "motion" as const, label: "Video and motion" },
+                    ]}
+                    onChange={(contentHint) =>
+                      updateScreenShareSettings({ contentHint })
+                    }
+                  />
+                  <SettingsSelect
+                    label="Under pressure"
+                    ariaLabel="Screen share degradation preference"
+                    value={
+                      mediaQualitySettings.screenShare.degradationPreference
+                    }
+                    options={[
+                      {
+                        value: "maintain-resolution" as const,
+                        label: "Keep text sharp",
+                      },
+                      { value: "balanced" as const, label: "Balance both" },
+                      {
+                        value: "maintain-framerate" as const,
+                        label: "Keep motion smooth",
+                      },
+                    ]}
+                    onChange={(degradationPreference) =>
+                      updateScreenShareSettings({ degradationPreference })
+                    }
+                  />
+                  <SettingsSelect
+                    label="Cursor"
+                    ariaLabel="Screen share cursor visibility"
+                    value={mediaQualitySettings.screenShare.cursor}
+                    options={[
+                      { value: "always" as const, label: "Always show" },
+                      { value: "motion" as const, label: "While moving" },
+                      { value: "never" as const, label: "Hide" },
+                    ]}
+                    onChange={(cursor) =>
+                      updateScreenSharePickerSettings({ cursor })
+                    }
+                  />
+                  <BitrateControl
+                    value={mediaQualitySettings.screenShare.maxBitrateKbps}
+                    minimum={150}
+                    maximum={15000}
+                    ariaLabel="Screen share maximum bitrate"
+                    onChange={(maxBitrateKbps) =>
+                      updateScreenShareSettings({ maxBitrateKbps })
+                    }
+                  />
+                </div>
+              ) : null}
+              <p
+                className="mt-2 px-1 text-[10.5px] leading-snug"
+                style={{ color: color.textFaint }}
+              >
+                Quality changes apply to an active share. System audio and
+                cursor visibility apply the next time the browser share picker
+                opens.
+              </p>
+              <button
+                type="button"
+                onClick={resetQualitySettings}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-lg px-1 py-1.5 text-[11.5px] transition-colors hover:text-[#fafafa]"
+                style={{ color: color.textFaint }}
+              >
+                <RotateCcw size={12} strokeWidth={ICON_STROKE} />
+                Restore recommended defaults
+              </button>
             </Section>
 
             {onOpenEffects ? (

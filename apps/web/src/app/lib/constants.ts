@@ -1,5 +1,6 @@
 import type { ProducerCodecOptions } from "mediasoup-client/types";
 import type { VideoQuality } from "./types";
+import type { ResolvedCameraPublishSettings } from "./media-quality-settings";
 
 export const RECONNECT_DELAY_MS = 1000;
 export const MAX_RECONNECT_ATTEMPTS = 8;
@@ -42,7 +43,7 @@ const POOR_QUALITY_CONSTRAINTS = {
 const EMERGENCY_QUALITY_CONSTRAINTS = {
   width: { ideal: 320, max: 320 },
   height: { ideal: 180, max: 180 },
-  frameRate: { ideal: 12, max: 12 },
+  frameRate: { ideal: 8, max: 8 },
 };
 
 export type CameraCaptureNetworkProfile =
@@ -55,6 +56,7 @@ export const buildCameraVideoConstraints = (
   quality: VideoQuality,
   profile: CameraCaptureNetworkProfile = "good",
   deviceId?: string,
+  publishSettings?: ResolvedCameraPublishSettings,
 ): MediaTrackConstraints => {
   const base =
     profile === "emergency"
@@ -65,8 +67,27 @@ export const buildCameraVideoConstraints = (
       ? LOW_QUALITY_CONSTRAINTS
       : STANDARD_QUALITY_CONSTRAINTS;
 
+  const preserveManualCeiling = profile === "good" && quality === "standard";
+  const width = publishSettings
+    ? preserveManualCeiling
+      ? publishSettings.width
+      : Math.min(publishSettings.width, base.width.max)
+    : base.width.max;
+  const height = publishSettings
+    ? preserveManualCeiling
+      ? publishSettings.height
+      : Math.min(publishSettings.height, base.height.max)
+    : base.height.max;
+  const frameRate = publishSettings
+    ? preserveManualCeiling
+      ? publishSettings.frameRate
+      : Math.min(publishSettings.frameRate, base.frameRate.max)
+    : base.frameRate.max;
+
   return {
-    ...base,
+    width: { ideal: width, max: width },
+    height: { ideal: height, max: height },
+    frameRate: { ideal: frameRate, max: frameRate },
     ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
   };
 };

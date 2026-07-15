@@ -86,6 +86,7 @@ import {
   type VideoEffectsState,
 } from "../lib/video-effects";
 import type { MeetViewSettings } from "../lib/meet-view";
+import type { MediaQualitySettings } from "../lib/media-quality-settings";
 import type {
   ClonedTtsVoice,
   TtsSystemVoiceOption,
@@ -169,6 +170,10 @@ interface MeetsMainContentProps {
   isMirrorCamera: boolean;
   mirrorLocalPreview: boolean;
   onToggleMirror?: () => void;
+  mediaQualitySettings: MediaQualitySettings;
+  onMediaQualitySettingsChange: Dispatch<
+    SetStateAction<MediaQualitySettings>
+  >;
   selectedAudioInputDeviceId?: string;
   selectedAudioOutputDeviceId?: string;
   ttsSystemVoices?: TtsSystemVoiceOption[];
@@ -430,6 +435,8 @@ export default function MeetsMainContent({
   isMirrorCamera,
   mirrorLocalPreview,
   onToggleMirror,
+  mediaQualitySettings,
+  onMediaQualitySettingsChange,
   selectedAudioInputDeviceId,
   selectedAudioOutputDeviceId,
   ttsSystemVoices,
@@ -2423,6 +2430,9 @@ export default function MeetsMainContent({
           mirrorLocalPreview={mirrorLocalPreview}
           isMirrorCamera={isMirrorCamera}
           onToggleMirror={onToggleMirror}
+          activeVideoEffectsCount={activeVideoEffectsCount}
+          mediaQualitySettings={mediaQualitySettings}
+          onMediaQualitySettingsChange={onMediaQualitySettingsChange}
           selectedAudioInputDeviceId={selectedAudioInputDeviceId}
           selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
           ttsSystemVoices={ttsSystemVoices}

@@ -99,6 +99,11 @@ import {
 } from "../lib/screen-share-network-profile";
 import { getBrowserNetworkSnapshot } from "../lib/network-information";
 import {
+  resolveEffectiveCameraPublishSettings,
+  resolveScreenSharePublishSettings,
+  type MediaQualitySettings,
+} from "../lib/media-quality-settings";
+import {
   getBrowserMediaAdaptationQuality,
   hasBrowserMediaEmergencyEvidence,
 } from "../lib/connection-quality-policy";
@@ -896,6 +901,8 @@ interface UseMeetSocketOptions {
   setServerActiveSpeakerAvailable: (value: boolean) => void;
   setNetworkManagedVideoQuality: (value: VideoQuality) => void;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
+  mediaQualitySettingsRef: React.MutableRefObject<MediaQualitySettings>;
+  activeVideoEffectsCount?: number;
   connectionQualityRef?: React.MutableRefObject<ConnectionQualityStats | null>;
   dataSaverMode?: boolean;
   isDocumentVisible?: boolean;
@@ -903,6 +910,7 @@ interface UseMeetSocketOptions {
     (
       quality: VideoQuality,
       networkProfileOverride?: WebcamProducerNetworkProfile,
+      forceCaptureRefresh?: boolean,
     ) => Promise<void>
   >;
   requestMediaPermissions: (
@@ -1000,6 +1008,8 @@ export function useMeetSocket({
   setServerActiveSpeakerAvailable,
   setNetworkManagedVideoQuality,
   videoQualityRef,
+  mediaQualitySettingsRef,
+  activeVideoEffectsCount = 0,
   connectionQualityRef,
   dataSaverMode = false,
   isDocumentVisible = true,
@@ -1588,12 +1598,19 @@ export function useMeetSocket({
 
       await flushPendingScreenProducerCloses();
 
+      const screenPublishSettings = resolveScreenSharePublishSettings(
+        mediaQualitySettingsRef.current.screenShare,
+      );
       if ("contentHint" in videoTrack) {
-        videoTrack.contentHint = "detail";
+        videoTrack.contentHint = screenPublishSettings.contentHint;
       }
 
       const screenNetworkProfile = getScreenSharePublishNetworkProfile();
-      await applyScreenShareTrackNetworkProfile(videoTrack, screenNetworkProfile);
+      await applyScreenShareTrackNetworkProfile(
+        videoTrack,
+        screenNetworkProfile,
+        screenPublishSettings,
+      );
       const preferredScreenShareCodec = getPreferredScreenShareCodec(
         deviceRef.current,
       );
@@ -1602,6 +1619,7 @@ export function useMeetSocket({
         track: videoTrack,
         networkProfile: screenNetworkProfile,
         preferredCodec: preferredScreenShareCodec,
+        publishSettings: screenPublishSettings,
       });
 
       if (
@@ -1663,6 +1681,7 @@ export function useMeetSocket({
         await applyScreenShareProducerNetworkProfile(
           producer,
           screenNetworkProfile,
+          screenPublishSettings,
         );
       } catch (profileErr) {
         console.warn(
@@ -1733,6 +1752,7 @@ export function useMeetSocket({
       flushPendingScreenProducerCloses,
       getScreenSharePublishNetworkProfile,
       intentionalLocalProducerCloseIdsRef,
+      mediaQualitySettingsRef,
       pendingScreenProducerCloseIdsRef,
       producerTransportRef,
       screenAudioProducerRef,
@@ -4183,6 +4203,13 @@ export function useMeetSocket({
       }
       if (videoTrack) {
         const quality = videoQualityRef.current;
+        const cameraPublishSettings = resolveEffectiveCameraPublishSettings(
+          mediaQualitySettingsRef.current.camera,
+          activeVideoEffectsCount > 0,
+        );
+        if ("contentHint" in videoTrack) {
+          videoTrack.contentHint = cameraPublishSettings.contentHint;
+        }
         const preferredWebcamCodec = getPreferredWebcamCodec(
           deviceRef.current,
           webcamCodecPolicyRef.current,
@@ -4196,6 +4223,7 @@ export function useMeetSocket({
             paused: shouldPauseVideo,
             preferredCodec: preferredWebcamCodec,
             codecPolicy: webcamCodecPolicyRef.current,
+            publishSettings: cameraPublishSettings,
           });
 
           if (shouldPauseVideo) {
@@ -4224,6 +4252,9 @@ export function useMeetSocket({
               : null;
 
           if (rawFallbackTrack) {
+            if ("contentHint" in rawFallbackTrack) {
+              rawFallbackTrack.contentHint = cameraPublishSettings.contentHint;
+            }
             console.warn(
               "[Meets] Processed camera publish failed; retrying raw camera:",
               {
@@ -4252,6 +4283,7 @@ export function useMeetSocket({
                 paused: shouldPauseVideo,
                 preferredCodec: preferredWebcamCodec,
                 codecPolicy: webcamCodecPolicyRef.current,
+                publishSettings: cameraPublishSettings,
               });
 
               if (shouldPauseVideo) {
@@ -4327,6 +4359,8 @@ export function useMeetSocket({
       setIsMuted,
       setIsCameraOff,
       videoQualityRef,
+      mediaQualitySettingsRef,
+      activeVideoEffectsCount,
       deviceRef,
       getVideoPublishTrack,
       prepareAudioPublishTrack,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ResolvedCameraPublishSettings } from "../lib/media-quality-settings";
 
 export interface LocalCameraPreviewController {
   /** Private preview stream. Never handed to a producer, so never broadcast. */
@@ -40,9 +41,12 @@ const describeCameraPreviewError = (err: unknown): string => {
  */
 export function useLocalCameraPreview({
   deviceId,
+  publishSettings,
 }: {
   /** Preferred camera; preview restarts when this changes while running. */
   deviceId?: string;
+  /** The same local quality ceiling used by the meeting publisher. */
+  publishSettings?: ResolvedCameraPublishSettings;
 }): LocalCameraPreviewController {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isStarting, setIsStarting] = useState(false);
@@ -97,7 +101,22 @@ export function useLocalCameraPreview({
     void navigator.mediaDevices
       .getUserMedia({
         video: {
-          ...PREVIEW_VIDEO_CONSTRAINTS,
+          ...(publishSettings
+            ? {
+                width: {
+                  ideal: publishSettings.width,
+                  max: publishSettings.width,
+                },
+                height: {
+                  ideal: publishSettings.height,
+                  max: publishSettings.height,
+                },
+                frameRate: {
+                  ideal: publishSettings.frameRate,
+                  max: publishSettings.frameRate,
+                },
+              }
+            : PREVIEW_VIDEO_CONSTRAINTS),
           // "ideal" (not "exact") so a stale device id falls back to any
           // camera instead of failing the preview outright.
           ...(deviceId ? { deviceId: { ideal: deviceId } } : {}),
@@ -147,7 +166,14 @@ export function useLocalCameraPreview({
     return () => {
       cancelled = true;
     };
-  }, [wanted, deviceId, releaseStream]);
+  }, [
+    wanted,
+    deviceId,
+    publishSettings?.width,
+    publishSettings?.height,
+    publishSettings?.frameRate,
+    releaseStream,
+  ]);
 
   // Release the camera when the owner unmounts.
   useEffect(

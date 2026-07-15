@@ -4,7 +4,9 @@ import { useCallback, useEffect, useRef } from "react";
 import {
   applyAudioProducerNetworkProfile,
   applyScreenShareProducerNetworkProfile,
+  applyWebcamTrackNetworkProfile,
   applyWebcamProducerNetworkProfile,
+  getWebcamCaptureFrameRateForNetworkProfile,
   getWebcamProducerTopology,
   type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
@@ -28,10 +30,25 @@ import {
   type WebcamTopologyTransitionInput,
 } from "../lib/webcam-topology-transition";
 import type { ConnectionQuality } from "./useConnectionQuality";
+import {
+  resolveEffectiveCameraPublishSettings,
+  resolveScreenSharePublishSettings,
+  type MediaQualitySettings,
+  type ResolvedCameraPublishSettings,
+} from "../lib/media-quality-settings";
 import type {
   WebcamProducerTopologyReplacementRequest,
 } from "./useMeetMedia";
 import type { WebcamTopologyReplacementResult } from "../lib/webcam-topology-transition";
+import {
+  createLatestWinsAsyncQueue,
+  type LatestWinsAsyncQueue,
+} from "../lib/latest-wins-async-queue";
+
+export {
+  createLatestWinsAsyncQueue,
+  type LatestWinsAsyncQueue,
+} from "../lib/latest-wins-async-queue";
 
 interface UseAdaptivePublishQualityOptions {
   enabled: boolean;
@@ -56,12 +73,16 @@ interface UseAdaptivePublishQualityOptions {
   screenProducerRef: React.MutableRefObject<Producer | null>;
   screenAudioProducerRef: React.MutableRefObject<Producer | null>;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
+  localStreamRef?: React.MutableRefObject<MediaStream | null>;
+  mediaQualitySettingsRef: React.MutableRefObject<MediaQualitySettings>;
+  activeVideoEffectsCount?: number;
   networkManagedVideoQualityRef?: React.MutableRefObject<boolean>;
   setVideoQuality: (value: VideoQuality) => void;
   updateVideoQualityRef: React.MutableRefObject<
     (
       quality: VideoQuality,
       networkProfileOverride?: WebcamProducerNetworkProfile,
+      forceCaptureRefresh?: boolean,
     ) => Promise<void>
   >;
   replaceWebcamProducerTopology?: (
@@ -219,75 +240,6 @@ export const shouldDowngradeStandardPublishQuality = ({
   return connectionElapsedMs >= FAIR_DOWNGRADE_AFTER_MS;
 };
 
-export type LatestWinsAsyncQueue<T> = {
-  request: (value: T) => Promise<void>;
-  clearPending: () => void;
-};
-
-/**
- * Serializes mutations while retaining only the newest target requested during
- * an in-flight mutation. This prevents overlapping RTCRtpSender updates and
- * avoids applying intermediate profiles that are already obsolete.
- */
-export const createLatestWinsAsyncQueue = <T,>(
-  apply: (value: T) => Promise<void>,
-  onError?: (error: unknown) => void,
-): LatestWinsAsyncQueue<T> => {
-  let currentValue: T | undefined;
-  let hasCurrentValue = false;
-  let pendingValue: T | undefined;
-  let hasPendingValue = false;
-  let drainPromise: Promise<void> | null = null;
-
-  const drain = async () => {
-    while (hasPendingValue) {
-      currentValue = pendingValue;
-      hasCurrentValue = true;
-      hasPendingValue = false;
-      try {
-        await apply(currentValue as T);
-      } catch (error) {
-        onError?.(error);
-      }
-    }
-    currentValue = undefined;
-    hasCurrentValue = false;
-  };
-
-  return {
-    request(value) {
-      if (
-        drainPromise !== null &&
-        hasCurrentValue &&
-        Object.is(value, currentValue)
-      ) {
-        // The latest request is exactly what is already being applied. Drop a
-        // now-obsolete pending target instead of applying the current one twice.
-        pendingValue = undefined;
-        hasPendingValue = false;
-        return drainPromise;
-      }
-
-      pendingValue = value;
-      hasPendingValue = true;
-      if (drainPromise === null) {
-        // Begin on the next microtask so multiple decisions made in one
-        // evaluation turn collapse to one authoritative target.
-        drainPromise = Promise.resolve()
-          .then(drain)
-          .finally(() => {
-            drainPromise = null;
-          });
-      }
-      return drainPromise;
-    },
-    clearPending() {
-      pendingValue = undefined;
-      hasPendingValue = false;
-    },
-  };
-};
-
 export const getAuthoritativeLiveProducerProfile = (
   profiles: readonly (WebcamProducerNetworkProfile | null | undefined)[],
 ): WebcamProducerNetworkProfile | null =>
@@ -420,23 +372,44 @@ export const getPublishProducerEncodingDebugSnapshot = (
   networkPriority: encoding.networkPriority ?? null,
 });
 
-const needsStandardCaptureRestore = (track: MediaStreamTrack): boolean => {
-  const settings = track.getSettings();
+export const getCameraCaptureRestoreMinimums = (
+  publishSettings: ResolvedCameraPublishSettings,
+) => ({
+  width: Math.min(STANDARD_CAPTURE_MIN_WIDTH, publishSettings.width),
+  height: Math.min(STANDARD_CAPTURE_MIN_HEIGHT, publishSettings.height),
+  frameRate: Math.min(
+    STANDARD_CAPTURE_MIN_FRAMERATE,
+    publishSettings.frameRate,
+  ),
+});
+
+export const needsConfiguredCameraCaptureRestore = (
+  settings: Pick<MediaTrackSettings, "width" | "height" | "frameRate">,
+  publishSettings: ResolvedCameraPublishSettings,
+): boolean => {
+  const minimums = getCameraCaptureRestoreMinimums(publishSettings);
   return (
     (typeof settings.width === "number" &&
-      settings.width < STANDARD_CAPTURE_MIN_WIDTH) ||
+      settings.width < minimums.width) ||
     (typeof settings.height === "number" &&
-      settings.height < STANDARD_CAPTURE_MIN_HEIGHT) ||
+      settings.height < minimums.height) ||
     (typeof settings.frameRate === "number" &&
-      settings.frameRate < STANDARD_CAPTURE_MIN_FRAMERATE)
+      settings.frameRate < minimums.frameRate)
   );
 };
 
-const getStandardCaptureRestoreSignature = (track: MediaStreamTrack): string => {
+const getConfiguredCaptureRestoreSignature = (
+  track: MediaStreamTrack,
+  quality: VideoQuality,
+  publishSettings: ResolvedCameraPublishSettings,
+): string => {
   const settings = track.getSettings();
   return [
-    "standard",
+    quality,
     "good",
+    publishSettings.width,
+    publishSettings.height,
+    publishSettings.frameRate,
     settings.width ?? "unknown-width",
     settings.height ?? "unknown-height",
     settings.frameRate ?? "unknown-fps",
@@ -674,6 +647,9 @@ export function useAdaptivePublishQuality({
   screenProducerRef,
   screenAudioProducerRef,
   videoQualityRef,
+  localStreamRef,
+  mediaQualitySettingsRef,
+  activeVideoEffectsCount = 0,
   networkManagedVideoQualityRef,
   setVideoQuality,
   updateVideoQualityRef,
@@ -733,6 +709,10 @@ export function useAdaptivePublishQuality({
     at: number;
   } | null>(null);
   const standardCaptureRestoreRetryTimeoutRef = useRef<number | null>(null);
+  const cameraCaptureCadenceApplicationRef = useRef<{
+    signature: string;
+    retryAfter: number;
+  } | null>(null);
 
   const writeDebugSnapshot = useCallback(
     (now = Date.now()) => {
@@ -879,6 +859,54 @@ export function useAdaptivePublishQuality({
         screenProducerRef.current && !screenProducerRef.current.closed,
       );
       const webcamProducer = videoProducerRef.current;
+      const webcamQuality = videoQualityRef.current;
+      const webcamProfile = screenShareVideoActive
+        ? getScreenShareAwareWebcamProfile(profile)
+        : profile;
+      const cameraPublishSettings = resolveEffectiveCameraPublishSettings(
+        mediaQualitySettingsRef.current.camera,
+        activeVideoEffectsCount > 0,
+      );
+      const rawCameraTrack =
+        localStreamRef?.current
+          ?.getVideoTracks()
+          .find((track) => track.readyState === "live") ??
+        webcamProducer?.track ??
+        null;
+      if (webcamProducer && !webcamProducer.closed && rawCameraTrack) {
+        const targetFrameRate = getWebcamCaptureFrameRateForNetworkProfile(
+          webcamProfile,
+          cameraPublishSettings,
+        );
+        const cadenceSignature = `${rawCameraTrack.id}:${webcamProfile}:${targetFrameRate}`;
+        const previousCadenceApplication =
+          cameraCaptureCadenceApplicationRef.current;
+        if (
+          previousCadenceApplication?.signature !== cadenceSignature ||
+          Date.now() >= previousCadenceApplication.retryAfter
+        ) {
+          try {
+            await applyWebcamTrackNetworkProfile(
+              rawCameraTrack,
+              webcamProfile,
+              cameraPublishSettings,
+            );
+            cameraCaptureCadenceApplicationRef.current = {
+              signature: cadenceSignature,
+              retryAfter: Number.POSITIVE_INFINITY,
+            };
+          } catch (error) {
+            cameraCaptureCadenceApplicationRef.current = {
+              signature: cadenceSignature,
+              retryAfter: Date.now() + STANDARD_CAPTURE_RESTORE_FAILURE_RETRY_MS,
+            };
+            console.debug(
+              "[Meets] Adaptive camera capture cadence cap was not applied:",
+              error,
+            );
+          }
+        }
+      }
       const useProducerTransportAuthority = Boolean(
         webcamProducer &&
           !webcamProducer.closed &&
@@ -918,12 +946,11 @@ export function useAdaptivePublishQuality({
           };
           appliedProducerTransportProfileRef.current = applied;
           webcamNetworkProfileAuthorityRef.current = "producer-transport";
-          const quality = videoQualityRef.current;
           lastAppliedProfilesRef.current.webcam =
-            `${webcamProducer.id}:${quality}:${profile}:adaptive-layers`;
+            `${webcamProducer.id}:${webcamQuality}:${webcamProfile}:adaptive-layers:${cameraPublishSettings.maxBitrate}:${cameraPublishSettings.frameRate}:${cameraPublishSettings.degradationPreference}`;
           lastAppliedWebcamProfileRef.current = {
             producerId: webcamProducer.id,
-            profile,
+            profile: webcamProfile,
           };
           const audioProducer = audioProducerRef.current;
           if (audioProducer && !audioProducer.closed) {
@@ -1052,10 +1079,6 @@ export function useAdaptivePublishQuality({
       }
 
       if (webcamProducer && !webcamProducer.closed) {
-        const quality = videoQualityRef.current;
-        const webcamProfile = screenShareVideoActive
-          ? getScreenShareAwareWebcamProfile(profile)
-          : profile;
         const nowMonotonicMs = performance.now();
         const hasNegotiatedReplacementOffer =
           hasUsableWebcamSingleLayerReplacementOffer(
@@ -1067,7 +1090,7 @@ export function useAdaptivePublishQuality({
           !hasNegotiatedReplacementOffer &&
           shouldOptimizeVp8ForSingleReceiver({
             participantCount,
-            quality,
+            quality: webcamQuality,
             profile: webcamProfile,
             dataSaverMode,
             publishCpuLimited,
@@ -1084,14 +1107,17 @@ export function useAdaptivePublishQuality({
         const topologyMode = optimizeForSingleReceiver
           ? "single-receiver"
           : "adaptive-layers";
-        const signature = `${webcamProducer.id}:${quality}:${webcamProfile}:${topologyMode}`;
+        const signature = `${webcamProducer.id}:${webcamQuality}:${webcamProfile}:${topologyMode}:${cameraPublishSettings.maxBitrate}:${cameraPublishSettings.frameRate}:${cameraPublishSettings.degradationPreference}`;
         if (lastAppliedProfilesRef.current.webcam !== signature) {
           try {
             await applyWebcamProducerNetworkProfile(
               webcamProducer,
-              quality,
+              webcamQuality,
               webcamProfile,
-              { optimizeForSingleReceiver },
+              {
+                optimizeForSingleReceiver,
+                publishSettings: cameraPublishSettings,
+              },
             );
             lastAppliedProfilesRef.current.webcam = signature;
             lastAppliedWebcamProfileRef.current = {
@@ -1112,15 +1138,20 @@ export function useAdaptivePublishQuality({
 
       const screenProducer = screenProducerRef.current;
       if (screenProducer && !screenProducer.closed) {
-        const signature = getScreenShareProducerProfileSignature(
+        const screenPublishSettings = resolveScreenSharePublishSettings(
+          mediaQualitySettingsRef.current.screenShare,
+        );
+        const profileSignature = getScreenShareProducerProfileSignature(
           screenProducer,
           profile,
         );
+        const signature = `${profileSignature}:${screenPublishSettings.maxBitrate}:${screenPublishSettings.frameRate}:${screenPublishSettings.maxWidth}x${screenPublishSettings.maxHeight}:${screenPublishSettings.degradationPreference}`;
         if (lastAppliedProfilesRef.current.screen !== signature) {
           try {
             await applyScreenShareProducerNetworkProfile(
               screenProducer,
               profile,
+              screenPublishSettings,
             );
             lastAppliedProfilesRef.current.screen = signature;
             writeDebugSnapshot();
@@ -1195,6 +1226,7 @@ export function useAdaptivePublishQuality({
       }
     },
     [
+      activeVideoEffectsCount,
       audioProducerRef,
       canUseProducerTransportProfile,
       producerTransportId,
@@ -1204,8 +1236,10 @@ export function useAdaptivePublishQuality({
       screenProducerRef,
       videoProducerRef,
       videoQualityRef,
+      mediaQualitySettingsRef,
       writeDebugSnapshot,
       dataSaverMode,
+      localStreamRef,
       participantCount,
       publishCpuLimited,
       soleReceiverCapacityProof,
@@ -1245,7 +1279,7 @@ export function useAdaptivePublishQuality({
     [],
   );
 
-  const restoreStandardCaptureIfNeeded = useCallback(async () => {
+  const restoreConfiguredCaptureIfNeeded = useCallback(async () => {
     const scheduleRestoreRetry = (
       delayMs = STANDARD_CAPTURE_RESTORE_RETRY_MS,
     ) => {
@@ -1257,7 +1291,7 @@ export function useAdaptivePublishQuality({
       }
       standardCaptureRestoreRetryTimeoutRef.current = window.setTimeout(() => {
         standardCaptureRestoreRetryTimeoutRef.current = null;
-        void restoreStandardCaptureIfNeeded();
+        void restoreConfiguredCaptureIfNeeded();
       }, delayMs);
     };
 
@@ -1272,23 +1306,38 @@ export function useAdaptivePublishQuality({
       scheduleRestoreRetry();
       return;
     }
-    if (videoQualityRef.current !== "standard") return;
-
     const webcamProducer = videoProducerRef.current;
-    const webcamTrack = webcamProducer?.track ?? null;
+    const producerTrack = webcamProducer?.track ?? null;
+    const rawCaptureTrack =
+      localStreamRef?.current
+        ?.getVideoTracks()
+        .find((track) => track.readyState === "live") ?? null;
+    const captureTrack = rawCaptureTrack ?? producerTrack;
     if (
       !webcamProducer ||
       webcamProducer.closed ||
-      webcamTrack?.readyState !== "live"
+      captureTrack?.readyState !== "live"
     ) {
       return;
     }
 
-    const signature = getStandardCaptureRestoreSignature(webcamTrack);
-    const needsCaptureRestore = needsStandardCaptureRestore(webcamTrack);
+    const currentQuality = videoQualityRef.current;
+    const publishSettings = resolveEffectiveCameraPublishSettings(
+      mediaQualitySettingsRef.current.camera,
+      activeVideoEffectsCount > 0,
+    );
+    const signature = getConfiguredCaptureRestoreSignature(
+      captureTrack,
+      currentQuality,
+      publishSettings,
+    );
+    const needsCaptureRestore = needsConfiguredCameraCaptureRestore(
+      captureTrack.getSettings(),
+      publishSettings,
+    );
+    if (!needsCaptureRestore) return;
     const now = Date.now();
     if (
-      needsCaptureRestore &&
       !isStandardCaptureRestoreRetryDue(
         lastStandardCaptureRestoreAttemptRef.current,
         signature,
@@ -1304,24 +1353,29 @@ export function useAdaptivePublishQuality({
     }
     updateInFlightRef.current = true;
     try {
-      if (needsCaptureRestore) {
-        lastStandardCaptureRestoreAttemptRef.current = {
-          signature,
-          retryAfter: getStandardCaptureRestoreRetryAfter(now, false),
-        };
-        await updateVideoQualityRef.current("standard", "good");
-      } else {
-        await applyWebcamProducerNetworkProfile(
-          webcamProducer,
-          "standard",
-          "good",
-        );
-      }
+      lastStandardCaptureRestoreAttemptRef.current = {
+        signature,
+        retryAfter: getStandardCaptureRestoreRetryAfter(now, false),
+      };
+      await updateVideoQualityRef.current(currentQuality, "good", true);
       const activeProducer = videoProducerRef.current;
-      const activeTrack = activeProducer?.track ?? null;
+      const activeRawTrack =
+        localStreamRef?.current
+          ?.getVideoTracks()
+          .find((track) => track.readyState === "live") ?? null;
+      const activeTrack = activeRawTrack ?? activeProducer?.track ?? null;
       if (activeTrack?.readyState === "live") {
+        const activeQuality = videoQualityRef.current;
+        const activePublishSettings = resolveEffectiveCameraPublishSettings(
+          mediaQualitySettingsRef.current.camera,
+          activeVideoEffectsCount > 0,
+        );
         lastStandardCaptureRestoreAttemptRef.current = {
-          signature: getStandardCaptureRestoreSignature(activeTrack),
+          signature: getConfiguredCaptureRestoreSignature(
+            activeTrack,
+            activeQuality,
+            activePublishSettings,
+          ),
           retryAfter: getStandardCaptureRestoreRetryAfter(Date.now(), false),
         };
       }
@@ -1338,7 +1392,7 @@ export function useAdaptivePublishQuality({
         retryAfter: getStandardCaptureRestoreRetryAfter(Date.now(), true),
       };
       console.warn(
-        "[Meets] Adaptive standard camera capture restore failed:",
+        "[Meets] Adaptive configured camera capture restore failed:",
         error,
       );
       scheduleRestoreRetry(STANDARD_CAPTURE_RESTORE_FAILURE_RETRY_MS);
@@ -1347,7 +1401,10 @@ export function useAdaptivePublishQuality({
       writeDebugSnapshot();
     }
   }, [
+    activeVideoEffectsCount,
     isCameraOff,
+    localStreamRef,
+    mediaQualitySettingsRef,
     updateVideoQualityRef,
     videoProducerRef,
     videoQualityRef,
@@ -1853,11 +1910,10 @@ export function useAdaptivePublishQuality({
           requestLiveProducerProfile(authoritativeLiveProfile);
         }
       };
-      const shouldRestoreStableStandardCapture =
+      const shouldRestoreStableConfiguredCapture =
         capRecoveryQuality === "good" &&
         capRecoveryElapsedMs >= GOOD_LIVE_RESTORE_AFTER_MS &&
-        connectionQuality !== "poor" &&
-        currentPublishQuality === "standard";
+        connectionQuality !== "poor";
       if (isCameraOff) {
         applyAuthoritativeLiveProfile();
         writeDebugSnapshot(now);
@@ -1936,8 +1992,8 @@ export function useAdaptivePublishQuality({
         writeDebugSnapshot(now);
         return;
       }
-      if (shouldRestoreStableStandardCapture) {
-        void restoreStandardCaptureIfNeeded().finally(() => {
+      if (shouldRestoreStableConfiguredCapture) {
+        void restoreConfiguredCaptureIfNeeded().finally(() => {
           if (!updateInFlightRef.current) {
             requestLiveProducerProfile(authoritativeLiveProfile ?? "good");
           }
@@ -1973,7 +2029,7 @@ export function useAdaptivePublishQuality({
     participantCount,
     publishCpuLimited,
     requestLiveProducerProfile,
-    restoreStandardCaptureIfNeeded,
+    restoreConfiguredCaptureIfNeeded,
     soleReceiverCapacityProof,
     switchQuality,
     videoQualityRef,

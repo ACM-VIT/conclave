@@ -89,6 +89,16 @@ import {
   MAX_SCREEN_SHARE_TRACK_REFRESH_ATTEMPTS,
   shouldReopenCameraAfterConstraintFailure,
 } from "../lib/media-recovery-policy";
+import {
+  getScreenShareLiveVideoSettingsSignature,
+  resolveEffectiveCameraPublishSettings,
+  resolveScreenSharePublishSettings,
+  type MediaQualitySettings,
+} from "../lib/media-quality-settings";
+import {
+  createLatestWinsAsyncQueue,
+  type LatestWinsAsyncQueue,
+} from "../lib/latest-wins-async-queue";
 import type { ConnectionQualityStats } from "./useConnectionQuality";
 import {
   createLatestWinsTopologyReplacementQueue,
@@ -127,6 +137,8 @@ interface UseMeetMediaOptions {
   isNoiseCancellationEnabled?: boolean;
   meetVolume?: number;
   videoQualityRef: React.MutableRefObject<VideoQuality>;
+  mediaQualitySettings: MediaQualitySettings;
+  mediaQualitySettingsRef: React.MutableRefObject<MediaQualitySettings>;
   webcamCodecPolicyRef: React.MutableRefObject<WebcamCodecPolicy>;
   dataSaverMode?: boolean;
   activeVideoEffectsCount?: number;
@@ -500,6 +512,8 @@ export function useMeetMedia({
   isNoiseCancellationEnabled = true,
   meetVolume = DEFAULT_MEET_VOLUME,
   videoQualityRef,
+  mediaQualitySettings,
+  mediaQualitySettingsRef,
   webcamCodecPolicyRef,
   dataSaverMode = false,
   activeVideoEffectsCount = 0,
@@ -541,8 +555,51 @@ export function useMeetMedia({
     (
       quality: VideoQuality,
       networkProfileOverride?: WebcamProducerNetworkProfile,
+      forceCaptureRefresh?: boolean,
     ) => Promise<void>
   >(async () => {});
+  const previousCameraQualitySettingsRef = useRef(
+    JSON.stringify({
+      settings: mediaQualitySettings.camera,
+      effectsActive: activeVideoEffectsCount > 0,
+    }),
+  );
+  const previousScreenShareQualitySettingsRef = useRef(
+    getScreenShareLiveVideoSettingsSignature(mediaQualitySettings.screenShare),
+  );
+  const applyLatestCameraQualitySettingsRef = useRef<
+    (signature: string) => Promise<void>
+  >(async () => {});
+  const applyLatestScreenShareQualitySettingsRef = useRef<
+    (signature: string) => Promise<void>
+  >(async () => {});
+  const cameraQualitySettingsQueueRef = useRef<
+    LatestWinsAsyncQueue<string> | null
+  >(null);
+  const screenShareQualitySettingsQueueRef = useRef<
+    LatestWinsAsyncQueue<string> | null
+  >(null);
+  const videoQualityMutationTailRef = useRef<Promise<void>>(Promise.resolve());
+  if (cameraQualitySettingsQueueRef.current === null) {
+    cameraQualitySettingsQueueRef.current = createLatestWinsAsyncQueue(
+      (signature) => applyLatestCameraQualitySettingsRef.current(signature),
+      (error) => {
+        console.warn("[Meets] Failed to apply camera quality settings:", error);
+      },
+    );
+  }
+  if (screenShareQualitySettingsQueueRef.current === null) {
+    screenShareQualitySettingsQueueRef.current = createLatestWinsAsyncQueue(
+      (signature) =>
+        applyLatestScreenShareQualitySettingsRef.current(signature),
+      (error) => {
+        console.warn(
+          "[Meets] Failed to apply screen-share quality settings:",
+          error,
+        );
+      },
+    );
+  }
   const audioRecoveryInFlightRef = useRef(false);
   const localAudioTrackHandlersRef = useRef<WeakSet<MediaStreamTrack>>(
     new WeakSet(),
@@ -771,9 +828,43 @@ export function useMeetMedia({
         videoQualityRef.current,
         networkProfile,
         targetDeviceId,
+        resolveEffectiveCameraPublishSettings(
+          mediaQualitySettingsRef.current.camera,
+          activeVideoEffectsCount > 0,
+        ),
       );
     },
-    [connectionQualityRef, selectedVideoInputDeviceId, videoQualityRef]
+    [
+      connectionQualityRef,
+      activeVideoEffectsCount,
+      mediaQualitySettingsRef,
+      selectedVideoInputDeviceId,
+      videoQualityRef,
+    ]
+  );
+
+  const getCameraPublishSettings = useCallback(
+    () =>
+      resolveEffectiveCameraPublishSettings(
+        mediaQualitySettingsRef.current.camera,
+        activeVideoEffectsCount > 0,
+      ),
+    [activeVideoEffectsCount, mediaQualitySettingsRef],
+  );
+  const getScreenSharePublishSettings = useCallback(
+    () =>
+      resolveScreenSharePublishSettings(
+        mediaQualitySettingsRef.current.screenShare,
+      ),
+    [mediaQualitySettingsRef],
+  );
+  const applyCameraContentHint = useCallback(
+    (track: MediaStreamTrack | null | undefined) => {
+      if (track && "contentHint" in track) {
+        track.contentHint = getCameraPublishSettings().contentHint;
+      }
+    },
+    [getCameraPublishSettings],
   );
 
   const getAudioContext = useCallback(() => {
@@ -1245,6 +1336,7 @@ export function useMeetMedia({
             forceSimulcast,
             receiverCapacityTransition,
             codecPolicy: webcamCodecPolicyRef.current,
+            publishSettings: getCameraPublishSettings(),
           }),
         onProcessedTrackFailure: (error) => {
           console.warn(
@@ -1263,6 +1355,7 @@ export function useMeetMedia({
       onPreferredVideoPublishTrackRejected,
       reportCurrentWebcamCodecFailure,
       webcamCodecPolicyRef,
+      getCameraPublishSettings,
     ],
   );
 
@@ -2060,9 +2153,7 @@ export function useMeetMedia({
           }
         };
       });
-      if (nextVideoTrack && "contentHint" in nextVideoTrack) {
-        nextVideoTrack.contentHint = "motion";
-      }
+      applyCameraContentHint(nextVideoTrack);
       if (nextVideoTrack) {
         attachLocalVideoTrackHandlers(nextVideoTrack);
       }
@@ -2203,7 +2294,7 @@ export function useMeetMedia({
   const handleVideoInputDeviceChange = useCallback(
     async (deviceId: string) => {
       if (connectionState !== "joined") return;
-      if (isCameraOff) return;
+      if (isCameraOffRef.current) return;
 
       let acquiredVideoTracks: MediaStreamTrack[] = [];
       let committedNewVideoTrack: MediaStreamTrack | null = null;
@@ -2219,9 +2310,7 @@ export function useMeetMedia({
         acquiredVideoTracks = newStream.getVideoTracks();
         const newVideoTrack = newStream.getVideoTracks()[0];
         if (newVideoTrack) {
-          if ("contentHint" in newVideoTrack) {
-            newVideoTrack.contentHint = "motion";
-          }
+          applyCameraContentHint(newVideoTrack);
           attachLocalVideoTrackHandlers(newVideoTrack);
           newVideoTrack.onended = () => {
             handleLocalTrackEnded("video", newVideoTrack);
@@ -2282,7 +2371,7 @@ export function useMeetMedia({
     },
     [
       connectionState,
-      isCameraOff,
+      isCameraOffRef,
       attachLocalVideoTrackHandlers,
       localStream,
       handleLocalTrackEnded,
@@ -2468,16 +2557,17 @@ export function useMeetMedia({
     requestCameraProducerRecovery,
   ]);
 
-  const updateVideoQuality = useCallback(
+  const performVideoQualityUpdate = useCallback(
     async (
       quality: VideoQuality,
       networkProfileOverride?: WebcamProducerNetworkProfile,
+      forceCaptureRefresh = false,
     ) => {
       const topologyReplacement = cameraTopologyReplacementPromiseRef.current;
       if (topologyReplacement) {
         await topologyReplacement;
       }
-      if (isCameraOff) return;
+      if (isCameraOffRef.current) return;
       const currentStream = localStreamRef.current ?? localStream;
       if (!currentStream) return;
 
@@ -2485,6 +2575,7 @@ export function useMeetMedia({
       let replacementTrack: MediaStreamTrack | null = null;
       let constrainedExistingTrack: MediaStreamTrack | null = null;
       let rollbackTrackConstraints: MediaTrackConstraints | null = null;
+      let fencedPreviousProducer: Producer | null = null;
 
       try {
         const publishNetworkProfile =
@@ -2494,7 +2585,8 @@ export function useMeetMedia({
         if (
           previousProducer &&
           !previousProducer.closed &&
-          isVp9SvcWebcamProducer(previousProducer)
+          isVp9SvcWebcamProducer(previousProducer) &&
+          !forceCaptureRefresh
         ) {
           // Continuous VP9 SVC already carries a receiver-selectable base and
           // enhancement layer. A network-only quality transition must mutate
@@ -2505,6 +2597,7 @@ export function useMeetMedia({
             previousProducer,
             quality,
             publishNetworkProfile,
+            { publishSettings: getCameraPublishSettings() },
           );
           return;
         }
@@ -2512,6 +2605,8 @@ export function useMeetMedia({
         const constraints = buildCameraVideoConstraints(
           quality,
           publishNetworkProfile,
+          undefined,
+          getCameraPublishSettings(),
         );
 
         console.info(
@@ -2601,9 +2696,7 @@ export function useMeetMedia({
           if (!newVideoTrack) {
             throw new Error("No video track obtained");
           }
-          if ("contentHint" in newVideoTrack) {
-            newVideoTrack.contentHint = "motion";
-          }
+          applyCameraContentHint(newVideoTrack);
           attachLocalVideoTrackHandlers(newVideoTrack);
           newVideoTrack.onended = () => {
             handleLocalTrackEnded("video", newVideoTrack);
@@ -2626,10 +2719,12 @@ export function useMeetMedia({
           return;
         }
 
+        applyCameraContentHint(nextVideoTrack);
         const publishTrack = await waitForPreferredVideoPublishTrack(
           publishStream,
           nextVideoTrack,
         );
+        applyCameraContentHint(publishTrack);
         attachLocalVideoTrackHandlers(publishTrack);
         const preferredWebcamCodec = getPreferredWebcamCodec(
           deviceRef.current,
@@ -2672,6 +2767,7 @@ export function useMeetMedia({
             previousProducer,
             quality,
             publishNetworkProfile,
+            { publishSettings: getCameraPublishSettings() },
           );
           void requestVideoSenderKeyFrame(previousProducer.rtpSender);
           if (
@@ -2700,6 +2796,21 @@ export function useMeetMedia({
 
         const transport = await prepareCameraProducerTransport();
 
+        if (
+          previousProducer &&
+          (previousProducer.closed ||
+            videoProducerRef.current?.id !== previousProducer.id)
+        ) {
+          throw new Error(
+            "Camera producer changed while the quality update was queued",
+          );
+        }
+        if (previousProducer) {
+          // The SFU can displace the previous producer before produce()
+          // resolves. Fence that close event before crossing the await.
+          intentionalLocalProducerCloseIdsRef.current.add(previousProducer.id);
+          fencedPreviousProducer = previousProducer;
+        }
         const nextProducer = await produceCameraTrackWithRawFallback({
           transport,
           publishTrack,
@@ -2724,7 +2835,6 @@ export function useMeetMedia({
           previousProducer &&
           previousProducer.id !== nextProducerId
         ) {
-          intentionalLocalProducerCloseIdsRef.current.add(previousProducer.id);
           socketRef.current?.emit(
             "closeProducer",
             { producerId: previousProducer.id },
@@ -2739,6 +2849,15 @@ export function useMeetMedia({
           nextProducer.track,
         ]);
       } catch (err) {
+        if (
+          fencedPreviousProducer &&
+          !fencedPreviousProducer.closed &&
+          videoProducerRef.current?.id === fencedPreviousProducer.id
+        ) {
+          intentionalLocalProducerCloseIdsRef.current.delete(
+            fencedPreviousProducer.id,
+          );
+        }
         console.error("[Meets] Failed to update video quality:", err);
         if (rollbackStream && replacementTrack) {
           localStreamRef.current = rollbackStream;
@@ -2764,7 +2883,7 @@ export function useMeetMedia({
       }
     },
     [
-      isCameraOff,
+      isCameraOffRef,
       attachLocalVideoTrackHandlers,
       localStream,
       handleLocalTrackEnded,
@@ -2782,14 +2901,110 @@ export function useMeetMedia({
       waitForPreferredVideoPublishTrack,
       onPreferredVideoPublishTrackRejected,
       getPublishNetworkProfile,
+      getCameraPublishSettings,
+      applyCameraContentHint,
       produceCameraTrackWithRawFallback,
       requestCameraProducerRecovery,
     ]
   );
 
+  const updateVideoQuality = useCallback(
+    (
+      quality: VideoQuality,
+      networkProfileOverride?: WebcamProducerNetworkProfile,
+      forceCaptureRefresh = false,
+    ): Promise<void> => {
+      const operation = videoQualityMutationTailRef.current
+        .catch(() => {})
+        .then(() =>
+          performVideoQualityUpdate(
+            quality,
+            networkProfileOverride,
+            forceCaptureRefresh,
+          ),
+        );
+      videoQualityMutationTailRef.current = operation.then(
+        () => undefined,
+        () => undefined,
+      );
+      return operation;
+    },
+    [performVideoQualityUpdate],
+  );
+
   useEffect(() => {
     updateVideoQualityRef.current = updateVideoQuality;
   }, [updateVideoQuality]);
+
+  applyLatestCameraQualitySettingsRef.current = async () => {
+    if (connectionState !== "joined" || isCameraOff) return;
+    await updateVideoQuality(videoQualityRef.current, undefined, true);
+  };
+
+  applyLatestScreenShareQualitySettingsRef.current = async () => {
+    const producer = screenProducerRef.current;
+    if (
+      connectionState !== "joined" ||
+      !isScreenSharing ||
+      !producer ||
+      producer.closed
+    ) {
+      return;
+    }
+    const track = producer.track;
+    const publishSettings = getScreenSharePublishSettings();
+    if (track && "contentHint" in track) {
+      track.contentHint = publishSettings.contentHint;
+    }
+    await applyScreenShareProducerNetworkProfile(
+      producer,
+      getScreenSharePublishNetworkProfile(),
+      publishSettings,
+    );
+  };
+
+  useEffect(() => {
+    const signature = JSON.stringify({
+      settings: mediaQualitySettings.camera,
+      effectsActive: activeVideoEffectsCount > 0,
+    });
+    if (signature === previousCameraQualitySettingsRef.current) return;
+    previousCameraQualitySettingsRef.current = signature;
+    if (connectionState !== "joined" || isCameraOff) return;
+    void cameraQualitySettingsQueueRef.current?.request(signature);
+  }, [
+    activeVideoEffectsCount,
+    connectionState,
+    isCameraOff,
+    mediaQualitySettings.camera,
+  ]);
+
+  useEffect(() => {
+    const signature = getScreenShareLiveVideoSettingsSignature(
+      mediaQualitySettings.screenShare,
+    );
+    if (signature === previousScreenShareQualitySettingsRef.current) return;
+    previousScreenShareQualitySettingsRef.current = signature;
+    if (
+      connectionState !== "joined" ||
+      !isScreenSharing
+    ) {
+      return;
+    }
+    void screenShareQualitySettingsQueueRef.current?.request(signature);
+  }, [
+    connectionState,
+    isScreenSharing,
+    mediaQualitySettings.screenShare,
+  ]);
+
+  useEffect(
+    () => () => {
+      cameraQualitySettingsQueueRef.current?.clearPending();
+      screenShareQualitySettingsQueueRef.current?.clearPending();
+    },
+    [],
+  );
 
   const applyWebcamProducerTopologyReplacement = useCallback(
     async (
@@ -3795,9 +4010,7 @@ export function useMeetMedia({
           createdTrack = videoTrack ?? null;
 
           if (!videoTrack) throw new Error("No video track obtained");
-          if ("contentHint" in videoTrack) {
-            videoTrack.contentHint = "motion";
-          }
+          applyCameraContentHint(videoTrack);
           attachLocalVideoTrackHandlers(videoTrack);
           videoTrack.onended = () => {
             handleLocalTrackEnded("video", videoTrack);
@@ -3937,9 +4150,7 @@ export function useMeetMedia({
             ) {
               return;
             }
-            if ("contentHint" in rawCameraTrack) {
-              rawCameraTrack.contentHint = "motion";
-            }
+            applyCameraContentHint(rawCameraTrack);
             attachLocalVideoTrackHandlers(rawCameraTrack);
             rawCameraTrack.onended = () => {
               handleLocalTrackEnded("video", rawCameraTrack);
@@ -3955,6 +4166,7 @@ export function useMeetMedia({
               producer,
               videoQualityRef.current,
               getPublishNetworkProfile(),
+              { publishSettings: getCameraPublishSettings() },
             );
             console.info("[Meets] Repaired camera producer with raw track:", {
               reason,
@@ -4179,9 +4391,7 @@ export function useMeetMedia({
           if (policy.codec === "vp9" && sample.frames === 0) {
             try {
               diagnosticTrack = rawCameraTrack.clone();
-              if ("contentHint" in diagnosticTrack) {
-                diagnosticTrack.contentHint = "motion";
-              }
+              applyCameraContentHint(diagnosticTrack);
             } catch {
               diagnosticTrack = null;
             }
@@ -4196,9 +4406,7 @@ export function useMeetMedia({
             if (diagnosticTrack) stopLocalTrack(diagnosticTrack);
             return;
           }
-          if ("contentHint" in rawCameraTrack) {
-            rawCameraTrack.contentHint = "motion";
-          }
+          applyCameraContentHint(rawCameraTrack);
           attachLocalVideoTrackHandlers(rawCameraTrack);
           if (!diagnosticTrack) attachLocalVideoTrackHandlers(publishTrack);
           rawCameraTrack.onended = () => {
@@ -4238,6 +4446,7 @@ export function useMeetMedia({
             producer,
             videoQualityRef.current,
             getPublishNetworkProfile(),
+            { publishSettings: getCameraPublishSettings() },
           );
           cameraOutboundStallStateRef.current = {
             ...createCameraOutboundStallState(producer.id, publishTrack.id),
@@ -4658,7 +4867,8 @@ export function useMeetMedia({
         }
 
         if ("contentHint" in liveScreenTrack) {
-          liveScreenTrack.contentHint = "detail";
+          liveScreenTrack.contentHint =
+            getScreenSharePublishSettings().contentHint;
         }
         await producer.replaceTrack({ track: null });
         detachedForRefresh = true;
@@ -4667,6 +4877,7 @@ export function useMeetMedia({
         await applyScreenShareProducerNetworkProfile(
           producer,
           getScreenSharePublishNetworkProfile(),
+          getScreenSharePublishSettings(),
         );
         screenOutboundStallStateRef.current = {
           ...createCameraOutboundStallState(producer.id, liveScreenTrack.id),
@@ -4936,9 +5147,7 @@ export function useMeetMedia({
           return;
         }
 
-        if ("contentHint" in videoTrack) {
-          videoTrack.contentHint = "motion";
-        }
+        applyCameraContentHint(videoTrack);
         attachLocalVideoTrackHandlers(videoTrack);
         videoTrack.onended = () => {
           handleLocalTrackEnded("video", videoTrack);
@@ -5332,12 +5541,14 @@ export function useMeetMedia({
         return;
       }
 
+      const screenPublishSettings = getScreenSharePublishSettings();
       if ("contentHint" in track) {
-        track.contentHint = "detail";
+        track.contentHint = screenPublishSettings.contentHint;
       }
       void applyScreenShareProducerNetworkProfile(
         producer,
         getScreenSharePublishNetworkProfile(),
+        screenPublishSettings,
       ).catch((error) => {
         console.warn(
           "[Meets] Failed to reapply screen-share profile after source resumed:",
@@ -5535,20 +5746,22 @@ export function useMeetMedia({
       }
 
       const screenNetworkProfile = getScreenSharePublishNetworkProfile();
+      const screenPublishSettings = getScreenSharePublishSettings();
 
       let captureController = createCaptureController();
       const screenVideoConstraints =
         buildScreenShareVideoConstraintsForNetworkProfile(
           screenNetworkProfile,
+          screenPublishSettings,
         );
       const constrainedDisplayVideoConstraints: DisplayMediaVideoConstraints = {
         frameRate: screenVideoConstraints.frameRate,
         width: screenVideoConstraints.width,
         height: screenVideoConstraints.height,
-        cursor: "always",
+        cursor: screenVideoConstraints.cursor ?? screenPublishSettings.cursor,
       };
       const relaxedDisplayVideoConstraints: DisplayMediaVideoConstraints = {
-        cursor: "always",
+        cursor: screenPublishSettings.cursor,
       };
       const getDisplayMedia = (
         video: DisplayMediaVideoConstraints,
@@ -5556,11 +5769,13 @@ export function useMeetMedia({
       ): Promise<MediaStream> => {
         const options: ExtendedDisplayMediaStreamOptions = {
           video,
-          audio: true,
+          audio: screenPublishSettings.includeAudio,
           monitorTypeSurfaces: "include",
           selfBrowserSurface: "exclude",
           surfaceSwitching: "include",
-          systemAudio: "include",
+          ...(screenPublishSettings.includeAudio
+            ? { systemAudio: "include" as const }
+            : {}),
           ...(controller ? { controller } : {}),
         };
         return navigator.mediaDevices.getDisplayMedia(options);
@@ -5606,10 +5821,14 @@ export function useMeetMedia({
         } catch {}
       }
       if (track && "contentHint" in track) {
-        track.contentHint = "detail";
+        track.contentHint = screenPublishSettings.contentHint;
       }
       attachLocalScreenShareTrackHandlers(track);
-      await applyScreenShareTrackNetworkProfile(track, screenNetworkProfile);
+      await applyScreenShareTrackNetworkProfile(
+        track,
+        screenNetworkProfile,
+        screenPublishSettings,
+      );
 
       const preferredScreenShareCodec = getPreferredScreenShareCodec(
         deviceRef.current,
@@ -5619,6 +5838,7 @@ export function useMeetMedia({
         track,
         networkProfile: screenNetworkProfile,
         preferredCodec: preferredScreenShareCodec,
+        publishSettings: screenPublishSettings,
       });
 
       screenShareStreamRef.current = stream;
@@ -5680,6 +5900,7 @@ export function useMeetMedia({
         await applyScreenShareProducerNetworkProfile(
           producer,
           screenNetworkProfile,
+          screenPublishSettings,
         );
       } catch (profileErr) {
         console.warn(
