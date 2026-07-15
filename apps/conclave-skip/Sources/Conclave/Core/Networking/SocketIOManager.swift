@@ -360,6 +360,7 @@ final class SocketIOManager {
     var onChatLockChanged: ((ChatLockChangedNotification) -> Void)?
     var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Void)?
     var onDmStateChanged: ((DmStateChangedNotification) -> Void)?
+    var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Void)?
     var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Void)?
     var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Void)?
     var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Void)?
@@ -2223,8 +2224,9 @@ final class SocketIOManager {
         socket.on(SocketEvent.imageAttachmentsStateChanged) { [weak self] data, _ in
             guard let self, let first = data.first,
                   self.socket === socket,
-                  let notification = self.decode(DmStateChangedNotification.self, from: first),
+                  let notification = self.decode(ImageAttachmentsStateChangedNotification.self, from: first),
                   self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
+            self.onImageAttachmentsStateChanged?(notification)
         }
 
         socket.on(SocketEvent.ttsDisabledChanged) { [weak self] data, _ in

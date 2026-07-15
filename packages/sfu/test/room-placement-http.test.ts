@@ -138,6 +138,18 @@ const reserve = (url: string, roomId = "room-1") =>
   });
 
 describe("room placement HTTP API", () => {
+  it("advertises atomic placement support before web clients call the endpoint", async () => {
+    const { url } = await startPlacementApp();
+    const response = await fetch(`${url}/status`, {
+      headers: { "x-sfu-secret": config.sfuSecret },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      capabilities: { roomPlacement: 1 },
+    });
+  });
+
   it("returns the same bounded assignment to concurrent first joins", async () => {
     const { url } = await startPlacementApp();
     const responses = await Promise.all(

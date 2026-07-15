@@ -4838,11 +4838,13 @@ final class ConclaveTests: XCTestCase {
             .noGuestsChanged(NoGuestsChangedNotification(noGuests: true, roomId: "room-a")),
             .chatLockChanged(ChatLockChangedNotification(locked: true, roomId: "room-a")),
             .dmStateChanged(DmStateChangedNotification(enabled: false, roomId: "room-a")),
+            .imageAttachmentsStateChanged(ImageAttachmentsStateChangedNotification(enabled: false, roomId: "room-a")),
             .ttsDisabledChanged(TtsDisabledChangedNotification(disabled: true, roomId: "room-a")),
             .reactionsDisabledChanged(ReactionsDisabledChangedNotification(disabled: true, roomId: "room-a")),
             .roomLockChanged(RoomLockChangedNotification(locked: false, roomId: "old-room")),
             .chatLockChanged(ChatLockChangedNotification(locked: false, roomId: "old-room")),
             .dmStateChanged(DmStateChangedNotification(enabled: true, roomId: "old-room")),
+            .imageAttachmentsStateChanged(ImageAttachmentsStateChangedNotification(enabled: true, roomId: "old-room")),
             .ttsDisabledChanged(TtsDisabledChangedNotification(disabled: false, roomId: "old-room")),
             .reactionsDisabledChanged(ReactionsDisabledChangedNotification(disabled: false, roomId: "old-room"))
         ]
@@ -4852,6 +4854,7 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(viewModel.state.isNoGuests)
         XCTAssertTrue(viewModel.state.isChatLocked)
         XCTAssertFalse(viewModel.state.isDmEnabled)
+        XCTAssertFalse(viewModel.state.isImageAttachmentsEnabled)
         XCTAssertTrue(viewModel.state.isTtsDisabled)
         XCTAssertTrue(viewModel.state.isReactionsDisabled)
     }
@@ -8888,6 +8891,15 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(source.contains("isDmEnabled = boolField(obj, \"isDmEnabled\")"))
         XCTAssertTrue(source.contains("isReactionsDisabled = boolField(obj, \"isReactionsDisabled\")"))
         XCTAssertTrue(source.contains("meetingRequiresInviteCode = boolField(obj, \"meetingRequiresInviteCode\")"))
+    }
+
+    func testImageAttachmentStateChangesDispatchOnBothNativeSocketImplementations() throws {
+        let swift = try sourceFileContents("Sources/Conclave/Core/Networking/SocketIOManager.swift")
+        let kotlin = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
+
+        XCTAssertTrue(swift.contains("self.onImageAttachmentsStateChanged?(notification)"))
+        XCTAssertTrue(kotlin.contains("onImageAttachmentsStateChanged?.invoke(notification)"))
+        XCTAssertTrue(kotlin.contains("decode<ImageAttachmentsStateChangedNotification>"))
     }
 
     func testAndroidScreenShareCaptureUsesWebNetworkProfileBounds() throws {

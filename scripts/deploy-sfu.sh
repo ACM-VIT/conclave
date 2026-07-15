@@ -243,12 +243,15 @@ run_deploy_preflight() {
   if [[ -n "${SFU_DEPLOY_SERVICES:-}" ]]; then
     preflight+=(--services "${SFU_DEPLOY_SERVICES}")
   fi
-  if [[ "$PREFLIGHT_CONFIG_ONLY" == "true" ]]; then
+  # A normal deployment must be able to revive a stopped inactive SFU, so its
+  # pre-mutation gate validates rendered configuration only. Explicit
+  # --preflight-only remains the operator-facing live route check.
+  if [[ "$PREFLIGHT_CONFIG_ONLY" == "true" || "$PREFLIGHT_ONLY" != "true" ]]; then
     preflight+=(--config-only)
   fi
 
-  # `docker compose config` only renders local configuration. The Node
-  # preflight makes GET-only health/status requests and cannot drain or deploy.
+  # `docker compose config` only renders local configuration. In explicit live
+  # preflight mode, the Node probe makes GET-only health/status requests.
   "${COMPOSE[@]}" config --format json | "${preflight[@]}"
 }
 

@@ -8,7 +8,7 @@ services:
       SFU_PORT: "3031"
       SFU_INSTANCE_ID: "sfu-a"
       SFU_PUBLIC_URL: ${SFU_A_PUBLIC_URL:-}
-      SFU_REGION: ${SFU_A_REGION:-}
+      SFU_REGION: ${SFU_A_REGION:-${SFU_REGION:-local}}
       SFU_SECRET: ${SFU_SECRET}
       TRANSCRIPT_WORKER_URL: ${TRANSCRIPT_WORKER_URL:-http://localhost:8788}
       SFU_DRAINING: "false"
@@ -49,7 +49,7 @@ services:
       SFU_PORT: "3032"
       SFU_INSTANCE_ID: "sfu-b"
       SFU_PUBLIC_URL: ${SFU_B_PUBLIC_URL:-}
-      SFU_REGION: ${SFU_B_REGION:-}
+      SFU_REGION: ${SFU_B_REGION:-${SFU_REGION:-local}}
       SFU_SECRET: ${SFU_SECRET}
       TRANSCRIPT_WORKER_URL: ${TRANSCRIPT_WORKER_URL:-http://localhost:8788}
       SFU_DRAINING: "false"

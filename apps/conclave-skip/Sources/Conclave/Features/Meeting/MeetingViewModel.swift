@@ -279,6 +279,7 @@ enum PendingPreAckRoomPolicyEvent {
     case noGuestsChanged(NoGuestsChangedNotification)
     case chatLockChanged(ChatLockChangedNotification)
     case dmStateChanged(DmStateChangedNotification)
+    case imageAttachmentsStateChanged(ImageAttachmentsStateChangedNotification)
     case ttsDisabledChanged(TtsDisabledChangedNotification)
     case reactionsDisabledChanged(ReactionsDisabledChangedNotification)
 }
@@ -553,6 +554,7 @@ final class MeetingViewModel {
     private var pendingNoGuestsChanged: NoGuestsChangedNotification?
     private var pendingChatLockChanged: ChatLockChangedNotification?
     private var pendingDmStateChanged: DmStateChangedNotification?
+    private var pendingImageAttachmentsStateChanged: ImageAttachmentsStateChangedNotification?
     private var pendingTtsDisabledChanged: TtsDisabledChangedNotification?
     private var pendingReactionsDisabledChanged: ReactionsDisabledChangedNotification?
     private var pendingMeetingConfigSnapshot: MeetingConfigSnapshot?
@@ -1669,6 +1671,19 @@ final class MeetingViewModel {
             }
         }
 
+        socketManager.onImageAttachmentsStateChanged = { [weak self] notification in
+            guard let self = self else { return }
+            let eventContext = self.currentSocketEventContext()
+            Task { @MainActor in
+                guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
+                if self.shouldBufferRoomSnapshotDuringJoin {
+                    self.pendingImageAttachmentsStateChanged = notification
+                    return
+                }
+                self.state.isImageAttachmentsEnabled = notification.enabled
+            }
+        }
+
         socketManager.onTtsDisabledChanged = { [weak self] notification in
             guard let self = self else { return }
             let eventContext = self.currentSocketEventContext()
@@ -2501,6 +2516,7 @@ final class MeetingViewModel {
             state.isChatLocked = false
             state.isNoGuests = false
             state.isDmEnabled = true
+            state.isImageAttachmentsEnabled = true
             applyTtsDisabled(false)
             state.isReactionsDisabled = false
             state.meetingRequiresInviteCode = false
@@ -2663,6 +2679,9 @@ final class MeetingViewModel {
         if let pendingDmStateChanged {
             events.append(.dmStateChanged(pendingDmStateChanged))
         }
+        if let pendingImageAttachmentsStateChanged {
+            events.append(.imageAttachmentsStateChanged(pendingImageAttachmentsStateChanged))
+        }
         if let pendingTtsDisabledChanged {
             events.append(.ttsDisabledChanged(pendingTtsDisabledChanged))
         }
@@ -2687,6 +2706,9 @@ final class MeetingViewModel {
             case .dmStateChanged(let notification):
                 guard isCurrentRoomEvent(notification.roomId) else { continue }
                 state.isDmEnabled = notification.enabled
+            case .imageAttachmentsStateChanged(let notification):
+                guard isCurrentRoomEvent(notification.roomId) else { continue }
+                state.isImageAttachmentsEnabled = notification.enabled
             case .ttsDisabledChanged(let notification):
                 guard isCurrentRoomEvent(notification.roomId) else { continue }
                 applyTtsDisabled(notification.disabled)
@@ -2824,6 +2846,7 @@ final class MeetingViewModel {
         pendingNoGuestsChanged = nil
         pendingChatLockChanged = nil
         pendingDmStateChanged = nil
+        pendingImageAttachmentsStateChanged = nil
         pendingTtsDisabledChanged = nil
         pendingReactionsDisabledChanged = nil
         pendingMeetingConfigSnapshot = nil
@@ -2930,6 +2953,7 @@ final class MeetingViewModel {
         pendingNoGuestsChanged = nil
         pendingChatLockChanged = nil
         pendingDmStateChanged = nil
+        pendingImageAttachmentsStateChanged = nil
         pendingTtsDisabledChanged = nil
         pendingReactionsDisabledChanged = nil
         pendingMeetingConfigSnapshot = nil
@@ -6959,6 +6983,7 @@ final class MeetingViewModel {
         state.isChatLocked = false
         state.isNoGuests = false
         state.isDmEnabled = true
+        state.isImageAttachmentsEnabled = true
         state.isTtsDisabled = false
         state.isReactionsDisabled = false
         state.meetingRequiresInviteCode = false

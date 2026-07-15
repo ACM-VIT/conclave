@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveConfiguredOwnerSfuUrl,
+  resolveRoomPlacementCapability,
   resolveReservedSfuUrl,
   selectPreOwnerSfu,
   type SfuRoutingCandidate,
@@ -114,6 +115,21 @@ describe("selectPreOwnerSfu", () => {
 
   it("reports an empty candidate pool", () => {
     expect(selectPreOwnerSfu([], "client:room")).toEqual({ kind: "empty" });
+  });
+});
+
+describe("resolveRoomPlacementCapability", () => {
+  it("distinguishes current, legacy, and unavailable status envelopes", () => {
+    expect(
+      resolveRoomPlacementCapability({
+        instanceId: "sfu-a",
+        capabilities: { roomPlacement: 1 },
+      }),
+    ).toBe("supported");
+    expect(resolveRoomPlacementCapability({ instanceId: "sfu-a" })).toBe(
+      "legacy",
+    );
+    expect(resolveRoomPlacementCapability(null)).toBe("unknown");
   });
 });
 

@@ -857,6 +857,9 @@ export const createSfuApp = ({
       draining: state.isDraining,
       rooms: state.rooms.size,
       uptime: process.uptime(),
+      capabilities: {
+        roomPlacement: 1,
+      },
     });
   });
 

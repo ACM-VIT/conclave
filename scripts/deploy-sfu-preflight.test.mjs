@@ -227,5 +227,24 @@ test("deployment wrappers run the preflight before local or live mutations", asy
     assert.ok(preflight < pull, `${file} preflights before git pull`);
     assert.ok(preflight < build, `${file} preflights before build`);
     assert.ok(preflight < drain, `${file} preflights before drain`);
+    assert.match(source, /preflightConfigOnly|PREFLIGHT_CONFIG_ONLY/);
+    assert.match(source, /preflightOnly|PREFLIGHT_ONLY/);
+    assert.match(source, /--config-only/);
   }
+});
+
+test("compose preserves existing deployments with a neutral region default", async () => {
+  const source = await readFile(
+    new URL("../docker-compose.sfu.yml", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    source,
+    /SFU_REGION: \$\{SFU_A_REGION:-\$\{SFU_REGION:-local\}\}/,
+  );
+  assert.match(
+    source,
+    /SFU_REGION: \$\{SFU_B_REGION:-\$\{SFU_REGION:-local\}\}/,
+  );
 });

@@ -66,6 +66,7 @@ final class SocketIOManager {
     var onChatLockChanged: ((ChatLockChangedNotification) -> Void)?
     var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Void)?
     var onDmStateChanged: ((DmStateChangedNotification) -> Void)?
+    var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Void)?
     var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Void)?
     var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Void)?
     var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Void)?

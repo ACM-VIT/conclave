@@ -1297,6 +1297,11 @@ struct DmStateChangedNotification: Codable {
     let roomId: String?
 }
 
+struct ImageAttachmentsStateChangedNotification: Codable {
+    let enabled: Bool
+    let roomId: String?
+}
+
 struct TtsDisabledChangedNotification: Codable {
     let disabled: Bool
     let roomId: String?

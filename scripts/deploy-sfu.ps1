@@ -329,7 +329,10 @@ $preflightArguments = @(
 if (-not [string]::IsNullOrWhiteSpace($env:SFU_DEPLOY_SERVICES)) {
   $preflightArguments += @("--services", $env:SFU_DEPLOY_SERVICES)
 }
-if ($preflightConfigOnly) {
+# A normal deployment must be able to revive a stopped inactive SFU, so its
+# pre-mutation gate validates rendered configuration only. Explicit
+# --preflight-only remains the operator-facing live route check.
+if ($preflightConfigOnly -or -not $preflightOnly) {
   $preflightArguments += "--config-only"
 }
 

@@ -297,6 +297,7 @@ internal class SocketIOManager {
     internal var onChatLockChanged: ((ChatLockChangedNotification) -> Unit)? = null
     internal var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Unit)? = null
     internal var onDmStateChanged: ((DmStateChangedNotification) -> Unit)? = null
+    internal var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Unit)? = null
     internal var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Unit)? = null
     internal var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Unit)? = null
     internal var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Unit)? = null
@@ -3357,8 +3358,9 @@ internal class SocketIOManager {
 
         socket.on(SocketEvent.imageAttachmentsStateChanged, Emitter.Listener { args ->
             if (this.socket !== socket) return@Listener
-            val notification = decode<DmStateChangedNotification>(args.firstOrNull()) ?: return@Listener
+            val notification = decode<ImageAttachmentsStateChangedNotification>(args.firstOrNull()) ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
+            onImageAttachmentsStateChanged?.invoke(notification)
         })
 
         socket.on(SocketEvent.ttsDisabledChanged, Emitter.Listener { args ->
