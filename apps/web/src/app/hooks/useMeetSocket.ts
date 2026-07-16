@@ -52,6 +52,7 @@ import type {
   RestartIceResponse,
   Transport,
   VideoQuality,
+  WebcamCodecPolicy,
   WebinarConfigSnapshot,
   WebinarFeedChangedNotification,
   WebinarLinkResponse,
@@ -82,6 +83,15 @@ import {
   produceWebcamTrack,
   type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
+import {
+  BASELINE_WEBCAM_CODEC_POLICY,
+  classifyVp9CodecFailure,
+  detectBrowserWebcamCodecCapabilities,
+  detectLoadedDeviceWebcamCodecCapabilities,
+  isNewerWebcamCodecPolicy,
+  normalizeWebcamCodecPolicy,
+  rememberProvenVp9EncoderIncompatibility,
+} from "../lib/webcam-codec-policy";
 import { setNoiseCancellationTrackEnabled } from "../lib/noise-cancellation";
 import {
   getMostConstrainedWebcamProducerNetworkProfile,
@@ -90,11 +100,46 @@ import {
 } from "../lib/screen-share-network-profile";
 import { getBrowserNetworkSnapshot } from "../lib/network-information";
 import {
+  getBrowserMediaAdaptationQuality,
+  hasBrowserMediaEmergencyEvidence,
+} from "../lib/connection-quality-policy";
+import { WEBCAM_RECEIVE_TEMPORAL_LAYER } from "../lib/adaptive-video-receive";
+import {
   getConsumerResumeEffectiveAttempt,
   isConsumerResumeSettlementCurrent,
   type ConsumerResumeRetryState,
 } from "../lib/consumer-resume-retry";
+import {
+  advanceVideoFreezeRecovery,
+  shouldRecreateProducerTransport,
+  type VideoFreezeRecoveryState,
+} from "../lib/media-recovery-policy";
+import { waitForRemoteVideoPresentation } from "../lib/remote-video-presentation";
+import {
+  decideWebcamStartupResetAttempt,
+  decideWebcamStartupResetPoll,
+  decideWebcamStartupResetVerification,
+  enqueueWebcamStartupResetProducer,
+  getConsumerMaximumSpatialLayer,
+  getWebcamStartupResetQueueDelayMs,
+  isCurrentConsumerGeneration,
+  isProducerPauseSnapshotCurrent,
+  isVp8SimulcastConsumerEligibleForStartupReset,
+  WEBCAM_STARTUP_RESET_MAX_ATTEMPTS,
+  WEBCAM_STARTUP_RESET_MAX_WAIT_MS,
+  WEBCAM_STARTUP_RESET_MIN_SPACING_MS,
+  WEBCAM_STARTUP_RESET_POLL_MS,
+  WEBCAM_STARTUP_RESET_PRESENTATION_TIMEOUT_MS,
+  WEBCAM_STARTUP_RESET_REASON,
+  WEBCAM_STARTUP_RESET_RESUME_ACK_TIMEOUT_MS,
+  WEBCAM_STARTUP_RESET_RESUME_MAX_ATTEMPTS,
+  WEBCAM_STARTUP_RESET_RETRY_MS,
+  WEBCAM_STARTUP_RESET_STABLE_MS,
+  WEBCAM_STARTUP_RESET_VERIFY_POLL_MS,
+  WEBCAM_STARTUP_RESET_VERIFY_TIMEOUT_MS,
+} from "../lib/webcam-consumer-generation-reset";
 import type {
+  ConsumerGenerationResetDebugRecord,
   ConsumerTelemetrySnapshot,
   MeetRefs,
 } from "./useMeetRefs";
@@ -102,7 +147,11 @@ import type {
   ConnectionQuality,
   ConnectionQualityStats,
 } from "./useConnectionQuality";
-import type { RequestMediaPermissionsOptions } from "./useMeetMedia";
+import type {
+  ProducerTransportEnsureOptions,
+  RequestMediaPermissionsOptions,
+  ScreenShareRepublishOptions,
+} from "./useMeetMedia";
 
 type ConsumerTelemetryPayload = Omit<
   ConsumerTelemetrySnapshot,
@@ -111,8 +160,38 @@ type ConsumerTelemetryPayload = Omit<
 
 type ConsumeProducerOptions = {
   replaceExisting?: boolean;
+  retryOnFailure?: boolean;
   knownScreenShareVideoActive?: boolean;
   webcamVideoStartupRank?: number;
+  makeBeforeBreak?: {
+    expectedPreviousConsumerId: string;
+    deadlineAt: number;
+    resetEpoch: number;
+    rollbackOutcome: { confirmed: boolean };
+  };
+};
+
+type ServerConsumerCloseOperation = {
+  promise: Promise<boolean>;
+  settle: (success: boolean) => void;
+};
+
+type WebcamStartupLatencyResetRuntime = {
+  producerInfo: ProducerInfo;
+  previousConsumerId: string;
+  replacementConsumerId: string | null;
+  maximumSpatialLayer: number;
+  observedSpatialLayer: number | null;
+  startedAt: number;
+  deadlineAt: number;
+  highLayerSince: number | null;
+  replacementStartedAt: number | null;
+  verificationStartedAt: number | null;
+  completedAt: number | null;
+  attempt: number;
+  epoch: number;
+  status: ConsumerGenerationResetDebugRecord["status"];
+  failureReason: string | null;
 };
 
 type JoinInfo = {
@@ -145,12 +224,12 @@ const STALE_REPLACEMENT_CLEANUP_DELAY_MS = 5000;
 const SCREEN_SHARE_STALE_REPLACEMENT_CLEANUP_DELAY_MS = 1500;
 const CLOSE_CONSUMER_RETRY_DELAY_MS = 500;
 const CLOSE_CONSUMER_MAX_ATTEMPTS = 4;
+const CLOSE_CONSUMER_ACK_TIMEOUT_MS = 2_500;
 const SCREEN_SHARE_FREEZE_KEYFRAME_REQUEST_COOLDOWN_MS = 2000;
 const SCREEN_SHARE_FOREGROUND_KEYFRAME_REQUEST_COOLDOWN_MS = 1200;
 const FOREGROUND_RECOVERY_DELAY_MS = 150;
 const SUSPENDED_EVENT_LOOP_CHECK_MS = 5000;
 const SUSPENDED_EVENT_LOOP_GAP_MS = 30000;
-
 const isScreenShareVideoProducer = (
   producerInfo: Pick<ProducerInfo, "kind" | "type">,
 ): boolean => producerInfo.kind === "video" && producerInfo.type === "screen";
@@ -219,6 +298,70 @@ const startSocketAckTimeout = (
   };
 };
 
+type ConsumerVideoFlowSnapshot = {
+  framesDecoded: number | null;
+  bytesReceived: number | null;
+};
+
+const readConsumerVideoFlowSnapshot = async (
+  consumer: Consumer,
+): Promise<ConsumerVideoFlowSnapshot> => {
+  try {
+    const report = await consumer.getStats();
+    let foundInboundVideo = false;
+    let framesDecoded = 0;
+    let bytesReceived = 0;
+    report.forEach((entry) => {
+      const stat = entry as RTCInboundRtpStreamStats & {
+        kind?: string;
+        mediaType?: string;
+        isRemote?: boolean;
+      };
+      if (
+        stat.type !== "inbound-rtp" ||
+        stat.isRemote === true ||
+        (stat.kind && stat.kind !== "video") ||
+        (stat.mediaType && stat.mediaType !== "video")
+      ) {
+        return;
+      }
+      foundInboundVideo = true;
+      const decodedFrameCount = Number(stat.framesDecoded);
+      if (Number.isFinite(decodedFrameCount)) {
+        framesDecoded += decodedFrameCount;
+      }
+      const receivedByteCount = Number(stat.bytesReceived);
+      if (Number.isFinite(receivedByteCount)) {
+        bytesReceived += receivedByteCount;
+      }
+    });
+    return foundInboundVideo
+      ? { framesDecoded, bytesReceived }
+      : { framesDecoded: null, bytesReceived: null };
+  } catch {
+    return { framesDecoded: null, bytesReceived: null };
+  }
+};
+
+const readConsumerVideoFlowSnapshotWithin = (
+  consumer: Consumer,
+  timeoutMs: number,
+): Promise<ConsumerVideoFlowSnapshot> =>
+  new Promise((resolve) => {
+    let settled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({ framesDecoded: null, bytesReceived: null });
+    }, Math.max(1, timeoutMs));
+    void readConsumerVideoFlowSnapshot(consumer).then((snapshot) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+      resolve(snapshot);
+    });
+  });
+
 const CLOSE_CONSUMER_RETRY_WINDOW_MS = 30000;
 const TURN_URL_PATTERN = /^turns?:/i;
 const TRANSPORT_CC_FEEDBACK_TYPE = "transport-cc";
@@ -229,7 +372,9 @@ const getConnectionStatsNetworkProfile = (
 ): WebcamProducerNetworkProfile => {
   const snapshot = stats?.browserNetwork ?? getBrowserNetworkSnapshot();
   const statsQuality =
-    direction === "publish" ? stats?.publishQuality : stats?.receiveQuality;
+    direction === "publish"
+      ? stats?.publishAdaptationQuality
+      : stats?.receiveAdaptationQuality;
   const statsEmergency =
     direction === "publish"
       ? stats?.publishEmergencyMode
@@ -237,11 +382,12 @@ const getConnectionStatsNetworkProfile = (
   const quality: ConnectionQuality =
     statsQuality && statsQuality !== "unknown"
       ? statsQuality
-      : ((snapshot.quality === "unknown"
-          ? snapshot.startupQuality
-          : snapshot.quality));
+      : getBrowserMediaAdaptationQuality(snapshot);
 
-  if (snapshot.emergency || (statsEmergency === true && quality !== "good")) {
+  if (
+    hasBrowserMediaEmergencyEvidence(snapshot) ||
+    (statsEmergency === true && quality !== "good")
+  ) {
     return "emergency";
   }
   if (quality === "poor") return "poor";
@@ -341,7 +487,7 @@ type ScreenAudioProducerAppData = {
   networkProfile?: WebcamProducerNetworkProfile;
 };
 
-const getInitialConsumerPreferences = (
+export const getInitialConsumerPreferences = (
   producerInfo: ProducerInfo,
   options: {
     preferHighWebcamLayer?: boolean;
@@ -380,8 +526,7 @@ const getInitialConsumerPreferences = (
     return {
       preferredLayers: {
         spatialLayer: 0,
-        temporalLayer:
-          networkProfile === "poor" || networkProfile === "emergency" ? 0 : 1,
+        temporalLayer: WEBCAM_RECEIVE_TEMPORAL_LAYER,
       },
       priority:
         networkProfile === "good" ? 70 : networkProfile === "fair" ? 55 : 40,
@@ -393,7 +538,7 @@ const getInitialConsumerPreferences = (
       return {
         preferredLayers: {
           spatialLayer: 2,
-          temporalLayer: 2,
+          temporalLayer: WEBCAM_RECEIVE_TEMPORAL_LAYER,
         },
         priority: 180,
       };
@@ -403,7 +548,7 @@ const getInitialConsumerPreferences = (
       return {
         preferredLayers: {
           spatialLayer: 1,
-          temporalLayer: 2,
+          temporalLayer: WEBCAM_RECEIVE_TEMPORAL_LAYER,
         },
         priority: 150,
       };
@@ -412,21 +557,26 @@ const getInitialConsumerPreferences = (
     return {
       preferredLayers: {
         spatialLayer: 0,
-        temporalLayer: networkProfile === "emergency" ? 0 : 1,
+        temporalLayer: WEBCAM_RECEIVE_TEMPORAL_LAYER,
       },
       priority: networkProfile === "emergency" ? 145 : 120,
     };
   }
 
   if (networkProfile === "good") {
-    return { priority: 100 };
+    return {
+      preferredLayers: {
+        spatialLayer: 0,
+        temporalLayer: WEBCAM_RECEIVE_TEMPORAL_LAYER,
+      },
+      priority: 100,
+    };
   }
 
   return {
     preferredLayers: {
       spatialLayer: 0,
-      temporalLayer:
-        networkProfile === "emergency" || networkProfile === "poor" ? 0 : 1,
+      temporalLayer: WEBCAM_RECEIVE_TEMPORAL_LAYER,
     },
     priority: networkProfile === "fair" ? 90 : 70,
   };
@@ -705,6 +855,7 @@ interface UseMeetSocketOptions {
   displayNameInput: string;
   localStream: MediaStream | null;
   setLocalStream: React.Dispatch<React.SetStateAction<MediaStream | null>>;
+  selectedVideoInputDeviceId?: string;
   getVideoPublishTrack?: (stream?: MediaStream | null) => MediaStreamTrack | null;
   onPreferredVideoPublishTrackRejected?: (
     track: MediaStreamTrack,
@@ -786,6 +937,7 @@ interface UseMeetSocketOptions {
     displayName: string;
     text: string;
     ttsVoiceToken?: string;
+    messageId?: string;
   }) => void;
   prewarm?: {
     Device: typeof import("mediasoup-client").Device | null;
@@ -813,6 +965,7 @@ export function useMeetSocket({
   displayNameInput,
   localStream,
   setLocalStream,
+  selectedVideoInputDeviceId,
   getVideoPublishTrack,
   onPreferredVideoPublishTrackRejected,
   dispatchParticipants,
@@ -890,6 +1043,9 @@ export function useMeetSocket({
   const serverRestartNoticeRef = useRef<string | null>(null);
   const adminNoticeTimeoutRef = useRef<number | null>(null);
   const consumeRetryAttemptsRef = useRef<Map<string, number>>(new Map());
+  // Initial consumes from join, sync, and producer notifications can race.
+  // Replacement consumes are serialized separately by the recovery owner.
+  const consumerConsumeInFlightRef = useRef<Map<string, symbol>>(new Map());
   // One retry chain per producer for acked resumeConsumer delivery; a lost
   // resume means one silent speaker for this attendee only (#177). The entry
   // owns a specific consumer generation and keeps its attempt count, so stale
@@ -909,35 +1065,63 @@ export function useMeetSocket({
   const staleConsumerRecoveryTimeoutsRef = useRef<Map<string, number>>(
     new Map(),
   );
+  const webcamStartupLatencyResetTimeoutsRef = useRef<Map<string, number>>(
+    new Map(),
+  );
+  const webcamStartupLatencyResetStateRef = useRef<
+    Map<string, WebcamStartupLatencyResetRuntime>
+  >(new Map());
+  const webcamStartupLatencyResetQueueRef = useRef<string[]>([]);
+  const webcamStartupLatencyResetActiveRef = useRef<string | null>(null);
+  const webcamStartupLatencyResetLastFinishedAtRef = useRef(0);
+  const webcamStartupLatencyResetDrainTimeoutRef = useRef<number | null>(null);
+  const webcamStartupLatencyResetEpochRef = useRef(0);
+  // Server telemetry for a make-before-break candidate can arrive before its
+  // local Consumer is committed. Stage it by consumer id so stale generations
+  // never overwrite the currently presented generation.
+  const pendingConsumerTelemetryByIdRef = useRef<
+    Map<string, ConsumerTelemetrySnapshot>
+  >(new Map());
+  const scheduleWebcamStartupLatencyResetRef = useRef<
+    (
+      producerInfo: ProducerInfo,
+      consumer: Consumer,
+      maximumSpatialLayer: number,
+    ) => void
+  >(() => {});
+  const evaluateWebcamStartupLatencyResetRef = useRef<
+    (producerId: string) => void
+  >(() => {});
+  const drainWebcamStartupLatencyResetQueueRef = useRef<() => void>(() => {});
+  const runWebcamStartupLatencyResetRef = useRef<
+    (producerId: string) => Promise<void>
+  >(async () => {});
   const staleReplacementCleanupTimeoutsRef = useRef<Map<string, number>>(
     new Map(),
   );
   const closeConsumerRetryTimeoutsRef = useRef<Map<string, number>>(new Map());
+  const closeConsumerOperationsRef = useRef<
+    Map<string, ServerConsumerCloseOperation>
+  >(new Map());
   const localRoomEndedHandledRef = useRef(false);
   const mutedConsumerSinceRef = useRef<Map<string, number>>(new Map());
   const producerPausedStateRef = useRef<Map<string, boolean>>(new Map());
+  const producerPausedStateRevisionRef = useRef<Map<string, number>>(new Map());
   // Per-video-consumer decode progress for the freeze watchdog: last
   // framesDecoded/bytesReceived sample + how many consecutive checks the decoder
   // has been stuck (frames flat while bytes still climb). See the freeze-watchdog
   // effect below — this catches a frozen decoder that `track.muted` never fires
   // for (RTP keeps flowing, the decoder is stuck on a stale reference frame).
   const videoFreezeStatsRef = useRef<
-    Map<
-      string,
-      {
-        frames: number;
-        bytes: number;
-        stalls: number;
-        lastKeyFrameRequestAt: number;
-      }
-    >
+    Map<string, VideoFreezeRecoveryState & { consumerId: string }>
   >(new Map());
   const foregroundScreenShareKeyFrameAtRef = useRef(0);
-  const consumerRecoveryInFlightRef = useRef<Set<string>>(new Set());
+  const consumerRecoveryInFlightRef = useRef<Map<string, symbol>>(new Map());
   const announcedRemoteProducersRef = useRef<Map<string, ProducerInfo>>(
     new Map(),
   );
   const pendingScreenProducerCloseIdsRef = useRef<Set<string>>(new Set());
+  const screenShareRepublishPromiseRef = useRef<Promise<boolean> | null>(null);
   // Announce-order bookkeeping for producers, per participant slot
   // (userId:kind:type). Producers are re-created (mic switch, recovery), and
   // consume completions can finish out of order — a stale consume must never
@@ -969,6 +1153,10 @@ export function useMeetSocket({
   const producerTransportCreatePromiseRef = useRef<Promise<boolean> | null>(
     null,
   );
+  // Keep presentations stable when the room changes webcam codec while this
+  // participant's camera is off. The next camera publish consumes the flag and
+  // recreates the send transport before negotiating the new codec family.
+  const pendingCameraCodecTransportResetEpochRef = useRef<number | null>(null);
   const iceRestartPromiseRef = useRef<
     Record<"producer" | "consumer", Promise<boolean> | null>
   >({
@@ -994,12 +1182,15 @@ export function useMeetSocket({
     consumersRef,
     adaptivelyPausedConsumerProducerIdsRef,
     consumerTelemetryRef,
+    consumerGenerationResetDebugRef,
+    adaptiveVideoReceiverLifecycleRef,
     producerMapRef,
     pendingProducersRef,
     leaveTimeoutsRef,
     reconnectAttemptsRef,
     reconnectInFlightRef,
     intentionalDisconnectRef,
+    webcamCodecPolicyRef,
     currentRoomIdRef,
     handleRedirectRef,
     handleReconnectRef,
@@ -1014,6 +1205,69 @@ export function useMeetSocket({
     iceRestartInFlightRef,
     producerSyncIntervalRef,
   } = refs;
+
+  const writeWebcamStartupLatencyResetDebug = useCallback(
+    (state: WebcamStartupLatencyResetRuntime) => {
+      const entry: ConsumerGenerationResetDebugRecord = {
+        producerId: state.producerInfo.producerId,
+        previousConsumerId: state.previousConsumerId,
+        replacementConsumerId: state.replacementConsumerId,
+        reason: WEBCAM_STARTUP_RESET_REASON,
+        status: state.status,
+        startedAt: state.startedAt,
+        replacementStartedAt: state.replacementStartedAt,
+        completedAt: state.completedAt,
+        attempt: state.attempt,
+        maximumSpatialLayer: state.maximumSpatialLayer,
+        observedSpatialLayer: state.observedSpatialLayer,
+        failureReason: state.failureReason,
+      };
+      const records = consumerGenerationResetDebugRef.current;
+      const existingIndex = records.findIndex(
+        (record) =>
+          record.producerId === entry.producerId &&
+          record.previousConsumerId === entry.previousConsumerId,
+      );
+      if (existingIndex >= 0) {
+        records[existingIndex] = entry;
+      } else {
+        records.push(entry);
+        if (records.length > 64) records.splice(0, records.length - 64);
+      }
+    },
+    [consumerGenerationResetDebugRef],
+  );
+
+  const settleWebcamStartupLatencyReset = useCallback(
+    (
+      state: WebcamStartupLatencyResetRuntime,
+      status: "completed" | "failed" | "cancelled",
+      failureReason: string | null,
+    ) => {
+      if (
+        state.status === "completed" ||
+        state.status === "failed" ||
+        state.status === "cancelled"
+      ) {
+        return;
+      }
+      const settledAt = Date.now();
+      state.status = status;
+      state.failureReason = failureReason;
+      state.completedAt = status === "completed" ? settledAt : null;
+      writeWebcamStartupLatencyResetDebug(state);
+      telemetry.capture(`meet_webcam_consumer_generation_reset_${status}`, {
+        reason: WEBCAM_STARTUP_RESET_REASON,
+        failureReason,
+        attempts: state.attempt,
+        durationMs: settledAt - state.startedAt,
+        maximumSpatialLayer: state.maximumSpatialLayer,
+        observedSpatialLayer: state.observedSpatialLayer,
+      });
+    },
+    [writeWebcamStartupLatencyResetDebug],
+  );
+
   const [reconnectRecoveryStatus, setReconnectRecoveryStatus] =
     useState<ReconnectRecoveryStatus | null>(null);
   const updateReconnectRecoveryStatus = useCallback(
@@ -1076,11 +1330,11 @@ export function useMeetSocket({
         baseProfile,
         availableOutgoingBitrateBps: stats?.availableOutgoingBitrate,
         emergencyMode:
-          browserNetwork.emergency ||
+          hasBrowserMediaEmergencyEvidence(browserNetwork) ||
           (stats?.publishEmergencyMode === true &&
-            stats.publishQuality !== "good"),
+            stats.publishAdaptationQuality !== "good"),
         browserNetwork,
-        observedPublishQuality: stats?.rtcPublishQuality,
+        observedPublishQuality: stats?.publishAdaptationQuality,
       });
     }, [connectionQualityRef, getPublishNetworkProfile]);
 
@@ -1290,8 +1544,11 @@ export function useMeetSocket({
     );
   }, [closeProducerOnServer]);
 
-  const republishScreenShare = useCallback(
-    async (reason: string): Promise<boolean> => {
+  const republishScreenShareOnce = useCallback(
+    async (
+      reason: string,
+      options: ScreenShareRepublishOptions = {},
+    ): Promise<boolean> => {
       const screenStream = screenShareStreamRef.current;
       const videoTrack = getFirstLiveTrack(screenStream?.getVideoTracks() ?? []);
       if (!screenStream || !videoTrack) {
@@ -1301,6 +1558,35 @@ export function useMeetSocket({
       const transport = producerTransportRef.current;
       if (!transport || transport.closed) {
         throw new Error("Screen share transport unavailable");
+      }
+
+      if (options.replaceCurrent) {
+        const currentVideoProducer = screenProducerRef.current;
+        const currentAudioProducer = screenAudioProducerRef.current;
+        if (currentVideoProducer) {
+          pendingScreenProducerCloseIdsRef.current.add(currentVideoProducer.id);
+          intentionalLocalProducerCloseIdsRef.current.add(
+            currentVideoProducer.id,
+          );
+          try {
+            currentVideoProducer.close();
+          } catch {}
+          if (screenProducerRef.current?.id === currentVideoProducer.id) {
+            screenProducerRef.current = null;
+          }
+        }
+        if (currentAudioProducer) {
+          pendingScreenProducerCloseIdsRef.current.add(currentAudioProducer.id);
+          intentionalLocalProducerCloseIdsRef.current.add(
+            currentAudioProducer.id,
+          );
+          try {
+            currentAudioProducer.close();
+          } catch {}
+          if (screenAudioProducerRef.current?.id === currentAudioProducer.id) {
+            screenAudioProducerRef.current = null;
+          }
+        }
       }
 
       await flushPendingScreenProducerCloses();
@@ -1320,6 +1606,17 @@ export function useMeetSocket({
         networkProfile: screenNetworkProfile,
         preferredCodec: preferredScreenShareCodec,
       });
+
+      if (
+        videoTrack.readyState !== "live" ||
+        screenShareStreamRef.current !== screenStream
+      ) {
+        emitCloseProducer(producer.id);
+        try {
+          producer.close();
+        } catch {}
+        return false;
+      }
 
       screenProducerRef.current = producer;
       setIsScreenSharing(true);
@@ -1438,6 +1735,8 @@ export function useMeetSocket({
       emitCloseProducer,
       flushPendingScreenProducerCloses,
       getScreenSharePublishNetworkProfile,
+      intentionalLocalProducerCloseIdsRef,
+      pendingScreenProducerCloseIdsRef,
       producerTransportRef,
       screenAudioProducerRef,
       screenProducerRef,
@@ -1446,6 +1745,31 @@ export function useMeetSocket({
       setIsScreenSharing,
       stopScreenShareCapture,
     ],
+  );
+
+  const republishScreenShare = useCallback(
+    (
+      reason: string,
+      options: ScreenShareRepublishOptions = {},
+    ): Promise<boolean> => {
+      const existing = screenShareRepublishPromiseRef.current;
+      if (existing) return existing;
+
+      const owner: { promise: Promise<boolean> | null } = { promise: null };
+      const promise = (async () => {
+        try {
+          return await republishScreenShareOnce(reason, options);
+        } finally {
+          if (screenShareRepublishPromiseRef.current === owner.promise) {
+            screenShareRepublishPromiseRef.current = null;
+          }
+        }
+      })();
+      owner.promise = promise;
+      screenShareRepublishPromiseRef.current = promise;
+      return promise;
+    },
+    [republishScreenShareOnce],
   );
 
   const cleanupRoomResources = useCallback(
@@ -1462,7 +1786,14 @@ export function useMeetSocket({
         pendingProducerRetryTimeoutRef.current = null;
       }
 
-      consumersRef.current.forEach((consumer) => {
+      consumersRef.current.forEach((consumer, producerId) => {
+        if (consumer.kind === "video") {
+          adaptiveVideoReceiverLifecycleRef.current({
+            type: "removing",
+            producerId,
+            consumer,
+          });
+        }
         try {
           consumer.close();
         } catch {}
@@ -1493,6 +1824,20 @@ export function useMeetSocket({
         window.clearTimeout(timeoutId);
       }
       staleConsumerRecoveryTimeoutsRef.current.clear();
+      for (const timeoutId of webcamStartupLatencyResetTimeoutsRef.current.values()) {
+        window.clearTimeout(timeoutId);
+      }
+      webcamStartupLatencyResetTimeoutsRef.current.clear();
+      webcamStartupLatencyResetStateRef.current.clear();
+      webcamStartupLatencyResetQueueRef.current = [];
+      webcamStartupLatencyResetActiveRef.current = null;
+      webcamStartupLatencyResetLastFinishedAtRef.current = 0;
+      webcamStartupLatencyResetEpochRef.current += 1;
+      if (webcamStartupLatencyResetDrainTimeoutRef.current != null) {
+        window.clearTimeout(webcamStartupLatencyResetDrainTimeoutRef.current);
+        webcamStartupLatencyResetDrainTimeoutRef.current = null;
+      }
+      consumerGenerationResetDebugRef.current = [];
       for (const timeoutId of staleReplacementCleanupTimeoutsRef.current.values()) {
         window.clearTimeout(timeoutId);
       }
@@ -1502,13 +1847,20 @@ export function useMeetSocket({
           window.clearTimeout(timeoutId);
         }
         closeConsumerRetryTimeoutsRef.current.clear();
+        for (const operation of closeConsumerOperationsRef.current.values()) {
+          operation.settle(false);
+        }
+        closeConsumerOperationsRef.current.clear();
       }
       mutedConsumerSinceRef.current.clear();
       producerPausedStateRef.current.clear();
+      producerPausedStateRevisionRef.current.clear();
       videoFreezeStatsRef.current.clear();
       consumerRecoveryInFlightRef.current.clear();
+      consumerConsumeInFlightRef.current.clear();
       announcedRemoteProducersRef.current.clear();
       consumerTelemetryRef.current.clear();
+      pendingConsumerTelemetryByIdRef.current.clear();
       producerMapRef.current.clear();
       pendingProducersRef.current.clear();
       intentionalLocalProducerCloseIdsRef.current.clear();
@@ -1590,6 +1942,7 @@ export function useMeetSocket({
       producerTransportRef.current = null;
       consumerTransportRef.current = null;
       producerTransportCreatePromiseRef.current = null;
+      pendingCameraCodecTransportResetEpochRef.current = null;
       prejoinMediaIntentRef.current = null;
       if (producerTransportDisconnectTimeoutRef.current) {
         window.clearTimeout(producerTransportDisconnectTimeoutRef.current);
@@ -1631,6 +1984,7 @@ export function useMeetSocket({
     },
     [
       audioProducerRef,
+      adaptiveVideoReceiverLifecycleRef,
       consumerTransportRef,
       consumersRef,
       currentRoomIdRef,
@@ -1638,6 +1992,7 @@ export function useMeetSocket({
       leaveTimeoutsRef,
       pendingProducersRef,
       consumerTelemetryRef,
+      consumerGenerationResetDebugRef,
       producerMapRef,
       producerTransportRef,
       serverRoomIdRef,
@@ -1679,6 +2034,7 @@ export function useMeetSocket({
       videoStallRecoveryTimeoutsRef,
       staleConsumerRecoveryTimeoutsRef,
       closeConsumerRetryTimeoutsRef,
+      closeConsumerOperationsRef,
       mutedConsumerSinceRef,
       producerPausedStateRef,
       consumerRecoveryInFlightRef,
@@ -1704,6 +2060,7 @@ export function useMeetSocket({
     socketRef.current = null;
     onSocketReady?.(null);
     deviceRef.current = null;
+    webcamCodecPolicyRef.current = { ...BASELINE_WEBCAM_CODEC_POLICY };
 
     setConnectionState("disconnected");
     setLocalStream(null);
@@ -1736,6 +2093,7 @@ export function useMeetSocket({
     setWaitingMessage,
     socketRef,
     deviceRef,
+    webcamCodecPolicyRef,
     stopLocalTrack,
     producerSyncIntervalRef,
     updateReconnectRecoveryStatus,
@@ -2069,6 +2427,160 @@ export function useMeetSocket({
     [currentRoomIdRef, serverRoomIdRef],
   );
 
+  const applyWebcamCodecPolicyNotification = useCallback(
+    (value: WebcamCodecPolicy & { roomId?: string }) => {
+      if (!isRoomEvent(value?.roomId)) return;
+      const next = normalizeWebcamCodecPolicy(value);
+      if (!next) {
+        console.warn("[Meets] Ignoring invalid webcam codec policy:", value);
+        return;
+      }
+
+      const current = webcamCodecPolicyRef.current;
+      if (!isNewerWebcamCodecPolicy(current, next)) return;
+      webcamCodecPolicyRef.current = next;
+      if (next.codec === current.codec) return;
+
+      telemetry.capture("meet_webcam_codec_policy_changed", {
+        from: current.codec,
+        to: next.codec,
+        epoch: next.epoch,
+      });
+
+      // Chromium can leave the send transceiver bound to the old codec after a
+      // producer is stopped. Reusing that PeerConnection for a codec-family
+      // change can fail in mediasoup-client while parsing an answer with
+      // "no a=ssrc lines found". Force a fresh send transport; the SFU closes
+      // the replaced server transport atomically, while the normal audio,
+      // camera, and screen recovery paths republish live tracks.
+      const resetProducerTransportForCodecChange = () => {
+        const transport = producerTransportRef.current;
+        if (transport && !transport.closed) {
+          try {
+            intentionallyClosedTransportsRef.current.add(transport);
+            transport.close();
+          } catch {}
+        }
+        if (producerTransportRef.current === transport) {
+          producerTransportRef.current = null;
+        }
+        if (!isMutedRef.current) requestAudioProducerRecovery();
+      };
+
+      const producer = videoProducerRef.current;
+      if (!producer || producer.closed) {
+        // This also covers the narrow camera-toggle gap where React state has
+        // changed but isCameraOffRef has not committed yet. Record the epoch
+        // instead of tearing down a presentation; an enabled camera's recovery
+        // pulse will consume it through prepareCameraProducerTransport.
+        pendingCameraCodecTransportResetEpochRef.current = next.epoch;
+        if (!isCameraOffRef.current) {
+          requestCameraProducerRecovery();
+        }
+        return;
+      }
+
+      if (isCameraOffRef.current) {
+        // Do not interrupt an active screen share just because a disabled
+        // camera's future codec changed. Close any stale webcam producer, keep
+        // the display-media capture and current transport flowing, and force a
+        // fresh transport immediately before the next camera publication.
+        pendingCameraCodecTransportResetEpochRef.current = next.epoch;
+        if (producer && !producer.closed) {
+          intentionalLocalProducerCloseIdsRef.current.add(producer.id);
+          emitCloseProducer(producer.id);
+          try {
+            producer.close();
+          } catch {}
+          if (videoProducerRef.current?.id === producer.id) {
+            videoProducerRef.current = null;
+          }
+        }
+        return;
+      }
+
+      const producerId = producer.id;
+      intentionalLocalProducerCloseIdsRef.current.add(producerId);
+      emitCloseProducer(producerId);
+      try {
+        producer.close();
+      } catch {}
+      if (videoProducerRef.current?.id === producerId) {
+        videoProducerRef.current = null;
+      }
+      resetProducerTransportForCodecChange();
+      requestCameraProducerRecovery();
+    },
+    [
+      emitCloseProducer,
+      intentionalLocalProducerCloseIdsRef,
+      isRoomEvent,
+      requestCameraProducerRecovery,
+      requestAudioProducerRecovery,
+      producerTransportRef,
+      intentionallyClosedTransportsRef,
+      videoProducerRef,
+      webcamCodecPolicyRef,
+    ],
+  );
+
+  const reportCurrentWebcamCodecFailure = useCallback(
+    (error: unknown): boolean => {
+      const policy = webcamCodecPolicyRef.current;
+      if (
+        policy.codec !== "vp9" ||
+        classifyVp9CodecFailure(error) !==
+          "proven-encoder-incompatibility"
+      ) {
+        return false;
+      }
+
+      rememberProvenVp9EncoderIncompatibility({
+        handlerName: deviceRef.current?.handlerName ?? "unknown-handler",
+        videoInputDeviceId: selectedVideoInputDeviceId,
+      });
+
+      const socket = socketRef.current;
+      if (!socket?.connected) return false;
+
+      console.warn(
+        "[Meets] Reporting failed VP9 SVC webcam production; requesting room fallback:",
+        error,
+      );
+      socket.emit(
+        "reportWebcamCodecFailure",
+        { codec: "vp9", epoch: policy.epoch },
+        (
+          response:
+            | { success: true; webcamCodecPolicy: WebcamCodecPolicy }
+            | { error: string },
+        ) => {
+          if ("error" in response) {
+            console.warn(
+              "[Meets] Webcam codec fallback report was not applied:",
+              response.error,
+            );
+            return;
+          }
+          applyWebcamCodecPolicyNotification({
+            ...response.webcamCodecPolicy,
+            roomId: serverRoomIdRef.current ?? currentRoomIdRef.current ?? undefined,
+          });
+        },
+      );
+      return true;
+    },
+    [
+      applyWebcamCodecPolicyNotification,
+      currentRoomIdRef,
+      serverRoomIdRef,
+      deviceRef,
+      selectedVideoInputDeviceId,
+      socketRef,
+      webcamCodecPolicyRef,
+    ],
+  );
+
   const applyServerActiveSpeaker = useCallback(
     (userId: string | null | undefined) => {
       const nextSpeakerId =
@@ -2283,6 +2795,10 @@ export function useMeetSocket({
     (producerId: string, paused: boolean) => {
       const wasPaused = producerPausedStateRef.current.get(producerId);
       producerPausedStateRef.current.set(producerId, paused);
+      producerPausedStateRevisionRef.current.set(
+        producerId,
+        (producerPausedStateRevisionRef.current.get(producerId) ?? 0) + 1,
+      );
 
       mutedConsumerSinceRef.current.delete(producerId);
       clearStaleConsumerRecoveryTimeout(producerId);
@@ -2344,24 +2860,54 @@ export function useMeetSocket({
 
   const closeConsumerForSameProducerReconsume = useCallback(
     (producerId: string, consumerToClose?: Consumer | null) => {
-      pendingProducersRef.current.delete(producerId);
-      consumeRetryAttemptsRef.current.delete(producerId);
-      const scheduledRecoveryTimeout =
-        videoStallRecoveryTimeoutsRef.current.get(producerId);
-      if (scheduledRecoveryTimeout != null) {
-        window.clearTimeout(scheduledRecoveryTimeout);
-        videoStallRecoveryTimeoutsRef.current.delete(producerId);
-      }
-      clearConsumerResumeRetry(producerId);
-      clearStaleConsumerRecoveryTimeout(producerId);
-      clearStaleReplacementCleanupTimeout(producerId);
-      mutedConsumerSinceRef.current.delete(producerId);
-      adaptivelyPausedConsumerProducerIdsRef.current.delete(producerId);
-      consumerTelemetryRef.current.delete(producerId);
-      videoFreezeStatsRef.current.delete(producerId);
+      const currentConsumer = consumersRef.current.get(producerId) ?? null;
+      const consumer = consumerToClose ?? currentConsumer;
+      const consumerIdToClose = consumer?.id ?? null;
+      const closesCurrentGeneration =
+        consumerIdToClose !== null &&
+        isCurrentConsumerGeneration({
+          currentConsumerId: currentConsumer?.id ?? null,
+          closingConsumerId: consumerIdToClose,
+        });
 
-      const consumer = consumerToClose ?? consumersRef.current.get(producerId);
+      // These ledgers are producer-scoped and now describe the committed
+      // successor. A late close of its displaced predecessor may only clean up
+      // exact-ID telemetry and media resources.
+      if (closesCurrentGeneration) {
+        pendingProducersRef.current.delete(producerId);
+        consumeRetryAttemptsRef.current.delete(producerId);
+        const scheduledRecoveryTimeout =
+          videoStallRecoveryTimeoutsRef.current.get(producerId);
+        if (scheduledRecoveryTimeout != null) {
+          window.clearTimeout(scheduledRecoveryTimeout);
+          videoStallRecoveryTimeoutsRef.current.delete(producerId);
+        }
+        clearConsumerResumeRetry(producerId);
+        clearStaleConsumerRecoveryTimeout(producerId);
+        clearStaleReplacementCleanupTimeout(producerId);
+        mutedConsumerSinceRef.current.delete(producerId);
+        adaptivelyPausedConsumerProducerIdsRef.current.delete(producerId);
+        videoFreezeStatsRef.current.delete(producerId);
+      }
+      if (
+        consumerIdToClose !== null &&
+        consumerTelemetryRef.current.get(producerId)?.consumerId ===
+          consumerIdToClose
+      ) {
+        consumerTelemetryRef.current.delete(producerId);
+      }
+      if (consumerIdToClose !== null) {
+        pendingConsumerTelemetryByIdRef.current.delete(consumerIdToClose);
+      }
+
       if (!consumer) return;
+      if (consumer.kind === "video") {
+        adaptiveVideoReceiverLifecycleRef.current({
+          type: "removing",
+          producerId,
+          consumer,
+        });
+      }
       try {
         consumer.track.onmute = null;
         consumer.track.onunmute = null;
@@ -2373,6 +2919,7 @@ export function useMeetSocket({
       }
     },
     [
+      adaptiveVideoReceiverLifecycleRef,
       adaptivelyPausedConsumerProducerIdsRef,
       clearConsumerResumeRetry,
       clearStaleConsumerRecoveryTimeout,
@@ -2384,6 +2931,7 @@ export function useMeetSocket({
       pendingProducersRef,
       videoFreezeStatsRef,
       videoStallRecoveryTimeoutsRef,
+      pendingConsumerTelemetryByIdRef,
     ],
   );
 
@@ -2399,15 +2947,51 @@ export function useMeetSocket({
       }
       clearConsumerResumeRetry(producerId);
       clearStaleConsumerRecoveryTimeout(producerId);
+      const startupLatencyResetTimeout =
+        webcamStartupLatencyResetTimeoutsRef.current.get(producerId);
+      if (startupLatencyResetTimeout != null) {
+        window.clearTimeout(startupLatencyResetTimeout);
+        webcamStartupLatencyResetTimeoutsRef.current.delete(producerId);
+      }
+      const startupLatencyResetState =
+        webcamStartupLatencyResetStateRef.current.get(producerId);
+      if (startupLatencyResetState) {
+        settleWebcamStartupLatencyReset(
+          startupLatencyResetState,
+          "cancelled",
+          "producer-closed",
+        );
+        webcamStartupLatencyResetStateRef.current.delete(producerId);
+      }
+      webcamStartupLatencyResetQueueRef.current =
+        webcamStartupLatencyResetQueueRef.current.filter(
+          (queuedProducerId) => queuedProducerId !== producerId,
+        );
       forgetAnnouncedProducer(producerId);
       mutedConsumerSinceRef.current.delete(producerId);
       producerPausedStateRef.current.delete(producerId);
+      producerPausedStateRevisionRef.current.delete(producerId);
       adaptivelyPausedConsumerProducerIdsRef.current.delete(producerId);
       consumerTelemetryRef.current.delete(producerId);
+      for (const [
+        pendingConsumerId,
+        pendingTelemetry,
+      ] of pendingConsumerTelemetryByIdRef.current.entries()) {
+        if (pendingTelemetry.producerId === producerId) {
+          pendingConsumerTelemetryByIdRef.current.delete(pendingConsumerId);
+        }
+      }
       videoFreezeStatsRef.current.delete(producerId);
       consumerRecoveryInFlightRef.current.delete(producerId);
       const consumer = consumersRef.current.get(producerId);
       if (consumer) {
+        if (consumer.kind === "video") {
+          adaptiveVideoReceiverLifecycleRef.current({
+            type: "removing",
+            producerId,
+            consumer,
+          });
+        }
         try {
           consumer.track.onmute = null;
           consumer.track.onunmute = null;
@@ -2550,6 +3134,7 @@ export function useMeetSocket({
       announcedRemoteProducersRef.current.delete(producerId);
     },
     [
+      adaptiveVideoReceiverLifecycleRef,
       consumersRef,
       dispatchParticipants,
       pendingProducersRef,
@@ -2567,50 +3152,122 @@ export function useMeetSocket({
       announcedRemoteProducersRef,
       clearStaleReplacementCleanupTimeout,
       setActiveScreenShareId,
+      settleWebcamStartupLatencyReset,
+      pendingConsumerTelemetryByIdRef,
     ],
   );
 
   const closeServerConsumer = useCallback(
-    (consumerId?: string | null) => {
-      if (!consumerId) return;
+    (consumerId?: string | null): Promise<boolean> => {
+      if (!consumerId) return Promise.resolve(false);
 
-      const existingTimeout =
-        closeConsumerRetryTimeoutsRef.current.get(consumerId);
-      if (existingTimeout != null) {
-        window.clearTimeout(existingTimeout);
-        closeConsumerRetryTimeoutsRef.current.delete(consumerId);
-      }
+      const existingOperation = closeConsumerOperationsRef.current.get(consumerId);
+      if (existingOperation) return existingOperation.promise;
 
-      const retryStartedAt = Date.now();
-      const scheduleCloseRetry = (attempt: number) => {
-        if (Date.now() - retryStartedAt >= CLOSE_CONSUMER_RETRY_WINDOW_MS) {
+      const retryDeadlineAt = Date.now() + CLOSE_CONSUMER_RETRY_WINDOW_MS;
+      let settled = false;
+      let resolveOperation: (success: boolean) => void = () => {};
+      const promise = new Promise<boolean>((resolve) => {
+        resolveOperation = resolve;
+      });
+      const operation: ServerConsumerCloseOperation = {
+        promise,
+        settle: (success) => {
+          if (settled) return;
+          settled = true;
+          const timeoutId =
+            closeConsumerRetryTimeoutsRef.current.get(consumerId);
+          if (timeoutId != null) window.clearTimeout(timeoutId);
           closeConsumerRetryTimeoutsRef.current.delete(consumerId);
-          console.warn("[Meets] Gave up closing server consumer after retry window:", {
-            consumerId,
-          });
+          closeConsumerOperationsRef.current.delete(consumerId);
+          resolveOperation(success);
+        },
+      };
+      closeConsumerOperationsRef.current.set(consumerId, operation);
+
+      const retryWindowRemainingMs = () => retryDeadlineAt - Date.now();
+      const giveUp = (reason: string) => {
+        console.warn("[Meets] Gave up closing server consumer:", {
+          consumerId,
+          reason,
+        });
+        operation.settle(false);
+      };
+      const scheduleCloseRetry = (attempt: number) => {
+        const remainingMs = retryWindowRemainingMs();
+        if (remainingMs <= 0) {
+          giveUp("retry window exhausted");
           return;
         }
 
-        const timeoutId = window.setTimeout(() => {
-          closeConsumerRetryTimeoutsRef.current.delete(consumerId);
-          closeWithRetry(attempt);
-        }, CLOSE_CONSUMER_RETRY_DELAY_MS);
+        const timeoutId = window.setTimeout(
+          () => {
+            if (
+              closeConsumerRetryTimeoutsRef.current.get(consumerId) !==
+              timeoutId
+            ) {
+              return;
+            }
+            closeConsumerRetryTimeoutsRef.current.delete(consumerId);
+            closeWithRetry(attempt);
+          },
+          Math.min(CLOSE_CONSUMER_RETRY_DELAY_MS, remainingMs),
+        );
         closeConsumerRetryTimeoutsRef.current.set(consumerId, timeoutId);
       };
 
       const closeWithRetry = (attempt: number) => {
+        const remainingMs = retryWindowRemainingMs();
+        if (remainingMs <= 0) {
+          giveUp("retry window exhausted");
+          return;
+        }
         const socket = socketRef.current;
         if (!socket?.connected) {
           scheduleCloseRetry(attempt);
           return;
         }
 
+        const ackTimeoutId = window.setTimeout(() => {
+          if (
+            closeConsumerRetryTimeoutsRef.current.get(consumerId) !==
+            ackTimeoutId
+          ) {
+            return;
+          }
+          closeConsumerRetryTimeoutsRef.current.delete(consumerId);
+          if (attempt + 1 >= CLOSE_CONSUMER_MAX_ATTEMPTS) {
+            giveUp("acknowledgement timeout");
+            return;
+          }
+          scheduleCloseRetry(attempt + 1);
+        }, Math.max(
+          1,
+          Math.min(CLOSE_CONSUMER_ACK_TIMEOUT_MS, remainingMs),
+        ));
+        closeConsumerRetryTimeoutsRef.current.set(consumerId, ackTimeoutId);
+
         socket.emit(
           "closeConsumer",
           { consumerId },
           (response: { success: boolean } | { error: string }) => {
+            if (
+              closeConsumerRetryTimeoutsRef.current.get(consumerId) !==
+              ackTimeoutId
+            ) {
+              return;
+            }
+            window.clearTimeout(ackTimeoutId);
             closeConsumerRetryTimeoutsRef.current.delete(consumerId);
-            if (!("error" in response)) return;
+            if (!("error" in response) && response.success === true) {
+              operation.settle(true);
+              return;
+            }
+
+            if (!("error" in response)) {
+              giveUp("negative acknowledgement");
+              return;
+            }
 
             if (
               attempt + 1 >= CLOSE_CONSUMER_MAX_ATTEMPTS ||
@@ -2618,10 +3275,7 @@ export function useMeetSocket({
                 response.error,
               )
             ) {
-              console.warn("[Meets] Failed to close server consumer:", {
-                consumerId,
-                error: response.error,
-              });
+              giveUp(response.error);
               return;
             }
 
@@ -2631,8 +3285,188 @@ export function useMeetSocket({
       };
 
       closeWithRetry(0);
+      return promise;
     },
-    [closeConsumerRetryTimeoutsRef, socketRef],
+    [closeConsumerOperationsRef, closeConsumerRetryTimeoutsRef, socketRef],
+  );
+
+  const closeServerConsumerBeforeDeadline = useCallback(
+    (consumerId: string, deadlineAt: number): Promise<boolean> => {
+      const closePromise = closeServerConsumer(consumerId);
+      const remainingMs = deadlineAt - Date.now();
+      if (remainingMs <= 0) return Promise.resolve(false);
+
+      return new Promise((resolve) => {
+        let settled = false;
+        const timeoutId = window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          resolve(false);
+        }, remainingMs);
+        void closePromise.then((closed) => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeoutId);
+          resolve(closed);
+        });
+      });
+    },
+    [closeServerConsumer],
+  );
+
+  const resumeConsumerForMakeBeforeBreak = useCallback(
+    async ({
+      consumerId,
+      deadlineAt,
+      isOwned,
+    }: {
+      consumerId: string;
+      deadlineAt: number;
+      isOwned: () => boolean;
+    }): Promise<boolean> => {
+      for (
+        let attempt = 0;
+        attempt < WEBCAM_STARTUP_RESET_RESUME_MAX_ATTEMPTS;
+        attempt += 1
+      ) {
+        if (!isOwned()) return false;
+        const socket = socketRef.current;
+        const remainingMs = deadlineAt - Date.now();
+        if (!socket?.connected || remainingMs <= 0) return false;
+
+        const result = await new Promise<"success" | "retry" | "fatal">(
+          (resolve) => {
+            let settled = false;
+            const timeoutId = window.setTimeout(() => {
+              if (settled) return;
+              settled = true;
+              resolve("retry");
+            }, Math.max(1, Math.min(
+              WEBCAM_STARTUP_RESET_RESUME_ACK_TIMEOUT_MS,
+              remainingMs,
+            )));
+            socket.emit(
+              "resumeConsumer",
+              { consumerId, requestKeyFrame: true },
+              (response?: {
+                success?: boolean;
+                error?: string;
+                code?: string;
+              }) => {
+                if (settled) return;
+                settled = true;
+                window.clearTimeout(timeoutId);
+                if (response?.success === true && !response.error) {
+                  resolve("success");
+                  return;
+                }
+                const error = response?.error ?? "missing resume acknowledgement";
+                const retryable =
+                  response?.code === "rate_limited" ||
+                  /too many consumer control requests|retry shortly|timeout/i.test(
+                    error,
+                  );
+                resolve(retryable ? "retry" : "fatal");
+              },
+            );
+          },
+        );
+        if (result === "success") return isOwned();
+        if (result === "fatal") return false;
+
+        const retryDelayMs = Math.min(250, deadlineAt - Date.now());
+        if (retryDelayMs <= 0) return false;
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, retryDelayMs);
+        });
+      }
+      return false;
+    },
+    [socketRef],
+  );
+
+  const prepareConsumerMakeBeforeBreak = useCallback(
+    async ({
+      producerId,
+      consumer,
+      expectedPreviousConsumerId,
+      deadlineAt,
+      resetEpoch,
+    }: {
+      producerId: string;
+      consumer: Consumer;
+      expectedPreviousConsumerId: string;
+      deadlineAt: number;
+      resetEpoch: number;
+    }): Promise<boolean> => {
+      const verificationStartedAt = Date.now();
+      const verificationDeadlineAt = Math.min(
+        deadlineAt,
+        verificationStartedAt + WEBCAM_STARTUP_RESET_VERIFY_TIMEOUT_MS,
+      );
+      const isOwned = () =>
+        (() => {
+          const previousConsumer = consumersRef.current.get(producerId);
+          return (
+            resetEpoch === webcamStartupLatencyResetEpochRef.current &&
+            !consumer.closed &&
+            previousConsumer?.id === expectedPreviousConsumerId &&
+            !previousConsumer.closed &&
+            previousConsumer.track.readyState === "live" &&
+            !previousConsumer.paused &&
+            producerPausedStateRef.current.get(producerId) !== true &&
+            !adaptivelyPausedConsumerProducerIdsRef.current.has(producerId)
+          );
+        })();
+
+      const resumed = await resumeConsumerForMakeBeforeBreak({
+        consumerId: consumer.id,
+        deadlineAt: verificationDeadlineAt,
+        isOwned,
+      });
+      if (!resumed) return false;
+
+      while (isOwned()) {
+        const now = Date.now();
+        const remainingMs = verificationDeadlineAt - now;
+        const flow = await readConsumerVideoFlowSnapshotWithin(
+          consumer,
+          Math.min(500, Math.max(1, remainingMs)),
+        );
+        if (!isOwned()) return false;
+        const decision = decideWebcamStartupResetVerification({
+          now: Date.now(),
+          verificationStartedAt,
+          verificationTimeoutMs:
+            verificationDeadlineAt - verificationStartedAt,
+          replacementConsumerId: consumer.id,
+          currentConsumerId: consumer.id,
+          consumerClosed: consumer.closed,
+          trackReadyState: consumer.track.readyState,
+          trackMuted: consumer.track.muted,
+          framesDecoded: flow.framesDecoded,
+          bytesReceived: flow.bytesReceived,
+        });
+        if (decision.action === "complete") return true;
+        if (decision.action !== "wait") return false;
+
+        const pollDelayMs = Math.min(
+          WEBCAM_STARTUP_RESET_VERIFY_POLL_MS,
+          verificationDeadlineAt - Date.now(),
+        );
+        if (pollDelayMs <= 0) return false;
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, pollDelayMs);
+        });
+      }
+      return false;
+    },
+    [
+      adaptivelyPausedConsumerProducerIdsRef,
+      consumersRef,
+      producerPausedStateRef,
+      resumeConsumerForMakeBeforeBreak,
+    ],
   );
 
   const dropDepartedProducer = useCallback(
@@ -2643,7 +3477,7 @@ export function useMeetSocket({
         existingConsumer ||
         producerMapRef.current.has(producerId)
       ) {
-        closeServerConsumer(existingConsumer?.id);
+        void closeServerConsumer(existingConsumer?.id);
         handleProducerClosed(producerId);
         return;
       }
@@ -2652,6 +3486,7 @@ export function useMeetSocket({
       pendingProducersRef.current.delete(producerId);
       consumeRetryAttemptsRef.current.delete(producerId);
       producerPausedStateRef.current.delete(producerId);
+      producerPausedStateRevisionRef.current.delete(producerId);
     },
     [
       announcedRemoteProducersRef,
@@ -2974,52 +3809,112 @@ export function useMeetSocket({
     ],
   );
 
-  const ensureProducerTransport = useCallback(async (): Promise<boolean> => {
-    const existingTransport = producerTransportRef.current;
-    if (getUsableProducerTransport(existingTransport)) return true;
-    if (existingTransport) {
-      try {
-        intentionallyClosedTransportsRef.current.add(existingTransport);
-        existingTransport.close();
-      } catch {}
-      producerTransportRef.current = null;
-    }
+  const ensureProducerTransport = useCallback(
+    async (
+      options: ProducerTransportEnsureOptions = {},
+    ): Promise<boolean> => {
+      let pendingResetEpoch = options.forCameraPublish
+        ? pendingCameraCodecTransportResetEpochRef.current
+        : null;
 
-    const socket = socketRef.current;
-    const device = deviceRef.current;
-    if (!socket?.connected || !device) {
-      console.warn("[Meets] Cannot create producer transport yet:", {
-        hasSocket: Boolean(socket),
-        socketConnected: Boolean(socket?.connected),
-        hasDevice: Boolean(device),
-      });
-      return false;
-    }
-
-    if (producerTransportCreatePromiseRef.current) {
-      return producerTransportCreatePromiseRef.current;
-    }
-
-    producerTransportCreatePromiseRef.current = (async () => {
-      try {
-        await createProducerTransport(socket, device);
-        const transport = producerTransportRef.current;
-        return Boolean(transport && !transport.closed);
-      } catch (err) {
-        console.error("[Meets] Failed to create producer transport:", err);
-        return false;
-      } finally {
-        producerTransportCreatePromiseRef.current = null;
+      // If another caller is already creating a transport, let it settle before
+      // deciding whether the pending codec transition still requires one more
+      // fresh PeerConnection. This prevents closing a transport while its create
+      // acknowledgement is still being installed.
+      if (
+        pendingResetEpoch !== null &&
+        producerTransportCreatePromiseRef.current
+      ) {
+        await producerTransportCreatePromiseRef.current;
+        pendingResetEpoch = pendingCameraCodecTransportResetEpochRef.current;
       }
-    })();
 
-    return producerTransportCreatePromiseRef.current;
-  }, [
-    createProducerTransport,
-    deviceRef,
-    producerTransportRef,
-    socketRef,
-  ]);
+      const existingTransport = producerTransportRef.current;
+      const hasUsableTransport = Boolean(
+        getUsableProducerTransport(existingTransport),
+      );
+      if (
+        !shouldRecreateProducerTransport({
+          hasUsableTransport,
+          pendingCameraCodecResetEpoch: pendingResetEpoch,
+          forCameraPublish: options.forCameraPublish === true,
+        })
+      ) {
+        return true;
+      }
+      if (existingTransport) {
+        try {
+          intentionallyClosedTransportsRef.current.add(existingTransport);
+          existingTransport.close();
+        } catch {}
+        producerTransportRef.current = null;
+      }
+
+      const socket = socketRef.current;
+      const device = deviceRef.current;
+      if (!socket?.connected || !device) {
+        console.warn("[Meets] Cannot create producer transport yet:", {
+          hasSocket: Boolean(socket),
+          socketConnected: Boolean(socket?.connected),
+          hasDevice: Boolean(device),
+        });
+        return false;
+      }
+
+      if (producerTransportCreatePromiseRef.current) {
+        return producerTransportCreatePromiseRef.current;
+      }
+
+      const codecResetEpochSatisfiedByCreation =
+        pendingCameraCodecTransportResetEpochRef.current;
+      producerTransportCreatePromiseRef.current = (async () => {
+        try {
+          await createProducerTransport(socket, device);
+          const transport = producerTransportRef.current;
+          const ready = Boolean(transport && !transport.closed);
+          if (
+            ready &&
+            screenShareStreamRef.current &&
+            (!screenProducerRef.current || screenProducerRef.current.closed)
+          ) {
+            try {
+              await republishScreenShare("producer transport recreation");
+            } catch (error) {
+              console.warn(
+                "[Meets] Screen share recovery after producer transport recreation failed:",
+                error,
+              );
+            }
+          }
+          if (
+            ready &&
+            codecResetEpochSatisfiedByCreation !== null &&
+            pendingCameraCodecTransportResetEpochRef.current ===
+              codecResetEpochSatisfiedByCreation
+          ) {
+            pendingCameraCodecTransportResetEpochRef.current = null;
+          }
+          return ready;
+        } catch (err) {
+          console.error("[Meets] Failed to create producer transport:", err);
+          return false;
+        } finally {
+          producerTransportCreatePromiseRef.current = null;
+        }
+      })();
+
+      return producerTransportCreatePromiseRef.current;
+    },
+    [
+      createProducerTransport,
+      deviceRef,
+      producerTransportRef,
+      republishScreenShare,
+      screenProducerRef,
+      screenShareStreamRef,
+      socketRef,
+    ],
+  );
 
   const createConsumerTransport = useCallback(
     async (socket: Socket, device: Device): Promise<void> => {
@@ -3295,7 +4190,10 @@ export function useMeetSocket({
       }
       if (videoTrack) {
         const quality = videoQualityRef.current;
-        const preferredWebcamCodec = getPreferredWebcamCodec(deviceRef.current);
+        const preferredWebcamCodec = getPreferredWebcamCodec(
+          deviceRef.current,
+          webcamCodecPolicyRef.current,
+        );
         try {
           const videoProducer = await produceWebcamTrack({
             transport,
@@ -3304,6 +4202,7 @@ export function useMeetSocket({
             networkProfile: getPublishNetworkProfile(),
             paused: shouldPauseVideo,
             preferredCodec: preferredWebcamCodec,
+            codecPolicy: webcamCodecPolicyRef.current,
           });
 
           if (shouldPauseVideo) {
@@ -3359,6 +4258,7 @@ export function useMeetSocket({
                 networkProfile: getPublishNetworkProfile(),
                 paused: shouldPauseVideo,
                 preferredCodec: preferredWebcamCodec,
+                codecPolicy: webcamCodecPolicyRef.current,
               });
 
               if (shouldPauseVideo) {
@@ -3382,9 +4282,11 @@ export function useMeetSocket({
                 "[Meets] Failed to produce raw fallback video:",
                 fallbackErr,
               );
+              reportCurrentWebcamCodecFailure(fallbackErr);
             }
           } else {
             console.error("[Meets] Failed to produce video:", err);
+            reportCurrentWebcamCodecFailure(err);
           }
 
           if (mediaIntent.isCameraOn) {
@@ -3442,6 +4344,8 @@ export function useMeetSocket({
       resolveMediaPublishIntent,
       requestAudioProducerRecovery,
       requestCameraProducerRecovery,
+      reportCurrentWebcamCodecFailure,
+      webcamCodecPolicyRef,
     ],
   );
 
@@ -3469,17 +4373,54 @@ export function useMeetSocket({
         consumeRetryAttemptsRef.current.delete(producerInfo.producerId);
         return;
       }
+      const ownsInitialConsumeSlot = !options.replaceExisting;
+      if (
+        ownsInitialConsumeSlot &&
+        consumerConsumeInFlightRef.current.has(producerInfo.producerId)
+      ) {
+        return;
+      }
 
       const socket = socketRef.current;
       const device = deviceRef.current;
       const transport = consumerTransportRef.current;
+      const queueFailureRetry = (delayMs: number) => {
+        if (
+          options.retryOnFailure !== false &&
+          socketRef.current === socket &&
+          consumerTransportRef.current === transport &&
+          !transport?.closed &&
+          socket?.connected
+        ) {
+          queueProducerConsumeRetry(producerInfo, delayMs);
+        }
+      };
 
       if (!socket || !device || !transport) {
-        queueProducerConsumeRetry(producerInfo, 300);
+        if (options.retryOnFailure !== false) {
+          queueProducerConsumeRetry(producerInfo, 300);
+        }
         return;
       }
 
-      return new Promise((resolve) => {
+      const consumeSlotOwner = Symbol(producerInfo.producerId);
+      if (ownsInitialConsumeSlot) {
+        consumerConsumeInFlightRef.current.set(
+          producerInfo.producerId,
+          consumeSlotOwner,
+        );
+      }
+      const isCapturedConsumeContextCurrent = (consumer?: Consumer) =>
+        socketRef.current === socket &&
+        consumerTransportRef.current === transport &&
+        socket.connected &&
+        !transport.closed &&
+        (!ownsInitialConsumeSlot ||
+          consumerConsumeInFlightRef.current.get(producerInfo.producerId) ===
+            consumeSlotOwner) &&
+        (!consumer ||
+          (!consumer.closed && consumer.track.readyState === "live"));
+      return new Promise<void>((resolve) => {
         const settleConsume = startSocketAckTimeout("consume", (error) => {
           console.warn("[Meets] Consume acknowledgement timed out:", {
             producerId: producerInfo.producerId,
@@ -3487,7 +4428,7 @@ export function useMeetSocket({
             type: producerInfo.type,
             error: error.message,
           });
-          queueProducerConsumeRetry(producerInfo, 450);
+          queueFailureRetry(450);
           resolve();
         });
         const existingWebcamVideoConsumerCount =
@@ -3507,12 +4448,16 @@ export function useMeetSocket({
           (dataSaverMode || !isDocumentVisible) &&
           producerInfo.kind === "video" &&
           producerInfo.type === "webcam";
+        const producerPauseRevisionAtRequest =
+          producerPausedStateRevisionRef.current.get(
+            producerInfo.producerId,
+          ) ?? 0;
         socket.emit(
           "consume",
           {
             transportId: transport.id,
             producerId: producerInfo.producerId,
-            rtpCapabilities: device.rtpCapabilities,
+            rtpCapabilities: device.recvRtpCapabilities,
             ...getInitialConsumerPreferences(producerInfo, {
               preferHighWebcamLayer:
                 !knownScreenShareVideoActive &&
@@ -3523,10 +4468,16 @@ export function useMeetSocket({
             }),
           },
           async (response: ConsumeResponse | { error: string }) => {
-            if (!settleConsume()) return;
+            if (!settleConsume()) {
+              if (!("error" in response)) {
+                pendingConsumerTelemetryByIdRef.current.delete(response.id);
+                void closeServerConsumer(response.id);
+              }
+              return;
+            }
             if (shouldIgnoreDepartedParticipant(producerInfo.producerUserId)) {
               if (!("error" in response)) {
-                closeServerConsumer(response.id);
+                void closeServerConsumer(response.id);
               }
               dropDepartedProducer(producerInfo);
               resolve();
@@ -3535,9 +4486,36 @@ export function useMeetSocket({
 
             if ("error" in response) {
               console.error("[Meets] Consume error:", response.error);
-              queueProducerConsumeRetry(producerInfo, 300);
+              queueFailureRetry(300);
               resolve();
               return;
+            }
+
+            if (!isCapturedConsumeContextCurrent()) {
+              pendingConsumerTelemetryByIdRef.current.delete(response.id);
+              void closeServerConsumer(response.id);
+              resolve();
+              return;
+            }
+            const acknowledgedProducerPaused = Boolean(
+              response.producerPaused ?? producerInfo.paused,
+            );
+            // Apply the ACK snapshot before the first await. Any subsequently
+            // ordered pause/unpause notification then wins and remains the
+            // source of truth through candidate verification/presentation.
+            if (
+              isProducerPauseSnapshotCurrent({
+                requestRevision: producerPauseRevisionAtRequest,
+                currentRevision:
+                  producerPausedStateRevisionRef.current.get(
+                    producerInfo.producerId,
+                  ) ?? 0,
+              })
+            ) {
+              setProducerPausedState(
+                producerInfo.producerId,
+                acknowledgedProducerPaused,
+              );
             }
 
             try {
@@ -3550,14 +4528,37 @@ export function useMeetSocket({
                     response.rtpParameters,
                   ),
               });
-              if (shouldIgnoreDepartedParticipant(producerInfo.producerUserId)) {
-                closeServerConsumer(response.id);
+              const discardUncommittedConsumer = async ({
+                confirmRollback,
+              }: {
+                confirmRollback: boolean;
+              }) => {
+                pendingConsumerTelemetryByIdRef.current.delete(consumer.id);
                 try {
                   consumer.track.onmute = null;
                   consumer.track.onunmute = null;
                   consumer.track.stop();
                   consumer.close();
                 } catch {}
+                if (confirmRollback && options.makeBeforeBreak) {
+                  options.makeBeforeBreak.rollbackOutcome.confirmed =
+                    await closeServerConsumerBeforeDeadline(
+                      consumer.id,
+                      options.makeBeforeBreak.deadlineAt,
+                    );
+                  return;
+                }
+                void closeServerConsumer(consumer.id);
+              };
+              if (!isCapturedConsumeContextCurrent(consumer)) {
+                await discardUncommittedConsumer({
+                  confirmRollback: Boolean(options.makeBeforeBreak),
+                });
+                resolve();
+                return;
+              }
+              if (shouldIgnoreDepartedParticipant(producerInfo.producerUserId)) {
+                await discardUncommittedConsumer({ confirmRollback: false });
                 dropDepartedProducer(producerInfo);
                 resolve();
                 return;
@@ -3575,30 +4576,116 @@ export function useMeetSocket({
                 // consume was in flight. Attaching this stream would clobber
                 // the newer producer's stream and leave the participant
                 // playing a dead track once this one closes.
-                closeServerConsumer(response.id);
-                closeConsumerForSameProducerReconsume(
-                  producerInfo.producerId,
-                  consumer,
-                );
+                await discardUncommittedConsumer({ confirmRollback: false });
+                resolve();
+                return;
+              }
+
+              let preparedMakeBeforeBreak = false;
+              if (options.makeBeforeBreak) {
+                const expectedPreviousConsumerId =
+                  options.makeBeforeBreak.expectedPreviousConsumerId;
+                const stillOwnsPreviousGeneration =
+                  existingConsumer?.id === expectedPreviousConsumerId &&
+                  consumersRef.current.get(producerInfo.producerId)?.id ===
+                    expectedPreviousConsumerId;
+                if (
+                  response.kind !== "video" ||
+                  !stillOwnsPreviousGeneration ||
+                  consumer.closed ||
+                  Date.now() >= options.makeBeforeBreak.deadlineAt
+                ) {
+                  await discardUncommittedConsumer({ confirmRollback: true });
+                  resolve();
+                  return;
+                }
+
+                preparedMakeBeforeBreak =
+                  await prepareConsumerMakeBeforeBreak({
+                    producerId: producerInfo.producerId,
+                    consumer,
+                    expectedPreviousConsumerId,
+                    deadlineAt: options.makeBeforeBreak.deadlineAt,
+                    resetEpoch: options.makeBeforeBreak.resetEpoch,
+                  });
+                if (
+                  !preparedMakeBeforeBreak ||
+                  consumer.closed ||
+                  consumersRef.current.get(producerInfo.producerId)?.id !==
+                    expectedPreviousConsumerId ||
+                  producerPausedStateRef.current.get(
+                    producerInfo.producerId,
+                  ) === true ||
+                  adaptivelyPausedConsumerProducerIdsRef.current.has(
+                    producerInfo.producerId,
+                  ) ||
+                  isSupersededProducer(producerInfo)
+                ) {
+                  await discardUncommittedConsumer({ confirmRollback: true });
+                  resolve();
+                  return;
+                }
+              }
+
+              if (!isCapturedConsumeContextCurrent(consumer)) {
+                await discardUncommittedConsumer({
+                  confirmRollback: Boolean(options.makeBeforeBreak),
+                });
+                resolve();
+                return;
+              }
+
+              const consumerBeingReplaced =
+                consumersRef.current.get(producerInfo.producerId) ?? null;
+              const replacedConsumerTelemetry =
+                consumerTelemetryRef.current.get(producerInfo.producerId) ??
+                null;
+              if (
+                !options.replaceExisting &&
+                consumerBeingReplaced &&
+                consumerBeingReplaced.id !== consumer.id
+              ) {
+                await discardUncommittedConsumer({ confirmRollback: false });
                 resolve();
                 return;
               }
 
               consumersRef.current.set(producerInfo.producerId, consumer);
+              const stagedTelemetry =
+                pendingConsumerTelemetryByIdRef.current.get(consumer.id);
+              pendingConsumerTelemetryByIdRef.current.delete(consumer.id);
+              if (stagedTelemetry) {
+                consumerTelemetryRef.current.set(
+                  producerInfo.producerId,
+                  stagedTelemetry,
+                );
+              } else if (
+                consumerTelemetryRef.current.get(producerInfo.producerId)
+                  ?.consumerId !== consumer.id
+              ) {
+                consumerTelemetryRef.current.delete(producerInfo.producerId);
+              }
               announcedRemoteProducersRef.current.delete(
                 producerInfo.producerId,
               );
               consumeRetryAttemptsRef.current.delete(producerInfo.producerId);
-              producerMapRef.current.set(producerInfo.producerId, {
+              const producerEntry = {
                 userId: producerInfo.producerUserId,
                 kind: response.kind,
                 type: producerInfo.type,
-              });
-              setProducerPausedState(
+              };
+              producerMapRef.current.set(
                 producerInfo.producerId,
-                Boolean(producerInfo.paused),
+                producerEntry,
               );
-
+              if (consumer.kind === "video") {
+                adaptiveVideoReceiverLifecycleRef.current({
+                  type: "added",
+                  producerId: producerInfo.producerId,
+                  consumer,
+                  info: producerEntry,
+                });
+              }
               const updateMutedState = (muted: boolean) => {
                 dispatchParticipants({
                   type: "UPDATE_MUTED",
@@ -3671,6 +4758,12 @@ export function useMeetSocket({
 
               const handleTrackMuted = () => {
                 if (
+                  consumersRef.current.get(producerInfo.producerId)?.id !==
+                  consumer.id
+                ) {
+                  return;
+                }
+                if (
                   response.kind === "video" &&
                   adaptivelyPausedConsumerProducerIdsRef.current.has(
                     producerInfo.producerId,
@@ -3740,6 +4833,12 @@ export function useMeetSocket({
               };
 
               const handleTrackUnmuted = () => {
+                if (
+                  consumersRef.current.get(producerInfo.producerId)?.id !==
+                  consumer.id
+                ) {
+                  return;
+                }
                 mutedConsumerSinceRef.current.delete(producerInfo.producerId);
                 setProducerPausedState(producerInfo.producerId, false);
                 clearStaleConsumerRecoveryTimeout(producerInfo.producerId);
@@ -3755,6 +4854,23 @@ export function useMeetSocket({
               };
 
               consumer.on("trackended", () => {
+                if (
+                  consumersRef.current.get(producerInfo.producerId)?.id !==
+                  consumer.id
+                ) {
+                  return;
+                }
+                if (
+                  preparedMakeBeforeBreak &&
+                  consumerBeingReplaced &&
+                  !consumerBeingReplaced.closed &&
+                  consumerBeingReplaced.track.readyState === "live"
+                ) {
+                  // The presentation waiter owns this provisional generation.
+                  // Keep it locally current long enough for the shared rollback
+                  // path to restore the still-flowing predecessor.
+                  return;
+                }
                 clearStaleConsumerRecoveryTimeout(producerInfo.producerId);
                 mutedConsumerSinceRef.current.delete(producerInfo.producerId);
                 const existingTimeout = videoStallRecoveryTimeoutsRef.current.get(
@@ -3777,6 +4893,21 @@ export function useMeetSocket({
                 handleTrackMuted();
               }
               const stream = new MediaStream([consumer.track]);
+              const presentationPromise =
+                preparedMakeBeforeBreak &&
+                response.kind === "video" &&
+                options.makeBeforeBreak
+                  ? waitForRemoteVideoPresentation({
+                      stream,
+                      timeoutMs: Math.max(
+                        1,
+                        Math.min(
+                          WEBCAM_STARTUP_RESET_PRESENTATION_TIMEOUT_MS,
+                          options.makeBeforeBreak.deadlineAt - Date.now(),
+                        ),
+                      ),
+                    })
+                  : null;
               dispatchParticipants({
                 type: "UPDATE_STREAM",
                 userId: producerInfo.producerUserId,
@@ -3798,14 +4929,192 @@ export function useMeetSocket({
                 setActiveScreenShareId(producerInfo.producerId);
               }
 
-              if (existingConsumer && existingConsumer.id !== consumer.id) {
+              if (
+                consumerBeingReplaced &&
+                consumerBeingReplaced.id !== consumer.id
+              ) {
+                const presentationResult = presentationPromise
+                  ? await presentationPromise
+                  : "unobserved";
+                if (isSupersededProducer(producerInfo)) {
+                  handleProducerClosed(producerInfo.producerId);
+                  closeConsumerForSameProducerReconsume(
+                    producerInfo.producerId,
+                    consumerBeingReplaced,
+                  );
+                  void closeServerConsumer(consumer.id);
+                  void closeServerConsumer(consumerBeingReplaced.id);
+                  resolve();
+                  return;
+                }
+                if (!isCapturedConsumeContextCurrent()) {
+                  if (
+                    consumersRef.current.get(producerInfo.producerId)?.id ===
+                    consumer.id
+                  ) {
+                    handleProducerClosed(producerInfo.producerId);
+                  } else {
+                    closeConsumerForSameProducerReconsume(
+                      producerInfo.producerId,
+                      consumer,
+                    );
+                  }
+                  closeConsumerForSameProducerReconsume(
+                    producerInfo.producerId,
+                    consumerBeingReplaced,
+                  );
+                  void closeServerConsumer(consumer.id);
+                  void closeServerConsumer(consumerBeingReplaced.id);
+                  resolve();
+                  return;
+                }
+                const candidateStillCurrent =
+                  consumersRef.current.get(producerInfo.producerId)?.id ===
+                  consumer.id;
+                const candidateRemainsPlayable =
+                  candidateStillCurrent &&
+                  isCapturedConsumeContextCurrent(consumer) &&
+                  !consumer.paused &&
+                  !consumer.track.muted &&
+                  producerPausedStateRef.current.get(
+                    producerInfo.producerId,
+                  ) !== true &&
+                  !adaptivelyPausedConsumerProducerIdsRef.current.has(
+                    producerInfo.producerId,
+                  );
+                const shouldRestorePredecessor =
+                  candidateStillCurrent &&
+                  (!candidateRemainsPlayable ||
+                    presentationResult === "observed-timeout") &&
+                  !consumerBeingReplaced.closed &&
+                  consumerBeingReplaced.track.readyState === "live";
+
+                if (shouldRestorePredecessor) {
+                  const candidateStallTimeout =
+                    videoStallRecoveryTimeoutsRef.current.get(
+                      producerInfo.producerId,
+                    );
+                  if (candidateStallTimeout != null) {
+                    window.clearTimeout(candidateStallTimeout);
+                    videoStallRecoveryTimeoutsRef.current.delete(
+                      producerInfo.producerId,
+                    );
+                  }
+                  clearConsumerResumeRetry(
+                    producerInfo.producerId,
+                    consumer.id,
+                  );
+                  clearStaleConsumerRecoveryTimeout(
+                    producerInfo.producerId,
+                  );
+                  mutedConsumerSinceRef.current.delete(
+                    producerInfo.producerId,
+                  );
+                  videoFreezeStatsRef.current.delete(
+                    producerInfo.producerId,
+                  );
+                  consumersRef.current.set(
+                    producerInfo.producerId,
+                    consumerBeingReplaced,
+                  );
+                  if (
+                    replacedConsumerTelemetry?.consumerId ===
+                    consumerBeingReplaced.id
+                  ) {
+                    consumerTelemetryRef.current.set(
+                      producerInfo.producerId,
+                      replacedConsumerTelemetry,
+                    );
+                  } else {
+                    consumerTelemetryRef.current.delete(
+                      producerInfo.producerId,
+                    );
+                  }
+                  if (consumerBeingReplaced.kind === "video") {
+                    adaptiveVideoReceiverLifecycleRef.current({
+                      type: "added",
+                      producerId: producerInfo.producerId,
+                      consumer: consumerBeingReplaced,
+                      info: producerEntry,
+                    });
+                  }
+                  dispatchParticipants({
+                    type: "UPDATE_STREAM",
+                    userId: producerInfo.producerUserId,
+                    kind: response.kind,
+                    streamType: producerInfo.type,
+                    stream: new MediaStream([consumerBeingReplaced.track]),
+                    producerId: producerInfo.producerId,
+                  });
+                  const restoredProducerPaused =
+                    producerPausedStateRef.current.get(
+                      producerInfo.producerId,
+                    ) ?? acknowledgedProducerPaused;
+                  if (isWebcamAudio) {
+                    updateMutedState(restoredProducerPaused);
+                  } else if (isWebcamVideo) {
+                    updateCameraState(restoredProducerPaused);
+                  }
+                  if (
+                    adaptivelyPausedConsumerProducerIdsRef.current.has(
+                      producerInfo.producerId,
+                    )
+                  ) {
+                    dispatchParticipants({
+                      type: "UPDATE_VIDEO_ADAPTIVE_PAUSED",
+                      userId: producerInfo.producerUserId,
+                      producerId: producerInfo.producerId,
+                      adaptivelyPaused: true,
+                    });
+                  }
+                  closeConsumerForSameProducerReconsume(
+                    producerInfo.producerId,
+                    consumer,
+                  );
+                  if (options.makeBeforeBreak) {
+                    options.makeBeforeBreak.rollbackOutcome.confirmed =
+                      await closeServerConsumerBeforeDeadline(
+                        consumer.id,
+                        options.makeBeforeBreak.deadlineAt,
+                      );
+                  } else {
+                    void closeServerConsumer(consumer.id);
+                  }
+                  resolve();
+                  return;
+                }
+
+                if (
+                  consumersRef.current.get(producerInfo.producerId)?.id ===
+                  consumerBeingReplaced.id
+                ) {
+                  resolve();
+                  return;
+                }
                 closeConsumerForSameProducerReconsume(
                   producerInfo.producerId,
-                  existingConsumer,
+                  consumerBeingReplaced,
                 );
+                void closeServerConsumer(consumerBeingReplaced.id);
               }
 
-              if (producerInfo.paused) {
+              if (
+                consumersRef.current.get(producerInfo.producerId)?.id !==
+                  consumer.id ||
+                !isCapturedConsumeContextCurrent(consumer)
+              ) {
+                resolve();
+                return;
+              }
+
+              const currentProducerPaused =
+                producerPausedStateRef.current.get(producerInfo.producerId) ??
+                acknowledgedProducerPaused;
+              const currentAdaptiveReceivePaused =
+                adaptivelyPausedConsumerProducerIdsRef.current.has(
+                  producerInfo.producerId,
+                );
+              if (currentProducerPaused) {
                 if (isWebcamAudio) {
                   updateMutedState(true);
                 } else if (isWebcamVideo) {
@@ -3821,26 +5130,77 @@ export function useMeetSocket({
               // consumer already flowing (audio, on current servers) — no
               // resume round-trip needed. Older servers omit the field, so
               // anything other than an explicit false still resumes.
-              if (!startsPausedForAdaptiveReceive && response.paused !== false) {
+              if (
+                !preparedMakeBeforeBreak &&
+                !startsPausedForAdaptiveReceive &&
+                !currentProducerPaused &&
+                !currentAdaptiveReceivePaused &&
+                response.paused !== false
+              ) {
                 resumeConsumerReliably(producerInfo.producerId, {
                   requestKeyFrame: response.kind === "video",
                 });
               }
+
+              const maximumSpatialLayer = isWebcamVideo
+                ? getConsumerMaximumSpatialLayer(
+                    consumer.rtpParameters.encodings ?? [],
+                  )
+                : null;
+              if (
+                isWebcamVideo &&
+                !options.replaceExisting &&
+                !currentProducerPaused &&
+                !startsPausedForAdaptiveReceive &&
+                !currentAdaptiveReceivePaused &&
+                maximumSpatialLayer !== null &&
+                isVp8SimulcastConsumerEligibleForStartupReset({
+                  consumerType: response.consumerType,
+                  codecs: consumer.rtpParameters.codecs ?? [],
+                  maximumSpatialLayer,
+                })
+              ) {
+                scheduleWebcamStartupLatencyResetRef.current(
+                  producerInfo,
+                  consumer,
+                  maximumSpatialLayer,
+                );
+              }
               resolve();
             } catch (err) {
-              closeServerConsumer(response.id);
+              pendingConsumerTelemetryByIdRef.current.delete(response.id);
+              if (options.makeBeforeBreak) {
+                options.makeBeforeBreak.rollbackOutcome.confirmed =
+                  await closeServerConsumerBeforeDeadline(
+                    response.id,
+                    options.makeBeforeBreak.deadlineAt,
+                  );
+              } else {
+                void closeServerConsumer(response.id);
+              }
               console.error("[Meets] Failed to create consumer:", err);
-              queueProducerConsumeRetry(producerInfo, 350);
+              queueFailureRetry(350);
               resolve();
             }
           },
         );
+      }).finally(() => {
+        if (
+          ownsInitialConsumeSlot &&
+          consumerConsumeInFlightRef.current.get(producerInfo.producerId) ===
+            consumeSlotOwner
+        ) {
+          consumerConsumeInFlightRef.current.delete(producerInfo.producerId);
+        }
       });
     },
     [
+      adaptiveVideoReceiverLifecycleRef,
       consumersRef,
       consumeRetryAttemptsRef,
+      consumerConsumeInFlightRef,
       pendingProducersRef,
+      prepareConsumerMakeBeforeBreak,
       socketRef,
       deviceRef,
       consumerTransportRef,
@@ -3849,6 +5209,7 @@ export function useMeetSocket({
       handleProducerClosed,
       closeConsumerForSameProducerReconsume,
       closeServerConsumer,
+      closeServerConsumerBeforeDeadline,
       dropDepartedProducer,
       getInitialConsumerNetworkProfile,
       isSupersededProducer,
@@ -3872,6 +5233,532 @@ export function useMeetSocket({
   );
   consumeProducerRef.current = consumeProducer;
 
+  const scheduleWebcamStartupLatencyResetTimeout = useCallback(
+    (producerId: string, callback: () => void, delayMs: number) => {
+      const existingTimeout =
+        webcamStartupLatencyResetTimeoutsRef.current.get(producerId);
+      if (existingTimeout != null) window.clearTimeout(existingTimeout);
+      const timeoutId = window.setTimeout(() => {
+        if (
+          webcamStartupLatencyResetTimeoutsRef.current.get(producerId) ===
+          timeoutId
+        ) {
+          webcamStartupLatencyResetTimeoutsRef.current.delete(producerId);
+        }
+        callback();
+      }, delayMs);
+      webcamStartupLatencyResetTimeoutsRef.current.set(producerId, timeoutId);
+    },
+    [],
+  );
+
+  const evaluateWebcamStartupLatencyReset = useCallback(
+    (producerId: string) => {
+      const state = webcamStartupLatencyResetStateRef.current.get(producerId);
+      if (
+        !state ||
+        state.epoch !== webcamStartupLatencyResetEpochRef.current ||
+        state.status === "completed" ||
+        state.status === "failed" ||
+        state.status === "cancelled" ||
+        state.status === "queued" ||
+        state.status === "replacing" ||
+        state.status === "verifying"
+      ) {
+        return;
+      }
+
+      const consumer = consumersRef.current.get(producerId);
+      const observedSpatialLayer =
+        consumerTelemetryRef.current.get(producerId)?.currentLayers
+          ?.spatialLayer ?? null;
+      state.observedSpatialLayer = observedSpatialLayer;
+      const decision = decideWebcamStartupResetPoll({
+        now: Date.now(),
+        deadlineAt: state.deadlineAt,
+        stableForMs: WEBCAM_STARTUP_RESET_STABLE_MS,
+        highLayerSince: state.highLayerSince,
+        previousConsumerId: state.previousConsumerId,
+        currentConsumerId: consumer?.id ?? null,
+        consumerClosed: consumer?.closed ?? true,
+        trackReadyState: consumer?.track.readyState ?? null,
+        trackMuted: consumer?.track.muted ?? true,
+        producerPaused:
+          producerPausedStateRef.current.get(producerId) === true,
+        adaptivelyPaused:
+          adaptivelyPausedConsumerProducerIdsRef.current.has(producerId),
+        observedSpatialLayer,
+        maximumSpatialLayer: state.maximumSpatialLayer,
+      });
+
+      if (decision.action === "queue") {
+        state.highLayerSince = decision.highLayerSince;
+        state.status = "queued";
+        state.failureReason = null;
+        writeWebcamStartupLatencyResetDebug(state);
+        webcamStartupLatencyResetQueueRef.current =
+          enqueueWebcamStartupResetProducer(
+            webcamStartupLatencyResetQueueRef.current,
+            producerId,
+          );
+        drainWebcamStartupLatencyResetQueueRef.current();
+        scheduleWebcamStartupLatencyResetTimeout(
+          producerId,
+          () => {
+            const queuedState =
+              webcamStartupLatencyResetStateRef.current.get(producerId);
+            if (
+              queuedState !== state ||
+              state.epoch !== webcamStartupLatencyResetEpochRef.current ||
+              state.status !== "queued"
+            ) {
+              return;
+            }
+            webcamStartupLatencyResetQueueRef.current =
+              webcamStartupLatencyResetQueueRef.current.filter(
+                (queuedProducerId) => queuedProducerId !== producerId,
+              );
+            settleWebcamStartupLatencyReset(
+              state,
+              "failed",
+              "replacement-deadline-exhausted",
+            );
+            drainWebcamStartupLatencyResetQueueRef.current();
+          },
+          Math.max(1, state.deadlineAt - Date.now()),
+        );
+        return;
+      }
+      if (decision.action === "cancel") {
+        settleWebcamStartupLatencyReset(
+          state,
+          "cancelled",
+          decision.reason,
+        );
+        return;
+      }
+      if (decision.action === "fail") {
+        settleWebcamStartupLatencyReset(state, "failed", decision.reason);
+        return;
+      }
+
+      state.highLayerSince = decision.highLayerSince;
+      state.status = "waiting-for-high-layer";
+      writeWebcamStartupLatencyResetDebug(state);
+      scheduleWebcamStartupLatencyResetTimeout(
+        producerId,
+        () => evaluateWebcamStartupLatencyResetRef.current(producerId),
+        WEBCAM_STARTUP_RESET_POLL_MS,
+      );
+    },
+    [
+      adaptivelyPausedConsumerProducerIdsRef,
+      consumerTelemetryRef,
+      consumersRef,
+      scheduleWebcamStartupLatencyResetTimeout,
+      settleWebcamStartupLatencyReset,
+      writeWebcamStartupLatencyResetDebug,
+    ],
+  );
+  evaluateWebcamStartupLatencyResetRef.current =
+    evaluateWebcamStartupLatencyReset;
+
+  const drainWebcamStartupLatencyResetQueue = useCallback(() => {
+    if (
+      webcamStartupLatencyResetActiveRef.current !== null ||
+      webcamStartupLatencyResetDrainTimeoutRef.current !== null
+    ) {
+      return;
+    }
+
+    let producerId: string | undefined;
+    while ((producerId = webcamStartupLatencyResetQueueRef.current.shift())) {
+      const state = webcamStartupLatencyResetStateRef.current.get(producerId);
+      if (
+        state?.status === "queued" &&
+        state.epoch === webcamStartupLatencyResetEpochRef.current
+      ) {
+        break;
+      }
+      producerId = undefined;
+    }
+    if (!producerId) return;
+
+    const delayMs = getWebcamStartupResetQueueDelayMs({
+      now: Date.now(),
+      lastFinishedAt: webcamStartupLatencyResetLastFinishedAtRef.current,
+      minimumSpacingMs: WEBCAM_STARTUP_RESET_MIN_SPACING_MS,
+    });
+    if (delayMs > 0) {
+      webcamStartupLatencyResetQueueRef.current.unshift(producerId);
+      webcamStartupLatencyResetDrainTimeoutRef.current = window.setTimeout(
+        () => {
+          webcamStartupLatencyResetDrainTimeoutRef.current = null;
+          drainWebcamStartupLatencyResetQueueRef.current();
+        },
+        delayMs,
+      );
+      return;
+    }
+
+    webcamStartupLatencyResetActiveRef.current = producerId;
+    void runWebcamStartupLatencyResetRef.current(producerId);
+  }, []);
+  drainWebcamStartupLatencyResetQueueRef.current =
+    drainWebcamStartupLatencyResetQueue;
+
+  const runWebcamStartupLatencyReset = useCallback(
+    async (producerId: string) => {
+      const state = webcamStartupLatencyResetStateRef.current.get(producerId);
+      const epoch = state?.epoch ?? -1;
+      let recoverySlotOwner: symbol | null = null;
+
+      const finishQueueSlot = () => {
+        if (epoch !== webcamStartupLatencyResetEpochRef.current) return;
+        if (webcamStartupLatencyResetActiveRef.current === producerId) {
+          webcamStartupLatencyResetActiveRef.current = null;
+          webcamStartupLatencyResetLastFinishedAtRef.current = Date.now();
+        }
+        drainWebcamStartupLatencyResetQueueRef.current();
+      };
+
+      try {
+        if (
+          !state ||
+          state.status !== "queued" ||
+          epoch !== webcamStartupLatencyResetEpochRef.current
+        ) {
+          return;
+        }
+
+        const preflightConsumer = consumersRef.current.get(producerId);
+        const observedSpatialLayer =
+          consumerTelemetryRef.current.get(producerId)?.currentLayers
+            ?.spatialLayer ?? null;
+        state.observedSpatialLayer = observedSpatialLayer;
+        const preflight = decideWebcamStartupResetPoll({
+          now: Date.now(),
+          deadlineAt: state.deadlineAt,
+          stableForMs: WEBCAM_STARTUP_RESET_STABLE_MS,
+          highLayerSince: state.highLayerSince,
+          previousConsumerId: state.previousConsumerId,
+          currentConsumerId: preflightConsumer?.id ?? null,
+          consumerClosed: preflightConsumer?.closed ?? true,
+          trackReadyState: preflightConsumer?.track.readyState ?? null,
+          trackMuted: preflightConsumer?.track.muted ?? true,
+          producerPaused:
+            producerPausedStateRef.current.get(producerId) === true,
+          adaptivelyPaused:
+            adaptivelyPausedConsumerProducerIdsRef.current.has(producerId),
+          observedSpatialLayer,
+          maximumSpatialLayer: state.maximumSpatialLayer,
+        });
+        if (
+          preflight.action === "queue" ||
+          preflight.action === "wait"
+        ) {
+          state.highLayerSince = preflight.highLayerSince;
+        }
+        if (preflight.action !== "queue") {
+          if (preflight.action === "cancel") {
+            settleWebcamStartupLatencyReset(
+              state,
+              "cancelled",
+              preflight.reason,
+            );
+          } else if (preflight.action === "fail") {
+            settleWebcamStartupLatencyReset(
+              state,
+              "failed",
+              preflight.reason,
+            );
+          } else {
+            state.status = "waiting-for-high-layer";
+            writeWebcamStartupLatencyResetDebug(state);
+            scheduleWebcamStartupLatencyResetTimeout(
+              producerId,
+              () => evaluateWebcamStartupLatencyResetRef.current(producerId),
+              WEBCAM_STARTUP_RESET_POLL_MS,
+            );
+          }
+          return;
+        }
+
+        if (consumerRecoveryInFlightRef.current.has(producerId)) {
+          state.status = "retry-wait";
+          state.failureReason = "another-consumer-replacement-in-flight";
+          writeWebcamStartupLatencyResetDebug(state);
+          scheduleWebcamStartupLatencyResetTimeout(
+            producerId,
+            () => evaluateWebcamStartupLatencyResetRef.current(producerId),
+            WEBCAM_STARTUP_RESET_RETRY_MS,
+          );
+          return;
+        }
+
+        state.attempt += 1;
+        state.status = "replacing";
+        state.replacementStartedAt ??= Date.now();
+        state.failureReason = null;
+        writeWebcamStartupLatencyResetDebug(state);
+        telemetry.capture("meet_webcam_consumer_generation_reset_attempt", {
+          reason: WEBCAM_STARTUP_RESET_REASON,
+          attempt: state.attempt,
+          maximumSpatialLayer: state.maximumSpatialLayer,
+          observedSpatialLayer: state.observedSpatialLayer,
+        });
+
+        const socket = socketRef.current;
+        const transport = consumerTransportRef.current;
+        const rollbackOutcome = { confirmed: true };
+        recoverySlotOwner = Symbol(producerId);
+        consumerRecoveryInFlightRef.current.set(
+          producerId,
+          recoverySlotOwner,
+        );
+        if (socket?.connected && transport && !transport.closed) {
+          await consumeProducer(state.producerInfo, {
+            replaceExisting: true,
+            retryOnFailure: false,
+            makeBeforeBreak: {
+              expectedPreviousConsumerId: state.previousConsumerId,
+              deadlineAt: state.deadlineAt,
+              resetEpoch: state.epoch,
+              rollbackOutcome,
+            },
+          });
+        }
+
+        if (
+          state.epoch !== webcamStartupLatencyResetEpochRef.current ||
+          webcamStartupLatencyResetStateRef.current.get(producerId) !== state
+        ) {
+          return;
+        }
+
+        const currentConsumer = consumersRef.current.get(producerId);
+        if (
+          currentConsumer?.id === state.previousConsumerId &&
+          !rollbackOutcome.confirmed
+        ) {
+          settleWebcamStartupLatencyReset(
+            state,
+            "failed",
+            "replacement-rollback-unconfirmed",
+          );
+          return;
+        }
+        if (Date.now() >= state.deadlineAt) {
+          settleWebcamStartupLatencyReset(
+            state,
+            "failed",
+            "replacement-deadline-exhausted",
+          );
+          return;
+        }
+        const attemptDecision = decideWebcamStartupResetAttempt({
+          previousConsumerId: state.previousConsumerId,
+          currentConsumerId: currentConsumer?.id ?? null,
+          attempt: state.attempt,
+          maximumAttempts: WEBCAM_STARTUP_RESET_MAX_ATTEMPTS,
+        });
+
+        if (attemptDecision.action === "verify") {
+          state.replacementConsumerId =
+            attemptDecision.replacementConsumerId;
+          state.verificationStartedAt = Date.now();
+          const verificationTimeoutMs = Math.max(
+            0,
+            Math.min(
+              WEBCAM_STARTUP_RESET_VERIFY_TIMEOUT_MS,
+              state.deadlineAt - state.verificationStartedAt,
+            ),
+          );
+          state.status = "verifying";
+          writeWebcamStartupLatencyResetDebug(state);
+
+          while (
+            state.epoch === webcamStartupLatencyResetEpochRef.current &&
+            webcamStartupLatencyResetStateRef.current.get(producerId) === state
+          ) {
+            const replacement = consumersRef.current.get(producerId);
+            const verificationRemainingMs = Math.max(
+              1,
+              state.verificationStartedAt + verificationTimeoutMs - Date.now(),
+            );
+            const flow = replacement
+              ? await readConsumerVideoFlowSnapshotWithin(
+                  replacement,
+                  Math.min(500, verificationRemainingMs),
+                )
+              : { framesDecoded: null, bytesReceived: null };
+            const verification = decideWebcamStartupResetVerification({
+              now: Date.now(),
+              verificationStartedAt: state.verificationStartedAt,
+              verificationTimeoutMs,
+              replacementConsumerId: attemptDecision.replacementConsumerId,
+              currentConsumerId: replacement?.id ?? null,
+              consumerClosed: replacement?.closed ?? true,
+              trackReadyState: replacement?.track.readyState ?? null,
+              trackMuted: replacement?.track.muted ?? true,
+              framesDecoded: flow.framesDecoded,
+              bytesReceived: flow.bytesReceived,
+            });
+            if (verification.action === "complete") {
+              settleWebcamStartupLatencyReset(state, "completed", null);
+              break;
+            }
+            if (verification.action === "cancel") {
+              settleWebcamStartupLatencyReset(
+                state,
+                "cancelled",
+                verification.reason,
+              );
+              break;
+            }
+            if (verification.action === "fail") {
+              settleWebcamStartupLatencyReset(
+                state,
+                "failed",
+                verification.reason,
+              );
+              break;
+            }
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, WEBCAM_STARTUP_RESET_VERIFY_POLL_MS);
+            });
+          }
+          return;
+        }
+
+        if (attemptDecision.action === "retry") {
+          state.status = "retry-wait";
+          state.failureReason = attemptDecision.reason;
+          writeWebcamStartupLatencyResetDebug(state);
+          scheduleWebcamStartupLatencyResetTimeout(
+            producerId,
+            () => evaluateWebcamStartupLatencyResetRef.current(producerId),
+            WEBCAM_STARTUP_RESET_RETRY_MS,
+          );
+          return;
+        }
+        settleWebcamStartupLatencyReset(
+          state,
+          attemptDecision.action === "cancel" ? "cancelled" : "failed",
+          attemptDecision.reason,
+        );
+      } catch (error) {
+        if (
+          state &&
+          state.epoch === webcamStartupLatencyResetEpochRef.current &&
+          webcamStartupLatencyResetStateRef.current.get(producerId) === state
+        ) {
+          console.error(
+            `[Meets] Planned webcam consumer generation reset failed for ${producerId}:`,
+            error,
+          );
+          if (state.attempt < WEBCAM_STARTUP_RESET_MAX_ATTEMPTS) {
+            state.status = "retry-wait";
+            state.failureReason = "replacement-threw";
+            writeWebcamStartupLatencyResetDebug(state);
+            scheduleWebcamStartupLatencyResetTimeout(
+              producerId,
+              () => evaluateWebcamStartupLatencyResetRef.current(producerId),
+              WEBCAM_STARTUP_RESET_RETRY_MS,
+            );
+          } else {
+            settleWebcamStartupLatencyReset(
+              state,
+              "failed",
+              "replacement-threw",
+            );
+          }
+        }
+      } finally {
+        if (
+          recoverySlotOwner &&
+          consumerRecoveryInFlightRef.current.get(producerId) ===
+            recoverySlotOwner
+        ) {
+          consumerRecoveryInFlightRef.current.delete(producerId);
+        }
+        finishQueueSlot();
+      }
+    },
+    [
+      adaptivelyPausedConsumerProducerIdsRef,
+      consumerTelemetryRef,
+      consumerTransportRef,
+      consumersRef,
+      consumeProducer,
+      scheduleWebcamStartupLatencyResetTimeout,
+      settleWebcamStartupLatencyReset,
+      socketRef,
+      writeWebcamStartupLatencyResetDebug,
+    ],
+  );
+  runWebcamStartupLatencyResetRef.current = runWebcamStartupLatencyReset;
+
+  const scheduleWebcamStartupLatencyReset = useCallback(
+    (
+      producerInfo: ProducerInfo,
+      consumer: Consumer,
+      maximumSpatialLayer: number,
+    ) => {
+      if (
+        maximumSpatialLayer <= 0 ||
+        webcamStartupLatencyResetStateRef.current.has(producerInfo.producerId)
+      ) {
+        return;
+      }
+
+      const startedAt = Date.now();
+      const state: WebcamStartupLatencyResetRuntime = {
+        producerInfo,
+        previousConsumerId: consumer.id,
+        replacementConsumerId: null,
+        maximumSpatialLayer,
+        observedSpatialLayer:
+          consumerTelemetryRef.current.get(producerInfo.producerId)
+            ?.currentLayers?.spatialLayer ?? null,
+        startedAt,
+        deadlineAt: startedAt + WEBCAM_STARTUP_RESET_MAX_WAIT_MS,
+        highLayerSince: null,
+        replacementStartedAt: null,
+        verificationStartedAt: null,
+        completedAt: null,
+        attempt: 0,
+        epoch: webcamStartupLatencyResetEpochRef.current,
+        status: "waiting-for-high-layer",
+        failureReason: null,
+      };
+      webcamStartupLatencyResetStateRef.current.set(
+        producerInfo.producerId,
+        state,
+      );
+      writeWebcamStartupLatencyResetDebug(state);
+      telemetry.capture("meet_webcam_consumer_generation_reset_scheduled", {
+        reason: WEBCAM_STARTUP_RESET_REASON,
+        maximumSpatialLayer,
+      });
+      scheduleWebcamStartupLatencyResetTimeout(
+        producerInfo.producerId,
+        () =>
+          evaluateWebcamStartupLatencyResetRef.current(
+            producerInfo.producerId,
+          ),
+        WEBCAM_STARTUP_RESET_POLL_MS,
+      );
+    },
+    [
+      consumerTelemetryRef,
+      scheduleWebcamStartupLatencyResetTimeout,
+      writeWebcamStartupLatencyResetDebug,
+    ],
+  );
+  scheduleWebcamStartupLatencyResetRef.current =
+    scheduleWebcamStartupLatencyReset;
+
   const recoverStaleConsumer = useCallback(
     async (producerInfo: ProducerInfo, reason: string) => {
       if (consumerRecoveryInFlightRef.current.has(producerInfo.producerId)) {
@@ -3888,26 +5775,62 @@ export function useMeetSocket({
         return;
       }
 
-      consumerRecoveryInFlightRef.current.add(producerInfo.producerId);
+      const recoverySlotOwner = Symbol(producerInfo.producerId);
+      consumerRecoveryInFlightRef.current.set(
+        producerInfo.producerId,
+        recoverySlotOwner,
+      );
+      const previousConsumerId =
+        consumersRef.current.get(producerInfo.producerId)?.id ?? null;
 
       try {
         console.warn(
           `[Meets] Recovering stale ${producerInfo.kind} consumer ${producerInfo.producerId}: ${reason}`,
         );
-        telemetry.capture("meet_stale_consumer_recovered", {
+        telemetry.capture("meet_stale_consumer_recovery_started", {
           kind: producerInfo.kind,
           type: producerInfo.type,
           reason,
         });
         await consumeProducer(producerInfo, { replaceExisting: true });
+        const replacement = consumersRef.current.get(producerInfo.producerId);
+        if (
+          replacement &&
+          !replacement.closed &&
+          replacement.id !== previousConsumerId
+        ) {
+          telemetry.capture("meet_stale_consumer_recovered", {
+            kind: producerInfo.kind,
+            type: producerInfo.type,
+            reason,
+          });
+        } else {
+          telemetry.capture("meet_stale_consumer_recovery_failed", {
+            kind: producerInfo.kind,
+            type: producerInfo.type,
+            reason,
+            failureReason: "replacement-not-attached",
+          });
+        }
       } catch (error) {
         console.error(
           `[Meets] Failed to recover stale consumer ${producerInfo.producerId}:`,
           error,
         );
+        telemetry.capture("meet_stale_consumer_recovery_failed", {
+          kind: producerInfo.kind,
+          type: producerInfo.type,
+          reason,
+          failureReason: "replacement-threw",
+        });
         queueProducerConsumeRetry(producerInfo, 1200);
       } finally {
-        consumerRecoveryInFlightRef.current.delete(producerInfo.producerId);
+        if (
+          consumerRecoveryInFlightRef.current.get(producerInfo.producerId) ===
+          recoverySlotOwner
+        ) {
+          consumerRecoveryInFlightRef.current.delete(producerInfo.producerId);
+        }
       }
     },
     [
@@ -3928,8 +5851,8 @@ export function useMeetSocket({
   // producer isn't paused, the decoder is stuck — request a fresh keyframe (PLI)
   // so it un-freezes. One confirmed stalled sample is enough (~2s) because the
   // byte-delta gate proves media is still arriving; a per-consumer cooldown
-  // avoids keyframe storms in lossy rooms. Persistent failures still fall
-  // through to the existing stale-consumer / producer-sync recovery.
+  // avoids keyframe storms in lossy rooms. If bounded PLI attempts produce no
+  // decoded-frame progress, close/re-consume through the stale-consumer path.
   useEffect(() => {
     const FREEZE_CHECK_MS = 2000;
     const STALL_SAMPLES_BEFORE_PLI = 1;
@@ -3997,24 +5920,23 @@ export function useMeetSocket({
               return;
             }
 
-            const prev = stats.get(producerId);
-            let stalls = 0;
-            let lastKeyFrameRequestAt = prev?.lastKeyFrameRequestAt ?? 0;
-            if (prev) {
-              const decoderStuck =
-                decodedNow === prev.frames &&
-                bytesNow - prev.bytes >= MIN_STALL_BYTE_DELTA;
-              stalls = decoderStuck ? prev.stalls + 1 : 0;
-            }
-
             const sampleNow = Date.now();
-            if (
-              stalls >= STALL_SAMPLES_BEFORE_PLI &&
-              sampleNow - lastKeyFrameRequestAt >=
-                (info.type === "screen"
+            const previous = stats.get(producerId);
+            const transition = advanceVideoFreezeRecovery({
+              previous:
+                previous?.consumerId === consumerId ? previous : null,
+              frames: decodedNow,
+              bytes: bytesNow,
+              now: sampleNow,
+              keyFrameRequestCooldownMs:
+                info.type === "screen"
                   ? SCREEN_SHARE_FREEZE_KEYFRAME_REQUEST_COOLDOWN_MS
-                  : KEYFRAME_REQUEST_COOLDOWN_MS)
-            ) {
+                  : KEYFRAME_REQUEST_COOLDOWN_MS,
+              minimumStallByteDelta: MIN_STALL_BYTE_DELTA,
+              stallSamplesBeforeKeyFrame: STALL_SAMPLES_BEFORE_PLI,
+            });
+
+            if (transition.action === "request-key-frame") {
               // Decoder is frozen but real media is flowing → force a keyframe.
               const socket2 = socketRef.current;
               if (socket2?.connected) {
@@ -4024,15 +5946,24 @@ export function useMeetSocket({
                   () => {},
                 );
               }
-              lastKeyFrameRequestAt = sampleNow;
-              stalls = 0; // give the PLI time to land before re-requesting
+            } else if (transition.action === "reconsume") {
+              stats.delete(producerId);
+              void recoverStaleConsumerRef.current(
+                {
+                  producerId,
+                  producerUserId: info.userId,
+                  kind: info.kind,
+                  type: info.type,
+                  paused: false,
+                },
+                "decoder remained frozen after bounded keyframe requests",
+              );
+              return;
             }
 
             stats.set(producerId, {
-              frames: decodedNow,
-              bytes: bytesNow,
-              stalls,
-              lastKeyFrameRequestAt,
+              ...transition.state,
+              consumerId,
             });
           })
           .catch(() => {});
@@ -4586,6 +6517,24 @@ export function useMeetSocket({
       const socket = socketRef.current;
       if (!socket) throw new Error("Socket not connected");
 
+      // Construct the mediasoup handler before membership so the SFU can make
+      // a room-wide codec decision without a transient incompatible producer.
+      const DeviceClass = prewarm?.Device
+        ? prewarm.Device
+        : (await import("mediasoup-client")).Device;
+      const pendingDevice = new DeviceClass();
+      const mediaCapabilities = detectBrowserWebcamCodecCapabilities(
+        pendingDevice.handlerName,
+        {
+          videoInputDeviceId: selectedVideoInputDeviceId,
+          // A validated desktop handler/static RTP intersection keeps an
+          // existing all-modern room on VP9 while this client loads. Proven
+          // encoder negatives are removed by the session/device cache. Confirm
+          // the claim again from the loaded Device before publishing below.
+          allowVp9SvcSend: true,
+        },
+      );
+
       setWaitingMessage(null);
       setConnectionState("joining");
 
@@ -4603,6 +6552,7 @@ export function useMeetSocket({
             displayName: joinOptions.displayName,
             webinarInviteCode: joinOptions.webinarInviteCode,
             meetingInviteCode: joinOptions.meetingInviteCode,
+            mediaCapabilities,
           },
           async (response: JoinRoomResponse | JoinRoomErrorResponse) => {
             if (!settleJoinRoom()) return;
@@ -4612,6 +6562,13 @@ export function useMeetSocket({
             }
 
             departedParticipantIdsRef.current.clear();
+
+            // A missing policy means an older SFU, whose interoperable webcam
+            // baseline is VP8. Set this before any producer is created.
+            webcamCodecPolicyRef.current =
+              normalizeWebcamCodecPolicy(response.webcamCodecPolicy) ?? {
+                ...BASELINE_WEBCAM_CODEC_POLICY,
+              };
 
             if (response.status === "waiting") {
               setConnectionState("waiting");
@@ -4727,16 +6684,58 @@ export function useMeetSocket({
                 applyDisplayNameSnapshot(response.displayNameSnapshot);
               }
 
-              // Use pre-warmed Device if available, otherwise dynamic import
-              const DeviceClass = prewarm?.Device
-                ? prewarm.Device
-                : (await import("mediasoup-client")).Device;
-
-              const device = new DeviceClass();
+              const device = pendingDevice;
               await device.load({
                 routerRtpCapabilities: response.rtpCapabilities,
               });
               deviceRef.current = device;
+              const loadedMediaCapabilities =
+                detectLoadedDeviceWebcamCodecCapabilities(device, {
+                  videoInputDeviceId: selectedVideoInputDeviceId,
+                });
+              await new Promise<void>((resolveCapabilities) => {
+                let settled = false;
+                const timeoutId = window.setTimeout(() => {
+                  if (settled) return;
+                  settled = true;
+                  console.warn(
+                    "[Meets] Loaded media capability refinement timed out; keeping the conservative room codec.",
+                  );
+                  resolveCapabilities();
+                }, 2500);
+                socket.emit(
+                  "updateMediaCapabilities",
+                  { mediaCapabilities: loadedMediaCapabilities },
+                  (
+                    capabilityResponse:
+                      | {
+                          success: true;
+                          webcamCodecPolicy: WebcamCodecPolicy;
+                        }
+                      | { error: string },
+                  ) => {
+                    if (settled) return;
+                    settled = true;
+                    window.clearTimeout(timeoutId);
+                    if ("error" in capabilityResponse) {
+                      console.warn(
+                        "[Meets] Loaded media capability refinement was not applied; keeping the conservative room codec:",
+                        capabilityResponse.error,
+                      );
+                      resolveCapabilities();
+                      return;
+                    }
+                    applyWebcamCodecPolicyNotification({
+                      ...capabilityResponse.webcamCodecPolicy,
+                      roomId:
+                        serverRoomIdRef.current ??
+                        currentRoomIdRef.current ??
+                        undefined,
+                    });
+                    resolveCapabilities();
+                  },
+                );
+              });
               console.info(
                 `[Meets] Device loaded in ${(performance.now() - joinedTime).toFixed(0)}ms`,
               );
@@ -4820,6 +6819,7 @@ export function useMeetSocket({
     [
       socketRef,
       sessionIdRef,
+      applyWebcamCodecPolicyNotification,
       setWaitingMessage,
       setConnectionState,
       setHostUserId,
@@ -4852,6 +6852,9 @@ export function useMeetSocket({
       setIsReactionsDisabled,
       setMusicState,
       dispatchParticipants,
+      prewarm,
+      selectedVideoInputDeviceId,
+      webcamCodecPolicyRef,
     ],
   );
 
@@ -5095,15 +7098,54 @@ export function useMeetSocket({
                   return;
                 }
 
+                const snapshot: ConsumerTelemetrySnapshot = {
+                  ...notification,
+                  receivedAt: Date.now(),
+                };
+                const currentConsumer = consumersRef.current.get(
+                  notification.producerId,
+                );
+
                 if (notification.event === "closed") {
-                  consumerTelemetryRef.current.delete(notification.producerId);
+                  pendingConsumerTelemetryByIdRef.current.delete(
+                    notification.consumerId,
+                  );
+                  if (
+                    consumerTelemetryRef.current.get(notification.producerId)
+                      ?.consumerId === notification.consumerId &&
+                    (!currentConsumer ||
+                      currentConsumer.id === notification.consumerId)
+                  ) {
+                    consumerTelemetryRef.current.delete(notification.producerId);
+                  }
                   return;
                 }
 
-                consumerTelemetryRef.current.set(notification.producerId, {
-                  ...notification,
-                  receivedAt: Date.now(),
-                });
+                if (
+                  currentConsumer &&
+                  currentConsumer.id !== notification.consumerId
+                ) {
+                  pendingConsumerTelemetryByIdRef.current.set(
+                    notification.consumerId,
+                    snapshot,
+                  );
+                  if (pendingConsumerTelemetryByIdRef.current.size > 64) {
+                    const oldestConsumerId =
+                      pendingConsumerTelemetryByIdRef.current.keys().next()
+                        .value;
+                    if (typeof oldestConsumerId === "string") {
+                      pendingConsumerTelemetryByIdRef.current.delete(
+                        oldestConsumerId,
+                      );
+                    }
+                  }
+                  return;
+                }
+
+                consumerTelemetryRef.current.set(
+                  notification.producerId,
+                  snapshot,
+                );
               },
             );
 
@@ -5181,6 +7223,15 @@ export function useMeetSocket({
                   return;
                 }
                 applyServerActiveSpeaker(nextSpeakerId);
+              },
+            );
+
+            socket.on(
+              "webcamCodecPolicyChanged",
+              (
+                policy: WebcamCodecPolicy & { roomId?: string },
+              ) => {
+                applyWebcamCodecPolicyNotification(policy);
               },
             );
 
@@ -5819,6 +7870,7 @@ export function useMeetSocket({
                   displayName: normalized.displayName,
                   text: ttsText,
                   ttsVoiceToken: normalized.ttsVoiceToken,
+                  messageId: normalized.id,
                 });
               }
               if (!chat.isChatOpenRef.current) {
@@ -6407,6 +8459,7 @@ export function useMeetSocket({
       handleProducerClosed,
       handleRedirectRef,
       handleReconnectRef,
+      applyWebcamCodecPolicyNotification,
       applyServerActiveSpeaker,
       applyDisplayNameSnapshot,
       applyParticipantConnectionStatus,
@@ -6945,7 +8998,9 @@ export function useMeetSocket({
       setMeetingEndedNotice?.(null);
       updateReconnectRecoveryStatus(null);
       setConnectionState("connecting");
-      primeAudioOutput();
+      if (!bypassMediaPermissions) {
+        primeAudioOutput();
+      }
       refs.intentionalDisconnectRef.current = false;
       serverRoomIdRef.current = null;
       runtimeStunIceServersRef.current = null;
@@ -7604,6 +9659,7 @@ export function useMeetSocket({
     cleanupRoomResources,
     connectSocket,
     ensureProducerTransport,
+    republishScreenShare,
     joinRoom,
     joinRoomById,
     retryReconnect,

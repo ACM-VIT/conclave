@@ -9,11 +9,19 @@ import {
 } from "@/lib/sfu-client-id";
 import { lookupScheduledWebinarByRoomId } from "@/lib/sfu-user-auth";
 import {
-  normalizeRoutedSfuUrl,
   normalizeSfuUrl,
-  resolveSfuUrl,
   resolveSfuUrls,
 } from "@/lib/sfu-url";
+import {
+  resolveConfiguredOwnerSfuUrl,
+  resolveRoomPlacementCapability,
+  resolveReservedSfuUrl,
+  selectPreOwnerSfu,
+  type PreOwnerSfuSelection,
+  type SfuPlacementResponse,
+  type SfuRoomAssignment,
+  type SfuRoutingCandidate,
+} from "@/lib/sfu-routing-policy";
 
 
 let loggedSecretFingerprint = false;
@@ -69,24 +77,26 @@ const CLOUDFLARE_TURN_MAX_TTL_SECONDS = 86400;
 const CLOUDFLARE_TURN_REQUEST_TIMEOUT_MS = 1500;
 const SFU_ROUTING_REQUEST_TIMEOUT_MS = 1000;
 const SFU_STATUS_REQUEST_TIMEOUT_MS = 1000;
+const SFU_PLACEMENT_REQUEST_TIMEOUT_MS = 1500;
 
 type RoomRoutingResponse = {
+  registryMode?: "local" | "redis";
   local?: boolean;
   owner?: {
     instanceId?: string;
     instanceUrl?: string;
   } | null;
+  placement?: SfuRoomAssignment | null;
 };
 
 type SfuStatusResponse = {
   instanceId?: string;
+  region?: string | null;
   draining?: boolean;
   rooms?: number;
-};
-
-type AvailableSfu = {
-  index: number;
-  url: string;
+  capabilities?: {
+    roomPlacement?: number;
+  };
 };
 
 const splitUrls = (value: string | undefined): string[] =>
@@ -137,6 +147,7 @@ const isScheduledRoomId = (value: string): boolean =>
 
 let roomRoutingWarningLogged = false;
 let sfuStatusWarningLogged = false;
+let legacyPlacementWarningLogged = false;
 
 const fetchWithTimeout = async (
   input: string,
@@ -153,19 +164,6 @@ const fetchWithTimeout = async (
   } finally {
     clearTimeout(timeout);
   }
-};
-
-const pickStableSfuUrl = (
-  available: AvailableSfu[],
-  routingKey: string,
-): string | null => {
-  if (available.length === 0) return null;
-  if (available.length === 1) return available[0]?.url ?? null;
-
-  const ordered = [...available].sort((a, b) => a.index - b.index);
-  const digest = createHash("sha256").update(routingKey).digest();
-  const index = digest.readUInt32BE(0) % ordered.length;
-  return ordered[index]?.url ?? null;
 };
 
 const resolveRoomOwnerSfuUrl = async (options: {
@@ -197,11 +195,22 @@ const resolveRoomOwnerSfuUrl = async (options: {
       }
 
       const data = (await response.json()) as RoomRoutingResponse;
-      const ownerUrl = normalizeRoutedSfuUrl(data.owner?.instanceUrl);
+      const assignment = data.owner ?? data.placement;
+      if (
+        data.placement &&
+        options.candidateSfuUrls.length > 1 &&
+        data.registryMode !== "redis"
+      ) {
+        return null;
+      }
+      const ownerUrl = resolveConfiguredOwnerSfuUrl(
+        assignment?.instanceUrl,
+        options.candidateSfuUrls,
+      );
       if (ownerUrl) {
         return ownerUrl;
       }
-      if (data.owner && data.local) {
+      if (assignment && data.local) {
         return candidateSfuUrl;
       }
       return null;
@@ -233,9 +242,10 @@ const resolveNonDrainingSfuUrl = async (options: {
   candidateSfuUrls: string[];
   secret: string;
   routingKey: string;
-}): Promise<string | null> => {
+}): Promise<PreOwnerSfuSelection> => {
   const statuses = await Promise.allSettled(
     options.candidateSfuUrls.map(async (candidateSfuUrl, index) => {
+      const startedAt = Date.now();
       const response = await fetchWithTimeout(
         `${candidateSfuUrl}/status`,
         {
@@ -249,44 +259,132 @@ const resolveNonDrainingSfuUrl = async (options: {
         SFU_STATUS_REQUEST_TIMEOUT_MS,
       );
       if (!response.ok) {
-        return null;
+        return {
+          index,
+          url: candidateSfuUrl,
+          availability: "unknown",
+          latencyMs: Date.now() - startedAt,
+        } satisfies SfuRoutingCandidate;
       }
 
-      const status = (await response.json()) as SfuStatusResponse;
-      if (status.draining) {
-        return null;
-      }
+      const status = (await response.json()) as SfuStatusResponse | null;
 
-      return { index, url: candidateSfuUrl } satisfies AvailableSfu;
+      return {
+        index,
+        url: candidateSfuUrl,
+        availability:
+          status && typeof status === "object"
+            ? status.draining === true
+              ? "draining"
+              : "healthy"
+            : "unknown",
+        ...(typeof status?.instanceId === "string" && status.instanceId.trim()
+          ? { instanceId: status.instanceId.trim() }
+          : {}),
+        ...(typeof status?.region === "string" && status.region.trim()
+          ? { region: status.region.trim() }
+          : {}),
+        roomPlacementCapability: resolveRoomPlacementCapability(status),
+        latencyMs: Date.now() - startedAt,
+      } satisfies SfuRoutingCandidate;
     }),
   );
 
-  let sawFailure = false;
-  const available = statuses.flatMap((status) => {
+  const candidates = statuses.map((status, index) => {
     if (status.status === "rejected") {
-      sawFailure = true;
-      return [];
+      return {
+        index,
+        url: options.candidateSfuUrls[index] ?? "",
+        availability: "unknown",
+        roomPlacementCapability: "unknown",
+      } satisfies SfuRoutingCandidate;
     }
-    return status.value ? [status.value] : [];
+    return status.value;
   });
 
-  if (available.length === 0) {
-    if (
-      (sawFailure || options.candidateSfuUrls.length > 1) &&
-      !sfuStatusWarningLogged
-    ) {
-      console.warn(
-        "[SFU Join] No non-draining SFU status response was available; falling back to the first configured SFU.",
-      );
-      sfuStatusWarningLogged = true;
-    }
-    return null;
+  const selection = selectPreOwnerSfu(candidates, options.routingKey);
+  // Stable hashing inside the near-latency band avoids needless placement
+  // churn. The shared reservation below is still the concurrency authority.
+  return selection;
+};
+
+type RoutedSfuResolution =
+  | { ok: true; url: string }
+  | {
+      ok: false;
+      reason:
+        | "all-draining"
+        | "placement-unsupported"
+        | "placement-unavailable"
+        | "unsafe-local-registry";
+    };
+
+const reserveRoomPlacement = async (options: {
+  candidate: SfuRoutingCandidate;
+  candidateSfuUrls: string[];
+  secret: string;
+  clientId: string;
+  roomId: string;
+}): Promise<RoutedSfuResolution> => {
+  const placementUrl =
+    `${options.candidate.url}/routing/placements/` +
+    `${encodeURIComponent(options.clientId)}/` +
+    encodeURIComponent(options.roomId);
+
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      placementUrl,
+      {
+        method: "POST",
+        headers: {
+          "x-sfu-secret": options.secret,
+          accept: "application/json",
+        },
+        cache: "no-store",
+      },
+      SFU_PLACEMENT_REQUEST_TIMEOUT_MS,
+    );
+  } catch {
+    return { ok: false, reason: "placement-unavailable" };
   }
 
-  // Before any SFU owns a room, concurrent first joins for the same link must
-  // still land on the same instance. Otherwise a degraded/missing registry can
-  // split one meeting code into parallel rooms.
-  return pickStableSfuUrl(available, options.routingKey);
+  if (!response.ok) {
+    return {
+      ok: false,
+      reason:
+        response.status === 409
+          ? "all-draining"
+          : response.status === 404 ||
+              response.status === 405 ||
+              response.status === 501
+            ? "placement-unsupported"
+          : "placement-unavailable",
+    };
+  }
+
+  let payload: SfuPlacementResponse;
+  try {
+    payload = (await response.json()) as SfuPlacementResponse;
+  } catch {
+    return { ok: false, reason: "placement-unavailable" };
+  }
+
+  const reserved = resolveReservedSfuUrl({
+    response: payload,
+    selectedCandidate: options.candidate,
+    candidateSfuUrls: options.candidateSfuUrls,
+  });
+  if (!reserved.ok) {
+    return {
+      ok: false,
+      reason:
+        reserved.reason === "unsafe-local-registry"
+          ? "unsafe-local-registry"
+          : "placement-unavailable",
+    };
+  }
+  return { ok: true, url: reserved.url };
 };
 
 const resolveRoutedSfuUrl = async (options: {
@@ -294,28 +392,99 @@ const resolveRoutedSfuUrl = async (options: {
   secret: string;
   clientId: string;
   roomId: string;
-}): Promise<string> => {
+}): Promise<RoutedSfuResolution> => {
   const candidateSfuUrls = options.candidateSfuUrls
     .map((url) => normalizeSfuUrl(url))
     .filter(Boolean);
-  const fallbackSfuUrl = candidateSfuUrls[0] ?? normalizeSfuUrl(resolveSfuUrl());
-
-  const ownerSfuUrl = await resolveRoomOwnerSfuUrl({
-    candidateSfuUrls,
-    secret: options.secret,
-    clientId: options.clientId,
-    roomId: options.roomId,
-  });
+  // Ownership lookup and edge-to-SFU health/latency probes are independent.
+  // Running them together removes a full regional RTT from first-join startup.
+  const [ownerSfuUrl, selection] = await Promise.all([
+    resolveRoomOwnerSfuUrl({
+      candidateSfuUrls,
+      secret: options.secret,
+      clientId: options.clientId,
+      roomId: options.roomId,
+    }),
+    resolveNonDrainingSfuUrl({
+      candidateSfuUrls,
+      secret: options.secret,
+      routingKey: `${options.clientId}:${options.roomId}`,
+    }),
+  ]);
   if (ownerSfuUrl) {
-    return ownerSfuUrl;
+    return { ok: true, url: ownerSfuUrl };
   }
+  if (selection.kind === "selected") {
+    if (selection.availability === "unknown" && !sfuStatusWarningLogged) {
+      console.warn(
+        "[SFU Join] No healthy SFU status response was available; using a deterministic unknown SFU and excluding explicitly draining instances.",
+      );
+      sfuStatusWarningLogged = true;
+    }
+    if (selection.candidate.roomPlacementCapability === "legacy") {
+      if (!legacyPlacementWarningLogged) {
+        console.warn(
+          "[SFU Join] Selected SFU predates atomic room placement; using the stable deterministic route during the rolling upgrade.",
+        );
+        legacyPlacementWarningLogged = true;
+      }
+      return { ok: true, url: selection.candidate.url };
+    }
 
-  const availableSfuUrl = await resolveNonDrainingSfuUrl({
-    candidateSfuUrls,
-    secret: options.secret,
-    routingKey: `${options.clientId}:${options.roomId}`,
-  });
-  return availableSfuUrl ?? fallbackSfuUrl;
+    let everyAttemptWasDraining = true;
+    // A timed-out reservation may still have committed in Redis. Trying the
+    // next healthy candidate is safe: its atomic response returns that first
+    // winner instead of creating a second placement.
+    const reservationCandidates = [
+      selection.candidate,
+      ...selection.alternatives,
+    ];
+    for (let index = 0; index < reservationCandidates.length; index += 1) {
+      const candidate = reservationCandidates[index];
+      if (!candidate) continue;
+      const reservation = await reserveRoomPlacement({
+        candidate,
+        candidateSfuUrls,
+        secret: options.secret,
+        clientId: options.clientId,
+        roomId: options.roomId,
+      });
+      if (reservation.ok) {
+        return reservation;
+      }
+      if (reservation.reason === "unsafe-local-registry") {
+        return reservation;
+      }
+      if (index === 0 && reservation.reason === "placement-unsupported") {
+        if (!legacyPlacementWarningLogged) {
+          console.warn(
+            "[SFU Join] Selected SFU does not expose atomic room placement; using the stable deterministic route during the rolling upgrade.",
+          );
+          legacyPlacementWarningLogged = true;
+        }
+        return { ok: true, url: selection.candidate.url };
+      }
+      if (reservation.reason !== "all-draining") {
+        everyAttemptWasDraining = false;
+      }
+    }
+    return {
+      ok: false,
+      reason: everyAttemptWasDraining
+        ? "all-draining"
+        : "placement-unavailable",
+    };
+  }
+  if (selection.kind === "all-draining") {
+    if (!sfuStatusWarningLogged) {
+      console.warn(
+        "[SFU Join] Every configured SFU is draining; refusing to route a new room.",
+      );
+      sfuStatusWarningLogged = true;
+    }
+    return { ok: false, reason: "all-draining" };
+  }
+  return { ok: false, reason: "placement-unavailable" };
 };
 
 const alwaysHostEmails = parseEmailList(
@@ -572,12 +741,31 @@ export async function POST(request: Request) {
   });
 
   const secret = process.env.SFU_SECRET || "development-secret";
-  const routedSfuUrl = await resolveRoutedSfuUrl({
+  const routedSfu = await resolveRoutedSfuUrl({
     candidateSfuUrls: resolveSfuUrls(),
     secret,
     clientId,
     roomId,
   });
+  if (!routedSfu.ok) {
+    const allDraining = routedSfu.reason === "all-draining";
+    const unsafeLocalRegistry =
+      routedSfu.reason === "unsafe-local-registry";
+    return NextResponse.json(
+      {
+        error: allDraining
+          ? "Meeting servers are draining. Try again shortly."
+          : unsafeLocalRegistry
+            ? "Meeting placement requires the shared room registry. Try again shortly."
+            : "Meeting placement is temporarily unavailable. Try again shortly.",
+      },
+      {
+        status: 503,
+        headers: { "Retry-After": allDraining ? "5" : "2" },
+      },
+    );
+  }
+  const routedSfuUrl = routedSfu.url;
   logSecretFingerprint(secret);
   const token = jwt.sign(
     {

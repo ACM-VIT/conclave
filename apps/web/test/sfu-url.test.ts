@@ -8,6 +8,8 @@ const sfuEnvKeys = [
   "NEXT_PUBLIC_SFU_URLS",
   "SFU_URL",
   "NEXT_PUBLIC_SFU_URL",
+  "CONCLAVE_ALLOW_LOCAL_SFU_IN_PRODUCTION",
+  "NODE_ENV",
 ] as const;
 
 const originalEnv = Object.fromEntries(
@@ -57,5 +59,29 @@ describe("resolveSfuUrls", () => {
       "https://sfu-a.acmvit.in",
       "https://sfu-b.acmvit.in",
     ]);
+  });
+
+  it("rejects every loopback spelling in production by default", () => {
+    clearSfuEnv();
+    process.env.NODE_ENV = "production";
+
+    for (const loopbackUrl of [
+      "http://localhost:3131",
+      "http://127.0.0.1:3131",
+      "http://127.0.0.2:3131",
+      "http://[::1]:3131",
+    ]) {
+      process.env.SFU_URL = loopbackUrl;
+      expect(resolveSfuUrls()).toEqual(["https://sfu.acmvit.in"]);
+    }
+  });
+
+  it("allows an explicit local production SFU for isolated quality runs", () => {
+    clearSfuEnv();
+    process.env.NODE_ENV = "production";
+    process.env.CONCLAVE_ALLOW_LOCAL_SFU_IN_PRODUCTION = "1";
+    process.env.SFU_URL = "http://127.0.0.1:3131/";
+
+    expect(resolveSfuUrls()).toEqual(["http://127.0.0.1:3131"]);
   });
 });

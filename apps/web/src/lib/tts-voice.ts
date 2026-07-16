@@ -1,14 +1,18 @@
 import { CompactEncrypt, compactDecrypt } from "jose";
+import { TTS_MAX_TEXT_LENGTH } from "@conclave/meeting-core/chat-commands";
 
 const ELEVENLABS_API_BASE = "https://api.elevenlabs.io/v1";
 const VOICE_TOKEN_ISSUER = "conclave-web";
 const VOICE_TOKEN_AUDIENCE = "conclave-tts";
 const VOICE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 
-export const MAX_TTS_TEXT_LENGTH = 500;
-export const MAX_VOICE_SAMPLE_BYTES = 8 * 1024 * 1024;
-export const MIN_VOICE_SAMPLE_SECONDS = 10;
-export const MAX_VOICE_SAMPLE_SECONDS = 25;
+export const MAX_TTS_TEXT_LENGTH = TTS_MAX_TEXT_LENGTH;
+export const MAX_VOICE_SAMPLE_BYTES = 12 * 1024 * 1024;
+// Instant clones want 1 to 2 minutes of clean audio (per the provider's IVC
+// guidance); more than ~3 minutes stops helping. The client records 60-120s;
+// the server bounds allow slight timer skew on either side.
+export const MIN_VOICE_SAMPLE_SECONDS = 55;
+export const MAX_VOICE_SAMPLE_SECONDS = 150;
 
 interface VoiceTokenPayload {
   voiceId: string;
@@ -130,6 +134,7 @@ export const createInstantVoiceClone = async ({
   formData.append("remove_background_noise", "false");
   formData.append("files", audio, audio.name || "conclave-voice-sample.webm");
 
+  // Instant Voice Cloning: the SDK's voices.ivc.create maps to this REST path.
   const response = await fetch(`${ELEVENLABS_API_BASE}/voices/add`, {
     method: "POST",
     headers: { "xi-api-key": requireElevenLabsApiKey() },

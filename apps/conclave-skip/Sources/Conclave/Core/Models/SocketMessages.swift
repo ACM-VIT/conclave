@@ -2,12 +2,35 @@ import Foundation
 
 // MARK: - Outgoing Messages
 
+struct NativeWebcamCodecCapabilities: Codable {
+    let negotiationVersion: Int
+    let receive: [String]
+    let send: [String]
+    let preferredBaseline: String
+}
+
+struct NativeClientMediaCapabilities: Codable {
+    let webcam: NativeWebcamCodecCapabilities
+}
+
 struct JoinRoomRequest: Codable {
     let roomId: String
     let sessionId: String
     let displayName: String?
     let webinarInviteCode: String?
     let meetingInviteCode: String?
+    // The active native wrappers can receive VP8 and constrained-baseline
+    // H264, but native publishing does not yet apply room codec-policy changes.
+    // Advertise VP8-only send support so a native publisher can never make the
+    // room select an H264/VP9 mode it has not explicitly configured.
+    var mediaCapabilities = NativeClientMediaCapabilities(
+        webcam: NativeWebcamCodecCapabilities(
+            negotiationVersion: 3,
+            receive: ["vp8", "h264-cb"],
+            send: ["vp8"],
+            preferredBaseline: "vp8"
+        )
+    )
 }
 
 enum JoinMode: String, Codable {
@@ -35,6 +58,17 @@ struct ProduceRequest: Codable {
 struct ProducerAppData: Codable {
     let type: String
     let paused: Bool?
+    let webcamReceiverCapacityTransition: WebcamReceiverCapacityTransition?
+
+    init(
+        type: String,
+        paused: Bool?,
+        webcamReceiverCapacityTransition: WebcamReceiverCapacityTransition? = nil
+    ) {
+        self.type = type
+        self.paused = paused
+        self.webcamReceiverCapacityTransition = webcamReceiverCapacityTransition
+    }
 }
 
 struct ConsumeRequest: Codable {
@@ -43,6 +77,42 @@ struct ConsumeRequest: Codable {
     let transportId: String?
     let preferredLayers: ConsumerLayerPreferenceRequest?
     let priority: Int?
+    let plannedConsumerHandoff: PlannedConsumerHandoffRequest?
+
+    init(
+        producerId: String,
+        rtpCapabilities: RtpCapabilities,
+        transportId: String?,
+        preferredLayers: ConsumerLayerPreferenceRequest?,
+        priority: Int?,
+        plannedConsumerHandoff: PlannedConsumerHandoffRequest? = nil
+    ) {
+        self.producerId = producerId
+        self.rtpCapabilities = rtpCapabilities
+        self.transportId = transportId
+        self.preferredLayers = preferredLayers
+        self.priority = priority
+        self.plannedConsumerHandoff = plannedConsumerHandoff
+    }
+}
+
+struct PlannedConsumerHandoffRequest: Codable {
+    let requestId: String
+    let predecessorConsumerId: String
+}
+
+struct AbortConsumerHandoffRequest: Codable {
+    let requestId: String
+    let producerId: String
+    let predecessorConsumerId: String
+}
+
+struct AbortConsumerHandoffResponse: Codable {
+    let success: Bool
+    let requestId: String
+    let status: String
+    let successorConsumerId: String?
+    let predecessorRestored: Bool
 }
 
 struct ConsumerLayerPreferenceRequest: Codable {
@@ -76,6 +146,10 @@ struct ResumeConsumerRequest: Codable {
     let consumerId: String
     // Requests a fresh keyframe while resuming to recover a stalled decoder.
     let requestKeyFrame: Bool?
+}
+
+struct CloseConsumerRequest: Codable {
+    let consumerId: String
 }
 
 struct ToggleMediaRequest: Codable {
@@ -746,6 +820,19 @@ struct ConsumeResponse: Codable {
     let producerId: String
     let kind: String
     let rtpParameters: RtpParameters
+    // Optional for compatibility with older SFUs. When present, these values
+    // are the authoritative mediasoup Consumer state returned by `consume`.
+    let consumerType: String?
+    let paused: Bool?
+    let producerPaused: Bool?
+    let score: ConsumerScoreSnapshot?
+    let preferredLayers: ConsumerLayerPreferenceRequest?
+    let currentLayers: ConsumerLayerPreferenceRequest?
+    let priority: Int?
+    // Forward-compatible server hint. Current servers expose enough RTP
+    // metadata to derive this when the field is absent.
+    let maxSpatialLayer: Int?
+    let plannedConsumerHandoffRequestId: String?
 }
 
 struct SendChatResponse: Codable {
@@ -1206,6 +1293,11 @@ struct NoGuestsChangedNotification: Codable {
 }
 
 struct DmStateChangedNotification: Codable {
+    let enabled: Bool
+    let roomId: String?
+}
+
+struct ImageAttachmentsStateChangedNotification: Codable {
     let enabled: Bool
     let roomId: String?
 }

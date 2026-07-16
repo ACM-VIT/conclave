@@ -30,10 +30,18 @@ const uniqueUrls = (values: string[]): string[] => {
 const isProductionRuntime = (): boolean =>
   process.env.NODE_ENV === "production";
 
-const isLocalhostUrl = (value: string): boolean => {
+const allowLoopbackSfuInProduction = (): boolean =>
+  process.env.CONCLAVE_ALLOW_LOCAL_SFU_IN_PRODUCTION === "1";
+
+const isLoopbackUrl = (value: string): boolean => {
   try {
     const { hostname } = new URL(value);
-    return hostname === "localhost" || hostname === "127.0.0.1";
+    return (
+      hostname === "localhost" ||
+      hostname === "::1" ||
+      hostname === "[::1]" ||
+      /^127(?:\.\d{1,3}){3}$/.test(hostname)
+    );
   } catch {
     return false;
   }
@@ -44,7 +52,11 @@ export const normalizeSfuUrl = (value: string): string =>
 
 const productionSafeSfuUrl = (value: string): string => {
   const normalized = normalizeSfuUrl(value);
-  if (isProductionRuntime() && isLocalhostUrl(normalized)) {
+  if (
+    isProductionRuntime() &&
+    isLoopbackUrl(normalized) &&
+    !allowLoopbackSfuInProduction()
+  ) {
     return PUBLIC_SFU_URL;
   }
   return normalized;

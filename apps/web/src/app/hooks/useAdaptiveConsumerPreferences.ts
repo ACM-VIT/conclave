@@ -5,8 +5,45 @@ import {
   getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate,
   SCREEN_SHARE_RECEIVE_EMERGENCY_BPS,
 } from "../lib/screen-share-network-profile";
+import {
+  advanceWebcamReceiveRecoveryProbe,
+  getGoodLinkWebcamSpatialAllocation,
+  isWebcamLayerConvergencePathHealthy,
+  getWebcamContinuityLayerPreference,
+  getWebcamTargetSpatialLayer,
+  normalizeRenderDevicePixelRatio,
+  shouldRetryWebcamLayerConvergenceKeyFrame,
+  shouldParkWebcamForDataSaver,
+  WEBCAM_RECEIVE_TEMPORAL_LAYER,
+  type WebcamLayerConvergenceKeyFrameAttempt,
+  type WebcamReceiveRecoveryProbeState,
+  type VideoLayerBounds,
+} from "../lib/adaptive-video-receive";
+import {
+  isConsumerGenerationDisplacedError,
+  isConsumerPreferenceGenerationCurrent,
+} from "../lib/consumer-preference-generation";
+import {
+  advanceConsumerScoreAdaptation,
+  getConsumerScoreSample,
+  getEffectiveConsumerReceiveQuality,
+  type ConsumerScoreAdaptationState,
+  type ConsumerScoreQuality,
+} from "../lib/adaptive-consumer-score";
+import {
+  applyVideoReceiverJitterBufferTarget,
+  getAdaptiveVideoJitterBufferTargetMs,
+  reconcileVideoReceiverJitterBufferTarget,
+  releaseVideoReceiverJitterBufferTargetState,
+  type AdaptiveVideoJitterBufferTargetMs,
+  type VideoJitterBufferTargetReconcileStatus,
+  type VideoJitterBufferTargetState,
+} from "../lib/adaptive-video-jitter-buffer";
 import type { Consumer, ProducerMapEntry } from "../lib/types";
-import type { MeetRefs } from "./useMeetRefs";
+import type {
+  AdaptiveVideoReceiverLifecycleEvent,
+  MeetRefs,
+} from "./useMeetRefs";
 import type { ConnectionQuality } from "./useConnectionQuality";
 
 type ConsumerLayerPreference = {
@@ -14,18 +51,13 @@ type ConsumerLayerPreference = {
   temporalLayer?: number;
 };
 
-type LayerBounds = {
-  maxSpatialLayer: number;
-  maxTemporalLayer: number;
-};
+type LayerBounds = VideoLayerBounds;
 
 type DesiredConsumerPreferences = {
   preferredLayers?: ConsumerLayerPreference;
   priority: number;
   paused?: boolean;
 };
-
-type ConsumerScoreQuality = "good" | "fair" | "poor" | "unknown";
 
 type SetConsumerPreferencesResponse =
   | {
@@ -62,10 +94,13 @@ interface UseAdaptiveConsumerPreferencesOptions {
     | "producerMapRef"
     | "consumerTelemetryRef"
     | "adaptivelyPausedConsumerProducerIdsRef"
+    | "adaptiveVideoReceiverLifecycleRef"
   >;
   enabled: boolean;
   connectionQuality: ConnectionQuality;
   emergencyMode: boolean;
+  receiveContinuityRisk: boolean;
+  browserAllowsFairWebcamLayerRecovery?: boolean;
   availableIncomingBitrateBps?: number | null;
   activeSpeakerId: string | null;
   dataSaverMode?: boolean;
@@ -87,12 +122,9 @@ const SCREEN_SHARE_CONSUMER_PREFERENCE_EMIT_SPACING_MS = 50;
 const RATE_LIMIT_RETRY_DELAY_MS = 1000;
 const CONSUMER_PREFERENCE_ACK_TIMEOUT_MS = 3000;
 const AUDIO_CONSUMER_PRIORITY = 255;
-const CONSUMER_SCORE_STALE_AFTER_MS = 15000;
 const UNSUPPORTED_LAYER_RETRY_AFTER_MS = 30000;
 const SCREEN_SHARE_SMALL_RENDERED_HEIGHT = 220;
 const SCREEN_SHARE_FULL_FPS_RENDERED_HEIGHT = 540;
-const WEBCAM_STANDARD_RENDERED_HEIGHT = 260;
-const WEBCAM_FULL_RENDERED_HEIGHT = 540;
 const OFFSCREEN_WEBCAM_PARK_PRIORITY = 5;
 const HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY = 60;
 
@@ -101,6 +133,7 @@ type PresentationTileSize = "stage" | "grid" | "rail";
 type RenderedTileMetrics = {
   width: number;
   height: number;
+  devicePixelRatio: number;
 };
 
 type LayoutRole = {
@@ -112,6 +145,7 @@ type LayoutRole = {
   rank: number | null;
   renderedWidth: number | null;
   renderedHeight: number | null;
+  renderedDevicePixelRatio: number | null;
   presentationSize: PresentationTileSize | null;
 };
 
@@ -147,6 +181,9 @@ type ConsumerPreferenceDebugContext = {
   webcamVideoCount: number;
 };
 
+type AdaptiveVideoJitterBufferDebugStatus =
+  VideoJitterBufferTargetReconcileStatus;
+
 export type AdaptiveConsumerPreferenceDebugEntry = {
   producerId: string;
   consumerId: string;
@@ -159,11 +196,16 @@ export type AdaptiveConsumerPreferenceDebugEntry = {
   producerPaused: boolean | null;
   requestedPaused: boolean | null;
   requestedLayers?: ConsumerLayerPreference;
+  requestedJitterBufferTargetMs: AdaptiveVideoJitterBufferTargetMs | null;
+  observedTargetMs: number | null;
+  jitterBufferTargetStatus: AdaptiveVideoJitterBufferDebugStatus;
   emergencyKeepVideo: boolean | null;
   preferredLayers?: ConsumerLayerPreference;
   currentLayers?: ConsumerLayerPreference;
   consumerScore: number | null;
   consumerScoreQuality: ConsumerScoreQuality;
+  receiveRecoveryProbePhase: WebcamReceiveRecoveryProbeState["phase"] | null;
+  receiveRecoveryProbeActive: boolean;
   bounds: LayerBounds | null;
   layout: LayoutRole | null;
   requestKeyFrame: boolean;
@@ -177,6 +219,8 @@ export type AdaptiveConsumerPreferencesDebugSnapshot = {
   timestamp: number;
   connectionQuality: ConnectionQuality;
   emergencyMode: boolean;
+  receiveContinuityRisk: boolean;
+  browserAllowsFairWebcamLayerRecovery: boolean;
   dataSaverMode: boolean;
   isDocumentVisible: boolean;
   activeSpeakerId: string | null;
@@ -335,6 +379,9 @@ const readParticipantTileMetrics = (
   }
 
   const metrics = new Map<string, RenderedTileMetrics>();
+  const devicePixelRatio = normalizeRenderDevicePixelRatio(
+    typeof window === "undefined" ? 1 : window.devicePixelRatio,
+  );
   const tiles = Array.from(
     document.querySelectorAll<HTMLElement>("[data-userid]"),
   );
@@ -350,7 +397,7 @@ const readParticipantTileMetrics = (
 
     const existing = metrics.get(userId);
     if (!existing || width * height > existing.width * existing.height) {
-      metrics.set(userId, { width, height });
+      metrics.set(userId, { width, height, devicePixelRatio });
     }
   });
 
@@ -454,6 +501,9 @@ const getLayoutRole = (
     renderedHeight: isPresentedScreen
       ? hints.presentation.renderedHeight
       : participantTileMetrics?.height ?? null,
+    renderedDevicePixelRatio: isPresentedScreen
+      ? 1
+      : participantTileMetrics?.devicePixelRatio ?? null,
     presentationSize: isPresentedScreen ? hints.presentation.size : null,
   };
 };
@@ -495,7 +545,10 @@ const inferLayerBounds = (
   }
 
   if (info.type === "webcam") {
-    return { maxSpatialLayer: 2, maxTemporalLayer: 2 };
+    return {
+      maxSpatialLayer: 2,
+      maxTemporalLayer: WEBCAM_RECEIVE_TEMPORAL_LAYER,
+    };
   }
 
   return null;
@@ -580,25 +633,6 @@ const worstQuality = (
   return qualityRank[left] >= qualityRank[right] ? left : right;
 };
 
-const parseConsumerScore = (score: unknown): number | null => {
-  if (!isRecord(score)) return null;
-  const value = score.score;
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-};
-
-const classifyConsumerScoreQuality = (
-  score: number | null,
-): ConsumerScoreQuality => {
-  if (score === null) return "unknown";
-  if (score <= 3) return "poor";
-  if (score <= 6) return "fair";
-  return "good";
-};
-
-const getConsumerScoreQualityHint = (
-  scoreQuality: ConsumerScoreQuality,
-): ConnectionQuality => (scoreQuality === "unknown" ? "unknown" : scoreQuality);
-
 const getScreenShareReceiveQualityForAvailableBitrate = (
   availableIncomingBitrateBps: number | null | undefined,
 ): ConnectionQuality => {
@@ -626,6 +660,16 @@ const buildLayerPreference = (
   spatialLayer: clampLayer(targetSpatialLayer, bounds.maxSpatialLayer),
   temporalLayer: clampLayer(targetTemporalLayer, bounds.maxTemporalLayer),
 });
+
+const buildWebcamLayerPreference = (
+  targetSpatialLayer: number,
+  bounds: LayerBounds,
+): ConsumerLayerPreference =>
+  buildLayerPreference(
+    targetSpatialLayer,
+    WEBCAM_RECEIVE_TEMPORAL_LAYER,
+    bounds,
+  );
 
 const getScreenShareTargetTemporalLayer = (
   bounds: LayerBounds,
@@ -671,18 +715,6 @@ const getScreenShareTargetTemporalLayer = (
   return isLargePresentation ? bounds.maxTemporalLayer : 1;
 };
 
-const getWebcamTargetSpatialLayer = (
-  bounds: LayerBounds,
-  renderedHeight: number | null,
-): number => {
-  if (renderedHeight === null) return bounds.maxSpatialLayer;
-  if (renderedHeight < WEBCAM_STANDARD_RENDERED_HEIGHT) return 0;
-  if (renderedHeight < WEBCAM_FULL_RENDERED_HEIGHT) {
-    return Math.min(1, bounds.maxSpatialLayer);
-  }
-  return bounds.maxSpatialLayer;
-};
-
 const getDesiredPreferences = (
   info: ProducerMapEntry,
   bounds: LayerBounds | null,
@@ -694,12 +726,15 @@ const getDesiredPreferences = (
     fullResolutionEligible: boolean;
     layout: LayoutRole | null;
     emergencyMode: boolean;
+    receiveContinuityRisk: boolean;
+    receiveRecoveryProbeActive: boolean;
     emergencyKeepVideo: boolean;
     screenShareVideoActive: boolean;
     dataSaverMode: boolean;
     isDocumentVisible: boolean;
     availableIncomingBitrateBps: number | null;
     consumerScoreQuality: ConsumerScoreQuality;
+    previousSpatialLayer: number | null;
   },
 ): DesiredConsumerPreferences | null => {
   if (info.kind === "audio") {
@@ -717,15 +752,14 @@ const getDesiredPreferences = (
   const screenShareReceiveEmergency = isScreenShareReceiveEmergencyBitrate(
     options.availableIncomingBitrateBps,
   );
-  const consumerScoreReceiveQuality =
-    options.quality === "good" || options.quality === "fair"
-      ? "unknown"
-      : getConsumerScoreQualityHint(options.consumerScoreQuality);
-  const effectiveQuality = worstQuality(
-    options.quality,
-    consumerScoreReceiveQuality,
-  );
-  const quality = effectiveQuality === "unknown" ? "good" : effectiveQuality;
+  const consumerScoreReceiveQuality: ConnectionQuality =
+    options.consumerScoreQuality;
+  const quality = options.receiveRecoveryProbeActive
+    ? "good"
+    : getEffectiveConsumerReceiveQuality(
+        options.quality,
+        consumerScoreReceiveQuality,
+      );
 
   if (info.type === "screen") {
     if (!options.isDocumentVisible) {
@@ -781,7 +815,9 @@ const getDesiredPreferences = (
 
   if (!options.isDocumentVisible) {
     return {
-      preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+      preferredLayers: bounds
+        ? buildWebcamLayerPreference(0, bounds)
+        : undefined,
       priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
       paused: true,
     };
@@ -799,25 +835,45 @@ const getDesiredPreferences = (
   const isWarm = layout?.warm === true || (!layout && !fallbackVisible);
   const isHidden = layout?.hidden === true && !isVisible;
   const isFocus = isActiveSpeaker || isLayoutFocus;
+  const isFocusOrPrimary = isFocus || isPrimary;
+  const webcamRenderedWidth = layout?.renderedWidth ?? null;
   const webcamRenderedHeight = layout?.renderedHeight ?? null;
   const webcamRenderedSpatialLayer = bounds
-    ? getWebcamTargetSpatialLayer(bounds, webcamRenderedHeight)
+    ? getWebcamTargetSpatialLayer({
+        bounds,
+        width: webcamRenderedWidth,
+        height: webcamRenderedHeight,
+        devicePixelRatio: layout?.renderedDevicePixelRatio ?? 1,
+        previousSpatialLayer: options.previousSpatialLayer,
+      })
     : null;
   const hasRenderedWebcamTile =
     isVisible || isPrimary || webcamRenderedHeight !== null;
 
   if (options.dataSaverMode) {
+    const shouldPark = shouldParkWebcamForDataSaver({
+      isVisible,
+      isFocusOrPrimary,
+    });
     return {
-      preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
-      priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
-      paused: true,
+      preferredLayers: bounds
+        ? buildWebcamLayerPreference(0, bounds)
+        : undefined,
+      priority: isFocusOrPrimary
+        ? 155
+        : isVisible
+          ? 70
+          : OFFSCREEN_WEBCAM_PARK_PRIORITY,
+      paused: shouldPark,
     };
   }
 
   if (options.emergencyMode) {
     if (isHidden && !isWarm && !isFocus && !options.emergencyKeepVideo) {
       return {
-        preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+        preferredLayers: bounds
+          ? buildWebcamLayerPreference(0, bounds)
+          : undefined,
         priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
         paused: true,
       };
@@ -825,15 +881,37 @@ const getDesiredPreferences = (
 
     if (!options.emergencyKeepVideo) {
       return {
-        preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+        preferredLayers: bounds
+          ? buildWebcamLayerPreference(0, bounds)
+          : undefined,
         priority: 8,
         paused: false,
       };
     }
 
     return {
-      preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+      preferredLayers: bounds
+        ? buildWebcamLayerPreference(0, bounds)
+        : undefined,
       priority: isFocus ? 145 : 90,
+      paused: false,
+    };
+  }
+
+  if (
+    options.receiveContinuityRisk &&
+    !options.receiveRecoveryProbeActive
+  ) {
+    const continuityLayers = bounds
+      ? getWebcamContinuityLayerPreference({
+          bounds,
+          isFocusOrPrimary,
+          availableIncomingBitrateBps: options.availableIncomingBitrateBps,
+        })
+      : null;
+    return {
+      preferredLayers: continuityLayers ?? undefined,
+      priority: isFocusOrPrimary ? 175 : isVisible ? 70 : 35,
       paused: false,
     };
   }
@@ -850,7 +928,9 @@ const getDesiredPreferences = (
 
   if (shouldParkOffscreenWebcamForScreenShare) {
     return {
-      preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+      preferredLayers: bounds
+        ? buildWebcamLayerPreference(0, bounds)
+        : undefined,
       priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
       paused: true,
     };
@@ -862,15 +942,9 @@ const getDesiredPreferences = (
       screenShareReserveQuality !== "good" ||
       screenShareReceiveEmergency)
   ) {
-    const screenShareConstrained =
-      screenShareReserveQuality === "poor" || screenShareReceiveEmergency;
     return {
       preferredLayers: bounds
-        ? buildLayerPreference(
-            0,
-            screenShareConstrained ? 0 : isVisible || isFocus ? 1 : 0,
-            bounds,
-          )
+        ? buildWebcamLayerPreference(0, bounds)
         : undefined,
       priority: screenShareReceiveEmergency
         ? isFocus
@@ -898,14 +972,18 @@ const getDesiredPreferences = (
   if (isHidden && !isWarm && !isFocus) {
     if (quality === "poor") {
       return {
-        preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+        preferredLayers: bounds
+          ? buildWebcamLayerPreference(0, bounds)
+          : undefined,
         priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
         paused: true,
       };
     }
 
     return {
-      preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
+      preferredLayers: bounds
+        ? buildWebcamLayerPreference(0, bounds)
+        : undefined,
       priority: 25,
       paused: false,
     };
@@ -914,27 +992,33 @@ const getDesiredPreferences = (
   if (!isVisible && isWarm && !isFocus) {
     return {
       preferredLayers: bounds
-        ? buildLayerPreference(0, quality === "poor" ? 0 : 1, bounds)
+        ? buildWebcamLayerPreference(0, bounds)
         : undefined,
       priority: quality === "poor" ? 35 : 55,
       paused: false,
     };
   }
 
+  const goodLinkSpatialAllocation = bounds
+    ? getGoodLinkWebcamSpatialAllocation({
+        bounds,
+        demandedSpatialLayer:
+          webcamRenderedSpatialLayer ?? bounds.maxSpatialLayer,
+        isVisible,
+        isFocus,
+        hasRenderedTile: hasRenderedWebcamTile,
+        screenShareVideoActive: options.screenShareVideoActive,
+        fullResolutionEligible: options.fullResolutionEligible,
+      })
+    : null;
   const keepFull =
     quality === "good" &&
-    (!bounds ||
-      (webcamRenderedSpatialLayer ?? bounds.maxSpatialLayer) >=
-        bounds.maxSpatialLayer) &&
-    ((isFocus && hasRenderedWebcamTile) ||
-      (!options.screenShareVideoActive &&
-        isVisible &&
-        options.fullResolutionEligible));
+    (goodLinkSpatialAllocation?.keepFullResolution ?? false);
 
   if (quality === "poor") {
     return {
       preferredLayers: bounds
-        ? buildLayerPreference(0, isFocus ? 1 : 0, bounds)
+        ? buildWebcamLayerPreference(0, bounds)
         : undefined,
       priority: isFocus ? 155 : isVisible ? 70 : 35,
       paused: false,
@@ -944,11 +1028,7 @@ const getDesiredPreferences = (
   if (quality === "fair") {
     return {
       preferredLayers: bounds
-        ? buildLayerPreference(
-            isFocus ? 1 : 0,
-            isVisible || isFocus ? bounds.maxTemporalLayer : 1,
-            bounds,
-          )
+        ? buildWebcamLayerPreference(isFocus ? 1 : 0, bounds)
         : undefined,
       priority: isFocus ? 175 : isVisible ? 90 : 50,
       paused: false,
@@ -957,22 +1037,10 @@ const getDesiredPreferences = (
 
   return {
     preferredLayers: bounds
-      ? keepFull
-        ? buildLayerPreference(
-            bounds.maxSpatialLayer,
-            bounds.maxTemporalLayer,
-            bounds,
-          )
-        : buildLayerPreference(
-            isVisible
-              ? Math.min(
-                  1,
-                  webcamRenderedSpatialLayer ?? bounds.maxSpatialLayer,
-                )
-              : 0,
-            isVisible ? bounds.maxTemporalLayer : 0,
-            bounds,
-          )
+      ? buildWebcamLayerPreference(
+          goodLinkSpatialAllocation?.spatialLayer ?? 0,
+          bounds,
+        )
       : undefined,
     priority: keepFull ? 175 : isFocus ? 130 : isVisible ? 95 : 45,
     paused: false,
@@ -1036,6 +1104,8 @@ export function useAdaptiveConsumerPreferences({
   enabled,
   connectionQuality,
   emergencyMode,
+  receiveContinuityRisk,
+  browserAllowsFairWebcamLayerRecovery = false,
   availableIncomingBitrateBps = null,
   activeSpeakerId,
   dataSaverMode = false,
@@ -1045,6 +1115,9 @@ export function useAdaptiveConsumerPreferences({
 }: UseAdaptiveConsumerPreferencesOptions) {
   const lastAppliedRef = useRef<Map<string, string>>(new Map());
   const lastLayersRef = useRef<Map<string, ConsumerLayerPreference>>(new Map());
+  const layerConvergenceKeyFrameAttemptsRef = useRef<
+    Map<string, WebcamLayerConvergenceKeyFrameAttempt>
+  >(new Map());
   const lastPausedRef = useRef<Map<string, boolean>>(new Map());
   const unsupportedLayerPreferencesRef = useRef<
     Map<string, UnsupportedLayerPreference>
@@ -1055,6 +1128,12 @@ export function useAdaptiveConsumerPreferences({
   const preferenceDebugRef = useRef<
     Map<string, AdaptiveConsumerPreferenceDebugEntry>
   >(new Map());
+  const consumerScoreAdaptationRef = useRef<
+    Map<string, ConsumerScoreAdaptationState>
+  >(new Map());
+  const receiveRecoveryProbeStateRef = useRef<
+    Map<string, WebcamReceiveRecoveryProbeState>
+  >(new Map());
   const lastRoomTilingEventSignatureRef = useRef<string | null>(null);
   const lastPublishedAdaptiveVideoPauseRef = useRef<Map<string, string>>(
     new Map(),
@@ -1064,6 +1143,125 @@ export function useAdaptiveConsumerPreferences({
     layoutHintsAvailable: false,
     webcamVideoCount: 0,
   });
+  const videoJitterBufferTargetsRef = useRef<
+    Map<string, VideoJitterBufferTargetState>
+  >(new Map());
+  const videoJitterBufferPolicyRef = useRef({
+    enabled,
+    connectionQuality,
+    emergencyMode,
+    dataSaverMode,
+    isDocumentVisible,
+  });
+  videoJitterBufferPolicyRef.current = {
+    enabled,
+    connectionQuality,
+    emergencyMode,
+    dataSaverMode,
+    isDocumentVisible,
+  };
+
+  const reconcileVideoJitterBufferTarget = useCallback(
+    (
+      producerId: string,
+      consumer: Consumer,
+      info: ProducerMapEntry,
+    ): {
+      requestedTargetMs: AdaptiveVideoJitterBufferTargetMs | null;
+      status: AdaptiveVideoJitterBufferDebugStatus;
+      observedTargetMs: number | null;
+    } => {
+      if (info.kind !== "video") {
+        videoJitterBufferTargetsRef.current.delete(producerId);
+        return {
+          requestedTargetMs: null,
+          status: "not-requested",
+          observedTargetMs: null,
+        };
+      }
+
+      const policy = videoJitterBufferPolicyRef.current;
+      const requestedTargetMs = getAdaptiveVideoJitterBufferTargetMs({
+        enabled: policy.enabled,
+        mediaKind: info.kind,
+        sourceType: info.type,
+        quality: policy.connectionQuality,
+        emergencyMode: policy.emergencyMode,
+        dataSaverMode: policy.dataSaverMode,
+        isDocumentVisible: policy.isDocumentVisible,
+      });
+      const receiver = consumer.rtpReceiver;
+      const reconciliation = reconcileVideoReceiverJitterBufferTarget({
+        consumerId: consumer.id,
+        receiver,
+        requestedTargetMs,
+        previousState:
+          videoJitterBufferTargetsRef.current.get(producerId) ?? null,
+        nowMs: Date.now(),
+      });
+      if (reconciliation.nextState) {
+        videoJitterBufferTargetsRef.current.set(
+          producerId,
+          reconciliation.nextState,
+        );
+      } else {
+        // Null policy transitions always clear ownership, including after a
+        // prior unsupported receiver or transient setter/readback error.
+        videoJitterBufferTargetsRef.current.delete(producerId);
+      }
+      return reconciliation;
+    },
+    [],
+  );
+
+  const releaseVideoJitterBufferTarget = useCallback(
+    (producerId: string, consumer: Consumer) => {
+      const currentState =
+        videoJitterBufferTargetsRef.current.get(producerId) ?? null;
+      const nextState = releaseVideoReceiverJitterBufferTargetState({
+        removingConsumerId: consumer.id,
+        receiverClosed: consumer.closed,
+        currentState,
+      });
+      if (nextState) {
+        if (nextState !== currentState) {
+          videoJitterBufferTargetsRef.current.set(producerId, nextState);
+        }
+        return;
+      }
+      videoJitterBufferTargetsRef.current.delete(producerId);
+    },
+    [],
+  );
+
+  const resetLiveVideoJitterBufferTargets = useCallback(() => {
+    videoJitterBufferTargetsRef.current.forEach((tracked, producerId) => {
+      const consumer = refs.consumersRef.current.get(producerId);
+      if (
+        consumer?.id === tracked.consumerId &&
+        !consumer.closed
+      ) {
+        applyVideoReceiverJitterBufferTarget(tracked.receiver, null);
+      }
+    });
+    videoJitterBufferTargetsRef.current.clear();
+  }, [refs.consumersRef]);
+
+  const handleAdaptiveVideoReceiverLifecycle = useCallback(
+    (event: AdaptiveVideoReceiverLifecycleEvent) => {
+      if (event.type === "removing") {
+        releaseVideoJitterBufferTarget(event.producerId, event.consumer);
+        return;
+      }
+
+      reconcileVideoJitterBufferTarget(
+        event.producerId,
+        event.consumer,
+        event.info,
+      );
+    },
+    [reconcileVideoJitterBufferTarget, releaseVideoJitterBufferTarget],
+  );
 
   const clearScheduledPreferenceWork = useCallback(() => {
     if (typeof window !== "undefined") {
@@ -1142,6 +1340,8 @@ export function useAdaptiveConsumerPreferences({
         timestamp: Date.now(),
         connectionQuality,
         emergencyMode,
+        receiveContinuityRisk,
+        browserAllowsFairWebcamLayerRecovery,
         dataSaverMode,
         isDocumentVisible,
         activeSpeakerId,
@@ -1172,6 +1372,8 @@ export function useAdaptiveConsumerPreferences({
       debugStateRef,
       enabled,
       emergencyMode,
+      receiveContinuityRisk,
+      browserAllowsFairWebcamLayerRecovery,
       dataSaverMode,
       isDocumentVisible,
       publishAdaptiveVideoPauseChanges,
@@ -1183,6 +1385,7 @@ export function useAdaptiveConsumerPreferences({
     const socket = refs.socketRef.current;
     if (!enabled || !socket?.connected) {
       clearScheduledPreferenceWork();
+      resetLiveVideoJitterBufferTargets();
       writeDebugSnapshot({
         socketConnected: socket?.connected === true,
         layoutHintsAvailable: false,
@@ -1332,15 +1535,22 @@ export function useAdaptiveConsumerPreferences({
     const trackedProducerIds = new Set([
       ...lastAppliedRef.current.keys(),
       ...preferenceDebugRef.current.keys(),
+      ...videoJitterBufferTargetsRef.current.keys(),
+      ...consumerScoreAdaptationRef.current.keys(),
+      ...receiveRecoveryProbeStateRef.current.keys(),
     ]);
     for (const producerId of trackedProducerIds) {
       if (liveProducerIds.has(producerId)) continue;
       lastAppliedRef.current.delete(producerId);
       lastLayersRef.current.delete(producerId);
+      layerConvergenceKeyFrameAttemptsRef.current.delete(producerId);
       lastPausedRef.current.delete(producerId);
       unsupportedLayerPreferencesRef.current.delete(producerId);
       inFlightProducerIdsRef.current.delete(producerId);
       preferenceDebugRef.current.delete(producerId);
+      videoJitterBufferTargetsRef.current.delete(producerId);
+      consumerScoreAdaptationRef.current.delete(producerId);
+      receiveRecoveryProbeStateRef.current.delete(producerId);
       refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(producerId);
     }
 
@@ -1356,9 +1566,18 @@ export function useAdaptiveConsumerPreferences({
       const info = refs.producerMapRef.current.get(producerId);
       if (!info || consumer.closed) {
         preferenceDebugRef.current.delete(producerId);
+        videoJitterBufferTargetsRef.current.delete(producerId);
+        consumerScoreAdaptationRef.current.delete(producerId);
+        receiveRecoveryProbeStateRef.current.delete(producerId);
         refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(producerId);
         return;
       }
+
+      const jitterBufferTarget = reconcileVideoJitterBufferTarget(
+        producerId,
+        consumer,
+        info,
+      );
 
       const bounds = inferLayerBounds(consumer, info);
       const layout = getLayoutRole(
@@ -1374,14 +1593,57 @@ export function useAdaptiveConsumerPreferences({
         emergencyVideoKeepProducerIds.has(producerId);
       const consumerTelemetry =
         refs.consumerTelemetryRef.current.get(producerId);
-      const consumerScore =
-        consumerTelemetry &&
-        now - consumerTelemetry.receivedAt <= CONSUMER_SCORE_STALE_AFTER_MS
-          ? parseConsumerScore(consumerTelemetry.score)
-          : null;
-      const consumerScoreQuality =
-        classifyConsumerScoreQuality(consumerScore);
+      const consumerScoreSample = consumerTelemetry
+        ? getConsumerScoreSample({
+            score: consumerTelemetry.score,
+            currentSpatialLayer:
+              consumerTelemetry.currentLayers?.spatialLayer ?? null,
+            receivedAtMs: consumerTelemetry.receivedAt,
+            nowMs: now,
+          })
+        : { score: null, quality: "unknown" as const };
+      const consumerScoreState = advanceConsumerScoreAdaptation({
+        consumerId: consumer.id,
+        sampleQuality: consumerScoreSample.quality,
+        previousState: consumerScoreAdaptationRef.current.get(producerId),
+        nowMs: now,
+      });
+      consumerScoreAdaptationRef.current.set(
+        producerId,
+        consumerScoreState,
+      );
+      const consumerScore = consumerScoreSample.score;
+      const consumerScoreQuality = consumerScoreState.quality;
       const fallbackRank = fallbackWebcamRanks.get(producerId) ?? null;
+      const previousLayers = lastLayersRef.current.get(producerId);
+      let receiveRecoveryProbeState: WebcamReceiveRecoveryProbeState | null =
+        null;
+      if (info.kind === "video" && info.type === "webcam") {
+        const isRecoveryProbeVisible = layout
+          ? layout.visible || layout.primary || layout.focus
+          : fallbackRank !== null &&
+            fallbackRank < MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS;
+        receiveRecoveryProbeState = advanceWebcamReceiveRecoveryProbe({
+          previousState:
+            receiveRecoveryProbeStateRef.current.get(producerId) ?? null,
+          consumerId: consumer.id,
+          nowMs: now,
+          connectionQuality,
+          consumerScoreQuality,
+          browserAllowsRecovery: browserAllowsFairWebcamLayerRecovery,
+          emergencyMode,
+          receiveContinuityRisk,
+          dataSaverMode,
+          isDocumentVisible,
+          isVisible: isRecoveryProbeVisible,
+        });
+        receiveRecoveryProbeStateRef.current.set(
+          producerId,
+          receiveRecoveryProbeState,
+        );
+      } else {
+        receiveRecoveryProbeStateRef.current.delete(producerId);
+      }
       const desired = getDesiredPreferences(info, bounds, {
         quality: connectionQuality,
         activeSpeakerId,
@@ -1395,16 +1657,19 @@ export function useAdaptiveConsumerPreferences({
               fallbackRank < MAX_WEBCAMS_TO_KEEP_FULL_ON_GOOD_LINKS),
         layout,
         emergencyMode,
+        receiveContinuityRisk,
+        receiveRecoveryProbeActive:
+          receiveRecoveryProbeState?.phase === "active",
         emergencyKeepVideo,
         screenShareVideoActive,
         dataSaverMode,
         isDocumentVisible,
         availableIncomingBitrateBps,
         consumerScoreQuality,
+        previousSpatialLayer: previousLayers?.spatialLayer ?? null,
       });
       if (!desired) return;
 
-      const previousLayers = lastLayersRef.current.get(producerId);
       const wasPaused =
         lastPausedRef.current.get(producerId) === true ||
         refs.adaptivelyPausedConsumerProducerIdsRef.current.has(producerId);
@@ -1438,10 +1703,40 @@ export function useAdaptiveConsumerPreferences({
       };
       const isScreenShareVideo =
         info.kind === "video" && info.type === "screen";
+      const currentSpatialLayer =
+        consumerTelemetry?.currentLayers?.spatialLayer ?? null;
+      if (
+        preferredLayers &&
+        currentSpatialLayer !== null &&
+        currentSpatialLayer >= preferredLayers.spatialLayer
+      ) {
+        layerConvergenceKeyFrameAttemptsRef.current.delete(producerId);
+      }
+      const retryWebcamLayerConvergence =
+        info.kind === "video" &&
+        info.type === "webcam" &&
+        preferences.paused === false &&
+        shouldRetryWebcamLayerConvergenceKeyFrame({
+          consumerId: consumer.id,
+          preferredSpatialLayer: preferredLayers?.spatialLayer ?? null,
+          currentSpatialLayer,
+          healthyPath: isWebcamLayerConvergencePathHealthy({
+            connectionQuality,
+            consumerScoreQuality,
+            emergencyMode,
+            receiveContinuityRisk,
+            dataSaverMode,
+          }),
+          visiblePriority: Boolean(layout?.visible || layout?.primary || layout?.focus),
+          nowMs: now,
+          previousAttempt:
+            layerConvergenceKeyFrameAttemptsRef.current.get(producerId) ?? null,
+        });
       const requestKeyFrame =
         preferences.paused === false &&
         Boolean(preferredLayers) &&
         (wasPaused ||
+          retryWebcamLayerConvergence ||
           (isScreenShareVideo
             ? !sameConsumerLayers(previousLayers, preferredLayers)
             : isConsumerLayerUpgrade(previousLayers, preferredLayers!)));
@@ -1454,19 +1749,30 @@ export function useAdaptiveConsumerPreferences({
         priority: preferences.priority,
         requestedPaused: preferences.paused ?? null,
         requestedLayers: preferredLayers,
+        requestedJitterBufferTargetMs:
+          jitterBufferTarget.requestedTargetMs,
+        observedTargetMs: jitterBufferTarget.observedTargetMs,
+        jitterBufferTargetStatus: jitterBufferTarget.status,
         emergencyKeepVideo:
           emergencyMode && info.kind === "video" && info.type === "webcam"
             ? emergencyKeepVideo
             : null,
         consumerScore,
         consumerScoreQuality,
+        receiveRecoveryProbePhase:
+          receiveRecoveryProbeState?.phase ?? null,
+        receiveRecoveryProbeActive:
+          receiveRecoveryProbeState?.phase === "active",
         bounds,
         layout,
         requestKeyFrame,
         unsupportedLayers: shouldSuppressPreferredLayers,
       };
       const signature = getPreferenceSignature(consumer.id, preferences);
-      if (lastAppliedRef.current.get(producerId) === signature) {
+      if (
+        lastAppliedRef.current.get(producerId) === signature &&
+        !retryWebcamLayerConvergence
+      ) {
         const existingDebugEntry = preferenceDebugRef.current.get(producerId);
         if (
           telemetryConfirmsPreferences(
@@ -1506,6 +1812,10 @@ export function useAdaptiveConsumerPreferences({
             ...existingDebugEntry,
             consumerScore,
             consumerScoreQuality,
+            requestedJitterBufferTargetMs:
+              jitterBufferTarget.requestedTargetMs,
+            observedTargetMs: jitterBufferTarget.observedTargetMs,
+            jitterBufferTargetStatus: jitterBufferTarget.status,
           });
         }
         return;
@@ -1631,10 +1941,27 @@ export function useAdaptiveConsumerPreferences({
       requestKeyFrame: update.debugEntryBase.requestKeyFrame,
     });
 
+    const isUpdateStillLive = (
+      update: PendingConsumerPreferenceUpdate,
+    ): boolean => {
+      const liveConsumer = refs.consumersRef.current.get(update.producerId);
+      return isConsumerPreferenceGenerationCurrent({
+        enabled,
+        socketConnected: socket.connected,
+        updateConsumerClosed: update.consumer.closed,
+        updateConsumerId: update.consumer.id,
+        currentConsumerId: liveConsumer?.id ?? null,
+      });
+    };
+
     const markDeferredForRetry = (
       update: PendingConsumerPreferenceUpdate,
       error: string,
     ) => {
+      if (!isUpdateStillLive(update)) {
+        inFlightProducerIdsRef.current.delete(update.producerId);
+        return;
+      }
       preferenceDebugRef.current.set(update.producerId, {
         ...update.debugEntryBase,
         status: "deferred",
@@ -1643,11 +1970,31 @@ export function useAdaptiveConsumerPreferences({
         error,
         appliedAt: Date.now(),
       });
+      writeDebugSnapshot(debugContext);
+      scheduleRateLimitRetry();
+    };
+
+    const markDisplacedGenerationForRetry = (
+      update: PendingConsumerPreferenceUpdate,
+      error: string,
+    ) => {
+      inFlightProducerIdsRef.current.delete(update.producerId);
       if (update.preferences.paused === true) {
-        refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
+        // Preserve the desired pause while a make-before-break candidate is
+        // server-current. Clearing this optimistic marker could let that
+        // candidate commit and flow until the next preference cycle.
+        refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
           update.producerId,
         );
       }
+      preferenceDebugRef.current.set(update.producerId, {
+        ...update.debugEntryBase,
+        status: "deferred",
+        paused: update.preferences.paused ?? null,
+        producerPaused: null,
+        error,
+        appliedAt: Date.now(),
+      });
       writeDebugSnapshot(debugContext);
       scheduleRateLimitRetry();
     };
@@ -1657,6 +2004,10 @@ export function useAdaptiveConsumerPreferences({
       error: string,
       unsupportedLayers = false,
     ) => {
+      if (!isUpdateStillLive(update)) {
+        inFlightProducerIdsRef.current.delete(update.producerId);
+        return;
+      }
       preferenceDebugRef.current.set(update.producerId, {
         ...update.debugEntryBase,
         status: "error",
@@ -1688,19 +2039,6 @@ export function useAdaptiveConsumerPreferences({
       }
     };
 
-    const isUpdateStillLive = (
-      update: PendingConsumerPreferenceUpdate,
-    ): boolean => {
-      const liveConsumer = refs.consumersRef.current.get(update.producerId);
-      return (
-        enabled &&
-        socket.connected &&
-        !update.consumer.closed &&
-        Boolean(liveConsumer) &&
-        liveConsumer!.id === update.consumer.id
-      );
-    };
-
     const sendPriorityOnlyFallback = (
       update: PendingConsumerPreferenceUpdate,
     ) => {
@@ -1710,6 +2048,7 @@ export function useAdaptiveConsumerPreferences({
         fallbackSettled = true;
         scheduledPreferenceTimeoutsRef.current.delete(fallbackAckTimeoutId);
         inFlightProducerIdsRef.current.delete(update.producerId);
+        if (!isUpdateStillLive(update)) return;
         markDeferredForRetry(
           update,
           "setConsumerPreferences priority-only ack timeout",
@@ -1730,8 +2069,23 @@ export function useAdaptiveConsumerPreferences({
           fallbackSettled = true;
           scheduledPreferenceTimeoutsRef.current.delete(fallbackAckTimeoutId);
           window.clearTimeout(fallbackAckTimeoutId);
+          if (!isUpdateStillLive(update)) {
+            inFlightProducerIdsRef.current.delete(update.producerId);
+            return;
+          }
           if ("error" in priorityOnlyResponse) {
             inFlightProducerIdsRef.current.delete(update.producerId);
+            if (
+              isConsumerGenerationDisplacedError(
+                priorityOnlyResponse.error,
+              )
+            ) {
+              markDisplacedGenerationForRetry(
+                update,
+                priorityOnlyResponse.error,
+              );
+              return;
+            }
             if (isConsumerControlRateLimitError(priorityOnlyResponse.error)) {
               markDeferredForRetry(update, priorityOnlyResponse.error);
               return;
@@ -1790,6 +2144,10 @@ export function useAdaptiveConsumerPreferences({
       }
 
       if ("error" in response) {
+        if (isConsumerGenerationDisplacedError(response.error)) {
+          markDisplacedGenerationForRetry(update, response.error);
+          return;
+        }
         if (isConsumerControlRateLimitError(response.error)) {
           inFlightProducerIdsRef.current.delete(update.producerId);
           markDeferredForRetry(update, response.error);
@@ -1860,6 +2218,7 @@ export function useAdaptiveConsumerPreferences({
         settled = true;
         scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
         inFlightProducerIdsRef.current.delete(update.producerId);
+        if (!isUpdateStillLive(update)) return;
         markDeferredForRetry(update, "setConsumerPreferences ack timeout");
       }, CONSUMER_PREFERENCE_ACK_TIMEOUT_MS);
       scheduledPreferenceTimeoutsRef.current.add(ackTimeoutId);
@@ -1909,6 +2268,12 @@ export function useAdaptiveConsumerPreferences({
           scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
           window.clearTimeout(ackTimeoutId);
           if ("error" in response) {
+            if (isConsumerGenerationDisplacedError(response.error)) {
+              for (const update of liveUpdates) {
+                markDisplacedGenerationForRetry(update, response.error);
+              }
+              return;
+            }
             if (isConsumerControlRateLimitError(response.error)) {
               for (const update of liveUpdates) {
                 inFlightProducerIdsRef.current.delete(update.producerId);
@@ -1938,6 +2303,29 @@ export function useAdaptiveConsumerPreferences({
 
     for (const update of updatesToSend) {
       markOptimisticPauseState(update);
+      if (
+        update.debugEntryBase.kind === "video" &&
+        update.debugEntryBase.type === "webcam" &&
+        update.debugEntryBase.requestKeyFrame &&
+        update.preferredLayers
+      ) {
+        const targetSignature = String(
+          update.preferredLayers.spatialLayer,
+        );
+        const previous = layerConvergenceKeyFrameAttemptsRef.current.get(
+          update.producerId,
+        );
+        layerConvergenceKeyFrameAttemptsRef.current.set(update.producerId, {
+          consumerId: update.consumer.id,
+          targetSignature,
+          requestedAtMs: now,
+          attemptCount:
+            previous?.consumerId === update.consumer.id &&
+            previous.targetSignature === targetSignature
+              ? previous.attemptCount + 1
+              : 1,
+        });
+      }
     }
 
     if (screenShareVideoActive && updatesToSend.length > 1) {
@@ -1955,10 +2343,12 @@ export function useAdaptiveConsumerPreferences({
   }, [
     activeSpeakerId,
     availableIncomingBitrateBps,
+    browserAllowsFairWebcamLayerRecovery,
     clearScheduledPreferenceWork,
     connectionQuality,
     dataSaverMode,
     emergencyMode,
+    receiveContinuityRisk,
     enabled,
     isDocumentVisible,
     refs.adaptivelyPausedConsumerProducerIdsRef,
@@ -1966,17 +2356,45 @@ export function useAdaptiveConsumerPreferences({
     refs.consumersRef,
     refs.producerMapRef,
     refs.socketRef,
+    reconcileVideoJitterBufferTarget,
+    resetLiveVideoJitterBufferTargets,
     writeDebugSnapshot,
   ]);
 
   useEffect(() => {
+    const lifecycleRef = refs.adaptiveVideoReceiverLifecycleRef;
+    const previousHandler = lifecycleRef.current;
+    lifecycleRef.current = handleAdaptiveVideoReceiverLifecycle;
+
+    return () => {
+      if (lifecycleRef.current === handleAdaptiveVideoReceiverLifecycle) {
+        lifecycleRef.current = previousHandler;
+      }
+    };
+  }, [
+    handleAdaptiveVideoReceiverLifecycle,
+    refs.adaptiveVideoReceiverLifecycleRef,
+  ]);
+
+  useEffect(
+    () => () => {
+      resetLiveVideoJitterBufferTargets();
+    },
+    [resetLiveVideoJitterBufferTargets],
+  );
+
+  useEffect(() => {
     if (!enabled) {
       clearScheduledPreferenceWork();
+      resetLiveVideoJitterBufferTargets();
       lastAppliedRef.current.clear();
       lastLayersRef.current.clear();
+      layerConvergenceKeyFrameAttemptsRef.current.clear();
       lastPausedRef.current.clear();
       unsupportedLayerPreferencesRef.current.clear();
       preferenceDebugRef.current.clear();
+      consumerScoreAdaptationRef.current.clear();
+      receiveRecoveryProbeStateRef.current.clear();
       lastRoomTilingEventSignatureRef.current = null;
       refs.adaptivelyPausedConsumerProducerIdsRef.current.clear();
       writeDebugSnapshot({
@@ -2016,6 +2434,7 @@ export function useAdaptiveConsumerPreferences({
     clearScheduledPreferenceWork,
     enabled,
     refs.adaptivelyPausedConsumerProducerIdsRef,
+    resetLiveVideoJitterBufferTargets,
     writeDebugSnapshot,
   ]);
 }

@@ -57,6 +57,9 @@ const MAX_GIF_URL_LENGTH = 2048;
 const MAX_REPLY_CONTENT_LENGTH = 280;
 const MAX_REPLY_NAME_LENGTH = 120;
 const MAX_TTS_VOICE_TOKEN_LENGTH = 2048;
+// Mirrors TTS_MAX_TEXT_LENGTH in @conclave/meeting-core (the SFU stays
+// dependency-free of it) and the web /api/tts/speech endpoint.
+const MAX_TTS_TEXT_LENGTH = 500;
 const TTS_VOICE_TOKEN_PATTERN = /^[A-Za-z0-9._~-]+$/;
 const KLIPY_MEDIA_HOSTS = new Set(["static.klipy.com"]);
 const KLIPY_PAGE_HOSTS = new Set(["klipy.com", "www.klipy.com"]);
@@ -651,6 +654,7 @@ const createConclaveAuthorizationToken = (options: {
   answerId: string;
   questionMessageId: string;
   userId: string;
+  displayName: string;
   room: Room;
 }): string =>
   jwt.sign(
@@ -659,6 +663,7 @@ const createConclaveAuthorizationToken = (options: {
       answerId: options.answerId,
       questionMessageId: options.questionMessageId,
       userId: options.userId,
+      displayName: options.displayName,
       roomId: options.room.id,
       clientId: options.room.clientId,
       channelId: options.room.channelId,
@@ -1001,13 +1006,20 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           messageContent = image.fileName;
         }
 
+        // Any whitespace after /tts counts (matches meeting-core's parser),
+        // so tab-separated messages cannot bypass the host toggle or cap.
         const isTtsMessage =
-          !directMessageIntent &&
-          (messageContent.toLowerCase().startsWith("/tts ") ||
-            messageContent.toLowerCase() === "/tts");
+          !directMessageIntent && /^\/tts(\s|$)/i.test(messageContent);
         if (isTtsMessage) {
           if (room.isTtsDisabled) {
             rejectMessage("TTS is disabled by the host in this room.");
+            return;
+          }
+          const spokenText = messageContent.slice("/tts".length).trim();
+          if (spokenText.length > MAX_TTS_TEXT_LENGTH) {
+            rejectMessage(
+              `TTS messages are limited to ${MAX_TTS_TEXT_LENGTH} characters.`,
+            );
             return;
           }
         }
@@ -1208,6 +1220,9 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
             answerId,
             questionMessageId,
             userId: sender.id,
+            displayName:
+              room.getDisplayNameForUser(sender.id) ||
+              fallbackDisplayNameFromUserId(sender.id),
             room,
           }),
         });

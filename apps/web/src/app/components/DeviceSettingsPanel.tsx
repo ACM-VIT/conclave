@@ -543,9 +543,9 @@ export default function DeviceSettingsPanel({
       >
         <div className="min-w-0">
           <h2 className="truncate text-[15px] font-semibold">Settings</h2>
-          <p className="mt-0.5 text-[11.5px]" style={{ color: color.textFaint }}>
+          {/* <p className="mt-0.5 text-[11.5px]" style={{ color: color.textFaint }}>
             Device choices stay local. Voice clones are shared only with /tts.
-          </p>
+          </p> */}
         </div>
         <button
           type="button"
@@ -839,7 +839,7 @@ export default function DeviceSettingsPanel({
               </button>
             </Section>
 
-            <Section label="Text to speech">
+            <Section label="Voice messages">
               <TtsVoiceSettings
                 systemVoices={ttsSystemVoices}
                 selectedSystemVoiceUri={selectedTtsSystemVoiceUri}
@@ -850,6 +850,7 @@ export default function DeviceSettingsPanel({
                 getRecordingStream={micTest.getRecordingStream}
                 canCloneVoice={canCloneTtsVoice}
                 ownerName={ttsVoiceOwnerName}
+                audioOutputDeviceId={selectedAudioOutputDeviceId}
               />
             </Section>
           </div>

@@ -7,15 +7,23 @@ final class VideoTrackWrapper: Identifiable {
     let id: String
     let userId: String
     let isLocal: Bool
+    let consumerGeneration: Int
 
     var rtcVideoTrack: Any?
     var isEnabled: Bool = false
 
-    init(id: String, userId: String, isLocal: Bool, track: Any? = nil) {
+    init(
+        id: String,
+        userId: String,
+        isLocal: Bool,
+        track: Any? = nil,
+        consumerGeneration: Int = 0
+    ) {
         self.id = id
         self.userId = userId
         self.isLocal = isLocal
         self.rtcVideoTrack = track
+        self.consumerGeneration = consumerGeneration
     }
 
     func setTrack(_ track: Any?) {
@@ -48,7 +56,7 @@ final class WebRTCClient {
     func createReceiveTransport() async throws { fatalError() }
     func restartIce() async -> Bool { fatalError() }
     func restartIce(transportKind: String) async -> Bool { fatalError() }
-    func consumeProducer(producerId: String, producerUserId: String, producerKind: String? = nil, producerType: String = "webcam", preferHighWebcamLayer: Bool = false, initialReceiveConnectionQuality: ConnectionQuality = .unknown) async throws { fatalError() }
+    func consumeProducer(producerId: String, producerUserId: String, producerKind: String? = nil, producerType: String = "webcam", preferHighWebcamLayer: Bool = false, initialReceiveConnectionQuality: ConnectionQuality = .unknown, roomId: String? = nil, meetingLifecycleGeneration: Int = 0) async throws { fatalError() }
     func closeConsumer(producerId: String, userId: String) { fatalError() }
     func applyRemoteConsumerBandwidthPolicy(
         focusedUserIds: Set<String>,
@@ -71,6 +79,10 @@ final class WebRTCClient {
     func sampleConnectionQuality() -> ConnectionQuality { fatalError() }
     func sampleConnectionQualitySample() -> ConnectionQualitySample { fatalError() }
     func consumerId(forProducer producerId: String) -> String? { fatalError() }
+    func hasConsumerGeneration(forProducer producerId: String) -> Bool { fatalError() }
+    func waitForFirstDecodedVideoFrame(consumerId: String, timeoutMilliseconds: Int) async throws -> Bool { fatalError() }
+    func cancelFirstDecodedVideoFrameObservation(consumerId: String) { fatalError() }
+    func closeConsumer(consumerId: String) { fatalError() }
     func closeConsumers(exceptProducerIds producerIds: [String]) { fatalError() }
     func closeConsumers(userIdPrefix: String) { fatalError() }
     func applyConsumerTelemetry(_ notification: ConsumerTelemetryNotification) { fatalError() }

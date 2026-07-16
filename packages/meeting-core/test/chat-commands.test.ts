@@ -7,9 +7,11 @@ import {
   getActionText,
   getCommandSuggestions,
   getHelpText,
+  getTtsMessageText,
   getTtsText,
   normalizeChatMessage,
   parseChatCommand,
+  TTS_MAX_TEXT_LENGTH,
 } from "../src/chat-commands";
 import type { ChatMessage } from "../src/types";
 
@@ -144,8 +146,24 @@ describe("formatters", () => {
     expect(formatTtsContent("hi")).toBe("TTS: hi");
   });
 
+  it("getTtsMessageText strips the TTS prefix", () => {
+    expect(getTtsMessageText("TTS: hi there")).toBe("hi there");
+  });
+
+  it("getTtsMessageText leaves other content alone", () => {
+    expect(getTtsMessageText("hi there")).toBe("hi there");
+  });
+
+  it("round-trips through formatTtsContent", () => {
+    expect(getTtsMessageText(formatTtsContent("speak up"))).toBe("speak up");
+  });
+
   it("formatActionContent prefixes /me", () => {
     expect(formatActionContent("waves")).toBe("/me waves");
+  });
+
+  it("exposes a sane spoken-text cap", () => {
+    expect(TTS_MAX_TEXT_LENGTH).toBeGreaterThan(0);
   });
 });
 
@@ -156,6 +174,7 @@ describe("normalizeChatMessage", () => {
     );
     expect(result.ttsText).toBe("hi there");
     expect(result.message.content).toBe("TTS: hi there");
+    expect(result.message.isTts).toBe(true);
     expect(result.message.ttsVoiceToken).toBe("encrypted-token");
   });
 

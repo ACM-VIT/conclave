@@ -18,6 +18,10 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(SfuServerEvent.webinarParticipantJoined.rawValue, "webinar:participantJoined")
         XCTAssertEqual(SfuServerEvent.gameView.rawValue, "game:view")
         XCTAssertEqual(SfuServerEvent.gameSnapshot.rawValue, "game:snapshot")
+        XCTAssertEqual(
+            SfuServerEvent.webcamReceiverCapacityProof.rawValue,
+            "webcamReceiverCapacityProof"
+        )
     }
 
     func testNativeTranscriptRelayWireModelsDecodeWebSfuAcks() throws {
@@ -78,12 +82,26 @@ final class ConclaveTests: XCTestCase {
             webinarInviteCode: nil,
             meetingInviteCode: "meet-123"
         )
-        let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? NSDictionary)
+        let requestData = try JSONEncoder().encode(request)
+        let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: requestData) as? NSDictionary)
 
         XCTAssertEqual(encoded["roomId"] as? String, "room-a")
         XCTAssertEqual(encoded["sessionId"] as? String, "session-a")
         XCTAssertEqual(encoded["displayName"] as? String, "Host")
         XCTAssertEqual(encoded["meetingInviteCode"] as? String, "meet-123")
+        let mediaCapabilities = try XCTUnwrap(encoded["mediaCapabilities"] as? NSDictionary)
+        let webcamCapabilities = try XCTUnwrap(mediaCapabilities["webcam"] as? NSDictionary)
+        XCTAssertEqual(webcamCapabilities["negotiationVersion"] as? Int, 3)
+        XCTAssertEqual(webcamCapabilities["receive"] as? [String], ["vp8", "h264-cb"])
+        XCTAssertEqual(webcamCapabilities["send"] as? [String], ["vp8"])
+        XCTAssertEqual(webcamCapabilities["preferredBaseline"] as? String, "vp8")
+
+        let decodedRequest = try JSONDecoder().decode(JoinRoomRequest.self, from: requestData)
+        XCTAssertEqual(decodedRequest.mediaCapabilities.webcam.negotiationVersion, 3)
+        XCTAssertEqual(decodedRequest.mediaCapabilities.webcam.receive, ["vp8", "h264-cb"])
+        XCTAssertEqual(decodedRequest.mediaCapabilities.webcam.send, ["vp8"])
+        XCTAssertFalse(decodedRequest.mediaCapabilities.webcam.send.contains("h264-cb"))
+        XCTAssertFalse(decodedRequest.mediaCapabilities.webcam.send.contains("vp9-p0-l2t1"))
 
         let notification = try JSONDecoder().decode(UserJoinedNotification.self, from: Data("""
         { "userId": "u1", "displayName": "Host", "roomId": "room-a" }
@@ -91,6 +109,41 @@ final class ConclaveTests: XCTestCase {
 
         XCTAssertEqual(notification.displayName, "Host")
         XCTAssertEqual(notification.roomId, "room-a")
+    }
+
+    func testProducerAppDataEncodesExactNestedReceiverCapacityTransition() throws {
+        let transition = WebcamReceiverCapacityTransition(
+            fromProducerId: "simulcast-a",
+            nonce: "server-issued-nonce"
+        )
+        let payload = ProducerAppData(
+            type: ProducerType.webcam.rawValue,
+            paused: false,
+            webcamReceiverCapacityTransition: transition
+        )
+        let encoded = try JSONEncoder().encode(payload)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? NSDictionary
+        )
+        let nested = try XCTUnwrap(
+            object["webcamReceiverCapacityTransition"] as? NSDictionary
+        )
+
+        XCTAssertEqual(object["type"] as? String, "webcam")
+        XCTAssertEqual(object["paused"] as? Bool, false)
+        XCTAssertEqual(nested["fromProducerId"] as? String, "simulcast-a")
+        XCTAssertEqual(nested["nonce"] as? String, "server-issued-nonce")
+
+        let ordinaryPayload = ProducerAppData(
+            type: ProducerType.webcam.rawValue,
+            paused: false
+        )
+        let ordinaryObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(ordinaryPayload)
+            ) as? NSDictionary
+        )
+        XCTAssertNil(ordinaryObject["webcamReceiverCapacityTransition"])
     }
 
     func testTranscriptPresentationPolicyOrdersAndGroupsSegments() throws {
@@ -713,6 +766,847 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(source.contains("NET_CAPABILITY_NOT_CONGESTED"))
         XCTAssertFalse(source.contains("NET_CAPABILITY_NOT_SUSPENDED"))
         XCTAssertFalse(source.contains("blocked_or_congested"))
+    }
+
+    func testNativePublishQualityDoesNotTreatRTTAloneAsMediaPressure() throws {
+        XCTAssertEqual(
+            RTCConnectionQualityPolicy.transportQuality(
+                rttMs: 900,
+                packetLoss: 0,
+                jitterMs: 5
+            ),
+            ConnectionQuality.emergency
+        )
+        XCTAssertEqual(
+            RTCConnectionQualityPolicy.publishMediaPressureQuality(
+                packetLoss: 0,
+                jitterMs: 5
+            ),
+            ConnectionQuality.good
+        )
+        XCTAssertEqual(
+            RTCConnectionQualityPolicy.publishMediaPressureQuality(
+                packetLoss: 0.09,
+                jitterMs: 5
+            ),
+            ConnectionQuality.poor
+        )
+        XCTAssertEqual(
+            RTCConnectionQualityPolicy.publishMediaPressureQuality(
+                packetLoss: 0,
+                jitterMs: 65
+            ),
+            ConnectionQuality.poor
+        )
+        XCTAssertEqual(
+            RTCConnectionQualityPolicy.publishMediaPressureQuality(
+                packetLoss: nil,
+                jitterMs: nil
+            ),
+            ConnectionQuality.unknown
+        )
+    }
+
+    func testNativePublishQualityKeepsLatencyInDisplayButOutOfAdaptivePressure() throws {
+        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
+        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+
+        for source in [iosSource, androidSource] {
+            XCTAssertTrue(source.contains("publishMediaPressureQuality"))
+            XCTAssertTrue(source.contains("publishTransportQuality"))
+            XCTAssertTrue(source.contains("publishMediaPressureQuality,"))
+            XCTAssertTrue(source.contains("publishTransportQuality,"))
+        }
+    }
+
+    func testAndroidWebcamSingleLayerFallbackPreservesPreferredCodec() throws {
+        let source = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+        let fallbackMarker = try XCTUnwrap(
+            source.range(of: "Webcam simulcast produce failed; retrying single-layer")
+        )
+        let fallbackSource = String(source[fallbackMarker.lowerBound...])
+
+        XCTAssertTrue(fallbackSource.contains(
+            "webcamFallbackSingleLayerEncodings(currentVideoQuality, connectionQuality),\n                codecOptions,\n                preferredCodec,\n                appData"
+        ))
+        XCTAssertFalse(fallbackSource.contains(
+            "null as List<RtpParameters.Encoding>?,\n                codecOptions,\n                null,\n                appData"
+        ))
+    }
+
+    func testNativeWebcamEncodingsUseOneTemporalLayerAcrossAllProducerPaths() throws {
+        XCTAssertEqual(WebcamTemporalLayerPolicy.temporalLayerCount, 1)
+
+        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
+        XCTAssertEqual(
+            iosSource.components(separatedBy:
+                "encoding.numTemporalLayers = NSNumber(value: WebcamTemporalLayerPolicy.temporalLayerCount)"
+            ).count - 1,
+            2
+        )
+        XCTAssertTrue(iosSource.contains(
+            "encodings[index].numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount"
+        ))
+
+        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+        XCTAssertTrue(androidSource.contains(
+            "webcamFallbackSingleLayerEncodings(currentVideoQuality, connectionQuality)"
+        ))
+        XCTAssertEqual(
+            androidSource.components(separatedBy:
+                "encoding.numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount"
+            ).count - 1,
+            3
+        )
+        XCTAssertFalse(androidSource.contains(
+            "null as List<RtpParameters.Encoding>?,\n                codecOptions,\n                preferredCodec,\n                appData"
+        ))
+    }
+
+    #if !SKIP
+    func testConsumerGenerationRemovalRequiresExactSlotOwnership() {
+        let predecessor = ConsumerGenerationIdentity(
+            consumerId: "consumer-old",
+            generation: 7
+        )
+        let successor = ConsumerGenerationIdentity(
+            consumerId: "consumer-new",
+            generation: 8
+        )
+
+        XCTAssertTrue(ConsumerGenerationRemovalPolicy.ownsConsumerSlot(
+            expected: predecessor,
+            current: predecessor
+        ))
+        XCTAssertFalse(ConsumerGenerationRemovalPolicy.ownsConsumerSlot(
+            expected: predecessor,
+            current: successor
+        ))
+        XCTAssertFalse(ConsumerGenerationRemovalPolicy.ownsTrackSlot(
+            expected: predecessor,
+            current: successor
+        ))
+        XCTAssertTrue(ConsumerGenerationRemovalPolicy.ownsTrackSlot(
+            expected: successor,
+            current: successor
+        ))
+        XCTAssertFalse(ConsumerGenerationRemovalPolicy.ownsTrackSlot(
+            expected: successor,
+            current: nil
+        ))
+    }
+    #endif
+
+    func testNativeConsumerRemovalPreservesOverlappingSuccessorOwnership() throws {
+        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
+        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+
+        XCTAssertTrue(iosSource.contains("let generation: Int"))
+        XCTAssertTrue(iosSource.contains("consumerGeneration: Int = 0"))
+        XCTAssertTrue(iosSource.contains("ConsumerGenerationRemovalPolicy.ownsConsumerSlot("))
+        XCTAssertTrue(iosSource.contains("ConsumerGenerationRemovalPolicy.ownsTrackSlot("))
+        XCTAssertTrue(iosSource.contains("$0.value.consumer === consumer"))
+        XCTAssertTrue(iosSource.contains("func closeConsumer(consumerId: String)"))
+        XCTAssertTrue(iosSource.contains("let matchingConsumers = consumers.filter"))
+
+        XCTAssertTrue(androidSource.contains("val generation: Int,"))
+        XCTAssertTrue(androidSource.contains("internal val consumerGeneration: Int = 0"))
+        XCTAssertTrue(androidSource.contains("ConsumerGenerationRemovalPolicy.ownsConsumerSlot("))
+        XCTAssertTrue(androidSource.contains("ConsumerGenerationRemovalPolicy.ownsTrackSlot("))
+        XCTAssertTrue(androidSource.contains("it.value.consumer === consumer"))
+        XCTAssertTrue(androidSource.contains("mainHandler.post {"))
+        XCTAssertTrue(androidSource.contains("internal fun closeConsumer(consumerId: String)"))
+        XCTAssertTrue(androidSource.contains("val matchingConsumers = consumers"))
+    }
+
+    func testNativeFirstDecodedFrameObservationIsLatchedCancellableAndPreResume() throws {
+        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
+        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+
+        let iosAttach = try XCTUnwrap(iosSource.range(of: "videoTrack.add(renderer)"))
+        let iosResume = try XCTUnwrap(iosSource.range(of:
+            "try await socket.resumeConsumer(\n                consumerId: response.id,"
+        ))
+        XCTAssertLessThan(iosAttach.lowerBound, iosResume.lowerBound)
+        XCTAssertTrue(iosSource.contains("private actor FirstDecodedVideoFrameSignal"))
+        XCTAssertTrue(iosSource.contains("withTaskCancellationHandler"))
+        XCTAssertTrue(iosSource.contains("withThrowingTaskGroup(of: Bool.self)"))
+        XCTAssertTrue(iosSource.contains("try Task.checkCancellation()"))
+        XCTAssertTrue(iosSource.contains("func cancelFirstDecodedVideoFrameObservation(consumerId: String)"))
+
+        let androidAttach = try XCTUnwrap(androidSource.range(of: "videoTrack.addSink(it)"))
+        let androidResume = try XCTUnwrap(androidSource.range(of:
+            "socket.resumeConsumer(\n                response.id,\n                response.kind == \"video\","
+        ))
+        XCTAssertLessThan(androidAttach.lowerBound, androidResume.lowerBound)
+        XCTAssertTrue(androidSource.contains("private class FirstDecodedVideoFrameObserver("))
+        XCTAssertTrue(androidSource.contains("withContext(Dispatchers.Main.immediate)"))
+        XCTAssertTrue(androidSource.contains("withTimeoutOrNull(timeoutMilliseconds.toLong())"))
+        XCTAssertTrue(androidSource.contains("signal.await()"))
+        XCTAssertTrue(androidSource.contains("Video consumer generation was replaced"))
+        XCTAssertTrue(androidSource.contains("internal fun cancelFirstDecodedVideoFrameObservation(consumerId: String)"))
+    }
+
+    #if !SKIP
+    func testPlannedWebcamConsumerResetEligibilityUsesAuthoritativeConsumeFacts() throws {
+        let parameters = try JSONDecoder().decode(RtpParameters.self, from: Data("""
+        {
+          "codecs": [
+            { "mimeType": "video/rtx", "payloadType": 97, "clockRate": 90000 },
+            { "mimeType": "video/VP8", "payloadType": 96, "clockRate": 90000 }
+          ],
+          "encodings": [
+            { "ssrc": 1111, "scalabilityMode": "S3T1" }
+          ]
+        }
+        """.utf8))
+        let actualCodec = PlannedWebcamConsumerResetPolicy.actualVideoCodecMimeType(parameters)
+        let maxSpatialLayer = PlannedWebcamConsumerResetPolicy.derivedMaxSpatialLayer(
+            explicit: nil,
+            encodings: parameters.encodings
+        )
+
+        XCTAssertEqual(actualCodec?.lowercased(), "video/vp8")
+        XCTAssertEqual(maxSpatialLayer, 2)
+        XCTAssertTrue(PlannedWebcamConsumerResetPolicy.isEligible(
+            kind: "video",
+            producerType: "webcam",
+            consumerType: "simulcast",
+            actualVideoCodecMimeType: actualCodec,
+            maxSpatialLayer: maxSpatialLayer
+        ))
+        XCTAssertFalse(PlannedWebcamConsumerResetPolicy.isEligible(
+            kind: "audio",
+            producerType: "webcam",
+            consumerType: "simulcast",
+            actualVideoCodecMimeType: actualCodec,
+            maxSpatialLayer: maxSpatialLayer
+        ))
+        XCTAssertFalse(PlannedWebcamConsumerResetPolicy.isEligible(
+            kind: "video",
+            producerType: "screen",
+            consumerType: "simulcast",
+            actualVideoCodecMimeType: actualCodec,
+            maxSpatialLayer: maxSpatialLayer
+        ))
+        XCTAssertFalse(PlannedWebcamConsumerResetPolicy.isEligible(
+            kind: "video",
+            producerType: "webcam",
+            consumerType: "simple",
+            actualVideoCodecMimeType: actualCodec,
+            maxSpatialLayer: maxSpatialLayer
+        ))
+        XCTAssertFalse(PlannedWebcamConsumerResetPolicy.isEligible(
+            kind: "video",
+            producerType: "webcam",
+            consumerType: "simulcast",
+            actualVideoCodecMimeType: "video/H264",
+            maxSpatialLayer: maxSpatialLayer
+        ))
+        XCTAssertFalse(PlannedWebcamConsumerResetPolicy.isEligible(
+            kind: "video",
+            producerType: "webcam",
+            consumerType: "simulcast",
+            actualVideoCodecMimeType: actualCodec,
+            maxSpatialLayer: 0
+        ))
+    }
+
+    func testPlannedWebcamConsumerResetLayerAndDeadlinePolicyIsBounded() throws {
+        let threeEncodingParameters = try JSONDecoder().decode(
+            RtpParameters.self,
+            from: Data("""
+            {
+              "codecs": [
+                { "mimeType": "video/VP8", "payloadType": 96, "clockRate": 90000 }
+              ],
+              "encodings": [{}, {}, {}]
+            }
+            """.utf8)
+        )
+
+        XCTAssertEqual(PlannedWebcamConsumerResetPolicy.derivedMaxSpatialLayer(
+            explicit: nil,
+            encodings: threeEncodingParameters.encodings
+        ), 2)
+        XCTAssertEqual(PlannedWebcamConsumerResetPolicy.derivedMaxSpatialLayer(
+            explicit: 1,
+            encodings: threeEncodingParameters.encodings
+        ), 1)
+        XCTAssertTrue(PlannedWebcamConsumerResetPolicy.isAtTopLayer(
+            currentSpatialLayer: 2,
+            maxSpatialLayer: 2
+        ))
+        XCTAssertFalse(PlannedWebcamConsumerResetPolicy.isAtTopLayer(
+            currentSpatialLayer: 1,
+            maxSpatialLayer: 2
+        ))
+
+        let firstTopLayerAt: Int64 = 1_000
+        XCTAssertFalse(PlannedWebcamConsumerResetPolicy.hasSustainedTopLayer(
+            firstObservedAtMs: firstTopLayerAt,
+            nowMs: firstTopLayerAt +
+                PlannedWebcamConsumerResetPolicy.topLayerSustainMilliseconds - 1
+        ))
+        XCTAssertTrue(PlannedWebcamConsumerResetPolicy.hasSustainedTopLayer(
+            firstObservedAtMs: firstTopLayerAt,
+            nowMs: firstTopLayerAt +
+                PlannedWebcamConsumerResetPolicy.topLayerSustainMilliseconds
+        ))
+
+        let now: Int64 = 10_000
+        XCTAssertTrue(PlannedWebcamConsumerResetPolicy.canStartAttempt(
+            nowMs: now,
+            startupDeadlineMs: now +
+                PlannedWebcamConsumerResetPolicy.minimumAttemptBudgetMilliseconds
+        ))
+        XCTAssertFalse(PlannedWebcamConsumerResetPolicy.canStartAttempt(
+            nowMs: now,
+            startupDeadlineMs: now +
+                PlannedWebcamConsumerResetPolicy.minimumAttemptBudgetMilliseconds - 1
+        ))
+        XCTAssertLessThan(
+            PlannedWebcamConsumerResetPolicy.firstFrameTimeoutMilliseconds,
+            4_000
+        )
+        XCTAssertEqual(PlannedWebcamConsumerResetPolicy.maxAttempts, 2)
+        XCTAssertGreaterThan(PlannedWebcamConsumerResetPolicy.candidateStaggerMilliseconds, 0)
+    }
+
+    func testPlannedWebcamConsumerResetContextRequiresExactGenerationOwnership() {
+        XCTAssertTrue(PlannedWebcamConsumerResetPolicy.contextsMatch(
+            expectedRoomId: " Room-A ",
+            actualRoomId: "room-a",
+            expectedLifecycleGeneration: 7,
+            actualLifecycleGeneration: 7,
+            expectedConfigurationGeneration: 12,
+            actualConfigurationGeneration: 12,
+            expectedProducerClosureGeneration: 3,
+            actualProducerClosureGeneration: 3,
+            expectedAdaptivePolicyRevision: 19,
+            actualAdaptivePolicyRevision: 19
+        ))
+        XCTAssertFalse(PlannedWebcamConsumerResetPolicy.contextsMatch(
+            expectedRoomId: "room-a",
+            actualRoomId: "room-b",
+            expectedLifecycleGeneration: 7,
+            actualLifecycleGeneration: 7,
+            expectedConfigurationGeneration: 12,
+            actualConfigurationGeneration: 12,
+            expectedProducerClosureGeneration: 3,
+            actualProducerClosureGeneration: 3,
+            expectedAdaptivePolicyRevision: 19,
+            actualAdaptivePolicyRevision: 19
+        ))
+        XCTAssertFalse(PlannedWebcamConsumerResetPolicy.contextsMatch(
+            expectedRoomId: "room-a",
+            actualRoomId: "room-a",
+            expectedLifecycleGeneration: 7,
+            actualLifecycleGeneration: 8,
+            expectedConfigurationGeneration: 12,
+            actualConfigurationGeneration: 12,
+            expectedProducerClosureGeneration: 3,
+            actualProducerClosureGeneration: 3,
+            expectedAdaptivePolicyRevision: 19,
+            actualAdaptivePolicyRevision: 19
+        ))
+        XCTAssertFalse(PlannedWebcamConsumerResetPolicy.contextsMatch(
+            expectedRoomId: "room-a",
+            actualRoomId: "room-a",
+            expectedLifecycleGeneration: 7,
+            actualLifecycleGeneration: 7,
+            expectedConfigurationGeneration: 12,
+            actualConfigurationGeneration: 13,
+            expectedProducerClosureGeneration: 3,
+            actualProducerClosureGeneration: 3,
+            expectedAdaptivePolicyRevision: 19,
+            actualAdaptivePolicyRevision: 19
+        ))
+        XCTAssertFalse(PlannedWebcamConsumerResetPolicy.contextsMatch(
+            expectedRoomId: "room-a",
+            actualRoomId: "room-a",
+            expectedLifecycleGeneration: 7,
+            actualLifecycleGeneration: 7,
+            expectedConfigurationGeneration: 12,
+            actualConfigurationGeneration: 12,
+            expectedProducerClosureGeneration: 3,
+            actualProducerClosureGeneration: 4,
+            expectedAdaptivePolicyRevision: 19,
+            actualAdaptivePolicyRevision: 19
+        ))
+        XCTAssertFalse(PlannedWebcamConsumerResetPolicy.contextsMatch(
+            expectedRoomId: "room-a",
+            actualRoomId: "room-a",
+            expectedLifecycleGeneration: 7,
+            actualLifecycleGeneration: 7,
+            expectedConfigurationGeneration: 12,
+            actualConfigurationGeneration: 12,
+            expectedProducerClosureGeneration: 3,
+            actualProducerClosureGeneration: 3,
+            expectedAdaptivePolicyRevision: 19,
+            actualAdaptivePolicyRevision: 20
+        ))
+    }
+
+    func testCanceledResetCoordinatorOwnerCannotFinalizeNewOwnerTimeline() {
+        let canceledOwner = 41
+        let replacementOwner = 42
+
+        XCTAssertTrue(
+            PlannedConsumerResetCoordinatorOwnershipPolicy.ownsCompletion(
+                ownerToken: canceledOwner,
+                activeOwnerToken: canceledOwner
+            )
+        )
+        XCTAssertFalse(
+            PlannedConsumerResetCoordinatorOwnershipPolicy.ownsCompletion(
+                ownerToken: canceledOwner,
+                activeOwnerToken: replacementOwner
+            )
+        )
+        XCTAssertTrue(
+            PlannedConsumerResetCoordinatorOwnershipPolicy.ownsCompletion(
+                ownerToken: replacementOwner,
+                activeOwnerToken: replacementOwner
+            )
+        )
+        XCTAssertFalse(
+            PlannedConsumerResetCoordinatorOwnershipPolicy.shouldWake(
+                candidateRemoved: false,
+                activeCandidateMatches: false
+            )
+        )
+        XCTAssertTrue(
+            PlannedConsumerResetCoordinatorOwnershipPolicy.shouldWake(
+                candidateRemoved: true,
+                activeCandidateMatches: false
+            )
+        )
+        XCTAssertTrue(
+            PlannedConsumerResetCoordinatorOwnershipPolicy.shouldWake(
+                candidateRemoved: false,
+                activeCandidateMatches: true
+            )
+        )
+    }
+
+    func testConsumeResponseResetMetadataIsBackwardCompatibleAndAuthoritative() throws {
+        let legacy = try JSONDecoder().decode(ConsumeResponse.self, from: Data("""
+        {
+          "id": "consumer-old",
+          "producerId": "producer-a",
+          "kind": "video",
+          "rtpParameters": {
+            "codecs": [
+              { "mimeType": "video/VP8", "payloadType": 96, "clockRate": 90000 }
+            ],
+            "encodings": [{ "ssrc": 1111 }]
+          }
+        }
+        """.utf8))
+        XCTAssertNil(legacy.consumerType)
+        XCTAssertNil(legacy.currentLayers)
+        XCTAssertNil(legacy.maxSpatialLayer)
+
+        let enriched = try JSONDecoder().decode(ConsumeResponse.self, from: Data("""
+        {
+          "id": "consumer-new",
+          "producerId": "producer-a",
+          "kind": "video",
+          "rtpParameters": {
+            "codecs": [
+              { "mimeType": "video/VP8", "payloadType": 96, "clockRate": 90000 }
+            ],
+            "encodings": [{ "ssrc": 2222, "scalabilityMode": "L3T1" }]
+          },
+          "consumerType": "simulcast",
+          "paused": false,
+          "producerPaused": false,
+          "score": { "score": 10, "producerScore": 10, "producerScores": [10] },
+          "preferredLayers": { "spatialLayer": 2, "temporalLayer": 0 },
+          "currentLayers": { "spatialLayer": 2, "temporalLayer": 0 },
+          "priority": 255,
+          "maxSpatialLayer": 2
+        }
+        """.utf8))
+        XCTAssertEqual(enriched.consumerType, "simulcast")
+        XCTAssertEqual(enriched.currentLayers?.spatialLayer, 2)
+        XCTAssertEqual(enriched.maxSpatialLayer, 2)
+        XCTAssertEqual(enriched.priority, 255)
+    }
+
+    func testNativePlannedHandoffMessagesPreserveExactRequestOwnership() throws {
+        let request = AbortConsumerHandoffRequest(
+            requestId: "11111111-1111-4111-8111-111111111111",
+            producerId: "producer-a",
+            predecessorConsumerId: "consumer-old"
+        )
+        let encoded = try JSONEncoder().encode(request)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: String]
+        )
+        XCTAssertEqual(object["requestId"], request.requestId)
+        XCTAssertEqual(object["producerId"], request.producerId)
+        XCTAssertEqual(
+            object["predecessorConsumerId"],
+            request.predecessorConsumerId
+        )
+
+        let response = try JSONDecoder().decode(
+            AbortConsumerHandoffResponse.self,
+            from: Data("""
+            {
+              "success": true,
+              "requestId": "11111111-1111-4111-8111-111111111111",
+              "status": "already_aborted",
+              "successorConsumerId": "consumer-new",
+              "predecessorRestored": true
+            }
+            """.utf8)
+        )
+        XCTAssertTrue(response.success)
+        XCTAssertTrue(response.predecessorRestored)
+        XCTAssertEqual(response.status, "already_aborted")
+    }
+
+    func testPlannedHandoffAbortRetryReusesIdentityAndRequiresConfirmation() throws {
+        let request = AbortConsumerHandoffRequest(
+            requestId: "11111111-1111-4111-8111-111111111111",
+            producerId: "producer-a",
+            predecessorConsumerId: "consumer-old"
+        )
+        var retryState = PlannedConsumerHandoffAbortRetryState(request: request)
+
+        let firstAttempt = try XCTUnwrap(retryState.nextRequest())
+        XCTAssertEqual(firstAttempt.requestId, request.requestId)
+        XCTAssertEqual(firstAttempt.producerId, request.producerId)
+        XCTAssertEqual(
+            firstAttempt.predecessorConsumerId,
+            request.predecessorConsumerId
+        )
+        XCTAssertFalse(retryState.permitsConsumerResetRetry)
+        retryState.recordAcknowledgement(confirmed: false)
+        XCTAssertFalse(retryState.permitsConsumerResetRetry)
+        XCTAssertEqual(retryState.nextBackoffMilliseconds, 75)
+
+        // Simulate a lost first abort ACK: the second attempt must reuse the
+        // exact identity, and only its confirmation may release reset retry.
+        let secondAttempt = try XCTUnwrap(retryState.nextRequest())
+        XCTAssertEqual(secondAttempt.requestId, firstAttempt.requestId)
+        XCTAssertEqual(secondAttempt.producerId, firstAttempt.producerId)
+        XCTAssertEqual(
+            secondAttempt.predecessorConsumerId,
+            firstAttempt.predecessorConsumerId
+        )
+        XCTAssertFalse(retryState.permitsConsumerResetRetry)
+        retryState.recordAcknowledgement(confirmed: true)
+        XCTAssertTrue(retryState.isConfirmed)
+        XCTAssertTrue(retryState.permitsConsumerResetRetry)
+        XCTAssertNil(retryState.nextBackoffMilliseconds)
+        XCTAssertNil(retryState.nextRequest())
+
+        var exhausted = PlannedConsumerHandoffAbortRetryState(request: request)
+        XCTAssertNotNil(exhausted.nextRequest())
+        XCTAssertNotNil(exhausted.nextRequest())
+        XCTAssertNotNil(exhausted.nextRequest())
+        XCTAssertNil(exhausted.nextRequest())
+        XCTAssertEqual(
+            exhausted.attemptCount,
+            PlannedConsumerHandoffAbortRetryPolicy.maximumAttempts
+        )
+        XCTAssertFalse(exhausted.permitsConsumerResetRetry)
+    }
+    #endif
+
+    func testNativeAbortConfirmationRetryIsBoundedIdentityOwnedAndFencesResetRetry() throws {
+        let iosSocketSource = try sourceFileContents(
+            "Sources/Conclave/Core/Networking/SocketIOManager.swift"
+        )
+        let iosClientSource = try sourceFileContents(
+            "Sources/Conclave/Core/WebRTC/WebRTCClient.swift"
+        )
+        let androidClientSource = try sourceFileContents(
+            "Sources/Conclave/Skip/WebRTCClient+Android.kt"
+        )
+
+        XCTAssertTrue(iosSocketSource.contains("static let maximumAttempts = 3"))
+        XCTAssertTrue(iosSocketSource.contains(
+            "var retryState = PlannedConsumerHandoffAbortRetryState(request: request)"
+        ))
+        XCTAssertTrue(iosSocketSource.contains(
+            "while let attemptRequest = retryState.nextRequest()"
+        ))
+        XCTAssertTrue(iosSocketSource.contains("payload: attemptRequest"))
+        XCTAssertTrue(iosSocketSource.contains(
+            "retryState.recordAcknowledgement(confirmed: true)"
+        ))
+        XCTAssertTrue(iosClientSource.contains(
+            "let confirmation = Task { @MainActor in"
+        ))
+        XCTAssertTrue(iosClientSource.contains("return await confirmation.value"))
+
+        XCTAssertTrue(androidClientSource.contains(
+            "val identity = PlannedConsumerHandoffAbortIdentity("
+        ))
+        XCTAssertTrue(androidClientSource.contains(
+            "for (attempt in 1..PlannedConsumerHandoffAbortRetryPolicy.maximumAttempts)"
+        ))
+        XCTAssertTrue(androidClientSource.contains("requestId = identity.requestId"))
+        XCTAssertTrue(androidClientSource.contains("producerId = identity.producerId"))
+        XCTAssertTrue(androidClientSource.contains(
+            "predecessorConsumerId = identity.predecessorConsumerId"
+        ))
+        XCTAssertTrue(androidClientSource.contains(
+            "backoffMilliseconds(afterFailedAttempt = attempt)"
+        ))
+        XCTAssertTrue(androidClientSource.contains(
+            "): Boolean = withContext(NonCancellable) {\n        val identity"
+        ))
+
+        let iosResetStart = try XCTUnwrap(iosClientSource.range(
+            of: "private func performPlannedConsumerReset("
+        ))
+        let iosResetEnd = try XCTUnwrap(iosClientSource.range(
+            of: "private func promoteStagedConsumer(",
+            range: iosResetStart.upperBound..<iosClientSource.endIndex
+        ))
+        let iosReset = String(
+            iosClientSource[iosResetStart.lowerBound..<iosResetEnd.lowerBound]
+        )
+        let iosConfirmationGate = try XCTUnwrap(iosReset.range(
+            of: "PlannedConsumerHandoffAbortRetryPolicy.permitsConsumerResetRetry("
+        ))
+        let iosNextResetAttempt = try XCTUnwrap(iosReset.range(
+            of: "if attempt < PlannedWebcamConsumerResetPolicy.maxAttempts"
+        ))
+        XCTAssertLessThan(
+            iosConfirmationGate.lowerBound,
+            iosNextResetAttempt.lowerBound
+        )
+
+        let androidResetStart = try XCTUnwrap(androidClientSource.range(
+            of: "private suspend fun performPlannedConsumerReset("
+        ))
+        let androidResetEnd = try XCTUnwrap(androidClientSource.range(
+            of: "private fun promoteStagedConsumer(",
+            range: androidResetStart.upperBound..<androidClientSource.endIndex
+        ))
+        let androidReset = String(
+            androidClientSource[
+                androidResetStart.lowerBound..<androidResetEnd.lowerBound
+            ]
+        )
+        let androidConfirmationGate = try XCTUnwrap(androidReset.range(
+            of: "PlannedConsumerHandoffAbortRetryPolicy.permitsConsumerResetRetry("
+        ))
+        let androidNextResetAttempt = try XCTUnwrap(androidReset.range(
+            of: "if (attempt < CONSUMER_RESET_MAX_ATTEMPTS)"
+        ))
+        XCTAssertLessThan(
+            androidConfirmationGate.lowerBound,
+            androidNextResetAttempt.lowerBound
+        )
+    }
+
+    func testNativeWebcamReceiveRequestsOnlyT1TemporalLayer() throws {
+        XCTAssertEqual(WebcamTemporalLayerPolicy.receiveTemporalLayer, 0)
+
+        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
+        let iosInitialStart = try XCTUnwrap(
+            iosSource.range(of: "private func initialWebcamConsumerPreference(")
+        )
+        let iosInitialEnd = try XCTUnwrap(iosSource.range(
+            of: "private func initialScreenConsumerPreference(",
+            range: iosInitialStart.upperBound..<iosSource.endIndex
+        ))
+        let iosInitial = String(
+            iosSource[iosInitialStart.lowerBound..<iosInitialEnd.lowerBound]
+        )
+        XCTAssertTrue(iosInitial.contains(
+            "temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer"
+        ))
+        XCTAssertFalse(iosInitial.contains("temporalLayer: 1"))
+        XCTAssertFalse(iosInitial.contains("temporalLayer: 2"))
+        let iosAdaptiveStart = try XCTUnwrap(iosSource.range(of:
+            "guard info.type == ProducerType.webcam.rawValue else { return nil }"
+        ))
+        let iosAdaptiveEnd = try XCTUnwrap(iosSource.range(
+            of: "// MARK: - RTP Capabilities (from server)",
+            range: iosAdaptiveStart.upperBound..<iosSource.endIndex
+        ))
+        let iosAdaptive = String(
+            iosSource[iosAdaptiveStart.lowerBound..<iosAdaptiveEnd.lowerBound]
+        )
+        XCTAssertTrue(iosAdaptive.contains(
+            "temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer"
+        ))
+        XCTAssertFalse(iosAdaptive.contains("temporalLayer: 1"))
+        XCTAssertFalse(iosAdaptive.contains("temporalLayer: 2"))
+
+        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+        let androidInitialStart = try XCTUnwrap(
+            androidSource.range(of: "private fun initialWebcamConsumerPreference(")
+        )
+        let androidInitialEnd = try XCTUnwrap(androidSource.range(
+            of: "private fun initialScreenConsumerPreference(",
+            range: androidInitialStart.upperBound..<androidSource.endIndex
+        ))
+        let androidInitial = String(
+            androidSource[androidInitialStart.lowerBound..<androidInitialEnd.lowerBound]
+        )
+        XCTAssertTrue(androidInitial.contains(
+            "temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer"
+        ))
+        XCTAssertFalse(androidInitial.contains("temporalLayer = 1"))
+        XCTAssertFalse(androidInitial.contains("temporalLayer = 2"))
+        let androidAdaptiveStart = try XCTUnwrap(androidSource.range(of:
+            "if (info.type != ProducerType.webcam.rawValue) return null"
+        ))
+        let androidAdaptiveEnd = try XCTUnwrap(androidSource.range(
+            of: "private var socketManager: SocketIOManager?",
+            range: androidAdaptiveStart.upperBound..<androidSource.endIndex
+        ))
+        let androidAdaptive = String(
+            androidSource[androidAdaptiveStart.lowerBound..<androidAdaptiveEnd.lowerBound]
+        )
+        XCTAssertTrue(androidAdaptive.contains(
+            "temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer"
+        ))
+        XCTAssertFalse(androidAdaptive.contains("temporalLayer = 1"))
+        XCTAssertFalse(androidAdaptive.contains("temporalLayer = 2"))
+    }
+
+    func testNativeResetCancellationIsRevisionOwnedMainConfinedAndUnmeasured() throws {
+        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
+        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+
+        for source in [iosSource, androidSource] {
+            XCTAssertTrue(source.contains("adaptivePolicyRevision"))
+            XCTAssertTrue(source.contains("plannedConsumerResetCoordinatorOwnerToken"))
+            XCTAssertTrue(source.contains("wakePlannedConsumerResetCoordinator"))
+            XCTAssertTrue(source.contains("visibleInterruptionMs=unmeasured"))
+            XCTAssertFalse(source.contains("visibleInterruptionMs=0"))
+        }
+        XCTAssertTrue(iosSource.contains(
+            "expectedAdaptivePolicyRevision: candidate.adaptivePolicyRevision"
+        ))
+        XCTAssertTrue(iosSource.contains(
+            "invalidatePlannedConsumerResetCandidate(\n                consumerId: notification.consumerId"
+        ))
+        XCTAssertTrue(androidSource.contains(
+            "remoteConsumerPreferencePolicyRevision == candidate.adaptivePolicyRevision"
+        ))
+        XCTAssertTrue(androidSource.contains(
+            "withContext(Dispatchers.Main.immediate)"
+        ))
+        XCTAssertTrue(androidSource.contains(
+            "if (Looper.myLooper() != Looper.getMainLooper())"
+        ))
+    }
+
+    func testNativePlannedConsumerResetKeepsStagedGenerationInvisibleUntilPromotion() throws {
+        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
+        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+        let iosSocketSource = try sourceFileContents(
+            "Sources/Conclave/Core/Networking/SocketIOManager.swift"
+        )
+        let androidSocketSource = try sourceFileContents(
+            "Sources/Conclave/Skip/SocketIOManager+Android.kt"
+        )
+
+        XCTAssertTrue(iosSource.contains("visibility: .staged"))
+        XCTAssertTrue(iosSource.contains("if visibility == .currentVisible,"))
+        XCTAssertTrue(iosSource.contains("successorInfo.lifecycleRole = .current"))
+        XCTAssertTrue(iosSource.contains("lifecycleRole.acceptsPeriodicControls"))
+        XCTAssertTrue(iosSocketSource.contains("func closeConsumerAndWait("))
+
+        XCTAssertTrue(androidSource.contains("visibility = ConsumerRegistrationVisibility.STAGED"))
+        XCTAssertTrue(androidSource.contains(
+            "visibility == ConsumerRegistrationVisibility.CURRENT_VISIBLE"
+        ))
+        XCTAssertTrue(androidSource.contains(
+            "successorInfo.lifecycleRole = ConsumerGenerationLifecycleRole.CURRENT"
+        ))
+        XCTAssertTrue(androidSource.contains("lifecycleRole.acceptsPeriodicControls"))
+        XCTAssertTrue(androidSource.contains("withContext(NonCancellable)"))
+        XCTAssertTrue(androidSocketSource.contains("suspend fun closeConsumerAndWait("))
+
+        let iosAttemptStart = try XCTUnwrap(iosSource.range(of:
+            "private func performPlannedConsumerReset("
+        ))
+        let iosAttemptEnd = try XCTUnwrap(iosSource.range(
+            of: "private func promoteStagedConsumer(",
+            range: iosAttemptStart.upperBound..<iosSource.endIndex
+        ))
+        let iosAttempt = String(iosSource[iosAttemptStart.lowerBound..<iosAttemptEnd.lowerBound])
+        let iosRollback = try XCTUnwrap(iosAttempt.range(of:
+            "rollbackConfirmed = await rollbackStagedConsumer("
+        ))
+        let iosRetry = try XCTUnwrap(iosAttempt.range(of:
+            "PlannedWebcamConsumerResetPolicy.retryDelayMilliseconds"
+        ))
+        XCTAssertLessThan(iosRollback.lowerBound, iosRetry.lowerBound)
+
+        let androidAttemptStart = try XCTUnwrap(androidSource.range(of:
+            "private suspend fun performPlannedConsumerReset("
+        ))
+        let androidAttemptEnd = try XCTUnwrap(androidSource.range(
+            of: "private fun promoteStagedConsumer(",
+            range: androidAttemptStart.upperBound..<androidSource.endIndex
+        ))
+        let androidAttempt = String(
+            androidSource[androidAttemptStart.lowerBound..<androidAttemptEnd.lowerBound]
+        )
+        let androidRollback = try XCTUnwrap(androidAttempt.range(of:
+            "rollbackStagedConsumer("
+        ))
+        let androidRetry = try XCTUnwrap(androidAttempt.range(of:
+            "delay(CONSUMER_RESET_RETRY_DELAY_MS)"
+        ))
+        XCTAssertLessThan(androidRollback.lowerBound, androidRetry.lowerBound)
+    }
+
+    func testNativePlannedConsumerResetAbortsPausedAndStalePolicyGenerations() throws {
+        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
+        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+        let androidSocketSource = try sourceFileContents(
+            "Sources/Conclave/Skip/SocketIOManager+Android.kt"
+        )
+
+        XCTAssertTrue(iosSource.contains("var isConsumerPaused: Bool"))
+        XCTAssertTrue(iosSource.contains("var isProducerPaused: Bool"))
+        XCTAssertTrue(iosSource.contains("var isAdaptivelyPaused: Bool"))
+        XCTAssertTrue(iosSource.contains("!info.isConsumerPaused"))
+        XCTAssertTrue(iosSource.contains("!info.isProducerPaused"))
+        XCTAssertTrue(iosSource.contains("!info.isAdaptivelyPaused"))
+        XCTAssertTrue(iosSource.contains(
+            "currentInfo.generation == update.consumerGeneration"
+        ))
+        XCTAssertTrue(iosSource.contains(
+            "remoteConsumerPreferencePolicyRevision == policyRevision"
+        ))
+        XCTAssertTrue(iosSource.contains(
+            "requiredRole: .displaced"
+        ))
+
+        XCTAssertTrue(androidSource.contains("var isConsumerPaused: Boolean"))
+        XCTAssertTrue(androidSource.contains("var isProducerPaused: Boolean"))
+        XCTAssertTrue(androidSource.contains("var isAdaptivelyPaused: Boolean"))
+        XCTAssertTrue(androidSource.contains("!info.isConsumerPaused"))
+        XCTAssertTrue(androidSource.contains("!info.isProducerPaused"))
+        XCTAssertTrue(androidSource.contains("!info.isAdaptivelyPaused"))
+        XCTAssertTrue(androidSource.contains(
+            "currentInfo.generation != update.consumerGeneration"
+        ))
+        XCTAssertTrue(androidSource.contains(
+            "remoteConsumerPreferencePolicyRevision != policyRevision"
+        ))
+        XCTAssertTrue(androidSource.contains(
+            "ConsumerGenerationLifecycleRole.DISPLACED"
+        ))
+        XCTAssertTrue(androidSocketSource.contains(
+            "Regex(\"^[LS]([0-9]+)T\", RegexOption.IGNORE_CASE)"
+        ))
     }
 
     @MainActor
@@ -3944,11 +4838,13 @@ final class ConclaveTests: XCTestCase {
             .noGuestsChanged(NoGuestsChangedNotification(noGuests: true, roomId: "room-a")),
             .chatLockChanged(ChatLockChangedNotification(locked: true, roomId: "room-a")),
             .dmStateChanged(DmStateChangedNotification(enabled: false, roomId: "room-a")),
+            .imageAttachmentsStateChanged(ImageAttachmentsStateChangedNotification(enabled: false, roomId: "room-a")),
             .ttsDisabledChanged(TtsDisabledChangedNotification(disabled: true, roomId: "room-a")),
             .reactionsDisabledChanged(ReactionsDisabledChangedNotification(disabled: true, roomId: "room-a")),
             .roomLockChanged(RoomLockChangedNotification(locked: false, roomId: "old-room")),
             .chatLockChanged(ChatLockChangedNotification(locked: false, roomId: "old-room")),
             .dmStateChanged(DmStateChangedNotification(enabled: true, roomId: "old-room")),
+            .imageAttachmentsStateChanged(ImageAttachmentsStateChangedNotification(enabled: true, roomId: "old-room")),
             .ttsDisabledChanged(TtsDisabledChangedNotification(disabled: false, roomId: "old-room")),
             .reactionsDisabledChanged(ReactionsDisabledChangedNotification(disabled: false, roomId: "old-room"))
         ]
@@ -3958,6 +4854,7 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(viewModel.state.isNoGuests)
         XCTAssertTrue(viewModel.state.isChatLocked)
         XCTAssertFalse(viewModel.state.isDmEnabled)
+        XCTAssertFalse(viewModel.state.isImageAttachmentsEnabled)
         XCTAssertTrue(viewModel.state.isTtsDisabled)
         XCTAssertTrue(viewModel.state.isReactionsDisabled)
     }
@@ -6253,6 +7150,87 @@ final class ConclaveTests: XCTestCase {
         ))
     }
 
+    func testWebcamVideoCodecPolicyMatchesWebStartBitrateProfiles() throws {
+        let cases: [(VideoQuality, ConnectionQuality, Int)] = [
+            (.standard, .good, 1_800),
+            (.standard, .unknown, 1_800),
+            (.low, .good, 300),
+            (.low, .unknown, 300),
+            (.standard, .fair, 350),
+            (.low, .fair, 350),
+            (.standard, .poor, 90),
+            (.low, .emergency, 65)
+        ]
+
+        for (quality, connectionQuality, expectedBitrate) in cases {
+            XCTAssertEqual(
+                WebcamVideoCodecPolicy.googleStartBitrateKbps(
+                    quality: quality,
+                    connectionQuality: connectionQuality
+                ),
+                expectedBitrate,
+                "Unexpected start bitrate for \(quality.rawValue)/\(connectionQuality.rawValue)"
+            )
+        }
+    }
+
+    func testLoadedDeviceReceiveCapabilitiesPreserveCodecIntersectionForConsume() throws {
+        let loadedCapabilitiesJSON = """
+        {
+          "codecs": [
+            {
+              "kind": "video",
+              "mimeType": "video/H264",
+              "preferredPayloadType": 102,
+              "clockRate": 90000,
+              "parameters": {
+                "packetization-mode": 1,
+                "profile-level-id": "42e01f"
+              }
+            },
+            {
+              "kind": "video",
+              "mimeType": "video/VP9",
+              "preferredPayloadType": 98,
+              "clockRate": 90000,
+              "parameters": { "profile-id": 0 }
+            }
+          ],
+          "headerExtensions": [
+            {
+              "kind": "video",
+              "uri": "urn:ietf:params:rtp-hdrext:sdes:mid",
+              "preferredId": 1
+            }
+          ]
+        }
+        """
+
+        let capabilities = try NativeReceiveCapabilitiesPolicy.decodeLoadedDeviceCapabilities(
+            loadedCapabilitiesJSON
+        )
+        let request = ConsumeRequest(
+            producerId: "producer-video",
+            rtpCapabilities: capabilities,
+            transportId: "transport-recv",
+            preferredLayers: nil,
+            priority: nil
+        )
+        let requestObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+        )
+        let receiveCapabilities = try XCTUnwrap(requestObject["rtpCapabilities"] as? [String: Any])
+        let codecs = try XCTUnwrap(receiveCapabilities["codecs"] as? [[String: Any]])
+        let h264 = try XCTUnwrap(codecs.first { ($0["mimeType"] as? String) == "video/H264" })
+        let vp9 = try XCTUnwrap(codecs.first { ($0["mimeType"] as? String) == "video/VP9" })
+        let h264Parameters = try XCTUnwrap(h264["parameters"] as? [String: Any])
+        let vp9Parameters = try XCTUnwrap(vp9["parameters"] as? [String: Any])
+
+        XCTAssertEqual((h264Parameters["packetization-mode"] as? NSNumber)?.intValue, 1)
+        XCTAssertEqual(h264Parameters["profile-level-id"] as? String, "42e01f")
+        XCTAssertEqual((vp9Parameters["profile-id"] as? NSNumber)?.intValue, 0)
+    }
+
     func testAndroidFocusedChatOverlayKeepsComposerClearance() throws {
         let focusedBottomPadding = MeetingChatOverlayLayout.bottomPadding(
             inputFocused: true,
@@ -7915,6 +8893,15 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(source.contains("meetingRequiresInviteCode = boolField(obj, \"meetingRequiresInviteCode\")"))
     }
 
+    func testImageAttachmentStateChangesDispatchOnBothNativeSocketImplementations() throws {
+        let swift = try sourceFileContents("Sources/Conclave/Core/Networking/SocketIOManager.swift")
+        let kotlin = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
+
+        XCTAssertTrue(swift.contains("self.onImageAttachmentsStateChanged?(notification)"))
+        XCTAssertTrue(kotlin.contains("onImageAttachmentsStateChanged?.invoke(notification)"))
+        XCTAssertTrue(kotlin.contains("decode<ImageAttachmentsStateChangedNotification>"))
+    }
+
     func testAndroidScreenShareCaptureUsesWebNetworkProfileBounds() throws {
         let source = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
 
@@ -7962,7 +8949,7 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(androidWebRTCSource.contains("initialScreenConsumerPreference(\n                connectionQuality = initialReceiveConnectionQuality,"))
     }
 
-    func testNativeRemoteConsumersCommitOnlyAfterServerResume() throws {
+    func testNativeRemoteConsumersStageBeforeResumeAndExposeOnlyAfterAcknowledgement() throws {
         let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
         let iosWebRTCSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
         let androidWebRTCSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
@@ -7977,25 +8964,59 @@ final class ConclaveTests: XCTestCase {
             "scheduleDeferredProducerConsume(producerId: producer.producerId)"
         ))
 
+        let iosStage = try XCTUnwrap(iosWebRTCSource.range(of: "consumers[response.id] = ConsumerInfo("))
         let iosResume = try XCTUnwrap(iosWebRTCSource.range(of: "try await socket.resumeConsumer(\n                consumerId: response.id,"))
-        let iosCommit = try XCTUnwrap(iosWebRTCSource.range(of: "consumers[response.id] = ConsumerInfo("))
-        XCTAssertLessThan(iosResume.lowerBound, iosCommit.lowerBound)
+        let iosVisibleCommit = try XCTUnwrap(iosWebRTCSource.range(of: "remoteVideoTracks[trackKey] = trackWrapper"))
+        XCTAssertLessThan(iosStage.lowerBound, iosResume.lowerBound)
+        XCTAssertLessThan(iosResume.lowerBound, iosVisibleCommit.lowerBound)
         XCTAssertTrue(iosWebRTCSource.contains(
-            "consumer.close()\n            socket.closeConsumer(consumerId: response.id)\n            throw error"
+            "lifecycleRole: visibility == .currentVisible ? .current : .staged"
+        ))
+        XCTAssertTrue(iosWebRTCSource.contains(
+            "removeConsumer(\n                    consumerId: response.id,\n                    info: info,\n                    closeConsumer: true,\n                    notifyServer: false"
+        ))
+        XCTAssertTrue(iosWebRTCSource.contains(
+            "rollbackServerConsumerGenerationAndConfirm(\n                consumerId: response.id,"
         ))
         XCTAssertTrue(iosWebRTCSource.contains(
             "remoteProducerClosureGenerations[producerId, default: 0] == producerClosureGeneration"
         ))
+        let iosFirstFrame = try XCTUnwrap(iosWebRTCSource.range(of:
+            "let decoded = try await waitForFirstDecodedVideoFrame("
+        ))
+        let iosPromotion = try XCTUnwrap(iosWebRTCSource.range(of:
+            "promoteStagedConsumer(\n                        successor: registeredSuccessor,"
+        ))
+        XCTAssertLessThan(iosFirstFrame.lowerBound, iosPromotion.lowerBound)
 
-        let androidResume = try XCTUnwrap(androidWebRTCSource.range(of: "socket.resumeConsumer(response.id, response.kind == \"video\")"))
-        let androidCommit = try XCTUnwrap(androidWebRTCSource.range(of: "consumers[response.id] = ConsumerInfo("))
-        XCTAssertLessThan(androidResume.lowerBound, androidCommit.lowerBound)
+        let androidStage = try XCTUnwrap(androidWebRTCSource.range(of: "consumers[response.id] = ConsumerInfo("))
+        let androidResume = try XCTUnwrap(androidWebRTCSource.range(of:
+            "socket.resumeConsumer(\n                response.id,\n                response.kind == \"video\","
+        ))
+        let androidVisibleCommit = try XCTUnwrap(androidWebRTCSource.range(of:
+            "remoteVideoTracks[trackKey] = wrapper"
+        ))
+        XCTAssertLessThan(androidStage.lowerBound, androidResume.lowerBound)
+        XCTAssertLessThan(androidResume.lowerBound, androidVisibleCommit.lowerBound)
         XCTAssertTrue(androidWebRTCSource.contains(
-            "consumer.close()\n            socket.closeConsumer(response.id)\n            throw error"
+            "lifecycleRole = if (visibility == ConsumerRegistrationVisibility.CURRENT_VISIBLE)"
+        ))
+        XCTAssertTrue(androidWebRTCSource.contains(
+            "removeConsumer(response.id, it, closeConsumer = true, notifyServer = false)"
+        ))
+        XCTAssertTrue(androidWebRTCSource.contains(
+            "rollbackServerConsumerGenerationAndConfirm(\n                consumerId = response.id,"
         ))
         XCTAssertTrue(androidWebRTCSource.contains(
             "(remoteProducerClosureGenerations[producerId] ?: 0) != producerClosureGeneration"
         ))
+        let androidFirstFrame = try XCTUnwrap(androidWebRTCSource.range(of:
+            "val decoded = waitForFirstDecodedVideoFrame("
+        ))
+        let androidPromotion = try XCTUnwrap(androidWebRTCSource.range(of:
+            "!promoteStagedConsumer(\n                        successor = registeredSuccessor,"
+        ))
+        XCTAssertLessThan(androidFirstFrame.lowerBound, androidPromotion.lowerBound)
     }
 
     func testReconnectPreservesCallAudioRoutingAndVisibleRoster() throws {
@@ -8460,6 +9481,953 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(LocalCameraFacing.resolvedPreviewFacing(rawValue: "front"), .front)
         XCTAssertEqual(LocalCameraFacing.resolvedPreviewFacing(rawValue: "external"), .front)
         XCTAssertEqual(LocalCameraFacing.resolvedPreviewFacing(rawValue: ""), .front)
+    }
+
+    func testWebcamReceiverCapacityProofStrictlyDecodesServerLease() throws {
+        let proof = try decodeWebcamReceiverCapacityProof("""
+        {
+          "roomId": "room-a",
+          "producerId": "simulcast-a",
+          "revision": 7,
+          "eligible": true,
+          "validForMs": 4800,
+          "reason": "qualified",
+          "basis": "simulcast-full-layer",
+          "replacementOffer": {
+            "nonce": "server-issued-nonce",
+            "validForMs": 4200,
+            "target": "vp8-single-layer"
+          },
+          "maxSpatialLayer": 2,
+          "maxTemporalLayer": 2,
+          "currentSpatialLayer": 2,
+          "currentTemporalLayer": 2,
+          "score": 10
+        }
+        """)
+
+        XCTAssertEqual(proof.roomId, "room-a")
+        XCTAssertEqual(proof.producerId, "simulcast-a")
+        XCTAssertEqual(proof.revision, 7)
+        XCTAssertEqual(proof.basis, WebcamReceiverCapacityProofBasis.simulcastFullLayer)
+        XCTAssertEqual(proof.replacementOffer?.nonce, "server-issued-nonce")
+        XCTAssertEqual(
+            proof.replacementOffer?.target,
+            WebcamReceiverCapacityReplacementTarget.vp8SingleLayer
+        )
+    }
+
+    func testNativeWebcamTopologyHandoffKeepsExactTrackWireShapeAndCloseOrdering() throws {
+        let iosSource = try sourceFileContents(
+            "Sources/Conclave/Core/WebRTC/WebRTCClient.swift"
+        )
+        let androidSource = try sourceFileContents(
+            "Sources/Conclave/Skip/WebRTCClient+Android.kt"
+        )
+        let androidSocketSource = try sourceFileContents(
+            "Sources/Conclave/Skip/SocketIOManager+Android.kt"
+        )
+        let viewModelSource = try sourceFileContents(
+            "Sources/Conclave/Features/Meeting/MeetingViewModel.swift"
+        )
+
+        let iosStart = try XCTUnwrap(
+            iosSource.range(of: "private func applyWebcamTopologyReplacement(")
+        )
+        let iosEnd = try XCTUnwrap(
+            iosSource.range(
+                of: "private func isAmbiguousWebcamTopologyError(",
+                range: iosStart.upperBound..<iosSource.endIndex
+            )
+        )
+        let iosHandoff = String(iosSource[iosStart.lowerBound..<iosEnd.lowerBound])
+        let iosMarker = try XCTUnwrap(
+            iosHandoff.range(of: "intentionalLocalVideoProducerCloseIds.insert(oldProducer.id)")
+        )
+        let iosCreate = try XCTUnwrap(
+            iosHandoff.range(of: "sendTransport.createProducer(")
+        )
+        let iosCommit = try XCTUnwrap(
+            iosHandoff.range(of: "videoProducer = producer")
+        )
+        let iosRetire = try XCTUnwrap(
+            iosHandoff.range(of: "socketManager.closeProducer(producerId: oldProducer.id)")
+        )
+        XCTAssertLessThan(iosMarker.lowerBound, iosCreate.lowerBound)
+        XCTAssertLessThan(iosCommit.lowerBound, iosRetire.lowerBound)
+        XCTAssertTrue(iosHandoff.contains("for: track"))
+        XCTAssertTrue(iosHandoff.contains(
+            "webcamTopologyControlGeneration == topologyGeneration"
+        ))
+        XCTAssertTrue(iosHandoff.contains(
+            "webcamProducerTopology == targetTopology && !command.forceReplacement"
+        ))
+        XCTAssertFalse(iosHandoff.contains("startCameraCapture"))
+        XCTAssertFalse(iosHandoff.contains("createVideoTrack"))
+        XCTAssertTrue(iosSource.contains("encoding.maxBitrateBps = NSNumber(value: 1_650_000)"))
+        XCTAssertTrue(iosSource.contains("encoding.maxFramerate = NSNumber(value: 30.0)"))
+        XCTAssertTrue(iosSource.contains("WebcamEncodingSpec(rid: \"q\", scaleResolutionDownBy: 4, maxBitrateBps: 80_000"))
+        XCTAssertTrue(iosSource.contains("WebcamEncodingSpec(rid: \"h\", scaleResolutionDownBy: 2, maxBitrateBps: 220_000"))
+        XCTAssertTrue(iosSource.contains("WebcamEncodingSpec(rid: \"f\", scaleResolutionDownBy: 1, maxBitrateBps: 1_650_000, maxFramerate: 30)"))
+
+        let androidStart = try XCTUnwrap(
+            androidSource.range(of: "private suspend fun applyWebcamTopologyReplacement(")
+        )
+        let androidEnd = try XCTUnwrap(
+            androidSource.range(
+                of: "private fun isAmbiguousWebcamTopologyError(",
+                range: androidStart.upperBound..<androidSource.endIndex
+            )
+        )
+        let androidHandoff = String(
+            androidSource[androidStart.lowerBound..<androidEnd.lowerBound]
+        )
+        let androidMarker = try XCTUnwrap(
+            androidHandoff.range(of: "intentionalLocalVideoProducerCloseIds.add(oldProducer.id)")
+        )
+        let androidCreate = try XCTUnwrap(
+            androidHandoff.range(of: "transport.produce(")
+        )
+        let androidCommit = try XCTUnwrap(
+            androidHandoff.range(of: "videoProducer = producer")
+        )
+        let androidRetire = try XCTUnwrap(
+            androidHandoff.range(of: "socket.closeProducer(oldProducer.id)")
+        )
+        XCTAssertLessThan(androidMarker.lowerBound, androidCreate.lowerBound)
+        XCTAssertLessThan(androidCommit.lowerBound, androidRetire.lowerBound)
+        XCTAssertTrue(androidHandoff.contains("track as MediaStreamTrack"))
+        XCTAssertTrue(androidHandoff.contains(
+            "webcamTopologyControlGeneration != topologyGeneration"
+        ))
+        XCTAssertTrue(androidHandoff.contains(
+            "webcamProducerTopology == targetTopology && !command.forceReplacement"
+        ))
+        XCTAssertFalse(androidHandoff.contains("createVideoTrack"))
+        XCTAssertFalse(androidHandoff.contains("startCapture"))
+        XCTAssertTrue(androidSource.contains("RtpParameters.Encoding(null, true, 1.0)"))
+        XCTAssertTrue(androidSource.contains("encoding.maxBitrateBps = 1_650_000"))
+        XCTAssertTrue(androidSource.contains("encoding.maxFramerate = 30"))
+        XCTAssertTrue(androidSource.contains("WebcamEncodingSpec(rid = \"q\", scaleResolutionDownBy = 4.0, maxBitrateBps = 80_000"))
+        XCTAssertTrue(androidSource.contains("WebcamEncodingSpec(rid = \"h\", scaleResolutionDownBy = 2.0, maxBitrateBps = 220_000"))
+        XCTAssertTrue(androidSource.contains("WebcamEncodingSpec(rid = \"f\", scaleResolutionDownBy = 1.0, maxBitrateBps = 1_650_000, maxFramerate = 30)"))
+        XCTAssertTrue(androidSource.contains("val existingTopology = webcamProducerTopology"))
+        XCTAssertTrue(androidSource.contains(
+            "intentionalLocalVideoProducerCloseIds.remove(oldProducer.id)"
+        ))
+        XCTAssertTrue(androidSource.contains(
+            "WebcamTopologyTransitionMachine.forceAdaptiveRecovery("
+        ))
+        XCTAssertTrue(androidSocketSource.contains("\"webcamReceiverCapacityTransition\""))
+        XCTAssertTrue(androidSocketSource.contains(".put(\"fromProducerId\", transition.fromProducerId)"))
+        XCTAssertTrue(androidSocketSource.contains(".put(\"nonce\", transition.nonce)"))
+
+        let closeHandlerStart = try XCTUnwrap(
+            viewModelSource.range(of: "private func handleLocalProducerClosed(")
+        )
+        let closeHandlerEnd = try XCTUnwrap(
+            viewModelSource.range(
+                of: "private func handleRemoteProducerClosed(",
+                range: closeHandlerStart.upperBound..<viewModelSource.endIndex
+            )
+        )
+        let closeHandler = String(
+            viewModelSource[closeHandlerStart.lowerBound..<closeHandlerEnd.lowerBound]
+        )
+        let consumeIntentional = try XCTUnwrap(
+            closeHandler.range(of: "consumeIntentionalLocalVideoProducerClose(")
+        )
+        let genericClose = try XCTUnwrap(
+            closeHandler.range(of: "webRTCClient.closeLocalMedia(")
+        )
+        XCTAssertLessThan(consumeIntentional.lowerBound, genericClose.lowerBound)
+        XCTAssertTrue(viewModelSource.contains("webcamReceiverCapacityAuthorityGeneration += 1"))
+        XCTAssertTrue(viewModelSource.contains(
+            "WebcamReceiverCapacityAuthorityPolicy.canIngestAtReceipt("
+        ))
+        XCTAssertTrue(viewModelSource.contains(
+            "WebcamReceiverCapacityAuthorityPolicy.canIngestAfterHop("
+        ))
+        XCTAssertTrue(viewModelSource.contains("webRTCClient.invalidateWebcamReceiverCapacityAuthority()"))
+    }
+
+    func testWebcamReceiverCapacityAuthorityFenceRejectsQueuedBackgroundAndDisconnectProofs() throws {
+        let foregroundReceipt = WebcamReceiverCapacityAuthorityPolicy.canIngestAtReceipt(
+            isForeground: true,
+            isJoined: true,
+            isConnected: true,
+            isIntentionalLeave: false
+        )
+        XCTAssertTrue(foregroundReceipt)
+        XCTAssertFalse(WebcamReceiverCapacityAuthorityPolicy.canIngestAfterHop(
+            permittedAtReceipt: foregroundReceipt,
+            capturedGeneration: 4,
+            currentGeneration: 5,
+            isForeground: false,
+            isJoined: true,
+            isConnected: true,
+            isIntentionalLeave: false
+        ))
+
+        let backgroundReceipt = WebcamReceiverCapacityAuthorityPolicy.canIngestAtReceipt(
+            isForeground: false,
+            isJoined: true,
+            isConnected: true,
+            isIntentionalLeave: false
+        )
+        XCTAssertFalse(WebcamReceiverCapacityAuthorityPolicy.canIngestAfterHop(
+            permittedAtReceipt: backgroundReceipt,
+            capturedGeneration: 5,
+            currentGeneration: 6,
+            isForeground: true,
+            isJoined: true,
+            isConnected: true,
+            isIntentionalLeave: false
+        ))
+        XCTAssertFalse(WebcamReceiverCapacityAuthorityPolicy.canIngestAfterHop(
+            permittedAtReceipt: true,
+            capturedGeneration: 6,
+            currentGeneration: 6,
+            isForeground: true,
+            isJoined: true,
+            isConnected: false,
+            isIntentionalLeave: false
+        ))
+        XCTAssertTrue(WebcamReceiverCapacityAuthorityPolicy.canIngestAfterHop(
+            permittedAtReceipt: true,
+            capturedGeneration: 6,
+            currentGeneration: 6,
+            isForeground: true,
+            isJoined: true,
+            isConnected: true,
+            isIntentionalLeave: false
+        ))
+    }
+
+    func testAndroidWebcamFallbackIdentityAndRefreshFailureStayFailClosed() throws {
+        let source = try sourceFileContents(
+            "Sources/Conclave/Skip/WebRTCClient+Android.kt"
+        )
+        let proofHandlerStart = try XCTUnwrap(
+            source.range(of: "internal fun handleWebcamReceiverCapacityProof(")
+        )
+        let proofHandlerEnd = try XCTUnwrap(
+            source.range(
+                of: "internal fun invalidateWebcamReceiverCapacityAuthority()",
+                range: proofHandlerStart.upperBound..<source.endIndex
+            )
+        )
+        let proofHandler = String(
+            source[proofHandlerStart.lowerBound..<proofHandlerEnd.lowerBound]
+        )
+        XCTAssertTrue(proofHandler.contains("val existingTopology = webcamProducerTopology"))
+        XCTAssertTrue(proofHandler.contains("existingTopology"))
+        XCTAssertFalse(proofHandler.contains(
+            "videoProducer == null) {\n                WebcamProducerTopology.other\n            } else {\n                WebcamProducerTopology.vp8Simulcast"
+        ))
+
+        let refreshStart = try XCTUnwrap(
+            source.range(of: "internal suspend fun refreshLocalVideoProducerForBandwidthProfile(")
+        )
+        let refreshEnd = try XCTUnwrap(
+            source.range(
+                of: "internal suspend fun refreshLocalAudioProducerForBandwidthProfile(",
+                range: refreshStart.upperBound..<source.endIndex
+            )
+        )
+        let refresh = String(source[refreshStart.lowerBound..<refreshEnd.lowerBound])
+        let marker = try XCTUnwrap(
+            refresh.range(of: "intentionalLocalVideoProducerCloseIds.add(oldProducer.id)")
+        )
+        let markerCleanup = try XCTUnwrap(
+            refresh.range(of: "intentionalLocalVideoProducerCloseIds.remove(oldProducer.id)")
+        )
+        let forcedRecovery = try XCTUnwrap(
+            refresh.range(of: "WebcamTopologyTransitionMachine.forceAdaptiveRecovery(")
+        )
+        XCTAssertLessThan(marker.lowerBound, markerCleanup.lowerBound)
+        XCTAssertLessThan(markerCleanup.lowerBound, forcedRecovery.lowerBound)
+    }
+
+    func testWebcamReceiverCapacityProofRejectsMalformedOrClientInventedAuthority() throws {
+        let invalidPayloads = [
+            """
+            { "roomId":"room-a", "producerId":"p", "revision":1, "eligible":true,
+              "validForMs":5001, "reason":"qualified", "basis":"single-layer" }
+            """,
+            """
+            { "roomId":"room-a", "producerId":"p", "revision":1, "eligible":true,
+              "validForMs":0, "reason":"qualified", "basis":"single-layer" }
+            """,
+            """
+            { "roomId":"room-a", "producerId":"p", "revision":-1, "eligible":false,
+              "validForMs":0, "reason":"receiver_count", "basis":"single-layer" }
+            """,
+            """
+            { "roomId":"room-a", "producerId":"p", "revision":9007199254740992,
+              "eligible":false, "validForMs":0, "reason":"receiver_count",
+              "basis":"single-layer" }
+            """,
+            """
+            { "roomId":"room-a", "producerId":"p", "revision":1, "eligible":true,
+              "validForMs":4000, "reason":"qualified", "basis":"simulcast-full-layer",
+              "maxSpatialLayer":2, "maxTemporalLayer":2,
+              "currentSpatialLayer":1, "currentTemporalLayer":2 }
+            """,
+            """
+            { "roomId":"room-a", "producerId":"p", "revision":1, "eligible":true,
+              "validForMs":4000, "reason":"qualified", "basis":"single-layer",
+              "replacementOffer":{"nonce":"fake","validForMs":4000,"target":"vp8-single-layer"} }
+            """,
+            """
+            { "roomId":"room-a", "producerId":"p", "revision":1, "eligible":true,
+              "validForMs":4000, "reason":"transition_grace", "basis":"single-layer-transition",
+              "replacesProducerId":"old" }
+            """,
+            """
+            { "roomId":"room-a", "producerId":"p", "revision":1, "eligible":true,
+              "validForMs":4000, "reason":"qualified", "basis":"single-layer-transition",
+              "replacesProducerId":"old", "transitionNonce":"lease" }
+            """,
+            """
+            { "roomId":"room-a", "producerId":"p", "revision":1, "eligible":true,
+              "validForMs":4000, "reason":"transition_grace", "basis":"single-layer" }
+            """,
+            """
+            { "roomId":"room-a", "producerId":"p", "revision":1, "eligible":true,
+              "validForMs":4000, "reason":"qualified", "basis":"single-layer",
+              "maxSpatialLayer":0 }
+            """
+        ]
+
+        for payload in invalidPayloads {
+            XCTAssertThrowsError(try decodeWebcamReceiverCapacityProof(payload), payload)
+        }
+    }
+
+    func testWebcamReceiverCapacityProofCacheStagesSuccessorBeforeProducerReferenceChanges() throws {
+        var cache = WebcamReceiverCapacityProofCache(roomId: "room-a")
+        let source = try decodeWebcamReceiverCapacityProof("""
+        {
+          "roomId":"room-a", "producerId":"simulcast-a", "revision":3,
+          "eligible":true, "validForMs":5000, "reason":"qualified",
+          "basis":"simulcast-full-layer",
+          "replacementOffer":{"nonce":"lease-a","validForMs":4500,"target":"vp8-single-layer"},
+          "maxSpatialLayer":2, "maxTemporalLayer":2,
+          "currentSpatialLayer":2, "currentTemporalLayer":2
+        }
+        """)
+        XCTAssertTrue(cache.apply(source, expectedRoomId: "room-a", nowMonotonicMs: 100))
+        XCTAssertEqual(
+            cache.activeProof(roomId: "room-a", producerId: "simulcast-a", nowMonotonicMs: 200)?.revision,
+            3
+        )
+
+        let staleRevoke = try decodeWebcamReceiverCapacityProof("""
+        { "roomId":"room-a", "producerId":"simulcast-a", "revision":3,
+          "eligible":false, "validForMs":0, "reason":"receiver_count",
+          "basis":"simulcast-full-layer" }
+        """)
+        XCTAssertFalse(cache.apply(staleRevoke, expectedRoomId: "room-a", nowMonotonicMs: 250))
+        XCTAssertNotNil(cache.activeProof(roomId: "room-a", producerId: "simulcast-a", nowMonotonicMs: 250))
+
+        let successor = try decodeWebcamReceiverCapacityProof("""
+        { "roomId":"room-a", "producerId":"single-b", "revision":1,
+          "eligible":true, "validForMs":5000, "reason":"transition_grace",
+          "basis":"single-layer-transition", "replacesProducerId":"simulcast-a",
+          "transitionNonce":"lease-a" }
+        """)
+        XCTAssertTrue(cache.apply(successor, expectedRoomId: "room-a", nowMonotonicMs: 300))
+        XCTAssertEqual(
+            cache.stagedSuccessor(
+                roomId: "room-a",
+                fromProducerId: "simulcast-a",
+                nonce: "lease-a",
+                nowMonotonicMs: 301
+            )?.producerId,
+            "single-b"
+        )
+
+        let steady = try decodeWebcamReceiverCapacityProof("""
+        { "roomId":"room-a", "producerId":"single-b", "revision":2,
+          "eligible":true, "validForMs":5000, "reason":"qualified",
+          "basis":"single-layer" }
+        """)
+        XCTAssertTrue(cache.apply(steady, expectedRoomId: "room-a", nowMonotonicMs: 400))
+        XCTAssertNil(cache.stagedSuccessor(
+            roomId: "room-a",
+            fromProducerId: "simulcast-a",
+            nonce: "lease-a",
+            nowMonotonicMs: 401
+        ))
+        XCTAssertEqual(
+            cache.activeProof(roomId: "room-a", producerId: "single-b", nowMonotonicMs: 401)?.basis,
+            WebcamReceiverCapacityProofBasis.singleLayer
+        )
+
+        let revoke = try decodeWebcamReceiverCapacityProof("""
+        { "roomId":"room-a", "producerId":"single-b", "revision":3,
+          "eligible":false, "validForMs":0, "reason":"receiver_count",
+          "basis":"single-layer" }
+        """)
+        XCTAssertTrue(cache.apply(revoke, expectedRoomId: "room-a", nowMonotonicMs: 500))
+        XCTAssertNil(cache.activeProof(roomId: "room-a", producerId: "single-b", nowMonotonicMs: 501))
+        XCTAssertEqual(cache.revocation(roomId: "room-a", producerId: "single-b")?.revision, 3)
+    }
+
+    func testWebcamTopologyMachineUsesEachExactProducerNonceLeaseOnlyOnce() throws {
+        var state = WebcamTopologyTransitionState.initial()
+        state = WebcamTopologyTransitionMachine.advance(
+            state: state,
+            input: makeWebcamTopologyInput(nowMonotonicMs: 0)
+        ).state
+        let entry = WebcamTopologyTransitionMachine.advance(
+            state: state,
+            input: makeWebcamTopologyInput(nowMonotonicMs: WebcamTopologyTransitionMachine.entryStableMs)
+        )
+        let command = try XCTUnwrap(entry.command)
+        XCTAssertEqual(command.target, WebcamTopologyReplacementTarget.singleReceiver)
+        XCTAssertEqual(command.expectedProducerId, "simulcast-a")
+        XCTAssertEqual(command.transition?.fromProducerId, "simulcast-a")
+        XCTAssertEqual(command.transition?.nonce, "lease-a")
+
+        let failed = WebcamTopologyTransitionMachine.settle(
+            state: entry.state,
+            command: command,
+            result: WebcamTopologyReplacementResult(
+                status: WebcamTopologyReplacementStatus.failed,
+                producerId: "simulcast-a",
+                topology: WebcamProducerTopology.vp8Simulcast,
+                retryable: true,
+                ambiguousOrPostCommit: false
+            ),
+            input: makeWebcamTopologyInput(nowMonotonicMs: 1_600)
+        )
+        let replay = WebcamTopologyTransitionMachine.advance(
+            state: failed.state,
+            input: makeWebcamTopologyInput(nowMonotonicMs: 1_700)
+        )
+        XCTAssertEqual(replay.state.phase, WebcamTopologyTransitionPhase.adaptive)
+        XCTAssertNil(replay.state.entryCandidateSignature)
+        XCTAssertNil(replay.command)
+
+        let secondOffer = ActiveWebcamReceiverCapacityReplacementOffer(
+            nonce: "lease-b",
+            target: WebcamReceiverCapacityReplacementTarget.vp8SingleLayer,
+            expiresAtMonotonicMs: 8_000
+        )
+        let secondCandidate = WebcamTopologyTransitionMachine.advance(
+            state: replay.state,
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: 1_800,
+                replacementOffer: secondOffer
+            )
+        )
+        let secondEntry = WebcamTopologyTransitionMachine.advance(
+            state: secondCandidate.state,
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: 3_300,
+                replacementOffer: secondOffer
+            )
+        )
+        let secondCommand = try XCTUnwrap(secondEntry.command)
+        XCTAssertEqual(secondCommand.transition?.nonce, "lease-b")
+        let secondFailure = WebcamTopologyTransitionMachine.settle(
+            state: secondEntry.state,
+            command: secondCommand,
+            result: WebcamTopologyReplacementResult(
+                status: WebcamTopologyReplacementStatus.failed,
+                producerId: "simulcast-a",
+                topology: WebcamProducerTopology.vp8Simulcast,
+                retryable: true,
+                ambiguousOrPostCommit: false
+            ),
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: 3_400,
+                replacementOffer: secondOffer
+            )
+        )
+        let replayFirstOfferAfterSecond = WebcamTopologyTransitionMachine.advance(
+            state: secondFailure.state,
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: 3_500,
+                replacementOffer: ActiveWebcamReceiverCapacityReplacementOffer(
+                    nonce: "lease-a",
+                    target: WebcamReceiverCapacityReplacementTarget.vp8SingleLayer,
+                    expiresAtMonotonicMs: 8_000
+                )
+            )
+        )
+        XCTAssertNil(replayFirstOfferAfterSecond.state.entryCandidateSignature)
+        XCTAssertNil(replayFirstOfferAfterSecond.command)
+    }
+
+    func testWebcamTopologyMachineAcceptsEventBeforeReferenceSuccessorProof() throws {
+        let entry = try makeWebcamSingleEntry()
+        let successor = ActiveWebcamReceiverCapacityProof(
+            roomId: "room-a",
+            producerId: "single-b",
+            revision: 1,
+            basis: WebcamReceiverCapacityProofBasis.singleLayerTransition,
+            expiresAtMonotonicMs: 6_600,
+            replacementOffer: nil,
+            replacesProducerId: "simulcast-a",
+            transitionNonce: "lease-a"
+        )
+        let settled = WebcamTopologyTransitionMachine.settle(
+            state: entry.state,
+            command: entry.command,
+            result: WebcamTopologyReplacementResult(
+                status: WebcamTopologyReplacementStatus.applied,
+                producerId: "single-b",
+                topology: WebcamProducerTopology.vp8SingleLayer,
+                retryable: false,
+                ambiguousOrPostCommit: false
+            ),
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: 1_600,
+                producerId: "single-b",
+                producerTopology: WebcamProducerTopology.vp8SingleLayer,
+                sourceProofActive: false,
+                sourceRevocationReason: "producer_replaced",
+                replacementOffer: nil,
+                successorProof: successor,
+                currentSingleProofActive: true
+            )
+        )
+        XCTAssertEqual(settled.state.phase, WebcamTopologyTransitionPhase.single)
+        XCTAssertEqual(settled.state.producerId, "single-b")
+        XCTAssertNil(settled.command)
+    }
+
+    func testWebcamTopologyMachineRejectsWrongSuccessorProofBinding() throws {
+        let entry = try makeWebcamSingleEntry()
+        let wrongProofs = [
+            ActiveWebcamReceiverCapacityProof(
+                roomId: "room-a",
+                producerId: "single-b",
+                revision: 1,
+                basis: WebcamReceiverCapacityProofBasis.singleLayerTransition,
+                expiresAtMonotonicMs: 6_600,
+                replacementOffer: nil,
+                replacesProducerId: "different-predecessor",
+                transitionNonce: "lease-a"
+            ),
+            ActiveWebcamReceiverCapacityProof(
+                roomId: "room-a",
+                producerId: "single-b",
+                revision: 2,
+                basis: WebcamReceiverCapacityProofBasis.singleLayerTransition,
+                expiresAtMonotonicMs: 6_600,
+                replacementOffer: nil,
+                replacesProducerId: "simulcast-a",
+                transitionNonce: "different-nonce"
+            )
+        ]
+
+        for proof in wrongProofs {
+            let settled = WebcamTopologyTransitionMachine.settle(
+                state: entry.state,
+                command: entry.command,
+                result: WebcamTopologyReplacementResult(
+                    status: WebcamTopologyReplacementStatus.applied,
+                    producerId: "single-b",
+                    topology: WebcamProducerTopology.vp8SingleLayer,
+                    retryable: false,
+                    ambiguousOrPostCommit: false
+                ),
+                input: makeWebcamTopologyInput(
+                    nowMonotonicMs: 1_600,
+                    producerId: "single-b",
+                    producerTopology: WebcamProducerTopology.vp8SingleLayer,
+                    sourceProofActive: false,
+                    sourceRevocationReason: "producer_replaced",
+                    replacementOffer: nil,
+                    successorProof: proof,
+                    currentSingleProofActive: false
+                )
+            )
+            XCTAssertEqual(settled.state.phase, WebcamTopologyTransitionPhase.awaitingProof)
+            XCTAssertNil(settled.command)
+        }
+    }
+
+    func testWebcamTopologyMachineImmediatelyCompensatesConditionsAndAmbiguousEntry() throws {
+        let entry = try makeWebcamSingleEntry()
+        let changed = WebcamTopologyTransitionMachine.advance(
+            state: entry.state,
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: 1_550,
+                hardSingleReceiverConditionsMet: false
+            )
+        )
+        XCTAssertTrue(changed.state.exitRequested)
+
+        let settled = WebcamTopologyTransitionMachine.settle(
+            state: changed.state,
+            command: entry.command,
+            result: WebcamTopologyReplacementResult(
+                status: WebcamTopologyReplacementStatus.applied,
+                producerId: "single-b",
+                topology: WebcamProducerTopology.vp8SingleLayer,
+                retryable: false,
+                ambiguousOrPostCommit: false
+            ),
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: 1_600,
+                producerId: "single-b",
+                producerTopology: WebcamProducerTopology.vp8SingleLayer,
+                hardSingleReceiverConditionsMet: false,
+                replacementOffer: nil
+            )
+        )
+        XCTAssertEqual(settled.state.phase, WebcamTopologyTransitionPhase.exiting)
+        XCTAssertEqual(settled.command?.target, WebcamTopologyReplacementTarget.adaptiveLayers)
+        XCTAssertEqual(settled.command?.expectedProducerId, "single-b")
+
+        let ambiguousEntry = try makeWebcamSingleEntry()
+        let ambiguous = WebcamTopologyTransitionMachine.settle(
+            state: ambiguousEntry.state,
+            command: ambiguousEntry.command,
+            result: WebcamTopologyReplacementResult(
+                status: WebcamTopologyReplacementStatus.failed,
+                producerId: nil,
+                topology: nil,
+                retryable: true,
+                ambiguousOrPostCommit: true
+            ),
+            input: makeWebcamTopologyInput(nowMonotonicMs: 1_600)
+        )
+        XCTAssertEqual(ambiguous.state.phase, WebcamTopologyTransitionPhase.exiting)
+        XCTAssertEqual(ambiguous.command?.target, WebcamTopologyReplacementTarget.adaptiveLayers)
+        XCTAssertEqual(ambiguous.command?.forceReplacement, true)
+    }
+
+    func testWebcamTopologyMachineExitsOnRevokeRetriesAndAppliesCooldown() throws {
+        let entry = try makeWebcamSingleEntry()
+        let single = WebcamTopologyTransitionMachine.settle(
+            state: entry.state,
+            command: entry.command,
+            result: WebcamTopologyReplacementResult(
+                status: WebcamTopologyReplacementStatus.applied,
+                producerId: "single-b",
+                topology: WebcamProducerTopology.vp8SingleLayer,
+                retryable: false,
+                ambiguousOrPostCommit: false
+            ),
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: 1_600,
+                producerId: "single-b",
+                producerTopology: WebcamProducerTopology.vp8SingleLayer,
+                replacementOffer: nil,
+                currentSingleProofActive: true
+            )
+        )
+        let exit = WebcamTopologyTransitionMachine.advance(
+            state: single.state,
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: 1_700,
+                producerId: "single-b",
+                producerTopology: WebcamProducerTopology.vp8SingleLayer,
+                replacementOffer: nil,
+                currentSingleProofActive: false,
+                currentSingleProofRevocationReason: "receiver_count"
+            )
+        )
+        let exitCommand = try XCTUnwrap(exit.command)
+        XCTAssertEqual(exitCommand.target, WebcamTopologyReplacementTarget.adaptiveLayers)
+
+        let failedExit = WebcamTopologyTransitionMachine.settle(
+            state: exit.state,
+            command: exitCommand,
+            result: WebcamTopologyReplacementResult(
+                status: WebcamTopologyReplacementStatus.failed,
+                producerId: "single-b",
+                topology: WebcamProducerTopology.vp8SingleLayer,
+                retryable: true,
+                ambiguousOrPostCommit: true
+            ),
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: 1_800,
+                producerId: "single-b",
+                producerTopology: WebcamProducerTopology.vp8SingleLayer,
+                replacementOffer: nil
+            )
+        )
+        XCTAssertEqual(failedExit.state.phase, WebcamTopologyTransitionPhase.exiting)
+        XCTAssertNil(failedExit.state.inFlightCommandId)
+        XCTAssertEqual(failedExit.state.retryAfterMs, 2_300)
+
+        let retry = WebcamTopologyTransitionMachine.advance(
+            state: failedExit.state,
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: 2_300,
+                producerId: "single-b",
+                producerTopology: WebcamProducerTopology.vp8SingleLayer,
+                replacementOffer: nil
+            )
+        )
+        let retryCommand = try XCTUnwrap(retry.command)
+        let restored = WebcamTopologyTransitionMachine.settle(
+            state: retry.state,
+            command: retryCommand,
+            result: WebcamTopologyReplacementResult(
+                status: WebcamTopologyReplacementStatus.applied,
+                producerId: "simulcast-c",
+                topology: WebcamProducerTopology.vp8Simulcast,
+                retryable: false,
+                ambiguousOrPostCommit: false
+            ),
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: 2_400,
+                producerId: "simulcast-c",
+                producerTopology: WebcamProducerTopology.vp8Simulcast
+            )
+        )
+        XCTAssertEqual(restored.state.phase, WebcamTopologyTransitionPhase.adaptive)
+        XCTAssertEqual(
+            restored.state.reentryNotBeforeMs,
+            2_400 + WebcamTopologyTransitionMachine.reentryCooldownMs
+        )
+    }
+
+    func testWebcamTopologyMachineRestoresSimulcastWhenProofSilentlyExpires() throws {
+        let entry = try makeWebcamSingleEntry()
+        let single = WebcamTopologyTransitionMachine.settle(
+            state: entry.state,
+            command: entry.command,
+            result: WebcamTopologyReplacementResult(
+                status: WebcamTopologyReplacementStatus.applied,
+                producerId: "single-b",
+                topology: WebcamProducerTopology.vp8SingleLayer,
+                retryable: false,
+                ambiguousOrPostCommit: false
+            ),
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: 1_600,
+                producerId: "single-b",
+                producerTopology: WebcamProducerTopology.vp8SingleLayer,
+                replacementOffer: nil,
+                currentSingleProofActive: true
+            )
+        )
+        XCTAssertEqual(single.state.phase, WebcamTopologyTransitionPhase.single)
+
+        // No revoke event arrives. The runtime wake is scheduled at the active
+        // proof's monotonic expiry and supplies currentSingleProofActive=false.
+        let expired = WebcamTopologyTransitionMachine.advance(
+            state: single.state,
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: 6_600,
+                producerId: "single-b",
+                producerTopology: WebcamProducerTopology.vp8SingleLayer,
+                replacementOffer: nil,
+                currentSingleProofActive: false,
+                currentSingleProofRevocationReason: nil
+            )
+        )
+        XCTAssertEqual(expired.state.phase, WebcamTopologyTransitionPhase.exiting)
+        XCTAssertEqual(expired.command?.target, WebcamTopologyReplacementTarget.adaptiveLayers)
+    }
+
+    func testWebcamTopologyWakePolicySuppressesExpiredEntryUntilCommandStateChanges() throws {
+        let entry = try makeWebcamSingleEntry()
+        let deadline = try XCTUnwrap(entry.state.deadlineMs)
+
+        XCTAssertEqual(WebcamTopologyWakePolicy.nextWakeAt(
+            state: entry.state,
+            input: makeWebcamTopologyInput(nowMonotonicMs: deadline - 1),
+            currentSingleProofExpiresAtMonotonicMs: nil
+        ), deadline)
+
+        var exitRequested = entry.state
+        exitRequested.exitRequested = true
+        XCTAssertNil(WebcamTopologyWakePolicy.nextWakeAt(
+            state: exitRequested,
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: deadline,
+                hardSingleReceiverConditionsMet: false
+            ),
+            currentSingleProofExpiresAtMonotonicMs: nil
+        ))
+
+        let successor = ActiveWebcamReceiverCapacityProof(
+            roomId: "room-a",
+            producerId: "single-b",
+            revision: 1,
+            basis: WebcamReceiverCapacityProofBasis.singleLayerTransition,
+            expiresAtMonotonicMs: deadline + 4_000,
+            replacementOffer: nil,
+            replacesProducerId: "simulcast-a",
+            transitionNonce: "lease-a"
+        )
+        XCTAssertNil(WebcamTopologyWakePolicy.nextWakeAt(
+            state: entry.state,
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: deadline,
+                successorProof: successor
+            ),
+            currentSingleProofExpiresAtMonotonicMs: nil
+        ))
+
+        let settled = WebcamTopologyTransitionMachine.settle(
+            state: entry.state,
+            command: entry.command,
+            result: WebcamTopologyReplacementResult(
+                status: WebcamTopologyReplacementStatus.applied,
+                producerId: "single-b",
+                topology: WebcamProducerTopology.vp8SingleLayer,
+                retryable: false,
+                ambiguousOrPostCommit: false
+            ),
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: deadline,
+                producerId: "single-b",
+                producerTopology: WebcamProducerTopology.vp8SingleLayer,
+                replacementOffer: nil
+            )
+        )
+        XCTAssertEqual(settled.state.phase, WebcamTopologyTransitionPhase.awaitingProof)
+        XCTAssertEqual(WebcamTopologyWakePolicy.nextWakeAt(
+            state: settled.state,
+            input: makeWebcamTopologyInput(
+                nowMonotonicMs: deadline,
+                producerId: "single-b",
+                producerTopology: WebcamProducerTopology.vp8SingleLayer,
+                replacementOffer: nil
+            ),
+            currentSingleProofExpiresAtMonotonicMs: nil
+        ), deadline + WebcamTopologyTransitionMachine.successorWaitMs)
+    }
+
+    func testNativeWebcamWakePriorityAndAndroidRestoreMetadataStayInParity() throws {
+        let iosSource = try sourceFileContents(
+            "Sources/Conclave/Core/WebRTC/WebRTCClient.swift"
+        )
+        let androidSource = try sourceFileContents(
+            "Sources/Conclave/Skip/WebRTCClient+Android.kt"
+        )
+
+        XCTAssertTrue(iosSource.contains("WebcamTopologyWakePolicy.nextWakeAt("))
+        XCTAssertTrue(androidSource.contains("WebcamTopologyWakePolicy.nextWakeAt("))
+
+        XCTAssertTrue(iosSource.contains(
+            "encoding.networkPriority = spec.rid == \"f\" ? .low : .veryLow"
+        ))
+        XCTAssertTrue(iosSource.contains("encoding.networkPriority = .low"))
+        XCTAssertTrue(androidSource.contains("WEBRTC_NETWORK_PRIORITY_VERY_LOW = 0"))
+        XCTAssertTrue(androidSource.contains("WEBRTC_NETWORK_PRIORITY_LOW = 1"))
+        XCTAssertTrue(androidSource.contains("if (spec.rid == \"f\")"))
+
+        let androidSingleStart = try XCTUnwrap(
+            androidSource.range(of: "private fun webcamSingleReceiverEncodings()")
+        )
+        let androidSingleEnd = try XCTUnwrap(
+            androidSource.range(
+                of: "private fun restoredAdaptiveWebcamEncodings()",
+                range: androidSingleStart.upperBound..<androidSource.endIndex
+            )
+        )
+        let androidSingle = String(
+            androidSource[androidSingleStart.lowerBound..<androidSingleEnd.lowerBound]
+        )
+        XCTAssertTrue(androidSingle.contains(
+            "encoding.networkPriority = WEBRTC_NETWORK_PRIORITY_LOW"
+        ))
+
+        let handoffStart = try XCTUnwrap(
+            androidSource.range(of: "private suspend fun applyWebcamTopologyReplacement(")
+        )
+        let handoffEnd = try XCTUnwrap(
+            androidSource.range(
+                of: "private fun isAmbiguousWebcamTopologyError(",
+                range: handoffStart.upperBound..<androidSource.endIndex
+            )
+        )
+        let handoff = String(androidSource[handoffStart.lowerBound..<handoffEnd.lowerBound])
+        XCTAssertTrue(handoff.contains(
+            "targetTopology == WebcamProducerTopology.vp8Simulcast"
+        ))
+        XCTAssertTrue(handoff.contains(
+            "videoProducerBandwidthQuality = ConnectionQuality.good"
+        ))
+        XCTAssertTrue(handoff.contains(
+            "localVideoBandwidthSignature(\n                    VideoQuality.standard,\n                    ConnectionQuality.good,"
+        ))
+        XCTAssertFalse(handoff.contains(
+            "videoProducerBandwidthQuality = currentLocalBandwidthQuality"
+        ))
+    }
+
+    func testWebcamTopologyPendingCommandIsDeterministicallyLatestWins() throws {
+        let first = WebcamTopologyReplacementCommand(
+            id: 1,
+            target: WebcamTopologyReplacementTarget.singleReceiver,
+            expectedProducerId: "a",
+            transition: WebcamReceiverCapacityTransition(fromProducerId: "a", nonce: "one")
+        )
+        let latest = WebcamTopologyReplacementCommand(
+            id: 2,
+            target: WebcamTopologyReplacementTarget.adaptiveLayers,
+            expectedProducerId: "b",
+            transition: nil
+        )
+        XCTAssertEqual(WebcamTopologyTransitionMachine.latestPending(first, latest), latest)
+        XCTAssertEqual(WebcamTopologyTransitionMachine.latestPending(nil, latest), latest)
+    }
+
+    private func decodeWebcamReceiverCapacityProof(
+        _ payload: String
+    ) throws -> WebcamReceiverCapacityProofNotification {
+        try JSONDecoder().decode(
+            WebcamReceiverCapacityProofNotification.self,
+            from: Data(payload.utf8)
+        )
+    }
+
+    private func makeWebcamTopologyInput(
+        nowMonotonicMs: Double,
+        producerId: String? = "simulcast-a",
+        producerTopology: WebcamProducerTopology = WebcamProducerTopology.vp8Simulcast,
+        hardSingleReceiverConditionsMet: Bool = true,
+        sourceProofActive: Bool = true,
+        sourceRevocationReason: String? = nil,
+        replacementOffer: ActiveWebcamReceiverCapacityReplacementOffer? = ActiveWebcamReceiverCapacityReplacementOffer(
+            nonce: "lease-a",
+            target: WebcamReceiverCapacityReplacementTarget.vp8SingleLayer,
+            expiresAtMonotonicMs: 5_000
+        ),
+        successorProof: ActiveWebcamReceiverCapacityProof? = nil,
+        currentSingleProofActive: Bool = false,
+        currentSingleProofRevocationReason: String? = nil
+    ) -> WebcamTopologyTransitionInput {
+        WebcamTopologyTransitionInput(
+            nowMonotonicMs: nowMonotonicMs,
+            producerId: producerId,
+            producerTopology: producerTopology,
+            hardSingleReceiverConditionsMet: hardSingleReceiverConditionsMet,
+            sourceProofActive: sourceProofActive,
+            sourceRevocationReason: sourceRevocationReason,
+            replacementOffer: replacementOffer,
+            successorProof: successorProof,
+            currentSingleProofActive: currentSingleProofActive,
+            currentSingleProofRevocationReason: currentSingleProofRevocationReason
+        )
+    }
+
+    private func makeWebcamSingleEntry() throws -> (
+        state: WebcamTopologyTransitionState,
+        command: WebcamTopologyReplacementCommand
+    ) {
+        let candidate = WebcamTopologyTransitionMachine.advance(
+            state: WebcamTopologyTransitionState.initial(),
+            input: makeWebcamTopologyInput(nowMonotonicMs: 0)
+        )
+        let entry = WebcamTopologyTransitionMachine.advance(
+            state: candidate.state,
+            input: makeWebcamTopologyInput(nowMonotonicMs: WebcamTopologyTransitionMachine.entryStableMs)
+        )
+        return (entry.state, try XCTUnwrap(entry.command))
     }
 
 }

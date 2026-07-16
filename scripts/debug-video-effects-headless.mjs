@@ -1,21 +1,39 @@
 #!/usr/bin/env node
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
-  mkdtempSync,
   mkdirSync,
   readdirSync,
   rmSync,
   statSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import {
+  closeSilentBrowser,
+  launchSilentBrowser,
+  navigateSilentBrowserPage,
+  reloadSilentBrowserPage,
+} from "./quality/silent-browser-contract.mjs";
 
 const chromePath =
   process.env.CHROME_PATH ??
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const chromeHeadlessFlag =
-  process.env.CONCLAVE_CHROME_HEADLESS_FLAG ?? "--headless";
+const chromeHeadlessFlag = "--headless=new";
+if (
+  process.env.CONCLAVE_CHROME_HEADLESS_FLAG &&
+  process.env.CONCLAVE_CHROME_HEADLESS_FLAG !== chromeHeadlessFlag
+) {
+  throw new Error(
+    "Video-effects probes are safety-locked to --headless=new and cannot launch a visible browser",
+  );
+}
+if (process.env.CONCLAVE_CHROME_DEBUG_PORT) {
+  throw new Error(
+    "Video-effects probes use an isolated OS-selected DevTools port and cannot attach to a configured port",
+  );
+}
+
 const baseUrl = process.env.CONCLAVE_WEB_URL ?? "http://localhost:3000";
 const roomId =
   process.env.CONCLAVE_ROOM_ID ?? `headless-effects-${Date.now()}`;
@@ -283,14 +301,15 @@ const imageBackedBackgroundIds = new Set([
   "snowy-cafe",
 ]);
 const hasExplicitFakeVideoPath = Boolean(process.env.CONCLAVE_FAKE_VIDEO);
-const fakeVideoPath =
+const fakeVideoPath = resolve(
   process.env.CONCLAVE_FAKE_VIDEO ??
-  join(
-    tmpdir(),
-    fakeVideoSourceImage
-      ? `conclave-fake-camera-${basename(fakeVideoSourceImage).replace(/[^a-z0-9._-]/gi, "_")}-${fakeVideoWidth}x${fakeVideoHeight}-${fakeVideoFps}fps-${fakeVideoDurationSeconds}s.y4m`
-      : `conclave-fake-camera-${fakeVideoWidth}x${fakeVideoHeight}-${fakeVideoFps}fps-${fakeVideoDurationSeconds}s.y4m`,
-  );
+    join(
+      tmpdir(),
+      fakeVideoSourceImage
+        ? `conclave-fake-camera-${basename(fakeVideoSourceImage).replace(/[^a-z0-9._-]/gi, "_")}-${fakeVideoWidth}x${fakeVideoHeight}-${fakeVideoFps}fps-${fakeVideoDurationSeconds}s.y4m`
+        : `conclave-fake-camera-${fakeVideoWidth}x${fakeVideoHeight}-${fakeVideoFps}fps-${fakeVideoDurationSeconds}s.y4m`,
+    ),
+);
 const maxReusableFakeVideoBytes = parsePositiveInteger(
   process.env.CONCLAVE_MAX_FAKE_VIDEO_BYTES,
   (expectFaceLandmarks ? 10 : 4) * 1024 * 1024,
@@ -302,10 +321,6 @@ const timeoutMs = Number(process.env.CONCLAVE_HEADLESS_TIMEOUT_MS ?? 90000);
 const postProbeSoakMs = Math.max(
   0,
   Number(process.env.CONCLAVE_POST_PROBE_SOAK_MS ?? 0) || 0,
-);
-const chromePort = Number(
-  process.env.CONCLAVE_CHROME_DEBUG_PORT ??
-    String(9300 + Math.floor(Math.random() * 600)),
 );
 const minOutputFrameRatio = Number(
   process.env.CONCLAVE_MIN_OUTPUT_FRAME_RATIO ?? 0.93,
@@ -372,8 +387,6 @@ const emit = (event, payload = {}) => {
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const shellEscape = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 
 const cleanupLegacyFakeVideos = () => {
   if (hasExplicitFakeVideoPath || !shouldCleanupLegacyFakeVideos) return;
@@ -500,104 +513,6 @@ const ensureFakeVideo = () => {
     fps: fakeVideoFps,
     durationSeconds: fakeVideoDurationSeconds,
   });
-};
-
-class CdpClient {
-  constructor(wsUrl) {
-    this.ws = new WebSocket(wsUrl);
-    this.nextId = 1;
-    this.pending = new Map();
-    this.events = [];
-    this.logs = [];
-    this.ws.addEventListener("message", (message) => {
-      const data = JSON.parse(String(message.data));
-      if (data.id && this.pending.has(data.id)) {
-        const { resolve, reject } = this.pending.get(data.id);
-        this.pending.delete(data.id);
-        if (data.error) reject(new Error(JSON.stringify(data.error)));
-        else resolve(data.result);
-        return;
-      }
-      this.events.push(data);
-      this.collectLog(data);
-    });
-  }
-
-  async open() {
-    if (this.ws.readyState === WebSocket.OPEN) return;
-    await new Promise((resolve, reject) => {
-      this.ws.addEventListener("open", resolve, { once: true });
-      this.ws.addEventListener("error", reject, { once: true });
-    });
-  }
-
-  async send(method, params = {}) {
-    const id = this.nextId++;
-    const promise = new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-    });
-    this.ws.send(JSON.stringify({ id, method, params }));
-    return promise;
-  }
-
-  close() {
-    try {
-      this.ws.close();
-    } catch {}
-  }
-
-  collectLog(event) {
-    if (event.method === "Runtime.consoleAPICalled") {
-      const args = event.params.args
-        .map((arg) => {
-          if ("value" in arg) return String(arg.value);
-          return arg.description ?? arg.type;
-        })
-        .join(" ");
-      this.logs.push({
-        source: "console",
-        level: event.params.type,
-        text: args,
-      });
-    }
-    if (event.method === "Log.entryAdded") {
-      this.logs.push({
-        source: event.params.entry.source,
-        level: event.params.entry.level,
-        text: event.params.entry.text,
-        url: event.params.entry.url,
-      });
-    }
-    if (event.method === "Runtime.exceptionThrown") {
-      this.logs.push({
-        source: "exception",
-        level: "error",
-        text:
-          event.params.exceptionDetails.exception?.description ??
-          event.params.exceptionDetails.text ??
-          "Runtime exception",
-        url: event.params.exceptionDetails.url,
-        lineNumber: event.params.exceptionDetails.lineNumber,
-        columnNumber: event.params.exceptionDetails.columnNumber,
-      });
-    }
-  }
-}
-
-const waitForJson = async (url, label, timeoutMs = 15000) => {
-  const started = Date.now();
-  let lastError = null;
-  while (Date.now() - started < timeoutMs) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) return response.json();
-      lastError = new Error(`${response.status} ${response.statusText}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await sleep(250);
-  }
-  throw new Error(`Timed out waiting for ${label}: ${lastError}`);
 };
 
 const evalValue = async (cdp, expression, timeout = 10000) => {
@@ -2474,8 +2389,13 @@ const uploadCustomBackground = async (cdp) => {
   emit("custom_background_upload_done");
 };
 
-const runPrejoinHandoffProbe = async (cdp, prejoinUrl) => {
-  await cdp.send("Page.navigate", { url: prejoinUrl });
+const runPrejoinHandoffProbe = async (browserSession, prejoinUrl) => {
+  const { pageCdp: cdp } = browserSession;
+  await navigateSilentBrowserPage(browserSession, {
+    url: prejoinUrl,
+    label: "prejoin handoff",
+    timeoutMs,
+  });
   emit("prejoin_navigate", { url: prejoinUrl });
 
   await waitFor(
@@ -2756,9 +2676,14 @@ const runPrejoinHandoffProbe = async (cdp, prejoinUrl) => {
   );
 };
 
-const runPrejoinCameraOffJoinProbe = async (cdp, prejoinUrl) => {
+const runPrejoinCameraOffJoinProbe = async (browserSession, prejoinUrl) => {
+  const { pageCdp: cdp } = browserSession;
   const url = `${prejoinUrl}&probe=camera-off-join`;
-  await cdp.send("Page.navigate", { url });
+  await navigateSilentBrowserPage(browserSession, {
+    url,
+    label: "prejoin camera-off join",
+    timeoutMs,
+  });
   emit("prejoin_camera_off_join_navigate", { url });
 
   await waitFor(
@@ -2990,9 +2915,17 @@ const runPrejoinCameraOffJoinProbe = async (cdp, prejoinUrl) => {
   );
 };
 
-const runPrejoinPermissionDeniedEffectsProbe = async (cdp, prejoinUrl) => {
+const runPrejoinPermissionDeniedEffectsProbe = async (
+  browserSession,
+  prejoinUrl,
+) => {
+  const { pageCdp: cdp } = browserSession;
   const url = `${prejoinUrl}&probe=permission-blocked-effects`;
-  await cdp.send("Page.navigate", { url });
+  await navigateSilentBrowserPage(browserSession, {
+    url,
+    label: "prejoin permission-blocked effects",
+    timeoutMs,
+  });
   emit("prejoin_permission_blocked_navigate", { url });
 
   await waitFor(
@@ -3095,92 +3028,47 @@ const badLogPatterns = [
 const run = async () => {
   cleanupLegacyFakeVideos();
   ensureFakeVideo();
-  const userDataDir = mkdtempSync(join(tmpdir(), "conclave-headless-chrome-"));
   const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
   const prejoinUrl = `${normalizedBaseUrl}/?admin=1&name=Headless%20Prejoin`;
   const url = `${normalizedBaseUrl}/${roomId}?autojoin=1&hide=1&admin=1&name=Headless%20Effects`;
-  const args = [
-    chromeHeadlessFlag,
-    `--remote-debugging-port=${chromePort}`,
-    `--user-data-dir=${userDataDir}`,
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-background-networking",
-    "--disable-component-update",
-    "--disable-extensions",
-    "--disable-sync",
-    "--disable-features=MediaRouter",
-    `--window-size=${headlessWindowSize}`,
-    "--autoplay-policy=no-user-gesture-required",
-    "--use-fake-device-for-media-stream",
-    "--use-fake-ui-for-media-stream",
-    `--use-file-for-fake-video-capture=${fakeVideoPath}`,
-    "--enable-logging=stderr",
-    "--v=0",
-    "about:blank",
-  ];
-  emit("chrome_launch", {
-    chromePath,
-    chromePort,
-    fakeVideoPath,
-    fakeVideo: {
-      width: fakeVideoWidth,
-      height: fakeVideoHeight,
-      fps: fakeVideoFps,
-      durationSeconds: fakeVideoDurationSeconds,
-    },
-    url,
-    forceDarkVideoProbe,
-    viewport: {
-      width: headlessViewportWidth,
-      height: headlessViewportHeight,
-      deviceScaleFactor: headlessDeviceScaleFactor,
-      mobile: headlessEmulateMobile,
-      touch: headlessTouchEnabled,
-    },
-    command: `${shellEscape(chromePath)} ${args.map(shellEscape).join(" ")}`,
-  });
-
-  const chrome = spawn(chromePath, args, {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  chrome.stdout.on("data", (chunk) => {
-    emit("chrome_stdout", { text: String(chunk).trim() });
-  });
-  chrome.stderr.on("data", (chunk) => {
-    const text = String(chunk).trim();
-    if (text.includes("INFO:CONSOLE")) return;
-    if (text) emit("chrome_stderr", { text });
-  });
-
+  let browserSession = null;
   let cdp = null;
   let rapidEffectSwitchLogIndex = 0;
   try {
-    const targets = await waitForJson(
-      `http://127.0.0.1:${chromePort}/json/list`,
-      "Chrome target list",
-      chromeTargetListTimeoutMs,
-    );
-    emit("target_list", {
-      targets: targets.map((item) => ({
-        id: item.id,
-        type: item.type,
-        title: item.title,
-        url: item.url,
-      })),
+    browserSession = await launchSilentBrowser({
+      chromePath,
+      label: "video-effects",
+      windowSize: headlessWindowSize,
+      syntheticVideoFilePath: fakeVideoPath,
+      denySyntheticVideoWhenUrlIncludes:
+        "probe=permission-blocked-effects",
+      timeoutMs: chromeTargetListTimeoutMs,
     });
-    const target =
-      targets.find((item) => item.type === "page" && item.url.includes(roomId)) ??
-      targets.find((item) => item.type === "page");
-    if (!target?.webSocketDebuggerUrl) {
-      throw new Error("No debuggable Chrome page target found");
-    }
-
-    cdp = new CdpClient(target.webSocketDebuggerUrl);
-    await cdp.open();
-    await cdp.send("Runtime.enable");
+    cdp = browserSession.pageCdp;
+    emit("chrome_launch", {
+      chromePath,
+      fakeVideoPath,
+      fakeVideo: {
+        width: fakeVideoWidth,
+        height: fakeVideoHeight,
+        fps: fakeVideoFps,
+        durationSeconds: fakeVideoDurationSeconds,
+      },
+      url,
+      forceDarkVideoProbe,
+      viewport: {
+        width: headlessViewportWidth,
+        height: headlessViewportHeight,
+        deviceScaleFactor: headlessDeviceScaleFactor,
+        mobile: headlessEmulateMobile,
+        touch: headlessTouchEnabled,
+      },
+      headless: browserSession.authority.exactHeadless,
+      muted: browserSession.authority.muted,
+      zeroAudioInput: browserSession.authority.zeroAudioInput,
+      isolatedProfile: browserSession.authority.isolatedProfile,
+    });
     await cdp.send("Log.enable");
-    await cdp.send("Page.enable");
     await cdp.send("Emulation.setDeviceMetricsOverride", {
       width: headlessViewportWidth,
       height: headlessViewportHeight,
@@ -3237,26 +3125,6 @@ const run = async () => {
               },
             });
           }
-
-          const originalGetUserMedia = navigator.mediaDevices?.getUserMedia?.bind(
-            navigator.mediaDevices,
-          );
-          if (originalGetUserMedia) {
-            Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
-              configurable: true,
-              value: (constraints) => {
-                if (constraints?.video) {
-                  return Promise.reject(
-                    new DOMException(
-                      "Camera denied by headless permission probe",
-                      "NotAllowedError",
-                    ),
-                  );
-                }
-                return originalGetUserMedia(constraints);
-              },
-            });
-          }
         } catch {}
       })();`,
     });
@@ -3284,7 +3152,7 @@ const run = async () => {
     }
 
     if (headlessProbe !== "effects" && headlessProbe !== "meet-videopipe") {
-      await runPrejoinPermissionDeniedEffectsProbe(cdp, prejoinUrl);
+      await runPrejoinPermissionDeniedEffectsProbe(browserSession, prejoinUrl);
       if (headlessProbe === "permission-blocked-effects") {
         const badLogs = cdp.logs.filter((log) =>
           badLogPatterns.some((pattern) => pattern.test(log.text)),
@@ -3299,11 +3167,15 @@ const run = async () => {
         emit("result", { ok: true, probe: headlessProbe });
         return;
       }
-      await runPrejoinCameraOffJoinProbe(cdp, prejoinUrl);
-      await runPrejoinHandoffProbe(cdp, prejoinUrl);
+      await runPrejoinCameraOffJoinProbe(browserSession, prejoinUrl);
+      await runPrejoinHandoffProbe(browserSession, prejoinUrl);
     }
 
-    await cdp.send("Page.navigate", { url });
+    await navigateSilentBrowserPage(browserSession, {
+      url,
+      label: "video effects meeting",
+      timeoutMs,
+    });
     emit("page_navigate", { url });
 
     await waitFor(
@@ -4780,7 +4652,10 @@ const run = async () => {
       backgroundRender: state.panelStats?.backgroundRender ?? null,
     });
 
-    await cdp.send("Page.reload", { ignoreCache: true });
+    await reloadSilentBrowserPage(browserSession, {
+      label: "custom background reload",
+      timeoutMs,
+    });
     emit("page_reload_after_custom_background", { url });
     await waitFor(
       cdp,
@@ -5666,7 +5541,10 @@ const run = async () => {
       10000,
     );
 
-    await cdp.send("Page.reload", { ignoreCache: true });
+    await reloadSilentBrowserPage(browserSession, {
+      label: "effects reload",
+      timeoutMs,
+    });
     emit("page_reload", { url });
     await waitFor(
       cdp,
@@ -6960,14 +6838,7 @@ const run = async () => {
     }
     throw error;
   } finally {
-    cdp?.close();
-    chrome.kill("SIGTERM");
-    setTimeout(() => {
-      if (!chrome.killed) chrome.kill("SIGKILL");
-    }, 2000).unref();
-    try {
-      rmSync(userDataDir, { recursive: true, force: true });
-    } catch {}
+    await closeSilentBrowser(browserSession);
   }
 };
 

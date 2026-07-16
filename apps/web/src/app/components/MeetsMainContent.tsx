@@ -224,6 +224,11 @@ interface MeetsMainContentProps {
   replyTarget: ChatReplyPreview | null;
   onReplyToMessage: (message: ChatMessage) => void;
   onCancelReply: () => void;
+  /** Chat message id currently being spoken by the TTS engine. */
+  activeTtsMessageId?: string | null;
+  onReplayTtsMessage?: (message: ChatMessage) => void;
+  onStopTts?: () => void;
+  hasClonedTtsVoice?: boolean;
   assistantApiKeyPrompt: ConclaveAssistantApiKeyPromptState;
   onSubmitAssistantApiKey: (
     apiKey: string,
@@ -478,6 +483,10 @@ export default function MeetsMainContent({
   replyTarget,
   onReplyToMessage,
   onCancelReply,
+  activeTtsMessageId,
+  onReplayTtsMessage,
+  onStopTts,
+  hasClonedTtsVoice,
   assistantApiKeyPrompt,
   onSubmitAssistantApiKey,
   onCancelAssistantApiKey,
@@ -2348,6 +2357,11 @@ export default function MeetsMainContent({
           replyTarget={replyTarget}
           onReply={onReplyToMessage}
           onCancelReply={onCancelReply}
+          activeTtsMessageId={activeTtsMessageId}
+          onReplayTtsMessage={onReplayTtsMessage}
+          onStopTts={onStopTts}
+          hasClonedTtsVoice={hasClonedTtsVoice}
+          isTtsDisabled={isTtsDisabled}
           assistantApiKeyPrompt={assistantApiKeyPrompt}
           onSubmitAssistantApiKey={onSubmitAssistantApiKey}
           onCancelAssistantApiKey={onCancelAssistantApiKey}

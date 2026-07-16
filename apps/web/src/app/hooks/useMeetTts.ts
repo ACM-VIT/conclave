@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { clampMeetVolume, DEFAULT_MEET_VOLUME } from "../lib/meet-volume";
 
-interface TtsPayload {
+export interface TtsPayload {
   userId: string;
   displayName: string;
   text: string;
   ttsVoiceToken?: string;
+  /** Chat message id, when the payload came from a chat message. */
+  messageId?: string;
 }
 
 export interface TtsSystemVoiceOption {
@@ -23,6 +25,23 @@ export interface ClonedTtsVoice {
 
 const TTS_RATE = 0.94;
 const TTS_PITCH = 1;
+/** Queued messages beyond this are dropped oldest-first. */
+const MAX_QUEUED_TTS = 6;
+/** Gap between queued messages so back-to-back TTS doesn't run together. */
+const QUEUE_ADVANCE_DELAY_MS = 250;
+/** Give up on cloned-speech generation after this and use the system voice. */
+const CLONED_GENERATION_TIMEOUT_MS = 15000;
+/** Post-playback grace before the stuck-playback failsafe fires. */
+const FAILSAFE_GRACE_MS = 8000;
+
+/** Speech budget for playbacks whose real duration is unknown. */
+const estimateSpeechMs = (text: string): number => {
+  const words = text.split(/\s+/).filter(Boolean).length;
+  // Whitespace-free scripts (CJK etc.) would count as one word, so also
+  // budget by characters and take the larger of the two.
+  const units = Math.max(words, Math.ceil(text.length / 6));
+  return Math.min(90000, Math.max(FAILSAFE_GRACE_MS, units * 700 + 5000));
+};
 const VOICE_QUALITY_KEYWORDS = [
   "neural",
   "natural",
@@ -126,6 +145,9 @@ export function useMeetTts({
   audioOutputDeviceId,
 }: UseMeetTtsOptions = {}) {
   const [ttsSpeakerId, setTtsSpeakerId] = useState<string | null>(null);
+  const [activeTtsMessageId, setActiveTtsMessageId] = useState<string | null>(
+    null,
+  );
   const [availableSystemVoices, setAvailableSystemVoices] = useState<
     TtsSystemVoiceOption[]
   >([]);
@@ -136,10 +158,13 @@ export function useMeetTts({
     readStoredClonedVoice,
   );
   const activeTokenRef = useRef<number | null>(null);
-  const fallbackTimeoutRef = useRef<number | null>(null);
+  const tokenCounterRef = useRef(0);
+  const queueRef = useRef<TtsPayload[]>([]);
+  const speakPayloadRef = useRef<(payload: TtsPayload) => void>(() => {});
+  const failsafeTimeoutRef = useRef<number | null>(null);
+  const advanceTimeoutRef = useRef<number | null>(null);
   const unlockTimeoutRef = useRef<number | null>(null);
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
-  const pendingPayloadRef = useRef<TtsPayload | null>(null);
   const clonedSpeechAbortRef = useRef<AbortController | null>(null);
   const clonedSpeechAudioRef = useRef<HTMLAudioElement | null>(null);
   const clonedSpeechUrlRef = useRef<string | null>(null);
@@ -165,10 +190,36 @@ export function useMeetTts({
     }
   }, []);
 
-  const clearHighlight = useCallback((token: number) => {
-    if (activeTokenRef.current !== token) return;
-    setTtsSpeakerId(null);
+  const startNextInQueue = useCallback(() => {
+    if (activeTokenRef.current !== null) return;
+    const next = queueRef.current.shift();
+    if (next) speakPayloadRef.current(next);
   }, []);
+
+  /**
+   * Single completion path for a playback attempt: clears the speaking
+   * indicators and, after a short beat, plays the next queued message.
+   * Safe to call multiple times — only the owning token wins.
+   */
+  const finishPlayback = useCallback((token: number) => {
+    if (activeTokenRef.current !== token) return;
+    activeTokenRef.current = null;
+    setTtsSpeakerId(null);
+    setActiveTtsMessageId(null);
+    if (failsafeTimeoutRef.current !== null) {
+      window.clearTimeout(failsafeTimeoutRef.current);
+      failsafeTimeoutRef.current = null;
+    }
+    if (queueRef.current.length) {
+      if (advanceTimeoutRef.current !== null) {
+        window.clearTimeout(advanceTimeoutRef.current);
+      }
+      advanceTimeoutRef.current = window.setTimeout(() => {
+        advanceTimeoutRef.current = null;
+        startNextInQueue();
+      }, QUEUE_ADVANCE_DELAY_MS);
+    }
+  }, [startNextInQueue]);
 
   const refreshPreferredVoice = useCallback(() => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
@@ -185,6 +236,32 @@ export function useMeetTts({
       voices.find((voice) => voice.voiceURI === selectedSystemVoiceUri) ??
       pickBestVoice(voices, preferredLanguageRef.current);
   }, [selectedSystemVoiceUri]);
+
+  // The mount effect must not re-run when the selected voice changes (its
+  // cleanup tears down live playback), so it reaches the latest refresher
+  // through a ref while this effect applies selection changes immediately.
+  const refreshPreferredVoiceRef = useRef(refreshPreferredVoice);
+  useEffect(() => {
+    refreshPreferredVoiceRef.current = refreshPreferredVoice;
+    refreshPreferredVoice();
+  }, [refreshPreferredVoice]);
+
+  /**
+   * Arms the stuck-playback failsafe for the active token. Real completion
+   * comes from the utterance/audio end events; this only rescues playback
+   * that never reports back so the queue cannot wedge.
+   */
+  const armFailsafe = useCallback((token: number, delayMs: number) => {
+    if (failsafeTimeoutRef.current !== null) {
+      window.clearTimeout(failsafeTimeoutRef.current);
+    }
+    failsafeTimeoutRef.current = window.setTimeout(() => {
+      failsafeTimeoutRef.current = null;
+      if (activeTokenRef.current !== token) return;
+      stopClonedSpeech();
+      finishPlayback(token);
+    }, delayMs);
+  }, [finishPlayback, stopClonedSpeech]);
 
   const setSelectedSystemVoiceUri = useCallback((voiceUri: string | null) => {
     const normalized = voiceUri?.trim() || null;
@@ -218,6 +295,7 @@ export function useMeetTts({
   ) => {
     if (activeTokenRef.current !== token) return;
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      finishPlayback(token);
       return;
     }
 
@@ -225,7 +303,8 @@ export function useMeetTts({
       const synth = window.speechSynthesis;
       if (synth.speaking || synth.pending) synth.cancel();
       synth.resume();
-      if (!voiceRef.current) refreshPreferredVoice();
+      if (!voiceRef.current) refreshPreferredVoiceRef.current();
+      armFailsafe(token, estimateSpeechMs(payload.text));
 
       const utterance = new SpeechSynthesisUtterance(payload.text.trim());
       utterance.rate = TTS_RATE;
@@ -241,13 +320,13 @@ export function useMeetTts({
       utterance.onstart = () => {
         isSpeechUnlockedRef.current = true;
       };
-      utterance.onend = () => clearHighlight(token);
-      utterance.onerror = () => clearHighlight(token);
+      utterance.onend = () => finishPlayback(token);
+      utterance.onerror = () => finishPlayback(token);
       synth.speak(utterance);
     } catch {
-      clearHighlight(token);
+      finishPlayback(token);
     }
-  }, [clearHighlight, refreshPreferredVoice, ttsVolume]);
+  }, [armFailsafe, finishPlayback, ttsVolume]);
 
   const speakWithClonedVoice = useCallback(async (
     payload: TtsPayload,
@@ -261,6 +340,13 @@ export function useMeetTts({
 
     const controller = new AbortController();
     clonedSpeechAbortRef.current = controller;
+    // Generation gets its own clock: a slow provider falls back to the system
+    // voice instead of eating into (or being killed by) the playback failsafe.
+    let generationTimedOut = false;
+    const generationTimeout = window.setTimeout(() => {
+      generationTimedOut = true;
+      controller.abort();
+    }, CLONED_GENERATION_TIMEOUT_MS);
     try {
       const response = await fetch("/api/tts/speech", {
         method: "POST",
@@ -270,6 +356,7 @@ export function useMeetTts({
       });
       if (!response.ok) throw new Error("Cloned speech was unavailable.");
       const blob = await response.blob();
+      window.clearTimeout(generationTimeout);
       if (activeTokenRef.current !== token || controller.signal.aborted) return;
 
       const url = URL.createObjectURL(blob);
@@ -283,9 +370,10 @@ export function useMeetTts({
       if (audioOutputDeviceId && sinkCapable.setSinkId) {
         await sinkCapable.setSinkId(audioOutputDeviceId).catch(() => {});
       }
+      if (activeTokenRef.current !== token || controller.signal.aborted) return;
       audio.onended = () => {
         stopClonedSpeech();
-        clearHighlight(token);
+        finishPlayback(token);
       };
       audio.onerror = () => {
         stopClonedSpeech();
@@ -293,14 +381,24 @@ export function useMeetTts({
       };
       isSpeechUnlockedRef.current = true;
       await audio.play();
+      const knownDurationMs =
+        Number.isFinite(audio.duration) && audio.duration > 0
+          ? audio.duration * 1000 + FAILSAFE_GRACE_MS
+          : estimateSpeechMs(payload.text);
+      armFailsafe(token, knownDurationMs);
     } catch {
-      if (controller.signal.aborted || activeTokenRef.current !== token) return;
+      window.clearTimeout(generationTimeout);
+      if (activeTokenRef.current !== token) return;
+      // A user-initiated stop aborts too; only the generation timeout should
+      // fall back to the system voice.
+      if (controller.signal.aborted && !generationTimedOut) return;
       stopClonedSpeech();
       speakWithSystemVoice(payload, token);
     }
   }, [
+    armFailsafe,
     audioOutputDeviceId,
-    clearHighlight,
+    finishPlayback,
     speakWithSystemVoice,
     stopClonedSpeech,
     ttsVolume,
@@ -310,39 +408,34 @@ export function useMeetTts({
     const text = payload.text?.trim();
     if (!text) return;
 
-    const token = Date.now();
+    const token = ++tokenCounterRef.current;
     activeTokenRef.current = token;
     setTtsSpeakerId(payload.userId);
+    setActiveTtsMessageId(payload.messageId ?? null);
     stopClonedSpeech();
 
-    if (fallbackTimeoutRef.current) {
-      window.clearTimeout(fallbackTimeoutRef.current);
+    if (failsafeTimeoutRef.current !== null) {
+      window.clearTimeout(failsafeTimeoutRef.current);
+      failsafeTimeoutRef.current = null;
     }
-
-    const words = text.split(/\s+/).filter(Boolean).length;
-    const estimatedMs = Math.min(15000, Math.max(2000, Math.ceil(words * 420)));
-    fallbackTimeoutRef.current = window.setTimeout(() => {
-      clearHighlight(token);
-    }, estimatedMs);
-
+    // The cloned path arms its playback failsafe once audio actually starts
+    // (generation has its own timeout); until then, guard the fetch window.
     if (payload.ttsVoiceToken) {
+      armFailsafe(token, CLONED_GENERATION_TIMEOUT_MS + estimateSpeechMs(text));
       void speakWithClonedVoice(payload, token);
     } else {
       speakWithSystemVoice(payload, token);
     }
-  }, [clearHighlight, speakWithClonedVoice, speakWithSystemVoice, stopClonedSpeech]);
+  }, [armFailsafe, speakWithClonedVoice, speakWithSystemVoice, stopClonedSpeech]);
 
-  const flushPendingPayload = useCallback(() => {
-    const pendingPayload = pendingPayloadRef.current;
-    if (!pendingPayload) return;
-    pendingPayloadRef.current = null;
-    speakPayload(pendingPayload);
+  useEffect(() => {
+    speakPayloadRef.current = speakPayload;
   }, [speakPayload]);
 
   const unlockSpeech = useCallback(() => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     if (isSpeechUnlockedRef.current) {
-      flushPendingPayload();
+      startNextInQueue();
       return;
     }
 
@@ -355,11 +448,11 @@ export function useMeetTts({
       primer.lang = preferredLanguageRef.current;
       primer.onend = () => {
         isSpeechUnlockedRef.current = true;
-        flushPendingPayload();
+        startNextInQueue();
       };
       primer.onerror = () => {
         isSpeechUnlockedRef.current = true;
-        flushPendingPayload();
+        startNextInQueue();
       };
       synth.speak(primer);
 
@@ -368,33 +461,76 @@ export function useMeetTts({
       }
       unlockTimeoutRef.current = window.setTimeout(() => {
         isSpeechUnlockedRef.current = true;
-        flushPendingPayload();
+        startNextInQueue();
       }, 150);
     } catch {
       isSpeechUnlockedRef.current = true;
-      flushPendingPayload();
+      startNextInQueue();
     }
-  }, [flushPendingPayload]);
+  }, [startNextInQueue]);
 
   const handleTtsMessage = useCallback((payload: TtsPayload) => {
-    if (shouldGateSpeechRef.current && !isSpeechUnlockedRef.current) {
-      pendingPayloadRef.current = payload;
+    if (!payload.text?.trim()) return;
+    const mustQueue =
+      activeTokenRef.current !== null ||
+      // Messages already waiting keep their order even during the short
+      // advance gap between playbacks.
+      queueRef.current.length > 0 ||
+      (shouldGateSpeechRef.current && !isSpeechUnlockedRef.current);
+    if (mustQueue) {
+      queueRef.current.push(payload);
+      while (queueRef.current.length > MAX_QUEUED_TTS) {
+        queueRef.current.shift();
+      }
       return;
     }
     speakPayload(payload);
   }, [speakPayload]);
 
+  /** Stops the current message (if any) and plays this payload right away. */
+  const replayTts = useCallback((payload: TtsPayload) => {
+    if (!payload.text?.trim()) return;
+    // Replay always comes from a click, so speech is user-gesture unlocked.
+    isSpeechUnlockedRef.current = true;
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {}
+    }
+    speakPayload(payload);
+  }, [speakPayload]);
+
+  /** Stops the current message and drops everything queued behind it. */
+  const stopTts = useCallback(() => {
+    queueRef.current = [];
+    if (advanceTimeoutRef.current !== null) {
+      window.clearTimeout(advanceTimeoutRef.current);
+      advanceTimeoutRef.current = null;
+    }
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {}
+    }
+    stopClonedSpeech();
+    const token = activeTokenRef.current;
+    if (token !== null) finishPlayback(token);
+  }, [finishPlayback, stopClonedSpeech]);
+
+  // Mount-only lifecycle (all deps are stable callbacks): re-running this
+  // effect would tear down live playback and leave the queue wedged.
   useEffect(() => {
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       const synth = window.speechSynthesis;
       const handleUserGesture = () => {
         unlockSpeech();
       };
+      const handleVoicesChanged = () => refreshPreferredVoiceRef.current();
 
       shouldGateSpeechRef.current = shouldGateSpeechUntilGesture();
       isSpeechUnlockedRef.current = !shouldGateSpeechRef.current;
-      refreshPreferredVoice();
-      synth.addEventListener("voiceschanged", refreshPreferredVoice);
+      refreshPreferredVoiceRef.current();
+      synth.addEventListener("voiceschanged", handleVoicesChanged);
       if (shouldGateSpeechRef.current) {
         window.addEventListener("pointerdown", handleUserGesture);
         window.addEventListener("touchstart", handleUserGesture);
@@ -402,8 +538,11 @@ export function useMeetTts({
       }
 
       return () => {
-        if (fallbackTimeoutRef.current) {
-          window.clearTimeout(fallbackTimeoutRef.current);
+        if (failsafeTimeoutRef.current !== null) {
+          window.clearTimeout(failsafeTimeoutRef.current);
+        }
+        if (advanceTimeoutRef.current !== null) {
+          window.clearTimeout(advanceTimeoutRef.current);
         }
         if (unlockTimeoutRef.current) {
           window.clearTimeout(unlockTimeoutRef.current);
@@ -411,26 +550,32 @@ export function useMeetTts({
         window.removeEventListener("pointerdown", handleUserGesture);
         window.removeEventListener("touchstart", handleUserGesture);
         window.removeEventListener("keydown", handleUserGesture);
-        synth.removeEventListener("voiceschanged", refreshPreferredVoice);
+        synth.removeEventListener("voiceschanged", handleVoicesChanged);
         synth.cancel();
         stopClonedSpeech();
       };
     }
 
     return () => {
-      if (fallbackTimeoutRef.current) {
-        window.clearTimeout(fallbackTimeoutRef.current);
+      if (failsafeTimeoutRef.current !== null) {
+        window.clearTimeout(failsafeTimeoutRef.current);
+      }
+      if (advanceTimeoutRef.current !== null) {
+        window.clearTimeout(advanceTimeoutRef.current);
       }
       if (unlockTimeoutRef.current) {
         window.clearTimeout(unlockTimeoutRef.current);
       }
       stopClonedSpeech();
     };
-  }, [refreshPreferredVoice, stopClonedSpeech, unlockSpeech]);
+  }, [stopClonedSpeech, unlockSpeech]);
 
   return {
     ttsSpeakerId,
+    activeTtsMessageId,
     handleTtsMessage,
+    replayTts,
+    stopTts,
     availableSystemVoices,
     selectedSystemVoiceUri,
     setSelectedSystemVoiceUri,

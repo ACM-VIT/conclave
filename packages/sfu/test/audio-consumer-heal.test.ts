@@ -68,6 +68,10 @@ class FakeClient {
       this.consumers.set(consumer.producerId, consumer.asConsumer());
     }
   }
+
+  getConsumer(producerId: string): Consumer | undefined {
+    return this.consumers.get(producerId);
+  }
 }
 
 const makeRoom = (clients: FakeClient[]): Room =>
@@ -174,5 +178,32 @@ describe("healStuckAudioConsumers", () => {
     expect(stuck.paused).toBe(false);
     expect(clientA.emitted).toHaveLength(0);
     expect(clientB.emitted).toHaveLength(1);
+  });
+
+  it("does not report a generation displaced while resume is awaiting", async () => {
+    let releaseResume!: () => void;
+    const resumePending = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    const displaced = new FakeConsumer({ id: "c1", producerId: "speaker" });
+    displaced.resumeImplementation = async () => {
+      await resumePending;
+      displaced.paused = false;
+    };
+    const replacement = new FakeConsumer({
+      id: "c2",
+      producerId: "speaker",
+      paused: false,
+    });
+    const client = new FakeClient("user-a", [displaced]);
+    const room = makeRoom([client]);
+
+    const healing = healStuckAudioConsumers(room, NOW);
+    await vi.waitFor(() => expect(displaced.resumeCalls).toBe(1));
+    client.consumers.set("speaker", replacement.asConsumer());
+    releaseResume();
+
+    await expect(healing).resolves.toBe(0);
+    expect(client.emitted).toHaveLength(0);
   });
 });

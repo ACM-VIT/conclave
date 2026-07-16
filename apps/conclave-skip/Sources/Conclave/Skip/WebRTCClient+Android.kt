@@ -47,23 +47,113 @@ import skip.foundation.JSONDecoder
 import skip.foundation.JSONEncoder
 import skip.foundation.ProcessInfo
 import skip.lib.*
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.UUID
+
+private data class ConsumerGenerationIdentity(
+    val consumerId: String,
+    val generation: Int,
+)
+
+private object ConsumerGenerationRemovalPolicy {
+    fun ownsConsumerSlot(
+        expected: ConsumerGenerationIdentity,
+        current: ConsumerGenerationIdentity?,
+    ): Boolean = current == expected
+
+    fun ownsTrackSlot(
+        expected: ConsumerGenerationIdentity,
+        current: ConsumerGenerationIdentity?,
+    ): Boolean = current == expected
+}
+
+private enum class ConsumerGenerationLifecycleRole {
+    CURRENT,
+    STAGED,
+    DISPLACED;
+
+    val acceptsPeriodicControls: Boolean get() = this == CURRENT
+}
+
+private object PlannedConsumerResetCoordinatorOwnershipPolicy {
+    fun ownsCompletion(ownerToken: Long, activeOwnerToken: Long?): Boolean =
+        activeOwnerToken == ownerToken
+
+    fun shouldWake(
+        candidateRemoved: Boolean,
+        activeCandidateMatches: Boolean,
+    ): Boolean = candidateRemoved || activeCandidateMatches
+}
+
+private data class PlannedConsumerHandoffAbortIdentity(
+    val requestId: String,
+    val producerId: String,
+    val predecessorConsumerId: String,
+)
+
+private enum class PlannedWebcamConsumerResetOutcome(val rawValue: String) {
+    PROMOTED("promoted"),
+    PROMOTED_PREDECESSOR_CLOSE_UNCONFIRMED("promoted_predecessor_close_unconfirmed"),
+    ROLLED_BACK("rolled_back"),
+    ROLLBACK_UNCONFIRMED("rollback_unconfirmed"),
+    STARTUP_DEADLINE_EXPIRED("startup_deadline_expired"),
+    CONTEXT_CHANGED("context_changed"),
+    INELIGIBLE_SUCCESSOR("ineligible_successor"),
+    ATTEMPTS_EXHAUSTED("attempts_exhausted"),
+}
+
+/**
+ * A one-shot sink on the decoded WebRTC track. It detaches after the first
+ * frame, leaving steady-state rendering unchanged, while its deferred value
+ * remains latched for orchestration that starts awaiting slightly later.
+ */
+private class FirstDecodedVideoFrameObserver(
+    track: VideoTrack,
+    private val signal: CompletableDeferred<Unit>,
+) : org.webrtc.VideoSink {
+    private val isFinished = AtomicBoolean(false)
+    private var track: VideoTrack? = track
+
+    override fun onFrame(frame: org.webrtc.VideoFrame) {
+        if (!isFinished.compareAndSet(false, true)) return
+        val trackToDetach = track
+        track = null
+        trackToDetach?.removeSink(this)
+        signal.complete(Unit)
+    }
+
+    fun cancel() {
+        if (isFinished.compareAndSet(false, true)) {
+            val trackToDetach = track
+            track = null
+            trackToDetach?.removeSink(this)
+        }
+        signal.cancel()
+    }
+}
 
 internal class VideoTrackWrapper(
     override val id: String,
     internal val userId: String,
     internal val isLocal: Boolean,
-    track: VideoTrack? = null
+    track: VideoTrack? = null,
+    internal val consumerGeneration: Int = 0,
 ) : Identifiable<String> {
     internal var rtcVideoTrack: VideoTrack? = track
     internal var isEnabled: Boolean = track?.enabled() ?: false
@@ -136,12 +226,29 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val userId: String,
         val kind: String,
         val type: String,
+        val generation: Int,
+        val roomId: String,
+        val meetingLifecycleGeneration: Int,
+        val createdAtMonotonicMs: Long,
+        val consumerType: String?,
+        val actualVideoCodecMimeType: String?,
+        val maxSpatialLayer: Int?,
+        var isConsumerPaused: Boolean,
+        var isProducerPaused: Boolean,
+        var isAdaptivelyPaused: Boolean,
+        var lifecycleRole: ConsumerGenerationLifecycleRole,
+        var plannedResetCompleted: Boolean,
         // "{userId}" for webcam, "{userId}-screen" for a screen-share, so a
         // user's webcam + screen tracks coexist (mirrors the iOS client).
         val trackKey: String = "",
     )
 
     private val consumers: MutableMap<String, ConsumerInfo> = mutableMapOf()
+    private var nextConsumerGeneration: Int = 0
+    private val firstDecodedVideoFrameSignals:
+        MutableMap<ConsumerGenerationIdentity, CompletableDeferred<Unit>> = mutableMapOf()
+    private val firstDecodedVideoFrameObservers:
+        MutableMap<ConsumerGenerationIdentity, FirstDecodedVideoFrameObserver> = mutableMapOf()
     private val remoteProducerClosureGenerations: MutableMap<String, Int> = mutableMapOf()
     private val remoteConsumerPreferenceSignatures: MutableMap<String, String> = mutableMapOf()
     private val remoteConsumerLayerPreferenceUnsupportedIds: MutableSet<String> = mutableSetOf()
@@ -149,15 +256,51 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private val remoteConsumerPreferenceScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
     private val mainHandler = Handler(Looper.getMainLooper())
     private var remoteConsumerPreferenceRetryJob: Job? = null
+    private var remoteConsumerPreferencePolicyRevision: Long = 0
     private var remoteVideoReceiveEnabled = true
+    private data class PlannedConsumerResetCandidate(
+        val predecessor: ConsumerGenerationIdentity,
+        val producerId: String,
+        val userId: String,
+        val roomId: String,
+        val meetingLifecycleGeneration: Int,
+        val configurationGeneration: Long,
+        val producerClosureGeneration: Int,
+        val adaptivePolicyRevision: Long,
+        val firstTopLayerAtMs: Long,
+        val readyAtMs: Long,
+        val startupDeadlineMs: Long,
+        val sequence: Int,
+    )
+    private val plannedConsumerResetCandidates:
+        MutableMap<String, PlannedConsumerResetCandidate> = mutableMapOf()
+    private var plannedConsumerResetCoordinatorJob: Job? = null
+    private var plannedConsumerResetCoordinatorOwnerToken: Long? = null
+    private var nextPlannedConsumerResetCoordinatorOwnerToken = 0L
+    private var plannedConsumerResetActivePredecessorId: String? = null
+    private var plannedConsumerResetActiveOwnerToken: Long? = null
+    private var plannedConsumerResetSequence = 0
+    private var activeConsumerResetRoomId: String? = null
+    private var activeConsumerResetLifecycleGeneration: Int? = null
     private var serverRtpCapabilities: RtpCapabilities? = null
 
     companion object {
         private const val MAX_REMOTE_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE = 8
         private const val REMOTE_CONSUMER_PREFERENCE_EMIT_SPACING_MS = 75L
         private const val REMOTE_CONSUMER_PREFERENCE_RETRY_DELAY_MS = 1_000L
+        private const val CONSUMER_RESET_TOP_LAYER_SUSTAIN_MS = 1_250L
+        private const val CONSUMER_RESET_STARTUP_DEADLINE_MS = 15_000L
+        private const val CONSUMER_RESET_MINIMUM_ATTEMPT_BUDGET_MS = 5_200L
+        private const val CONSUMER_RESET_PER_ATTEMPT_DEADLINE_MS = 6_500L
+        private const val CONSUMER_RESET_SIGNALING_ACK_TIMEOUT_MS = 900
+        private const val CONSUMER_RESET_FIRST_FRAME_TIMEOUT_MS = 3_200
+        private const val CONSUMER_RESET_CLOSE_ACK_TIMEOUT_MS = 1_000
+        private const val CONSUMER_RESET_RETRY_DELAY_MS = 200L
+        private const val CONSUMER_RESET_CANDIDATE_STAGGER_MS = 350L
+        private const val CONSUMER_RESET_MAX_ATTEMPTS = 2
         private const val PRE_JOIN_CAMERA_RELEASE_SETTLE_MS = 350L
         private const val WEBRTC_NETWORK_PRIORITY_VERY_LOW = 0
+        private const val WEBRTC_NETWORK_PRIORITY_LOW = 1
         private const val WEBRTC_NETWORK_PRIORITY_HIGH = 3
     }
 
@@ -189,6 +332,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     private data class PendingRemoteConsumerPreferenceUpdate(
         val consumerId: String,
+        val consumerGeneration: Int,
+        val policyRevision: Long,
         val effectivePreference: RemoteConsumerPreference,
         val previousSignature: String?,
         val signature: String,
@@ -209,40 +354,34 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 ConnectionQuality.good -> {
                     return InitialConsumerPreference(
                         spatialLayer = 2,
-                        temporalLayer = 2,
+                        temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer,
                         priority = 180,
                     )
                 }
                 ConnectionQuality.fair -> {
                     return InitialConsumerPreference(
                         spatialLayer = 1,
-                        temporalLayer = 2,
+                        temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer,
                         priority = 150,
                     )
                 }
                 ConnectionQuality.poor -> {
                     return InitialConsumerPreference(
                         spatialLayer = 0,
-                        temporalLayer = 1,
+                        temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer,
                         priority = 120,
                     )
                 }
                 ConnectionQuality.emergency -> {
                     return InitialConsumerPreference(
                         spatialLayer = 0,
-                        temporalLayer = 0,
+                        temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer,
                         priority = 145,
                     )
                 }
                 ConnectionQuality.unknown -> {
                 }
             }
-        }
-
-        val temporalLayer = when (currentLocalBandwidthQuality) {
-            ConnectionQuality.emergency,
-            ConnectionQuality.poor -> 0
-            else -> 1
         }
 
         val priority = when (currentLocalBandwidthQuality) {
@@ -253,7 +392,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
         return InitialConsumerPreference(
             spatialLayer = 0,
-            temporalLayer = temporalLayer,
+            temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer,
             priority = priority,
         )
     }
@@ -343,15 +482,42 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return 250
     }
 
+    private fun recordAppliedRemoteConsumerPreference(
+        preference: RemoteConsumerPreference,
+        signature: String,
+        consumerId: String,
+        consumerGeneration: Int,
+        policyRevision: Long,
+    ) {
+        if (remoteConsumerPreferencePolicyRevision != policyRevision) return
+        val info = consumers[consumerId] ?: return
+        if (info.generation != consumerGeneration) return
+        info.isConsumerPaused = preference.paused
+        if (preference.paused) {
+            invalidatePlannedConsumerResetCandidate(consumerId)
+        }
+        if (info.lifecycleRole.acceptsPeriodicControls) {
+            remoteConsumerPreferenceSignatures[consumerId] = signature
+        }
+    }
+
     private fun scheduleRemoteConsumerPreferenceRetry(
         focusedUserIds: skip.lib.Set<String>,
         visibleUserIds: skip.lib.Set<String>,
         connectionQuality: ConnectionQuality,
         videoQuality: VideoQuality,
+        expectedPolicyRevision: Long,
     ) {
-        if (remoteConsumerPreferenceRetryJob?.isActive == true) return
+        if (
+            remoteConsumerPreferencePolicyRevision != expectedPolicyRevision ||
+            remoteConsumerPreferenceRetryJob?.isActive == true
+        ) return
         remoteConsumerPreferenceRetryJob = remoteConsumerPreferenceScope.launch {
             delay(REMOTE_CONSUMER_PREFERENCE_RETRY_DELAY_MS)
+            if (remoteConsumerPreferencePolicyRevision != expectedPolicyRevision) {
+                remoteConsumerPreferenceRetryJob = null
+                return@launch
+            }
             remoteConsumerPreferenceRetryJob = null
             applyRemoteConsumerBandwidthPolicy(
                 focusedUserIds = focusedUserIds,
@@ -378,13 +544,77 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     /// The consumer id we hold for a remote producer (the consumers map is keyed
     /// by consumer id, not producer id). Used by the producer-sync safety net.
     internal fun consumerId(forProducer: String): String? {
-        for (entry in consumers) {
-            if (entry.value.producerId == forProducer) return entry.key
+        return consumers
+            .filterValues {
+                it.producerId == forProducer && it.lifecycleRole.acceptsPeriodicControls
+            }
+            .maxByOrNull { it.value.generation }
+            ?.key
+    }
+
+    internal fun hasConsumerGeneration(forProducer: String): Boolean {
+        return consumers.values.any { it.producerId == forProducer }
+    }
+
+    /**
+     * Await the exact consumer generation's first decoded frame. Timeout is a
+     * normal `false` result; caller cancellation or consumer removal propagates
+     * cancellation. Map access and continuation resumption stay on Main.
+     */
+    internal suspend fun waitForFirstDecodedVideoFrame(
+        consumerId: String,
+        timeoutMilliseconds: Int,
+    ): Boolean = withContext(Dispatchers.Main.immediate) {
+        val info = consumers[consumerId]
+            ?: throw ErrorException("Video consumer is no longer available")
+        if (info.kind != "video") {
+            throw ErrorException("Consumer is not video")
         }
-        return null
+        val identity = ConsumerGenerationIdentity(
+            consumerId = consumerId,
+            generation = info.generation,
+        )
+        val signal = firstDecodedVideoFrameSignals[identity]
+            ?: throw ErrorException("First-frame observation is unavailable")
+        if (timeoutMilliseconds <= 0) return@withContext false
+
+        val didDecode = withTimeoutOrNull(timeoutMilliseconds.toLong()) {
+            signal.await()
+            true
+        } ?: false
+        if (!didDecode) return@withContext false
+
+        val currentIdentity = consumers[consumerId]?.let {
+            ConsumerGenerationIdentity(
+                consumerId = consumerId,
+                generation = it.generation,
+            )
+        }
+        if (!ConsumerGenerationRemovalPolicy.ownsConsumerSlot(
+                expected = identity,
+                current = currentIdentity,
+            )
+        ) {
+            throw CancellationException("Video consumer generation was replaced")
+        }
+        true
+    }
+
+    internal fun cancelFirstDecodedVideoFrameObservation(consumerId: String) {
+        val info = consumers[consumerId] ?: return
+        cancelFirstDecodedVideoFrameObservation(
+            ConsumerGenerationIdentity(
+                consumerId = consumerId,
+                generation = info.generation,
+            )
+        )
     }
 
     internal fun closeConsumers(exceptProducerIds: skip.lib.Array<String>) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { closeConsumers(exceptProducerIds) }
+            return
+        }
         val activeProducerIds = exceptProducerIds.toSet()
         val staleConsumers = consumers.filterValues { !activeProducerIds.contains(it.producerId) }
         for ((consumerId, info) in staleConsumers) {
@@ -393,6 +623,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal fun closeConsumers(userIdPrefix: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { closeConsumers(userIdPrefix) }
+            return
+        }
         val prefix = userIdPrefix.trim()
         if (prefix.isEmpty()) return
 
@@ -405,8 +639,16 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal fun applyConsumerTelemetry(notification: ConsumerTelemetryNotification) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { applyConsumerTelemetry(notification) }
+            return
+        }
         val info = consumers[notification.consumerId] ?: return
         if (info.producerId != notification.producerId) return
+        if (
+            info.roomId.isNotEmpty() &&
+            normalizeConsumerResetRoomId(notification.roomId) != info.roomId
+        ) return
 
         if (notification.event == "closed") {
             removeConsumer(
@@ -418,16 +660,649 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             return
         }
 
-        remoteConsumerPreferenceSignatures[notification.consumerId] = RemoteConsumerPreference(
-            spatialLayer = notification.preferredLayers?.spatialLayer,
-            temporalLayer = notification.preferredLayers?.temporalLayer,
-            priority = notification.priority,
-            paused = notification.paused,
-        ).signature
+        info.isConsumerPaused = notification.paused
+        info.isProducerPaused = notification.producerPaused
+
+        if (info.lifecycleRole.acceptsPeriodicControls) {
+            remoteConsumerPreferenceSignatures[notification.consumerId] = RemoteConsumerPreference(
+                spatialLayer = notification.preferredLayers?.spatialLayer,
+                temporalLayer = notification.preferredLayers?.temporalLayer,
+                priority = notification.priority,
+                paused = notification.paused,
+            ).signature
+        }
 
         if (notification.paused || notification.producerPaused) {
             videoFreezeStats.remove(notification.consumerId)
+            invalidatePlannedConsumerResetCandidate(notification.consumerId)
+        } else {
+            observePlannedConsumerResetLayer(
+                consumerId = notification.consumerId,
+                roomId = notification.roomId ?: "",
+                currentSpatialLayer = notification.currentLayers?.spatialLayer,
+            )
         }
+    }
+
+    private fun consumerResetMonotonicMs(): Long = SystemClock.elapsedRealtime()
+
+    private fun wakePlannedConsumerResetCoordinator() {
+        val coordinator = plannedConsumerResetCoordinatorJob
+        if (coordinator != null) {
+            coordinator.cancel()
+        } else {
+            schedulePlannedConsumerResetCoordinator()
+        }
+    }
+
+    private fun invalidatePlannedConsumerResetCandidate(consumerId: String) {
+        val removed = plannedConsumerResetCandidates.remove(consumerId) != null
+        val active = plannedConsumerResetActivePredecessorId == consumerId
+        if (PlannedConsumerResetCoordinatorOwnershipPolicy.shouldWake(
+                candidateRemoved = removed,
+                activeCandidateMatches = active,
+            )
+        ) {
+            wakePlannedConsumerResetCoordinator()
+        }
+    }
+
+    private fun invalidatePlannedConsumerResets(producerId: String) {
+        var removed = false
+        for ((consumerId, candidate) in plannedConsumerResetCandidates.toMap()) {
+            if (candidate.producerId == producerId) {
+                plannedConsumerResetCandidates.remove(consumerId)
+                removed = true
+            }
+        }
+        val active = plannedConsumerResetActivePredecessorId
+            ?.let { consumers[it]?.producerId } == producerId
+        if (PlannedConsumerResetCoordinatorOwnershipPolicy.shouldWake(
+                candidateRemoved = removed,
+                activeCandidateMatches = active,
+            )
+        ) {
+            wakePlannedConsumerResetCoordinator()
+        }
+    }
+
+    private fun normalizeConsumerResetRoomId(roomId: String?): String? {
+        return roomId?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun isPlannedConsumerResetEligible(
+        kind: String,
+        producerType: String,
+        consumerType: String?,
+        actualVideoCodecMimeType: String?,
+        maxSpatialLayer: Int?,
+    ): Boolean {
+        return kind.lowercase() == "video" &&
+            producerType.lowercase() == ProducerType.webcam.rawValue &&
+            consumerType?.lowercase() == "simulcast" &&
+            actualVideoCodecMimeType?.lowercase() == "video/vp8" &&
+            (maxSpatialLayer ?: 0) > 0
+    }
+
+    private fun updatePlannedConsumerResetContext(
+        roomId: String,
+        meetingLifecycleGeneration: Int,
+    ) {
+        if (roomId.isEmpty()) return
+        val activeRoomId = activeConsumerResetRoomId
+        if (
+            activeRoomId != null &&
+            (activeRoomId != roomId ||
+                activeConsumerResetLifecycleGeneration != meetingLifecycleGeneration)
+        ) {
+            plannedConsumerResetCoordinatorJob?.cancel()
+            plannedConsumerResetCandidates.clear()
+        }
+        activeConsumerResetRoomId = roomId
+        activeConsumerResetLifecycleGeneration = meetingLifecycleGeneration
+    }
+
+    private fun observePlannedConsumerResetLayer(
+        consumerId: String,
+        roomId: String,
+        currentSpatialLayer: Int?,
+    ) {
+        val info = consumers[consumerId]
+        if (
+            info == null ||
+            info.lifecycleRole != ConsumerGenerationLifecycleRole.CURRENT ||
+            info.plannedResetCompleted ||
+            info.isConsumerPaused ||
+            info.isProducerPaused ||
+            info.isAdaptivelyPaused ||
+            !remoteVideoReceiveEnabled ||
+            info.roomId.isEmpty() ||
+            info.roomId != normalizeConsumerResetRoomId(roomId) ||
+            !isPlannedConsumerResetEligible(
+                kind = info.kind,
+                producerType = info.type,
+                consumerType = info.consumerType,
+                actualVideoCodecMimeType = info.actualVideoCodecMimeType,
+                maxSpatialLayer = info.maxSpatialLayer,
+            )
+        ) {
+            invalidatePlannedConsumerResetCandidate(consumerId)
+            return
+        }
+        val maxSpatialLayer = info.maxSpatialLayer
+        val atTopLayer = currentSpatialLayer != null &&
+            maxSpatialLayer != null &&
+            maxSpatialLayer > 0 &&
+            currentSpatialLayer >= maxSpatialLayer
+        if (!atTopLayer) {
+            if (currentSpatialLayer != null) {
+                invalidatePlannedConsumerResetCandidate(consumerId)
+            }
+            return
+        }
+        if (plannedConsumerResetCandidates.containsKey(consumerId)) return
+
+        val now = consumerResetMonotonicMs()
+        val startupDeadline = info.createdAtMonotonicMs + CONSUMER_RESET_STARTUP_DEADLINE_MS
+        if (now >= startupDeadline) {
+            info.plannedResetCompleted = true
+            emitPlannedConsumerResetOutcome(
+                PlannedWebcamConsumerResetOutcome.STARTUP_DEADLINE_EXPIRED,
+                info.producerId,
+                consumerId,
+                null,
+                0,
+                now,
+            )
+            return
+        }
+
+        plannedConsumerResetSequence += 1
+        plannedConsumerResetCandidates[consumerId] = PlannedConsumerResetCandidate(
+            predecessor = ConsumerGenerationIdentity(consumerId, info.generation),
+            producerId = info.producerId,
+            userId = info.userId,
+            roomId = info.roomId,
+            meetingLifecycleGeneration = info.meetingLifecycleGeneration,
+            configurationGeneration = configurationGeneration,
+            producerClosureGeneration = remoteProducerClosureGenerations[info.producerId] ?: 0,
+            adaptivePolicyRevision = remoteConsumerPreferencePolicyRevision,
+            firstTopLayerAtMs = now,
+            readyAtMs = now + CONSUMER_RESET_TOP_LAYER_SUSTAIN_MS,
+            startupDeadlineMs = startupDeadline,
+            sequence = plannedConsumerResetSequence,
+        )
+        schedulePlannedConsumerResetCoordinator()
+    }
+
+    private fun schedulePlannedConsumerResetCoordinator() {
+        if (
+            plannedConsumerResetCoordinatorJob != null ||
+            plannedConsumerResetCandidates.isEmpty()
+        ) return
+        nextPlannedConsumerResetCoordinatorOwnerToken += 1
+        val ownerToken = nextPlannedConsumerResetCoordinatorOwnerToken
+        plannedConsumerResetCoordinatorOwnerToken = ownerToken
+        plannedConsumerResetCoordinatorJob = remoteConsumerPreferenceScope.launch {
+            try {
+                runPlannedConsumerResetCoordinator(ownerToken)
+            } finally {
+                if (PlannedConsumerResetCoordinatorOwnershipPolicy.ownsCompletion(
+                        ownerToken,
+                        plannedConsumerResetCoordinatorOwnerToken,
+                    )
+                ) {
+                    if (PlannedConsumerResetCoordinatorOwnershipPolicy.ownsCompletion(
+                            ownerToken,
+                            plannedConsumerResetActiveOwnerToken,
+                        )
+                    ) {
+                        plannedConsumerResetActiveOwnerToken = null
+                        plannedConsumerResetActivePredecessorId = null
+                    }
+                    plannedConsumerResetCoordinatorJob = null
+                    plannedConsumerResetCoordinatorOwnerToken = null
+                    if (plannedConsumerResetCandidates.isNotEmpty()) {
+                        schedulePlannedConsumerResetCoordinator()
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun runPlannedConsumerResetCoordinator(ownerToken: Long) {
+        while (true) {
+            pruneInvalidPlannedConsumerResetCandidates()
+            val candidate = plannedConsumerResetCandidates.values.minWithOrNull(
+                compareBy<PlannedConsumerResetCandidate> { it.readyAtMs }
+                    .thenBy { it.sequence }
+            ) ?: return
+            val now = consumerResetMonotonicMs()
+            if (now < candidate.readyAtMs) {
+                delay(candidate.readyAtMs - now)
+                continue
+            }
+            if (now - candidate.firstTopLayerAtMs < CONSUMER_RESET_TOP_LAYER_SUSTAIN_MS) {
+                continue
+            }
+            plannedConsumerResetCandidates.remove(candidate.predecessor.consumerId)
+            plannedConsumerResetActiveOwnerToken = ownerToken
+            plannedConsumerResetActivePredecessorId = candidate.predecessor.consumerId
+            performPlannedConsumerReset(candidate)
+            if (PlannedConsumerResetCoordinatorOwnershipPolicy.ownsCompletion(
+                    ownerToken,
+                    plannedConsumerResetActiveOwnerToken,
+                )
+            ) {
+                plannedConsumerResetActiveOwnerToken = null
+                plannedConsumerResetActivePredecessorId = null
+            }
+            if (plannedConsumerResetCandidates.isNotEmpty()) {
+                delay(CONSUMER_RESET_CANDIDATE_STAGGER_MS)
+            }
+        }
+    }
+
+    private fun canStartPlannedConsumerResetAttempt(nowMs: Long, deadlineMs: Long): Boolean {
+        return deadlineMs >= nowMs &&
+            deadlineMs - nowMs >= CONSUMER_RESET_MINIMUM_ATTEMPT_BUDGET_MS
+    }
+
+    private fun pruneInvalidPlannedConsumerResetCandidates() {
+        val now = consumerResetMonotonicMs()
+        for ((consumerId, candidate) in plannedConsumerResetCandidates.toMap()) {
+            if (!isPlannedConsumerResetCandidateCurrent(candidate)) {
+                plannedConsumerResetCandidates.remove(consumerId)
+                continue
+            }
+            if (!canStartPlannedConsumerResetAttempt(now, candidate.startupDeadlineMs)) {
+                plannedConsumerResetCandidates.remove(consumerId)
+                markPlannedConsumerResetCompleted(candidate.predecessor)
+                emitPlannedConsumerResetOutcome(
+                    PlannedWebcamConsumerResetOutcome.STARTUP_DEADLINE_EXPIRED,
+                    candidate.producerId,
+                    consumerId,
+                    null,
+                    0,
+                    candidate.firstTopLayerAtMs,
+                )
+            }
+        }
+    }
+
+    private fun isPlannedConsumerResetCandidateCurrent(
+        candidate: PlannedConsumerResetCandidate,
+        requiredRole: ConsumerGenerationLifecycleRole = ConsumerGenerationLifecycleRole.CURRENT,
+    ): Boolean {
+        val info = consumers[candidate.predecessor.consumerId] ?: return false
+        return info.generation == candidate.predecessor.generation &&
+            info.producerId == candidate.producerId &&
+            info.lifecycleRole == requiredRole &&
+            !info.isConsumerPaused &&
+            !info.isProducerPaused &&
+            !info.isAdaptivelyPaused &&
+            remoteVideoReceiveEnabled &&
+            !info.plannedResetCompleted &&
+            normalizeConsumerResetRoomId(activeConsumerResetRoomId) == candidate.roomId &&
+            activeConsumerResetLifecycleGeneration == candidate.meetingLifecycleGeneration &&
+            configurationGeneration == candidate.configurationGeneration &&
+            (remoteProducerClosureGenerations[candidate.producerId] ?: 0) ==
+                candidate.producerClosureGeneration &&
+            remoteConsumerPreferencePolicyRevision == candidate.adaptivePolicyRevision
+    }
+
+    private suspend fun performPlannedConsumerReset(
+        candidate: PlannedConsumerResetCandidate,
+    ) {
+        var attempt = 0
+        while (attempt < CONSUMER_RESET_MAX_ATTEMPTS) {
+            attempt += 1
+            val attemptStartedAt = consumerResetMonotonicMs()
+            if (!canStartPlannedConsumerResetAttempt(
+                    attemptStartedAt,
+                    candidate.startupDeadlineMs,
+                )
+            ) {
+                markPlannedConsumerResetCompleted(candidate.predecessor)
+                emitPlannedConsumerResetOutcome(
+                    PlannedWebcamConsumerResetOutcome.STARTUP_DEADLINE_EXPIRED,
+                    candidate.producerId,
+                    candidate.predecessor.consumerId,
+                    null,
+                    attempt,
+                    candidate.firstTopLayerAtMs,
+                )
+                return
+            }
+            val predecessorInfo = consumers[candidate.predecessor.consumerId]
+            if (
+                predecessorInfo == null ||
+                !isPlannedConsumerResetCandidateCurrent(candidate)
+            ) {
+                emitPlannedConsumerResetOutcome(
+                    PlannedWebcamConsumerResetOutcome.CONTEXT_CHANGED,
+                    candidate.producerId,
+                    candidate.predecessor.consumerId,
+                    null,
+                    attempt,
+                    attemptStartedAt,
+                )
+                return
+            }
+
+            predecessorInfo.lifecycleRole = ConsumerGenerationLifecycleRole.DISPLACED
+            val attemptDeadline = minOf(
+                candidate.startupDeadlineMs,
+                attemptStartedAt + CONSUMER_RESET_PER_ATTEMPT_DEADLINE_MS,
+            )
+            var successorIdentity: ConsumerGenerationIdentity? = null
+            val handoffRequestId = UUID.randomUUID().toString()
+            var rollbackWasAlreadyAcknowledged = true
+            var failureWasIneligibleSuccessor = false
+            var failureWasContextChange = false
+
+            try {
+                val registeredSuccessor = registerConsumerGeneration(
+                    producerId = candidate.producerId,
+                    producerUserId = predecessorInfo.userId,
+                    producerKind = predecessorInfo.kind,
+                    producerType = predecessorInfo.type,
+                    preferHighWebcamLayer = true,
+                    initialReceiveConnectionQuality = ConnectionQuality.good,
+                    roomId = candidate.roomId,
+                    meetingLifecycleGeneration = candidate.meetingLifecycleGeneration,
+                    visibility = ConsumerRegistrationVisibility.STAGED,
+                    plannedResetCompleted = true,
+                    plannedHandoffRequestId = handoffRequestId,
+                    plannedHandoffPredecessorConsumerId =
+                        candidate.predecessor.consumerId,
+                    signalingTimeoutMilliseconds = CONSUMER_RESET_SIGNALING_ACK_TIMEOUT_MS,
+                )
+                successorIdentity = registeredSuccessor
+                if (!isPlannedConsumerResetCandidateCurrent(
+                        candidate,
+                        ConsumerGenerationLifecycleRole.DISPLACED,
+                    )
+                ) {
+                    failureWasContextChange = true
+                    throw ErrorException("Planned consumer-reset context changed")
+                }
+                val successorInfo = consumers[registeredSuccessor.consumerId]
+                if (
+                    successorInfo == null ||
+                    successorInfo.generation != registeredSuccessor.generation ||
+                    successorInfo.isConsumerPaused ||
+                    successorInfo.isProducerPaused ||
+                    !isPlannedConsumerResetEligible(
+                        kind = successorInfo.kind,
+                        producerType = successorInfo.type,
+                        consumerType = successorInfo.consumerType,
+                        actualVideoCodecMimeType = successorInfo.actualVideoCodecMimeType,
+                        maxSpatialLayer = successorInfo.maxSpatialLayer,
+                    )
+                ) {
+                    failureWasIneligibleSuccessor = true
+                    throw ErrorException("Planned consumer-reset successor was ineligible")
+                }
+
+                val remainingForFrame = attemptDeadline - consumerResetMonotonicMs() -
+                    CONSUMER_RESET_CLOSE_ACK_TIMEOUT_MS - 100L
+                if (remainingForFrame <= 0) {
+                    throw ErrorException("Planned consumer-reset first-frame deadline expired")
+                }
+                val frameTimeout = minOf(
+                    CONSUMER_RESET_FIRST_FRAME_TIMEOUT_MS,
+                    remainingForFrame.toInt(),
+                )
+                val decoded = waitForFirstDecodedVideoFrame(
+                    registeredSuccessor.consumerId,
+                    frameTimeout,
+                )
+                if (!decoded) {
+                    throw ErrorException("Planned consumer-reset first-frame timeout")
+                }
+                if (
+                    consumerResetMonotonicMs() > attemptDeadline ||
+                    !isPlannedConsumerResetCandidateCurrent(
+                        candidate,
+                        ConsumerGenerationLifecycleRole.DISPLACED,
+                    ) ||
+                    !promoteStagedConsumer(
+                        successor = registeredSuccessor,
+                        predecessor = candidate.predecessor,
+                    )
+                ) {
+                    failureWasContextChange = true
+                    throw ErrorException("Planned consumer-reset context changed")
+                }
+
+                cancelFirstDecodedVideoFrameObservation(registeredSuccessor)
+                val predecessorCloseConfirmed = retirePromotedPredecessor(
+                    candidate.predecessor
+                )
+                emitPlannedConsumerResetOutcome(
+                    if (predecessorCloseConfirmed) {
+                        PlannedWebcamConsumerResetOutcome.PROMOTED
+                    } else {
+                        PlannedWebcamConsumerResetOutcome.PROMOTED_PREDECESSOR_CLOSE_UNCONFIRMED
+                    },
+                    candidate.producerId,
+                    candidate.predecessor.consumerId,
+                    registeredSuccessor.consumerId,
+                    attempt,
+                    attemptStartedAt,
+                )
+                return
+            } catch (error: Throwable) {
+                if (error is ConsumerGenerationRegistrationException) {
+                    rollbackWasAlreadyAcknowledged = error.rollbackAcknowledged
+                } else {
+                    val message = (error.message ?: error.toString()).lowercase()
+                    if (
+                        successorIdentity == null &&
+                        (message.contains("timed out") || message.contains("timeout"))
+                    ) {
+                        rollbackWasAlreadyAcknowledged = false
+                    }
+                }
+                if (error is CancellationException) {
+                    failureWasContextChange = true
+                }
+            }
+
+            val rollbackConfirmed = if (successorIdentity != null) {
+                rollbackStagedConsumer(
+                    successorIdentity,
+                    candidate.predecessor,
+                    candidate.producerId,
+                    handoffRequestId,
+                )
+            } else {
+                restoreDisplacedPredecessor(candidate.predecessor)
+                rollbackWasAlreadyAcknowledged
+            }
+
+            val contextChanged = failureWasContextChange ||
+                plannedConsumerResetCoordinatorJob?.isCancelled == true ||
+                !isPlannedConsumerResetCandidateCurrent(candidate)
+            if (contextChanged) {
+                emitPlannedConsumerResetOutcome(
+                    PlannedWebcamConsumerResetOutcome.CONTEXT_CHANGED,
+                    candidate.producerId,
+                    candidate.predecessor.consumerId,
+                    successorIdentity?.consumerId,
+                    attempt,
+                    attemptStartedAt,
+                )
+                return
+            }
+            if (failureWasIneligibleSuccessor) {
+                markPlannedConsumerResetCompleted(candidate.predecessor)
+                emitPlannedConsumerResetOutcome(
+                    PlannedWebcamConsumerResetOutcome.INELIGIBLE_SUCCESSOR,
+                    candidate.producerId,
+                    candidate.predecessor.consumerId,
+                    successorIdentity?.consumerId,
+                    attempt,
+                    attemptStartedAt,
+                )
+                return
+            }
+            if (!PlannedConsumerHandoffAbortRetryPolicy.permitsConsumerResetRetry(
+                    rollbackConfirmed = rollbackConfirmed,
+                )
+            ) {
+                markPlannedConsumerResetCompleted(candidate.predecessor)
+                emitPlannedConsumerResetOutcome(
+                    PlannedWebcamConsumerResetOutcome.ROLLBACK_UNCONFIRMED,
+                    candidate.producerId,
+                    candidate.predecessor.consumerId,
+                    successorIdentity?.consumerId,
+                    attempt,
+                    attemptStartedAt,
+                )
+                return
+            }
+
+            emitPlannedConsumerResetOutcome(
+                PlannedWebcamConsumerResetOutcome.ROLLED_BACK,
+                candidate.producerId,
+                candidate.predecessor.consumerId,
+                successorIdentity?.consumerId,
+                attempt,
+                attemptStartedAt,
+            )
+            if (attempt < CONSUMER_RESET_MAX_ATTEMPTS) {
+                delay(CONSUMER_RESET_RETRY_DELAY_MS)
+            }
+        }
+
+        markPlannedConsumerResetCompleted(candidate.predecessor)
+        emitPlannedConsumerResetOutcome(
+            PlannedWebcamConsumerResetOutcome.ATTEMPTS_EXHAUSTED,
+            candidate.producerId,
+            candidate.predecessor.consumerId,
+            null,
+            CONSUMER_RESET_MAX_ATTEMPTS,
+            candidate.firstTopLayerAtMs,
+        )
+    }
+
+    private fun promoteStagedConsumer(
+        successor: ConsumerGenerationIdentity,
+        predecessor: ConsumerGenerationIdentity,
+    ): Boolean {
+        val successorInfo = consumers[successor.consumerId] ?: return false
+        val predecessorInfo = consumers[predecessor.consumerId] ?: return false
+        if (
+            successorInfo.generation != successor.generation ||
+            successorInfo.lifecycleRole != ConsumerGenerationLifecycleRole.STAGED ||
+            successorInfo.isConsumerPaused ||
+            successorInfo.isProducerPaused ||
+            successorInfo.isAdaptivelyPaused ||
+            predecessorInfo.generation != predecessor.generation ||
+            predecessorInfo.lifecycleRole != ConsumerGenerationLifecycleRole.DISPLACED ||
+            predecessorInfo.isConsumerPaused ||
+            predecessorInfo.isProducerPaused ||
+            predecessorInfo.isAdaptivelyPaused ||
+            successorInfo.producerId != predecessorInfo.producerId ||
+            successorInfo.trackKey != predecessorInfo.trackKey
+        ) return false
+        val videoTrack = successorInfo.consumer.track as? VideoTrack ?: return false
+        val visibleIdentity = remoteVideoTracks[predecessorInfo.trackKey]?.let {
+            ConsumerGenerationIdentity(it.id, it.consumerGeneration)
+        }
+        if (visibleIdentity != predecessor) return false
+
+        successorInfo.lifecycleRole = ConsumerGenerationLifecycleRole.CURRENT
+        successorInfo.plannedResetCompleted = true
+        predecessorInfo.lifecycleRole = ConsumerGenerationLifecycleRole.DISPLACED
+        remoteVideoTracks[successorInfo.trackKey] = VideoTrackWrapper(
+            id = successor.consumerId,
+            userId = successorInfo.trackKey,
+            isLocal = false,
+            track = videoTrack,
+            consumerGeneration = successor.generation,
+        )
+        return true
+    }
+
+    private suspend fun rollbackStagedConsumer(
+        successor: ConsumerGenerationIdentity,
+        predecessor: ConsumerGenerationIdentity,
+        producerId: String,
+        handoffRequestId: String,
+    ): Boolean = withContext(NonCancellable) {
+        consumers[successor.consumerId]?.let { info ->
+            if (info.generation == successor.generation) {
+                removeConsumer(
+                    successor.consumerId,
+                    info,
+                    closeConsumer = true,
+                    notifyServer = false,
+                )
+            }
+        }
+        val confirmed = socketManager?.let {
+            abortServerConsumerHandoffAndConfirm(
+                requestId = handoffRequestId,
+                producerId = producerId,
+                predecessorConsumerId = predecessor.consumerId,
+                socket = it,
+            )
+        } ?: false
+        restoreDisplacedPredecessor(predecessor)
+        confirmed
+    }
+
+    private fun restoreDisplacedPredecessor(predecessor: ConsumerGenerationIdentity) {
+        val info = consumers[predecessor.consumerId] ?: return
+        if (info.generation == predecessor.generation) {
+            info.lifecycleRole = ConsumerGenerationLifecycleRole.CURRENT
+        }
+    }
+
+    private suspend fun retirePromotedPredecessor(
+        predecessor: ConsumerGenerationIdentity,
+    ): Boolean {
+        val confirmed = socketManager?.let {
+            closeServerConsumerGenerationAndConfirm(predecessor.consumerId, it)
+        } ?: false
+        consumers[predecessor.consumerId]?.let { info ->
+            if (info.generation == predecessor.generation) {
+                removeConsumer(
+                    predecessor.consumerId,
+                    info,
+                    closeConsumer = true,
+                    notifyServer = false,
+                )
+            }
+        }
+        return confirmed
+    }
+
+    private fun markPlannedConsumerResetCompleted(identity: ConsumerGenerationIdentity) {
+        val info = consumers[identity.consumerId] ?: return
+        if (info.generation == identity.generation) {
+            info.plannedResetCompleted = true
+        }
+    }
+
+    private fun emitPlannedConsumerResetOutcome(
+        outcome: PlannedWebcamConsumerResetOutcome,
+        producerId: String,
+        predecessorId: String,
+        successorId: String?,
+        attempt: Int,
+        startedAtMs: Long,
+    ) {
+        val elapsedMs = maxOf(0L, consumerResetMonotonicMs() - startedAtMs)
+        debugLog(
+            "[WebRTC][consumer-reset] outcome=${outcome.rawValue} " +
+                "producerId=${producerId} predecessorId=${predecessorId} " +
+                "successorId=${successorId ?: "-"} attempt=${attempt} " +
+                "elapsedMs=${elapsedMs} visibleInterruptionMs=unmeasured"
+        )
     }
 
     private fun removeConsumer(
@@ -436,6 +1311,25 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         closeConsumer: Boolean,
         notifyServer: Boolean = true
     ) {
+        val expectedIdentity = ConsumerGenerationIdentity(
+            consumerId = consumerId,
+            generation = info.generation,
+        )
+        val currentIdentity = consumers[consumerId]?.let {
+            ConsumerGenerationIdentity(
+                consumerId = consumerId,
+                generation = it.generation,
+            )
+        }
+        if (
+            !ConsumerGenerationRemovalPolicy.ownsConsumerSlot(
+                expected = expectedIdentity,
+                current = currentIdentity,
+            ) || consumers[consumerId]?.consumer !== info.consumer
+        ) {
+            return
+        }
+
         if (closeConsumer) {
             info.consumer.close()
             if (notifyServer) {
@@ -443,15 +1337,38 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             }
         }
         consumers.remove(consumerId)
+        if (plannedConsumerResetCandidates.remove(consumerId) != null) {
+            wakePlannedConsumerResetCoordinator()
+        }
         videoFreezeStats.remove(consumerId)
         remoteConsumerPreferenceSignatures.remove(consumerId)
         remoteConsumerLayerPreferenceUnsupportedIds.remove(consumerId)
         remoteConsumerPreferenceInFlightIds.remove(consumerId)
+        cancelFirstDecodedVideoFrameObservation(expectedIdentity)
 
         val key = if (info.trackKey.isEmpty()) info.userId else info.trackKey
         if (info.kind == "video" && key.isNotEmpty()) {
-            remoteVideoTracks.removeValue(forKey = key)
+            val currentTrackIdentity = remoteVideoTracks[key]?.let {
+                ConsumerGenerationIdentity(
+                    consumerId = it.id,
+                    generation = it.consumerGeneration,
+                )
+            }
+            if (ConsumerGenerationRemovalPolicy.ownsTrackSlot(
+                    expected = expectedIdentity,
+                    current = currentTrackIdentity,
+                )
+            ) {
+                remoteVideoTracks.removeValue(forKey = key)
+            }
         }
+    }
+
+    private fun cancelFirstDecodedVideoFrameObservation(
+        identity: ConsumerGenerationIdentity,
+    ) {
+        firstDecodedVideoFrameObservers.remove(identity)?.cancel()
+        firstDecodedVideoFrameSignals.remove(identity)?.cancel()
     }
 
     internal suspend fun applyRemoteConsumerBandwidthPolicy(
@@ -460,16 +1377,25 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         connectionQuality: ConnectionQuality,
         videoQuality: VideoQuality,
         receiveVideo: Boolean = true,
-    ) {
+    ) = withContext(Dispatchers.Main.immediate) {
+        remoteConsumerPreferenceRetryJob?.cancel()
+        remoteConsumerPreferenceRetryJob = null
+        remoteConsumerPreferencePolicyRevision += 1
+        val policyRevision = remoteConsumerPreferencePolicyRevision
         remoteVideoReceiveEnabled = receiveVideo
-        val socket = socketManager ?: return
+        wakePlannedConsumerResetCoordinator()
+        val socket = socketManager ?: return@withContext
 
         val shouldReceiveVideo = receiveVideo
-        val consumerSnapshot = consumers.toList()
+        val consumerSnapshot = consumers.toList().filter {
+            it.second.lifecycleRole.acceptsPeriodicControls
+        }
+        val consumerTransitionInProgress = consumers.values.any {
+            !it.lifecycleRole.acceptsPeriodicControls
+        }
         val emergencyKeepWebcamUserId: String? =
             if (connectionQuality == ConnectionQuality.emergency) {
-                val webcamInfos = consumerSnapshot
-                    .map { it.second }
+                val webcamInfos = consumers.values
                     .filter { it.kind == "video" && it.type == ProducerType.webcam.rawValue }
                     .sortedBy { it.userId }
                 webcamInfos.firstOrNull { focusedUserIds.contains(it.userId) }?.userId
@@ -477,9 +1403,22 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             } else {
                 null
             }
+        for (info in consumers.values) {
+            if (info.kind != "video" || info.type != ProducerType.webcam.rawValue) continue
+            info.isAdaptivelyPaused = remoteConsumerPreference(
+                info = info,
+                focusedUserIds = focusedUserIds,
+                visibleUserIds = visibleUserIds,
+                emergencyKeepWebcamUserId = emergencyKeepWebcamUserId,
+                connectionQuality = connectionQuality,
+                videoQuality = videoQuality,
+                receiveVideo = shouldReceiveVideo,
+            )?.paused ?: false
+        }
         val pendingUpdates = mutableListOf<PendingRemoteConsumerPreferenceUpdate>()
+        var skippedInFlightConsumer = false
         for ((consumerId, info) in consumerSnapshot) {
-            if (!consumers.containsKey(consumerId)) continue
+            if (consumers[consumerId]?.lifecycleRole?.acceptsPeriodicControls != true) continue
             val preference = remoteConsumerPreference(
                 info = info,
                 focusedUserIds = focusedUserIds,
@@ -489,7 +1428,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 videoQuality = videoQuality,
                 receiveVideo = shouldReceiveVideo,
             ) ?: continue
-            if (remoteConsumerPreferenceInFlightIds.contains(consumerId)) continue
+            if (remoteConsumerPreferenceInFlightIds.contains(consumerId)) {
+                skippedInFlightConsumer = true
+                continue
+            }
 
             val previousSignature = remoteConsumerPreferenceSignatures[consumerId]
             val effectivePreference =
@@ -504,6 +1446,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             pendingUpdates.add(
                 PendingRemoteConsumerPreferenceUpdate(
                     consumerId = consumerId,
+                    consumerGeneration = info.generation,
+                    policyRevision = policyRevision,
                     effectivePreference = effectivePreference,
                     previousSignature = previousSignature,
                     signature = signature,
@@ -523,12 +1467,17 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     .thenBy { it.consumerId },
             )
             .take(MAX_REMOTE_CONSUMER_PREFERENCE_UPDATES_PER_CYCLE)
-        if (pendingUpdates.size > updatesToSend.size) {
+        if (
+            pendingUpdates.size > updatesToSend.size ||
+            skippedInFlightConsumer ||
+            consumerTransitionInProgress
+        ) {
             scheduleRemoteConsumerPreferenceRetry(
                 focusedUserIds = focusedUserIds,
                 visibleUserIds = visibleUserIds,
                 connectionQuality = connectionQuality,
                 videoQuality = videoQuality,
+                expectedPolicyRevision = policyRevision,
             )
         }
 
@@ -536,9 +1485,18 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             if (index > 0) {
                 delay(REMOTE_CONSUMER_PREFERENCE_EMIT_SPACING_MS)
             }
+            if (remoteConsumerPreferencePolicyRevision != policyRevision) {
+                return@withContext
+            }
 
             val consumerId = update.consumerId
-            if (!consumers.containsKey(consumerId)) continue
+            val currentInfo = consumers[consumerId]
+            if (
+                currentInfo == null ||
+                currentInfo.generation != update.consumerGeneration ||
+                update.policyRevision != policyRevision ||
+                !currentInfo.lifecycleRole.acceptsPeriodicControls
+            ) continue
             remoteConsumerPreferenceInFlightIds.add(consumerId)
             try {
                 socket.setConsumerPreferences(
@@ -549,9 +1507,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     paused = update.effectivePreference.paused,
                     requestKeyFrame = update.previousSignature != null && !update.effectivePreference.paused,
                 )
-                if (consumers.containsKey(consumerId)) {
-                    remoteConsumerPreferenceSignatures[consumerId] = update.signature
-                }
+                recordAppliedRemoteConsumerPreference(
+                    preference = update.effectivePreference,
+                    signature = update.signature,
+                    consumerId = consumerId,
+                    consumerGeneration = update.consumerGeneration,
+                    policyRevision = update.policyRevision,
+                )
             } catch (error: Throwable) {
                 if (isConsumerControlRateLimitError(error)) {
                     scheduleRemoteConsumerPreferenceRetry(
@@ -559,11 +1521,19 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                         visibleUserIds = visibleUserIds,
                         connectionQuality = connectionQuality,
                         videoQuality = videoQuality,
+                        expectedPolicyRevision = policyRevision,
                     )
                     continue
                 }
 
                 if (update.effectivePreference.hasLayerPreference && isUnsupportedConsumerLayerPreferenceError(error)) {
+                    val fallbackInfo = consumers[consumerId]
+                    if (
+                        remoteConsumerPreferencePolicyRevision != policyRevision ||
+                        fallbackInfo == null ||
+                        fallbackInfo.generation != update.consumerGeneration ||
+                        !fallbackInfo.lifecycleRole.acceptsPeriodicControls
+                    ) continue
                     remoteConsumerLayerPreferenceUnsupportedIds.add(consumerId)
                     val fallbackPreference = update.effectivePreference.withoutLayerPreference
                     try {
@@ -575,9 +1545,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                             paused = fallbackPreference.paused,
                             requestKeyFrame = update.previousSignature != null && !fallbackPreference.paused,
                         )
-                        if (consumers.containsKey(consumerId)) {
-                            remoteConsumerPreferenceSignatures[consumerId] = fallbackPreference.signature
-                        }
+                        recordAppliedRemoteConsumerPreference(
+                            preference = fallbackPreference,
+                            signature = fallbackPreference.signature,
+                            consumerId = consumerId,
+                            consumerGeneration = update.consumerGeneration,
+                            policyRevision = update.policyRevision,
+                        )
                     } catch (fallbackError: Throwable) {
                         if (isConsumerControlRateLimitError(fallbackError)) {
                             scheduleRemoteConsumerPreferenceRetry(
@@ -585,6 +1559,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                                 visibleUserIds = visibleUserIds,
                                 connectionQuality = connectionQuality,
                                 videoQuality = videoQuality,
+                                expectedPolicyRevision = policyRevision,
                             )
                             continue
                         }
@@ -622,7 +1597,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         if (!receiveVideo) {
             return RemoteConsumerPreference(
                 spatialLayer = 0,
-                temporalLayer = 0,
+                temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer,
                 priority = 8,
                 paused = true,
             )
@@ -655,7 +1630,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         if (isEmergency && !emergencyKeepVideo) {
             return RemoteConsumerPreference(
                 spatialLayer = 0,
-                temporalLayer = 0,
+                temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer,
                 priority = 8,
                 paused = true,
             )
@@ -664,7 +1639,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         if (!isVisible && (isPoor || videoQuality == VideoQuality.low)) {
             return RemoteConsumerPreference(
                 spatialLayer = 0,
-                temporalLayer = 0,
+                temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer,
                 priority = 8,
                 paused = true,
             )
@@ -673,7 +1648,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         if (isFocused) {
             return RemoteConsumerPreference(
                 spatialLayer = if (isEmergency) 0 else if (isConstrained) 1 else 2,
-                temporalLayer = if (isEmergency) 0 else if (isPoor) 1 else 2,
+                temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer,
                 priority = if (isEmergency) 145 else if (isConstrained) 150 else 180,
                 paused = false,
             )
@@ -682,7 +1657,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         if (isVisible) {
             return RemoteConsumerPreference(
                 spatialLayer = if (isConstrained) 0 else 1,
-                temporalLayer = if (isEmergency) 0 else if (isPoor) 1 else 2,
+                temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer,
                 priority = if (isEmergency) 70 else if (isConstrained) 80 else 105,
                 paused = false,
             )
@@ -690,7 +1665,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
         return RemoteConsumerPreference(
             spatialLayer = 0,
-            temporalLayer = 1,
+            temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer,
             priority = 35,
             paused = false,
         )
@@ -721,9 +1696,22 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var screenVideoTrackSequence = 0
     private var currentVideoQuality: VideoQuality = VideoQuality.standard
     private var currentLocalBandwidthQuality: ConnectionQuality = ConnectionQuality.unknown
+    private var webcamProducerTopology: WebcamProducerTopology = WebcamProducerTopology.other
+    private var webcamReceiverCapacityRoomId: String? = null
+    private var webcamReceiverCapacityAuthorityAvailable = false
+    private var webcamReceiverCapacityProofCache = WebcamReceiverCapacityProofCache()
+    private var webcamTopologyTransitionState = WebcamTopologyTransitionState.initial()
+    private var pendingWebcamTopologyCommand: WebcamTopologyReplacementCommand? = null
+    private val webcamTopologyScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+    private var webcamTopologyCommandJob: Job? = null
+    private var webcamTopologyWakeJob: Job? = null
+    private var webcamTopologyControlGeneration = 0
+    private val intentionalLocalVideoProducerCloseIds: MutableSet<String> = mutableSetOf()
+    private var lastWebcamProducerSignalingError: Throwable? = null
     private var audioProducerBandwidthQuality: ConnectionQuality = ConnectionQuality.unknown
     private var videoProducerBandwidthQuality: ConnectionQuality = ConnectionQuality.unknown
     private var videoProducerBandwidthSignature: String? = null
+    private var lastWebcamProduceUsedSingleLayerFallback = false
     private var screenProducerBandwidthQuality: ConnectionQuality = ConnectionQuality.unknown
     private var selectedAudioOutputDeviceId: String? = null
     private var selectedAudioInputDeviceId: String? = null
@@ -827,6 +1815,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal fun configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities, iceServersJSON: String?) {
         val startedAt = System.nanoTime()
         configurationGeneration += 1
+        plannedConsumerResetCoordinatorJob?.cancel()
+        plannedConsumerResetCandidates.clear()
+        activeConsumerResetRoomId = null
+        activeConsumerResetLifecycleGeneration = null
+        resetWebcamTopologyControl()
         this.socketManager = socketManager
         this.serverRtpCapabilities = rtpCapabilities
         this.runtimeIceServersJSON = iceServersJSON?.trim()?.takeIf { it.isNotEmpty() }
@@ -1167,6 +2160,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             }
 
             videoProducer = producer
+            webcamProducerTopology = if (lastWebcamProduceUsedSingleLayerFallback) {
+                WebcamProducerTopology.vp8SingleLayer
+            } else {
+                WebcamProducerTopology.vp8Simulcast
+            }
             videoProducerBandwidthQuality = currentLocalBandwidthQuality
             videoProducerBandwidthSignature = localVideoBandwidthSignature(
                 currentVideoQuality,
@@ -1261,6 +2259,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             producer.resume()
             screenProducer = producer
             screenProducerBandwidthQuality = currentLocalBandwidthQuality
+            evaluateWebcamTopologyTransition()
             debugLog("[WebRTC] Screen sharing producer created: ${producer.id}")
         } catch (t: Throwable) {
             pendingProducer?.close()
@@ -1289,6 +2288,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         screenProducer?.close()
         screenProducer = null
         screenProducerBandwidthQuality = ConnectionQuality.unknown
+        evaluateWebcamTopologyTransition()
         try {
             screenCapturer?.stopCapture()
         } catch (_: Throwable) {
@@ -1302,6 +2302,16 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         screenVideoTrack = null
     }
 
+    private enum class ConsumerRegistrationVisibility {
+        CURRENT_VISIBLE,
+        STAGED,
+    }
+
+    private class ConsumerGenerationRegistrationException(
+        cause: Throwable,
+        val rollbackAcknowledged: Boolean,
+    ) : RuntimeException(cause.message ?: cause.toString(), cause)
+
     internal suspend fun consumeProducer(
         producerId: String,
         producerUserId: String,
@@ -1309,47 +2319,185 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         producerType: String = "webcam",
         preferHighWebcamLayer: Boolean = false,
         initialReceiveConnectionQuality: ConnectionQuality = ConnectionQuality.unknown,
-    ) {
+        roomId: String? = null,
+        meetingLifecycleGeneration: Int = 0,
+    ): Unit = withContext(Dispatchers.Main.immediate) {
+        val normalizedRoomId = normalizeConsumerResetRoomId(roomId) ?: ""
+        updatePlannedConsumerResetContext(normalizedRoomId, meetingLifecycleGeneration)
+        registerConsumerGeneration(
+            producerId = producerId,
+            producerUserId = producerUserId,
+            producerKind = producerKind,
+            producerType = producerType,
+            preferHighWebcamLayer = preferHighWebcamLayer,
+            initialReceiveConnectionQuality = initialReceiveConnectionQuality,
+            roomId = normalizedRoomId,
+            meetingLifecycleGeneration = meetingLifecycleGeneration,
+            visibility = ConsumerRegistrationVisibility.CURRENT_VISIBLE,
+            plannedResetCompleted = false,
+        )
+        Unit
+    }
+
+    private suspend fun registerConsumerGeneration(
+        producerId: String,
+        producerUserId: String,
+        producerKind: String?,
+        producerType: String,
+        preferHighWebcamLayer: Boolean,
+        initialReceiveConnectionQuality: ConnectionQuality,
+        roomId: String,
+        meetingLifecycleGeneration: Int,
+        visibility: ConsumerRegistrationVisibility,
+        plannedResetCompleted: Boolean,
+        plannedHandoffRequestId: String? = null,
+        plannedHandoffPredecessorConsumerId: String? = null,
+        signalingTimeoutMilliseconds: Int? = null,
+    ): ConsumerGenerationIdentity {
         val consumeConfigurationGeneration = configurationGeneration
         val producerClosureGeneration = remoteProducerClosureGenerations[producerId] ?: 0
         createReceiveTransportIfNeeded()
         val socket = socketManager ?: throw ErrorException("Socket not configured")
-        val rtpCapsJson = socket.routerRtpCapabilitiesJson ?: throw ErrorException("RTP caps missing")
+        val loadedDevice = device ?: throw ErrorException("Device not configured")
+        val rtpCapsJson = loadedDevice.getRtpCapabilities().takeIf { it.isNotBlank() }
+            ?: throw ErrorException("Receive RTP caps missing")
         val receiveTransport = receiveTransport ?: throw ErrorException("Receive transport missing")
         val receiveTransportId = receiveTransportId ?: throw ErrorException("Receive transport ID missing")
 
-        // Raw-JSON path: send the router caps verbatim and feed the server's
-        // rtpParameters straight into mediasoup, never touching the Codable
-        // structs that Skip's JSONEncoder can't round-trip.
+        // Raw-JSON path: send the Device's loaded receive capabilities and feed
+        // the server's rtpParameters straight into mediasoup, never touching
+        // the Codable structs that Skip's JSONEncoder can't round-trip.
         val initialPreference = initialConsumerPreference(
             producerKind = producerKind,
             producerType = producerType,
             preferHighWebcamLayer = preferHighWebcamLayer,
             initialReceiveConnectionQuality = initialReceiveConnectionQuality,
         )
-        val response = socket.consumeRaw(
-            producerId,
-            rtpCapsJson,
-            receiveTransportId,
-            preferredSpatialLayer = initialPreference.spatialLayer,
-            preferredTemporalLayer = initialPreference.temporalLayer,
-            priority = initialPreference.priority,
-        )
-        val consumer = receiveTransport.consume(
-            this,
-            response.id,
-            response.producerId,
-            response.kind,
-            response.rtpParametersJson
-        )
+        val response = try {
+            socket.consumeRaw(
+                producerId,
+                rtpCapsJson,
+                receiveTransportId,
+                preferredSpatialLayer = initialPreference.spatialLayer,
+                preferredTemporalLayer = initialPreference.temporalLayer,
+                priority = initialPreference.priority,
+                plannedHandoffRequestId = plannedHandoffRequestId,
+                plannedHandoffPredecessorConsumerId =
+                    plannedHandoffPredecessorConsumerId,
+                timeoutMilliseconds = signalingTimeoutMilliseconds,
+            )
+        } catch (error: Throwable) {
+            val rollbackAcknowledged = abortPlannedHandoffIfNeeded(
+                requestId = plannedHandoffRequestId,
+                producerId = producerId,
+                predecessorConsumerId = plannedHandoffPredecessorConsumerId,
+                socket = socket,
+            )
+            throw ConsumerGenerationRegistrationException(
+                error,
+                rollbackAcknowledged,
+            )
+        }
+        if (
+            plannedHandoffRequestId != null &&
+            !response.plannedConsumerHandoffRequestId.equals(
+                plannedHandoffRequestId,
+                ignoreCase = true,
+            )
+        ) {
+            val rollbackAcknowledged = abortPlannedHandoffIfNeeded(
+                requestId = plannedHandoffRequestId,
+                producerId = producerId,
+                predecessorConsumerId = plannedHandoffPredecessorConsumerId,
+                socket = socket,
+            )
+            throw ConsumerGenerationRegistrationException(
+                ErrorException("Planned consumer handoff acknowledgement mismatch"),
+                rollbackAcknowledged,
+            )
+        }
+        val consumer = try {
+            receiveTransport.consume(
+                this,
+                response.id,
+                response.producerId,
+                response.kind,
+                response.rtpParametersJson
+            )
+        } catch (error: Throwable) {
+            val rollbackAcknowledged = rollbackServerConsumerGenerationAndConfirm(
+                consumerId = response.id,
+                producerId = producerId,
+                plannedHandoffRequestId = plannedHandoffRequestId,
+                plannedHandoffPredecessorConsumerId =
+                    plannedHandoffPredecessorConsumerId,
+                socket = socket,
+            )
+            throw ConsumerGenerationRegistrationException(error, rollbackAcknowledged)
+        }
         consumer.resume()
 
         val isScreenVideo = producerType == "screen" && response.kind == "video"
         val trackKey = if (isScreenVideo) "${producerUserId}-screen" else producerUserId
+        nextConsumerGeneration += 1
+        val consumerGeneration = nextConsumerGeneration
+        val consumerIdentity = ConsumerGenerationIdentity(
+            consumerId = response.id,
+            generation = consumerGeneration,
+        )
+        val videoTrack = if (response.kind == "video") consumer.track as? VideoTrack else null
+        val firstFrameSignal = videoTrack?.let { CompletableDeferred<Unit>() }
+        val firstFrameObserver = if (videoTrack != null && firstFrameSignal != null) {
+            FirstDecodedVideoFrameObserver(videoTrack, firstFrameSignal).also {
+                videoTrack.addSink(it)
+            }
+        } else {
+            null
+        }
+        val isResetEligible = isPlannedConsumerResetEligible(
+            kind = response.kind,
+            producerType = producerType,
+            consumerType = response.consumerType,
+            actualVideoCodecMimeType = response.actualVideoCodecMimeType,
+            maxSpatialLayer = response.maxSpatialLayer,
+        )
+        consumers[response.id] = ConsumerInfo(
+            consumer = consumer,
+            producerId = response.producerId,
+            userId = producerUserId,
+            kind = response.kind,
+            type = producerType,
+            generation = consumerGeneration,
+            roomId = roomId,
+            meetingLifecycleGeneration = meetingLifecycleGeneration,
+            createdAtMonotonicMs = consumerResetMonotonicMs(),
+            consumerType = response.consumerType,
+            actualVideoCodecMimeType = response.actualVideoCodecMimeType,
+            maxSpatialLayer = response.maxSpatialLayer,
+            isConsumerPaused = response.paused ?: false,
+            isProducerPaused = response.producerPaused ?: false,
+            isAdaptivelyPaused = false,
+            lifecycleRole = if (visibility == ConsumerRegistrationVisibility.CURRENT_VISIBLE) {
+                ConsumerGenerationLifecycleRole.CURRENT
+            } else {
+                ConsumerGenerationLifecycleRole.STAGED
+            },
+            plannedResetCompleted = plannedResetCompleted || !isResetEligible,
+            trackKey = trackKey,
+        )
+
+        if (firstFrameSignal != null && firstFrameObserver != null) {
+            firstDecodedVideoFrameSignals[consumerIdentity] = firstFrameSignal
+            firstDecodedVideoFrameObservers[consumerIdentity] = firstFrameObserver
+        }
 
         // Request a keyframe on the initial video consume so the decoder gets a
         // fresh IDR immediately instead of a frozen/blank first frame.
-        if (response.kind == "video" && producerType == ProducerType.webcam.rawValue) {
+        if (
+            visibility == ConsumerRegistrationVisibility.CURRENT_VISIBLE &&
+            response.kind == "video" &&
+            producerType == ProducerType.webcam.rawValue
+        ) {
             val initialPreference = initialWebcamConsumerPreference(
                 preferHighWebcamLayer = preferHighWebcamLayer,
             )
@@ -1364,50 +2512,174 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             }
         }
         try {
-            socket.resumeConsumer(response.id, response.kind == "video")
+            socket.resumeConsumer(
+                response.id,
+                response.kind == "video",
+                timeoutMilliseconds = signalingTimeoutMilliseconds,
+            )
+            consumers[response.id]?.let { resumedInfo ->
+                if (resumedInfo.generation == consumerGeneration) {
+                    resumedInfo.isConsumerPaused = false
+                }
+            }
         } catch (error: Throwable) {
             // The SFU keeps video consumers paused until this acknowledgement.
             // Roll back both halves so the producer remains genuinely missing
             // and MeetingViewModel's retry can create a usable consumer.
-            consumer.close()
-            socket.closeConsumer(response.id)
-            throw error
+            consumers[response.id]?.let {
+                removeConsumer(response.id, it, closeConsumer = true, notifyServer = false)
+            }
+            val rollbackAcknowledged = rollbackServerConsumerGenerationAndConfirm(
+                consumerId = response.id,
+                producerId = producerId,
+                plannedHandoffRequestId = plannedHandoffRequestId,
+                plannedHandoffPredecessorConsumerId =
+                    plannedHandoffPredecessorConsumerId,
+                socket = socket,
+            )
+            throw ConsumerGenerationRegistrationException(error, rollbackAcknowledged)
         }
 
         if (
             configurationGeneration != consumeConfigurationGeneration ||
             (remoteProducerClosureGenerations[producerId] ?: 0) != producerClosureGeneration
         ) {
-            consumer.close()
-            socket.closeConsumer(response.id)
-            throw ErrorException("WebRTC session or remote producer changed while consumer was starting")
+            consumers[response.id]?.let {
+                removeConsumer(response.id, it, closeConsumer = true, notifyServer = false)
+            }
+            val error = ErrorException(
+                "WebRTC session or remote producer changed while consumer was starting"
+            )
+            val rollbackAcknowledged = rollbackServerConsumerGenerationAndConfirm(
+                consumerId = response.id,
+                producerId = producerId,
+                plannedHandoffRequestId = plannedHandoffRequestId,
+                plannedHandoffPredecessorConsumerId =
+                    plannedHandoffPredecessorConsumerId,
+                socket = socket,
+            )
+            throw ConsumerGenerationRegistrationException(error, rollbackAcknowledged)
         }
 
-        consumers[response.id] = ConsumerInfo(
-            consumer = consumer,
-            producerId = response.producerId,
-            userId = producerUserId,
-            kind = response.kind,
-            type = producerType,
-            trackKey = trackKey
-        )
-
-        if (response.kind == "video") {
-            val track = consumer.track as? VideoTrack
+        if (
+            visibility == ConsumerRegistrationVisibility.CURRENT_VISIBLE &&
+            response.kind == "video"
+        ) {
             val wrapper = VideoTrackWrapper(
                 id = response.id,
                 userId = trackKey,
                 isLocal = false,
-                track = track
+                track = videoTrack,
+                consumerGeneration = consumerGeneration,
             )
             remoteVideoTracks[trackKey] = wrapper
+        }
+        if (
+            visibility == ConsumerRegistrationVisibility.CURRENT_VISIBLE &&
+            response.currentSpatialLayer != null
+        ) {
+            observePlannedConsumerResetLayer(
+                consumerId = response.id,
+                roomId = roomId,
+                currentSpatialLayer = response.currentSpatialLayer,
+            )
+        }
+        return consumerIdentity
+    }
+
+    private suspend fun abortPlannedHandoffIfNeeded(
+        requestId: String?,
+        producerId: String,
+        predecessorConsumerId: String?,
+        socket: SocketIOManager,
+    ): Boolean = withContext(NonCancellable) {
+        if (requestId == null) return@withContext true
+        if (predecessorConsumerId == null) return@withContext false
+        abortServerConsumerHandoffAndConfirm(
+            requestId = requestId,
+            producerId = producerId,
+            predecessorConsumerId = predecessorConsumerId,
+            socket = socket,
+        )
+    }
+
+    private suspend fun rollbackServerConsumerGenerationAndConfirm(
+        consumerId: String,
+        producerId: String,
+        plannedHandoffRequestId: String?,
+        plannedHandoffPredecessorConsumerId: String?,
+        socket: SocketIOManager,
+    ): Boolean = withContext(NonCancellable) {
+        if (
+            plannedHandoffRequestId != null &&
+            plannedHandoffPredecessorConsumerId != null
+        ) {
+            return@withContext abortServerConsumerHandoffAndConfirm(
+                requestId = plannedHandoffRequestId,
+                producerId = producerId,
+                predecessorConsumerId =
+                    plannedHandoffPredecessorConsumerId,
+                socket = socket,
+            )
+        }
+        closeServerConsumerGenerationAndConfirm(consumerId, socket)
+    }
+
+    private suspend fun abortServerConsumerHandoffAndConfirm(
+        requestId: String,
+        producerId: String,
+        predecessorConsumerId: String,
+        socket: SocketIOManager,
+    ): Boolean = withContext(NonCancellable) {
+        val identity = PlannedConsumerHandoffAbortIdentity(
+            requestId = requestId,
+            producerId = producerId,
+            predecessorConsumerId = predecessorConsumerId,
+        )
+        for (attempt in 1..PlannedConsumerHandoffAbortRetryPolicy.maximumAttempts) {
+            try {
+                socket.abortConsumerHandoffAndWait(
+                    requestId = identity.requestId,
+                    producerId = identity.producerId,
+                    predecessorConsumerId = identity.predecessorConsumerId,
+                    timeoutMilliseconds = CONSUMER_RESET_CLOSE_ACK_TIMEOUT_MS,
+                )
+                return@withContext true
+            } catch (_: Throwable) {
+                val backoffMs = PlannedConsumerHandoffAbortRetryPolicy
+                    .backoffMilliseconds(afterFailedAttempt = attempt)
+                    ?: return@withContext false
+                delay(backoffMs)
+            }
+        }
+        false
+    }
+
+    private suspend fun closeServerConsumerGenerationAndConfirm(
+        consumerId: String,
+        socket: SocketIOManager,
+    ): Boolean = withContext(NonCancellable) {
+        try {
+            socket.closeConsumerAndWait(
+                consumerId,
+                timeoutMilliseconds = CONSUMER_RESET_CLOSE_ACK_TIMEOUT_MS,
+            )
+            true
+        } catch (_: Throwable) {
+            socket.closeConsumer(consumerId)
+            false
         }
     }
 
     internal fun closeConsumer(producerId: String, userId: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { closeConsumer(producerId, userId) }
+            return
+        }
         if (producerId.isNotEmpty()) {
             remoteProducerClosureGenerations[producerId] =
                 (remoteProducerClosureGenerations[producerId] ?: 0) + 1
+            invalidatePlannedConsumerResets(producerId)
         }
         if (producerId.isEmpty()) {
             val ids = consumers
@@ -1421,9 +2693,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 }
             }
         } else {
-            val entry = consumers.entries.firstOrNull { it.value.producerId == producerId }
-            if (entry != null) {
-                removeConsumer(entry.key, entry.value, closeConsumer = true)
+            val matchingConsumers = consumers
+                .filterValues { it.producerId == producerId }
+            for ((consumerId, info) in matchingConsumers) {
+                removeConsumer(
+                    consumerId = consumerId,
+                    info = info,
+                    closeConsumer = true,
+                )
             }
         }
 
@@ -1433,6 +2710,20 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 .toList()
                 .forEach { remoteVideoTracks.removeValue(forKey = it) }
         }
+    }
+
+    /** Close one exact predecessor generation without invalidating its producer. */
+    internal fun closeConsumer(consumerId: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { closeConsumer(consumerId) }
+            return
+        }
+        val info = consumers[consumerId] ?: return
+        removeConsumer(
+            consumerId = consumerId,
+            info = info,
+            closeConsumer = true,
+        )
     }
 
     private fun consumerMatchesUser(info: ConsumerInfo, userId: String): Boolean {
@@ -1604,6 +2895,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             localVideoTrack?.setEnabled(enabled)
             localVideoEnabled = enabled
             localVideoTrackWrapper?.isEnabled = enabled
+            evaluateWebcamTopologyTransition()
 
             if (!enabled) {
                 stopWebcamCapture()
@@ -1633,6 +2925,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun suspendLocalVideoForRecovery() {
+        invalidateWebcamReceiverCapacityAuthority()
         try {
             videoProducer?.pause()
         } catch (_: Throwable) {
@@ -1668,6 +2961,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             clearLocalWebcamCaptureState()
             return
         }
+
+        resetWebcamTopologyControl()
 
         closeLocalMedia(
             kind = "video",
@@ -1714,6 +3009,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (kind == "video" && isWebcam && matchesProducer(videoProducer, producerId)) {
+            resetWebcamTopologyControl()
             videoProducer?.close()
             videoProducer = null
             videoProducerBandwidthQuality = ConnectionQuality.unknown
@@ -1744,6 +3040,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     private fun clearLocalWebcamCaptureState(notifyLocalState: Boolean = true) {
+        resetWebcamTopologyControl()
         videoProducer?.close()
         videoProducer = null
         videoProducerBandwidthQuality = ConnectionQuality.unknown
@@ -1893,23 +3190,29 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     ): Producer {
         val mediaTrack = track as MediaStreamTrack
         val preferredCodec = preferredVideoCodecJson()
+        val codecOptions = webcamVideoCodecOptionsJson(
+            currentVideoQuality,
+            connectionQuality,
+        )
+        lastWebcamProduceUsedSingleLayerFallback = false
         val producer = try {
             transport.produce(
                 this,
                 mediaTrack,
                 webcamEncodings(currentVideoQuality, connectionQuality),
-                null,
+                codecOptions,
                 preferredCodec,
                 appData
             )
         } catch (error: Throwable) {
             debugLog("[WebRTC] Webcam simulcast produce failed; retrying single-layer: ${error}")
+            lastWebcamProduceUsedSingleLayerFallback = true
             transport.produce(
                 this,
                 mediaTrack,
-                null as List<RtpParameters.Encoding>?,
-                null,
-                null,
+                webcamFallbackSingleLayerEncodings(currentVideoQuality, connectionQuality),
+                codecOptions,
+                preferredCodec,
                 appData
             )
         }
@@ -1955,8 +3258,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     internal fun updateVideoQuality(quality: VideoQuality) {
         currentVideoQuality = quality
+        evaluateWebcamTopologyTransition()
         lastAppliedLocalBandwidthSignature = null
         applyLocalBandwidthProfile(currentLocalBandwidthQuality)
+        if (webcamProducerTopology == WebcamProducerTopology.vp8SingleLayer) return
         val producer = videoProducer ?: return
         try {
             producer.setMaxSpatialLayer(
@@ -1978,21 +3283,24 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         if (lastAppliedLocalBandwidthSignature == signature) return
         currentLocalBandwidthQuality = connectionQuality
         lastAppliedLocalBandwidthSignature = signature
+        evaluateWebcamTopologyTransition()
 
-        videoProducer?.let { producer ->
-            try {
-                producer.setMaxSpatialLayer(
-                    webcamMaxSpatialLayer(currentVideoQuality, connectionQuality)
-                )
-            } catch (_: Throwable) {
+        if (webcamProducerTopology != WebcamProducerTopology.vp8SingleLayer) {
+            videoProducer?.let { producer ->
+                try {
+                    producer.setMaxSpatialLayer(
+                        webcamMaxSpatialLayer(currentVideoQuality, connectionQuality)
+                    )
+                } catch (_: Throwable) {
+                }
             }
-        }
 
-        if (localVideoEnabled) {
-            val profile = webcamCaptureProfile(currentVideoQuality, connectionQuality)
-            try {
-                videoCapturer?.changeCaptureFormat(profile.width, profile.height, profile.fps)
-            } catch (_: Throwable) {
+            if (localVideoEnabled) {
+                val profile = webcamCaptureProfile(currentVideoQuality, connectionQuality)
+                try {
+                    videoCapturer?.changeCaptureFormat(profile.width, profile.height, profile.fps)
+                } catch (_: Throwable) {
+                }
             }
         }
 
@@ -2018,6 +3326,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         connectionQuality: ConnectionQuality,
     ) {
         if (videoBandwidthRefreshInFlight) return
+        if (webcamTopologyTransitionState.phase != WebcamTopologyTransitionPhase.adaptive) return
+        if (webcamTopologyCommandJob?.isActive == true) return
+        if (webcamProducerTopology != WebcamProducerTopology.vp8Simulcast) return
         if (!shouldRefreshVideoProducerForBandwidthProfile(connectionQuality)) return
 
         val socket = socketManager ?: return
@@ -2027,6 +3338,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         videoBandwidthRefreshInFlight = true
         try {
             val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
+            intentionalLocalVideoProducerCloseIds.add(oldProducer.id)
             val nextProducer = produceWebcamVideo(transport, track, appData, connectionQuality)
             nextProducer.resume()
             try {
@@ -2036,13 +3348,23 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             } catch (_: Throwable) {
             }
             videoProducer = nextProducer
+            webcamProducerTopology = if (lastWebcamProduceUsedSingleLayerFallback) {
+                WebcamProducerTopology.vp8SingleLayer
+            } else {
+                WebcamProducerTopology.vp8Simulcast
+            }
             videoProducerBandwidthQuality = connectionQuality
             videoProducerBandwidthSignature = localVideoBandwidthSignature(
                 currentVideoQuality,
                 connectionQuality,
             )
             localVideoEnabled = true
-            localVideoTrackWrapper?.isEnabled = true
+            localVideoTrackWrapper = VideoTrackWrapper(
+                id = nextProducer.id,
+                userId = "local",
+                isLocal = true,
+                track = track,
+            )
 
             try {
                 socket.closeProducer(oldProducer.id)
@@ -2050,8 +3372,18 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 debugLog("[WebRTC] Failed to notify SFU of refreshed webcam producer close: ${error}")
             }
             oldProducer.close()
+            evaluateWebcamTopologyTransition()
             debugLog("[WebRTC] Refreshed webcam producer for ${connectionQuality} bandwidth")
         } catch (error: Throwable) {
+            intentionalLocalVideoProducerCloseIds.remove(oldProducer.id)
+            val recovery = WebcamTopologyTransitionMachine.forceAdaptiveRecovery(
+                webcamTopologyTransitionState,
+                oldProducer.id,
+                "ambiguous bandwidth-profile webcam refresh",
+                webcamTopologyMonotonicMs(),
+            )
+            webcamTopologyTransitionState = recovery.state
+            recovery.command?.let { enqueueWebcamTopologyCommand(it) }
             debugLog("[WebRTC] Failed to refresh webcam producer for bandwidth: ${error}")
         } finally {
             videoBandwidthRefreshInFlight = false
@@ -2245,9 +3577,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 WebcamEncodingSpec(rid = "f", scaleResolutionDownBy = 1.0, maxBitrateBps = 180_000, maxFramerate = 15),
             )
             VideoQuality.standard -> listOf(
-                WebcamEncodingSpec(rid = "q", scaleResolutionDownBy = 4.0, maxBitrateBps = 90_000, maxFramerate = 12),
-                WebcamEncodingSpec(rid = "h", scaleResolutionDownBy = 2.0, maxBitrateBps = 260_000, maxFramerate = 20),
-                WebcamEncodingSpec(rid = "f", scaleResolutionDownBy = 1.0, maxBitrateBps = 1_500_000, maxFramerate = 30),
+                WebcamEncodingSpec(rid = "q", scaleResolutionDownBy = 4.0, maxBitrateBps = 80_000, maxFramerate = 12),
+                WebcamEncodingSpec(rid = "h", scaleResolutionDownBy = 2.0, maxBitrateBps = 220_000, maxFramerate = 20),
+                WebcamEncodingSpec(rid = "f", scaleResolutionDownBy = 1.0, maxBitrateBps = 1_650_000, maxFramerate = 30),
             )
         }
     }
@@ -2309,9 +3641,50 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             ).also { encoding ->
                 encoding.maxBitrateBps = spec.maxBitrateBps
                 encoding.maxFramerate = spec.maxFramerate
-                encoding.networkPriority = WEBRTC_NETWORK_PRIORITY_VERY_LOW
+                encoding.numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount
+                encoding.networkPriority = if (spec.rid == "f") {
+                    WEBRTC_NETWORK_PRIORITY_LOW
+                } else {
+                    WEBRTC_NETWORK_PRIORITY_VERY_LOW
+                }
             }
         }
+    }
+
+    private fun webcamSingleReceiverEncodings(): List<RtpParameters.Encoding> {
+        return listOf(
+            RtpParameters.Encoding(null, true, 1.0).also { encoding ->
+                encoding.maxBitrateBps = 1_650_000
+                encoding.maxFramerate = 30
+                encoding.numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount
+                encoding.networkPriority = WEBRTC_NETWORK_PRIORITY_LOW
+            },
+        )
+    }
+
+    /// Some Android devices cannot construct the full VP8 simulcast sender.
+    /// Keep that reliability fallback explicit so it still carries the L1T1
+    /// contract and the active bandwidth tier's resolution/bitrate/FPS cap.
+    private fun webcamFallbackSingleLayerEncodings(
+        quality: VideoQuality,
+        connectionQuality: ConnectionQuality,
+    ): List<RtpParameters.Encoding> {
+        val specs = webcamEncodingSpecs(quality, connectionQuality)
+        val selectedIndex = webcamMaxSpatialLayer(quality, connectionQuality)
+            .coerceIn(0, specs.lastIndex)
+        val spec = specs[selectedIndex]
+        return listOf(
+            RtpParameters.Encoding(null, true, spec.scaleResolutionDownBy).also { encoding ->
+                encoding.maxBitrateBps = spec.maxBitrateBps
+                encoding.maxFramerate = spec.maxFramerate
+                encoding.numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount
+                encoding.networkPriority = WEBRTC_NETWORK_PRIORITY_LOW
+            },
+        )
+    }
+
+    private fun restoredAdaptiveWebcamEncodings(): List<RtpParameters.Encoding> {
+        return webcamEncodings(VideoQuality.standard, ConnectionQuality.good)
     }
 
     private fun webcamMaxSpatialLayer(
@@ -2424,6 +3797,437 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             .toString()
     }
 
+    private fun webcamVideoCodecOptionsJson(
+        quality: VideoQuality,
+        connectionQuality: ConnectionQuality,
+    ): String {
+        return JSONObject()
+            .put(
+                "videoGoogleStartBitrate",
+                WebcamVideoCodecPolicy.googleStartBitrateKbps(quality, connectionQuality),
+            )
+            .toString()
+    }
+
+    internal fun handleWebcamReceiverCapacityProof(
+        notification: WebcamReceiverCapacityProofNotification,
+        expectedRoomId: String,
+    ) {
+        if (notification.roomId != expectedRoomId) return
+        if (webcamReceiverCapacityRoomId != expectedRoomId) {
+            val existingTopology = webcamProducerTopology
+            resetWebcamTopologyControl()
+            webcamReceiverCapacityRoomId = expectedRoomId
+            webcamReceiverCapacityProofCache.reset(roomId = expectedRoomId)
+            webcamProducerTopology = if (videoProducer == null) {
+                WebcamProducerTopology.other
+            } else {
+                existingTopology
+            }
+        }
+        val now = webcamTopologyMonotonicMs()
+        if (!webcamReceiverCapacityProofCache.apply(notification, expectedRoomId, now)) return
+        webcamReceiverCapacityAuthorityAvailable = true
+        evaluateWebcamTopologyTransition(now)
+    }
+
+    internal fun invalidateWebcamReceiverCapacityAuthority() {
+        webcamReceiverCapacityAuthorityAvailable = false
+        webcamReceiverCapacityProofCache.reset(roomId = webcamReceiverCapacityRoomId)
+        evaluateWebcamTopologyTransition()
+    }
+
+    internal fun consumeIntentionalLocalVideoProducerClose(producerId: String): Boolean {
+        return intentionalLocalVideoProducerCloseIds.remove(producerId)
+    }
+
+    private fun webcamTopologyMonotonicMs(): Double = SystemClock.elapsedRealtime().toDouble()
+
+    private fun resetWebcamTopologyControl() {
+        webcamTopologyControlGeneration += 1
+        webcamTopologyCommandJob?.cancel()
+        webcamTopologyCommandJob = null
+        webcamTopologyWakeJob?.cancel()
+        webcamTopologyWakeJob = null
+        pendingWebcamTopologyCommand = null
+        webcamReceiverCapacityRoomId = null
+        webcamReceiverCapacityAuthorityAvailable = false
+        webcamReceiverCapacityProofCache.reset()
+        webcamTopologyTransitionState = WebcamTopologyTransitionState.initial(
+            webcamTopologyMonotonicMs(),
+        )
+        webcamProducerTopology = WebcamProducerTopology.other
+        intentionalLocalVideoProducerCloseIds.clear()
+        lastWebcamProducerSignalingError = null
+    }
+
+    private fun hardSingleReceiverConditionsMet(): Boolean {
+        return webcamReceiverCapacityAuthorityAvailable &&
+            currentVideoQuality == VideoQuality.standard &&
+            currentLocalBandwidthQuality == ConnectionQuality.good &&
+            localVideoEnabled &&
+            localVideoTrack?.enabled() == true &&
+            localVideoTrack?.state() == MediaStreamTrack.State.LIVE &&
+            videoProducer?.isClosed == false &&
+            screenProducer == null
+    }
+
+    private fun webcamTopologyTransitionInput(
+        nowMonotonicMs: Double,
+    ): WebcamTopologyTransitionInput {
+        val roomId = webcamReceiverCapacityRoomId
+        if (roomId == null) {
+            return WebcamTopologyTransitionInput(
+                nowMonotonicMs = nowMonotonicMs,
+                producerId = videoProducer?.id,
+                producerTopology = webcamProducerTopology,
+                hardSingleReceiverConditionsMet = false,
+                sourceProofActive = false,
+                sourceRevocationReason = null,
+                replacementOffer = null,
+                successorProof = null,
+                currentSingleProofActive = false,
+                currentSingleProofRevocationReason = null,
+            )
+        }
+
+        val producerId = videoProducer?.id
+        val sourceProducerId = webcamTopologyTransitionState.fromProducerId ?: producerId
+        val sourceProof = webcamReceiverCapacityProofCache.activeProof(
+            roomId,
+            sourceProducerId,
+            nowMonotonicMs,
+        )
+        val currentProof = webcamReceiverCapacityProofCache.activeProof(
+            roomId,
+            producerId,
+            nowMonotonicMs,
+        )
+        val fromProducerId = webcamTopologyTransitionState.fromProducerId
+        val nonce = webcamTopologyTransitionState.nonce
+        val successorProof = if (fromProducerId != null && nonce != null) {
+            webcamReceiverCapacityProofCache.stagedSuccessor(
+                roomId,
+                fromProducerId,
+                nonce,
+                nowMonotonicMs,
+            )
+        } else {
+            null
+        }
+        val currentTransitionProofMatches =
+            currentProof?.basis == WebcamReceiverCapacityProofBasis.singleLayerTransition &&
+                currentProof.replacesProducerId == webcamTopologyTransitionState.fromProducerId &&
+                currentProof.transitionNonce == webcamTopologyTransitionState.nonce
+        val currentSingleProofActive =
+            currentProof?.basis == WebcamReceiverCapacityProofBasis.singleLayer ||
+                currentTransitionProofMatches
+
+        return WebcamTopologyTransitionInput(
+            nowMonotonicMs = nowMonotonicMs,
+            producerId = producerId,
+            producerTopology = webcamProducerTopology,
+            hardSingleReceiverConditionsMet = hardSingleReceiverConditionsMet(),
+            sourceProofActive = sourceProof?.basis == WebcamReceiverCapacityProofBasis.simulcastFullLayer,
+            sourceRevocationReason = webcamReceiverCapacityProofCache.revocation(
+                roomId,
+                sourceProducerId,
+            )?.reason,
+            replacementOffer = if (
+                sourceProof?.basis == WebcamReceiverCapacityProofBasis.simulcastFullLayer
+            ) {
+                sourceProof.replacementOffer
+            } else {
+                null
+            },
+            successorProof = successorProof,
+            currentSingleProofActive = currentSingleProofActive,
+            currentSingleProofRevocationReason = webcamReceiverCapacityProofCache.revocation(
+                roomId,
+                producerId,
+            )?.reason,
+        )
+    }
+
+    private fun evaluateWebcamTopologyTransition(
+        nowMonotonicMs: Double = webcamTopologyMonotonicMs(),
+    ) {
+        if (webcamReceiverCapacityRoomId == null) {
+            webcamTopologyWakeJob?.cancel()
+            webcamTopologyWakeJob = null
+            return
+        }
+        val step = WebcamTopologyTransitionMachine.advance(
+            webcamTopologyTransitionState,
+            webcamTopologyTransitionInput(nowMonotonicMs),
+        )
+        webcamTopologyTransitionState = step.state
+        step.command?.let { enqueueWebcamTopologyCommand(it) }
+        scheduleWebcamTopologyWake(nowMonotonicMs)
+    }
+
+    private fun scheduleWebcamTopologyWake(nowMonotonicMs: Double) {
+        webcamTopologyWakeJob?.cancel()
+        webcamTopologyWakeJob = null
+        val input = webcamTopologyTransitionInput(nowMonotonicMs)
+        val currentSingleProofExpiresAtMonotonicMs = webcamReceiverCapacityRoomId?.let { roomId ->
+            webcamReceiverCapacityProofCache.activeProof(
+                roomId,
+                videoProducer?.id,
+                nowMonotonicMs,
+            )?.expiresAtMonotonicMs
+        }
+        val wakeAt = WebcamTopologyWakePolicy.nextWakeAt(
+            webcamTopologyTransitionState,
+            input,
+            currentSingleProofExpiresAtMonotonicMs,
+        ) ?: return
+        val generation = webcamTopologyControlGeneration
+        val delayMs = maxOf(1L, (wakeAt - nowMonotonicMs).toLong())
+        webcamTopologyWakeJob = webcamTopologyScope.launch {
+            delay(delayMs)
+            if (webcamTopologyControlGeneration != generation) return@launch
+            webcamTopologyWakeJob = null
+            evaluateWebcamTopologyTransition()
+        }
+    }
+
+    private fun enqueueWebcamTopologyCommand(command: WebcamTopologyReplacementCommand) {
+        pendingWebcamTopologyCommand = WebcamTopologyTransitionMachine.latestPending(
+            pendingWebcamTopologyCommand,
+            command,
+        )
+        if (webcamTopologyCommandJob?.isActive == true) return
+        val generation = webcamTopologyControlGeneration
+        webcamTopologyCommandJob = webcamTopologyScope.launch {
+            drainWebcamTopologyCommands(generation)
+        }
+    }
+
+    private suspend fun drainWebcamTopologyCommands(generation: Int) {
+        while (true) {
+            if (webcamTopologyControlGeneration != generation) break
+            val command = pendingWebcamTopologyCommand ?: break
+            pendingWebcamTopologyCommand = null
+            val result = applyWebcamTopologyReplacement(command, generation)
+            if (webcamTopologyControlGeneration != generation) break
+            val now = webcamTopologyMonotonicMs()
+            val step = WebcamTopologyTransitionMachine.settle(
+                webcamTopologyTransitionState,
+                command,
+                result,
+                webcamTopologyTransitionInput(now),
+            )
+            webcamTopologyTransitionState = step.state
+            step.command?.let { next ->
+                pendingWebcamTopologyCommand = WebcamTopologyTransitionMachine.latestPending(
+                    pendingWebcamTopologyCommand,
+                    next,
+                )
+            }
+            scheduleWebcamTopologyWake(now)
+        }
+        if (webcamTopologyControlGeneration != generation) return
+        webcamTopologyCommandJob = null
+        pendingWebcamTopologyCommand?.let { command ->
+            pendingWebcamTopologyCommand = null
+            enqueueWebcamTopologyCommand(command)
+        }
+    }
+
+    private suspend fun applyWebcamTopologyReplacement(
+        command: WebcamTopologyReplacementCommand,
+        topologyGeneration: Int,
+    ): WebcamTopologyReplacementResult {
+        val targetTopology = if (command.target == WebcamTopologyReplacementTarget.singleReceiver) {
+            WebcamProducerTopology.vp8SingleLayer
+        } else {
+            WebcamProducerTopology.vp8Simulcast
+        }
+        val oldProducer = videoProducer
+        if (oldProducer == null || oldProducer.id != command.expectedProducerId) {
+            return WebcamTopologyReplacementResult(
+                status = WebcamTopologyReplacementStatus.failed,
+                producerId = videoProducer?.id,
+                topology = webcamProducerTopology,
+                retryable = true,
+                ambiguousOrPostCommit = false,
+            )
+        }
+        if (webcamProducerTopology == targetTopology && !command.forceReplacement) {
+            return WebcamTopologyReplacementResult(
+                status = WebcamTopologyReplacementStatus.noop,
+                producerId = oldProducer.id,
+                topology = webcamProducerTopology,
+                retryable = false,
+                ambiguousOrPostCommit = false,
+            )
+        }
+        val socket = socketManager
+        val transport = sendTransport
+        val track = localVideoTrack
+        if (
+            socket == null ||
+            transport == null || transport.isClosed ||
+            track == null || !track.enabled() || track.state() != MediaStreamTrack.State.LIVE ||
+            !localVideoEnabled
+        ) {
+            return WebcamTopologyReplacementResult(
+                status = WebcamTopologyReplacementStatus.failed,
+                producerId = oldProducer.id,
+                topology = webcamProducerTopology,
+                retryable = true,
+                ambiguousOrPostCommit = false,
+            )
+        }
+        if (command.target == WebcamTopologyReplacementTarget.singleReceiver) {
+            val transition = command.transition
+            if (
+                transition == null ||
+                transition.fromProducerId != oldProducer.id ||
+                transition.nonce.isEmpty()
+            ) {
+                return WebcamTopologyReplacementResult(
+                    status = WebcamTopologyReplacementStatus.failed,
+                    producerId = oldProducer.id,
+                    topology = webcamProducerTopology,
+                    retryable = false,
+                    ambiguousOrPostCommit = false,
+                )
+            }
+        }
+
+        val configurationGeneration = this.configurationGeneration
+        var pendingProducer: Producer? = null
+        lastWebcamProducerSignalingError = null
+        try {
+            val appData = encodeJSONString(
+                ProducerAppData(
+                    type = ProducerType.webcam.rawValue,
+                    paused = false,
+                    webcamReceiverCapacityTransition = if (
+                        command.target == WebcamTopologyReplacementTarget.singleReceiver
+                    ) {
+                        command.transition
+                    } else {
+                        null
+                    },
+                ),
+            )
+            if (intentionalLocalVideoProducerCloseIds.size >= 32) {
+                intentionalLocalVideoProducerCloseIds.clear()
+            }
+            intentionalLocalVideoProducerCloseIds.add(oldProducer.id)
+            val producer = requireRegisteredProducer(
+                transport.produce(
+                    this,
+                    track as MediaStreamTrack,
+                    if (command.target == WebcamTopologyReplacementTarget.singleReceiver) {
+                        webcamSingleReceiverEncodings()
+                    } else {
+                        restoredAdaptiveWebcamEncodings()
+                    },
+                    webcamVideoCodecOptionsJson(VideoQuality.standard, ConnectionQuality.good),
+                    preferredVideoCodecJson(),
+                    appData,
+                ),
+                if (command.target == WebcamTopologyReplacementTarget.singleReceiver) {
+                    "single-receiver webcam"
+                } else {
+                    "adaptive webcam recovery"
+                },
+            )
+            pendingProducer = producer
+            producer.resume()
+            if (targetTopology == WebcamProducerTopology.vp8Simulcast) {
+                try {
+                    producer.setMaxSpatialLayer(2)
+                } catch (_: Throwable) {
+                }
+            }
+
+            if (
+                webcamTopologyControlGeneration != topologyGeneration ||
+                this.configurationGeneration != configurationGeneration ||
+                sendTransport !== transport ||
+                localVideoTrack !== track ||
+                !track.enabled() ||
+                !localVideoEnabled
+            ) {
+                throw ErrorException("Stale webcam topology replacement")
+            }
+
+            videoProducer = producer
+            webcamProducerTopology = targetTopology
+            if (targetTopology == WebcamProducerTopology.vp8Simulcast) {
+                // restoredAdaptiveWebcamEncodings() installs this exact ladder.
+                // Record what is on the producer, not the latest requested
+                // profile, so a fair/poor/emergency refresh remains required.
+                videoProducerBandwidthQuality = ConnectionQuality.good
+                videoProducerBandwidthSignature = localVideoBandwidthSignature(
+                    VideoQuality.standard,
+                    ConnectionQuality.good,
+                )
+            }
+            localVideoTrackWrapper = VideoTrackWrapper(
+                id = producer.id,
+                userId = "local",
+                isLocal = true,
+                track = track,
+            )
+            pendingProducer = null
+
+            try {
+                socket.closeProducer(oldProducer.id)
+            } catch (error: Throwable) {
+                debugLog("[WebRTC] Predecessor webcam close after topology handoff: ${error}")
+            }
+            oldProducer.close()
+            lastAppliedLocalBandwidthSignature = null
+            return WebcamTopologyReplacementResult(
+                status = WebcamTopologyReplacementStatus.applied,
+                producerId = producer.id,
+                topology = targetTopology,
+                retryable = false,
+                ambiguousOrPostCommit = false,
+            )
+        } catch (error: Throwable) {
+            pendingProducer?.let { producer ->
+                try {
+                    socket.closeProducer(producer.id)
+                } catch (closeError: Throwable) {
+                    debugLog("[WebRTC] Failed to close uncommitted topology producer: ${closeError}")
+                }
+                producer.close()
+            }
+            val signalingError = lastWebcamProducerSignalingError ?: error
+            val ambiguous = pendingProducer != null || isAmbiguousWebcamTopologyError(signalingError)
+            if (!ambiguous) {
+                intentionalLocalVideoProducerCloseIds.remove(oldProducer.id)
+            }
+            return WebcamTopologyReplacementResult(
+                status = WebcamTopologyReplacementStatus.failed,
+                producerId = videoProducer?.id,
+                topology = webcamProducerTopology,
+                retryable = ambiguous,
+                ambiguousOrPostCommit = ambiguous,
+            )
+        }
+    }
+
+    private fun isAmbiguousWebcamTopologyError(error: Throwable): Boolean {
+        val message = (error.message ?: error.toString()).lowercase()
+        val definitiveRejections = listOf(
+            "invalid webcam receiver-capacity transition",
+            "codec policy changed",
+            "transition invalid",
+            "transition expired",
+            "transition already used",
+            "producer not current",
+        )
+        return definitiveRejections.none { message.contains(it) }
+    }
+
     private fun opusMaxAverageBitrate(connectionQuality: ConnectionQuality): Int {
         return when (connectionQuality) {
             ConnectionQuality.emergency -> 24_000
@@ -2438,6 +4242,17 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         preserveCallAudioRouting: Boolean = false,
     ) {
         configurationGeneration += 1
+        plannedConsumerResetCandidates.clear()
+        val consumerResetJob = plannedConsumerResetCoordinatorJob
+        consumerResetJob?.cancel()
+        consumerResetJob?.join()
+        plannedConsumerResetCoordinatorJob = null
+        plannedConsumerResetCoordinatorOwnerToken = null
+        plannedConsumerResetActiveOwnerToken = null
+        plannedConsumerResetActivePredecessorId = null
+        activeConsumerResetRoomId = null
+        activeConsumerResetLifecycleGeneration = null
+        resetWebcamTopologyControl()
         PermissionHelper.cancelPendingCallPermissionRequests()
         stopWebcamCapture()
         videoCapturer?.dispose()
@@ -2474,6 +4289,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         lastAppliedLocalBandwidthSignature = null
 
         consumers.values.forEach { it.consumer.close() }
+        firstDecodedVideoFrameSignals.keys.toList().forEach {
+            cancelFirstDecodedVideoFrameObservation(it)
+        }
         consumers.clear()
         remoteProducerClosureGenerations.clear()
         videoFreezeStats.clear()
@@ -2482,6 +4300,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         remoteConsumerPreferenceInFlightIds.clear()
         remoteConsumerPreferenceRetryJob?.cancel()
         remoteConsumerPreferenceRetryJob = null
+        remoteConsumerPreferencePolicyRevision += 1
         previousPublishConnectionLossSample = null
         previousReceiveConnectionLossSample = null
         previousPublishMediaCounterSample = null
@@ -4202,12 +6021,28 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         val publishTransportQuality = if (hasPublishStats) {
-            deriveConnectionQuality(publish.rttMs, publishPacketLoss, publish.jitterMs)
+            RTCConnectionQualityPolicy.transportQuality(
+                publish.rttMs,
+                publishPacketLoss,
+                publish.jitterMs,
+            )
+        } else {
+            ConnectionQuality.unknown
+        }
+        val publishMediaPressureQuality = if (hasPublishStats) {
+            RTCConnectionQualityPolicy.publishMediaPressureQuality(
+                publishPacketLoss,
+                publish.jitterMs,
+            )
         } else {
             ConnectionQuality.unknown
         }
         val receiveTransportQuality = if (hasReceiveStats) {
-            deriveConnectionQuality(receive.rttMs, receivePacketLoss, receive.jitterMs)
+            RTCConnectionQualityPolicy.transportQuality(
+                receive.rttMs,
+                receivePacketLoss,
+                receive.jitterMs,
+            )
         } else {
             ConnectionQuality.unknown
         }
@@ -4229,7 +6064,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         )
 
         val publishQuality = worstConnectionQuality(
-            publishTransportQuality,
+            publishMediaPressureQuality,
             publishBandwidthQuality,
         )
         val receiveQuality = worstConnectionQuality(
@@ -4243,7 +6078,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return ConnectionQualitySample(
             publishQuality = publishQuality,
             receiveQuality = receiveQuality,
-            overallQuality = worstConnectionQuality(publishQuality, receiveQuality),
+            overallQuality = worstConnectionQuality(
+                publishTransportQuality,
+                publishQuality,
+                receiveQuality,
+            ),
             screenSharePublishQuality = screenSharePublishQuality,
         )
     }
@@ -4450,32 +6289,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return if (deltaTotal > 0.0) deltaLost / deltaTotal else 0.0
     }
 
-    private fun deriveConnectionQuality(
-        rttMs: Double?,
-        packetLoss: Double?,
-        jitterMs: Double?,
-    ): ConnectionQuality {
-        if (rttMs == null && packetLoss == null && jitterMs == null) {
-            return ConnectionQuality.unknown
-        }
-        if ((rttMs ?: 0.0) >= 850.0 ||
-            (packetLoss ?: 0.0) >= 0.15 ||
-            (jitterMs ?: 0.0) >= 120.0) {
-            return ConnectionQuality.emergency
-        }
-        if ((rttMs ?: 0.0) >= 500.0 ||
-            (packetLoss ?: 0.0) >= 0.08 ||
-            (jitterMs ?: 0.0) >= 60.0) {
-            return ConnectionQuality.poor
-        }
-        if ((rttMs ?: 0.0) >= 250.0 ||
-            (packetLoss ?: 0.0) >= 0.05 ||
-            (jitterMs ?: 0.0) >= 30.0) {
-            return ConnectionQuality.fair
-        }
-        return ConnectionQuality.good
-    }
-
     private fun deriveAvailableBitrateQuality(
         availableBitrate: Double?,
         mediaBitrate: Double?,
@@ -4653,7 +6466,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val stallSamplesBeforePLI = 2
         val active = mutableSetOf<String>()
         for ((consumerId, info) in consumers) {
-            if (info.kind != "video") continue
+            if (info.kind != "video" || !info.lifecycleRole.acceptsPeriodicControls) continue
             active.add(consumerId)
             val statsJson = try {
                 info.consumer.getStats()
@@ -4697,7 +6510,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val socket = socketManager ?: return
         val targetUserId = userId?.trim()?.takeIf { it.isNotEmpty() }
         for ((consumerId, info) in consumers) {
-            if (info.kind != "video") continue
+            if (info.kind != "video" || !info.lifecycleRole.acceptsPeriodicControls) continue
             if (targetUserId != null && !consumerMatchesVideoRefreshTarget(info, targetUserId)) {
                 continue
             }
@@ -4796,9 +6609,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     kind = kind,
                     rtpParametersJson = rtpParameters,
                     type = type,
-                    paused = appDataPayload?.paused ?: false
+                    paused = appDataPayload?.paused ?: false,
+                    webcamReceiverCapacityTransition = appDataPayload?.webcamReceiverCapacityTransition,
                 )
             } catch (t: Throwable) {
+                val appDataPayload = decodeJSONString<ProducerAppData>(appData, allowFailure = true)
+                if (kind == "video" && appDataPayload?.type == ProducerType.webcam.rawValue) {
+                    lastWebcamProducerSignalingError = t
+                }
                 debugLog("[WebRTC] Produce failed: ${t}")
                 ""
             }
@@ -4823,6 +6641,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             recoverCallAudioAfterAdmError("microphone producer transport close", recoverCapture = true)
             onLocalAudioProducerLost?.invoke()
         } else if (producer.id == videoProducer?.id) {
+            resetWebcamTopologyControl()
             videoProducer = null
             videoProducerBandwidthQuality = ConnectionQuality.unknown
             videoProducerBandwidthSignature = null
@@ -4831,20 +6650,22 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         } else if (producer.id == screenProducer?.id) {
             screenProducer = null
             screenProducerBandwidthQuality = ConnectionQuality.unknown
+            evaluateWebcamTopologyTransition()
         }
     }
 
     override fun onTransportClose(consumer: Consumer) {
-        val entry = consumers.entries.firstOrNull { it.value.consumer.id == consumer.id } ?: return
-        consumers.remove(entry.key)
-        videoFreezeStats.remove(entry.key)
-        remoteConsumerPreferenceSignatures.remove(entry.key)
-        remoteConsumerLayerPreferenceUnsupportedIds.remove(entry.key)
-        remoteConsumerPreferenceInFlightIds.remove(entry.key)
-        if (entry.value.kind == "video") {
-            val trackKey = if (entry.value.trackKey.isEmpty()) entry.value.userId else entry.value.trackKey
-            if (trackKey.isNotEmpty()) {
-                remoteVideoTracks.removeValue(forKey = trackKey)
+        mainHandler.post {
+            val entry = consumers.entries.firstOrNull {
+                it.value.consumer === consumer
+            }
+            if (entry != null) {
+                removeConsumer(
+                    consumerId = entry.key,
+                    info = entry.value,
+                    closeConsumer = false,
+                    notifyServer = false,
+                )
             }
         }
     }

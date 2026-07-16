@@ -143,6 +143,11 @@ export function getHelpText(): string {
   return `Commands: ${items}`;
 }
 
+/** Hard cap on spoken text, mirrored by the web TTS speech endpoint. */
+export const TTS_MAX_TEXT_LENGTH = 500;
+
+const TTS_CONTENT_PREFIX = "TTS: ";
+
 export function getTtsText(content: string): string | null {
   const match = content.match(/^\/tts\s+(.+)/i);
   if (!match) return null;
@@ -151,7 +156,14 @@ export function getTtsText(content: string): string | null {
 }
 
 export function formatTtsContent(text: string): string {
-  return `TTS: ${text}`;
+  return `${TTS_CONTENT_PREFIX}${text}`;
+}
+
+/** Spoken text of an already-normalized TTS message ("TTS: hi" → "hi"). */
+export function getTtsMessageText(content: string): string {
+  return content.startsWith(TTS_CONTENT_PREFIX)
+    ? content.slice(TTS_CONTENT_PREFIX.length)
+    : content;
 }
 
 export function getActionText(content: string): string | null {
@@ -175,7 +187,7 @@ export function normalizeChatMessage(message: ChatMessage): {
   const ttsText = getTtsText(message.content);
   if (!ttsText) return { message };
   return {
-    message: { ...message, content: formatTtsContent(ttsText) },
+    message: { ...message, content: formatTtsContent(ttsText), isTts: true },
     ttsText,
   };
 }
