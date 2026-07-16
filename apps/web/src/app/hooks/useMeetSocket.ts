@@ -33,6 +33,7 @@ import type {
   MeetError,
   Producer,
   MeetingConfigSnapshot,
+  MeetingMusicState,
   MeetingUpdateRequest,
   ParticipantConnectionStatus,
   ProducerInfo,
@@ -891,6 +892,7 @@ interface UseMeetSocketOptions {
   setIsDmEnabled: (value: boolean) => void;
   setAreImageAttachmentsEnabled: (value: boolean) => void;
   setIsReactionsDisabled: (value: boolean) => void;
+  setMusicState: React.Dispatch<React.SetStateAction<MeetingMusicState>>;
   setActiveScreenShareId: (value: string | null) => void;
   setActiveSpeakerId: React.Dispatch<React.SetStateAction<string | null>>;
   setServerActiveSpeakerAvailable: (value: boolean) => void;
@@ -995,6 +997,7 @@ export function useMeetSocket({
   setIsDmEnabled,
   setAreImageAttachmentsEnabled,
   setIsReactionsDisabled,
+  setMusicState,
   setActiveScreenShareId,
   setActiveSpeakerId,
   setServerActiveSpeakerAvailable,
@@ -1874,6 +1877,7 @@ export function useMeetSocket({
         setHostUserIds([]);
         setWebinarRole(null);
         setWebinarSpeakerUserId(null);
+        setMusicState({ permission: "off", slowModeMs: 30_000, track: null });
         participantIdsRef.current = new Set([userId]);
         departedParticipantIdsRef.current.clear();
         webinarJoinedParticipantIdsRef.current.clear();
@@ -1967,6 +1971,7 @@ export function useMeetSocket({
         setIsTtsDisabled(false);
         setIsDmEnabled(true);
         setAreImageAttachmentsEnabled(true);
+        setIsReactionsDisabled(false);
         setMeetingRequiresInviteCode(false);
         setWebinarConfig(null);
       }
@@ -2006,9 +2011,11 @@ export function useMeetSocket({
       setHostUserIds,
       setWebinarRole,
       setWebinarSpeakerUserId,
+      setMusicState,
       setIsTtsDisabled,
       setIsDmEnabled,
       setAreImageAttachmentsEnabled,
+      setIsReactionsDisabled,
       setMeetingRequiresInviteCode,
       setServerActiveSpeakerAvailable,
       setWebinarConfig,
@@ -6606,6 +6613,13 @@ export function useMeetSocket({
                 response.areImageAttachmentsEnabled ?? true,
               );
               setIsReactionsDisabled(response.isReactionsDisabled ?? false);
+              setMusicState(
+                response.musicState ?? {
+                  permission: "off",
+                  slowModeMs: 30_000,
+                  track: null,
+                },
+              );
               resolve("waiting");
               return;
             }
@@ -6629,6 +6643,13 @@ export function useMeetSocket({
                 response.areImageAttachmentsEnabled ?? true,
               );
               setIsReactionsDisabled(response.isReactionsDisabled ?? false);
+              setMusicState(
+                response.musicState ?? {
+                  permission: "off",
+                  slowModeMs: 30_000,
+                  track: null,
+                },
+              );
               if (
                 Object.prototype.hasOwnProperty.call(response, "activeSpeakerId")
               ) {
@@ -6827,6 +6848,10 @@ export function useMeetSocket({
       setIsTtsDisabled,
       setIsChatLocked,
       setIsDmEnabled,
+      setAreImageAttachmentsEnabled,
+      setIsReactionsDisabled,
+      setMusicState,
+      dispatchParticipants,
       prewarm,
       selectedVideoInputDeviceId,
       webcamCodecPolicyRef,
@@ -8253,6 +8278,20 @@ export function useMeetSocket({
             );
 
             socket.on(
+              "musicStateChanged",
+              ({
+                state,
+                roomId: eventRoomId,
+              }: {
+                state?: MeetingMusicState;
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId) || !state) return;
+                setMusicState(state);
+              },
+            );
+
+            socket.on(
               "noGuestsChanged",
               ({
                 noGuests,
@@ -8467,7 +8506,9 @@ export function useMeetSocket({
       setMeetingRequiresInviteCode,
       setIsTtsDisabled,
       setIsDmEnabled,
+      setAreImageAttachmentsEnabled,
       setIsReactionsDisabled,
+      setMusicState,
       setHostUserId,
       setWebinarRole,
       setWebinarSpeakerUserId,
@@ -9368,6 +9409,25 @@ export function useMeetSocket({
       });
     }, [socketRef]);
 
+  const authorizeMomFinalize = useCallback((): Promise<string | null> => {
+    const socket = socketRef.current;
+    if (!socket) return Promise.resolve(null);
+
+    return new Promise((resolve) => {
+      socket.emit(
+        "mom:authorizeFinalize",
+        (response: { token: string; expiresIn?: number } | { error: string }) => {
+          if ("error" in response) {
+            console.error("[Meets] Failed to authorize MoM finalize:", response.error);
+            resolve(null);
+            return;
+          }
+          resolve(response.token);
+        },
+      );
+    });
+  }, [socketRef]);
+
   const getTranscriptSfuRelayStatus =
     useCallback((): Promise<TranscriptSfuRelayStatusResponse | null> => {
       const socket = socketRef.current;
@@ -9609,6 +9669,7 @@ export function useMeetSocket({
     toggleChatLock,
     endRoomForEveryone,
     getTranscriptToken,
+    authorizeMomFinalize,
     getTranscriptSfuRelayStatus,
     startTranscriptSfuRelay,
     stopTranscriptSfuRelay,

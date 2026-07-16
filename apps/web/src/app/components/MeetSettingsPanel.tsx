@@ -25,6 +25,7 @@ import type {
   WebinarConfigSnapshot,
   WebinarLinkResponse,
   WebinarUpdateRequest,
+  MeetingMusicPermission,
 } from "../lib/types";
 
 const DEFAULT_WEBINAR_CAP = 500;
@@ -65,6 +66,8 @@ interface MeetSettingsPanelProps {
   onToggleImageAttachments?: () => void;
   isReactionsDisabled: boolean;
   onToggleReactionsDisabled?: () => void;
+  musicPermission: MeetingMusicPermission;
+  onSetMusicPermission?: (permission: MeetingMusicPermission) => void;
   meetingRequiresInviteCode: boolean;
   onGetMeetingConfig?: () => Promise<MeetingConfigSnapshot | null>;
   onUpdateMeetingConfig?: (
@@ -456,6 +459,8 @@ export default function MeetSettingsPanel({
   onToggleImageAttachments,
   isReactionsDisabled,
   onToggleReactionsDisabled,
+  musicPermission,
+  onSetMusicPermission,
   meetingRequiresInviteCode,
   onGetMeetingConfig,
   onUpdateMeetingConfig,
@@ -721,6 +726,51 @@ export default function MeetSettingsPanel({
             onClick={onToggleReactionsDisabled}
             disabled={!onToggleReactionsDisabled}
           />
+
+          <div className="px-4 py-2.5">
+            <div className="mb-2 flex items-center gap-3">
+              <Volume2
+                size={ICON_SIZE}
+                strokeWidth={ICON_STROKE}
+                className="shrink-0"
+                style={{
+                  color:
+                    musicPermission === "off"
+                      ? ICON_OFF
+                      : TONE_ACCENT.success,
+                }}
+              />
+              <span className="min-w-0 flex-1 truncate text-[14px] font-normal text-[#fafafa]">
+                Room music
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-1 rounded-[10px] border border-white/[0.10] bg-black/20 p-1">
+              {(["off", "admin", "everyone"] as const).map((permission) => {
+                const active = musicPermission === permission;
+                const label =
+                  permission === "off"
+                    ? "Off"
+                    : permission === "admin"
+                      ? "Hosts"
+                      : "Everyone";
+                return (
+                  <button
+                    key={permission}
+                    type="button"
+                    onClick={() => onSetMusicPermission?.(permission)}
+                    disabled={!onSetMusicPermission}
+                    className={`h-8 rounded-[8px] text-[12px] font-semibold transition-colors ${
+                      active
+                        ? "bg-[#F95F4A] text-white"
+                        : "text-[#a1a1aa] hover:bg-white/[0.06] hover:text-[#fafafa]"
+                    } disabled:cursor-not-allowed disabled:opacity-50`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           <Separator />
 

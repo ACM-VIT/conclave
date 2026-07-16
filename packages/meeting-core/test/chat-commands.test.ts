@@ -88,6 +88,12 @@ describe("parseChatCommand", () => {
   it("recognizes the /action alias", () => {
     expect(parseChatCommand("/action waves")?.command.id).toBe("action");
   });
+
+  it("parses the room music play command", () => {
+    const parsed = parseChatCommand("/play lo-fi beats");
+    expect(parsed?.command.id).toBe("play");
+    expect(parsed?.args).toBe("lo-fi beats");
+  });
 });
 
 describe("getTtsText", () => {

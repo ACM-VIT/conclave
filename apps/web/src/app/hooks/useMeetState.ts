@@ -7,6 +7,7 @@ import type {
   AdminNoticeNotification,
   ConnectionState,
   MeetError,
+  MeetingMusicState,
   Participant,
   WebinarConfigSnapshot,
 } from "../lib/types";
@@ -74,6 +75,11 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
   );
   const [adminNotice, setAdminNotice] =
     useState<AdminNoticeNotification | null>(null);
+  const [musicState, setMusicState] = useState<MeetingMusicState>({
+    permission: "off",
+    slowModeMs: 30_000,
+    track: null,
+  });
 
   return {
     connectionState,
@@ -142,5 +148,7 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     setServerRestartNotice,
     adminNotice,
     setAdminNotice,
+    musicState,
+    setMusicState,
   };
 }

@@ -1,5 +1,8 @@
+import { randomUUID } from "node:crypto";
 import type { MediaKind } from "mediasoup/types";
+import jwt from "jsonwebtoken";
 import { Admin } from "../../../config/classes/Admin.js";
+import { config } from "../../../config/config.js";
 import type { ProducerType } from "../../../config/classes/Client.js";
 import type { RedirectData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
@@ -35,6 +38,7 @@ const MAX_ADMIN_NOTICE_LENGTH = 2000;
 const MAX_ROOM_ID_LENGTH = 256;
 const MAX_PRODUCER_ID_LENGTH = 256;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+const MOM_FINALIZE_TOKEN_TTL_SECONDS = 60;
 
 const normalizePlainText = (
   value: unknown,
@@ -1418,6 +1422,92 @@ export const registerAdminHandlers = (
       return;
     }
     respond(cb, { disabled: guard.room.isReactionsDisabled });
+  });
+
+  socket.on(
+    "setMusicPermission",
+    (
+      data: { permission?: "off" | "admin" | "everyone" },
+      cb,
+    ) => {
+      const guard = ensureAdminRoom(context);
+      if ("error" in guard) {
+        respond(cb, guard);
+        return;
+      }
+      const permission = data?.permission;
+      if (
+        permission !== "off" &&
+        permission !== "admin" &&
+        permission !== "everyone"
+      ) {
+        respond(cb, { error: "Invalid music permission" });
+        return;
+      }
+
+      const update = applyRoomPolicyUpdate(io, guard.room, {
+        musicPermission: permission,
+      });
+      Logger.info(
+        `Room ${guard.room.id} music permission changed to ${permission} by admin`,
+      );
+      respond(cb, {
+        success: true,
+        state: guard.room.getMusicState(),
+        changed: update.changed,
+      });
+    },
+  );
+
+  socket.on("music:stop", (_data, cb) => {
+    const guard = ensureAdminRoom(context);
+    if ("error" in guard) {
+      respond(cb, guard);
+      return;
+    }
+    guard.room.setCurrentMusicTrack(null);
+    io.to(guard.room.channelId).emit("musicStateChanged", {
+      roomId: guard.room.id,
+      state: guard.room.getMusicState(),
+    });
+    respond(cb, { success: true, state: guard.room.getMusicState() });
+  });
+
+  socket.on("mom:authorizeFinalize", (_data, cb) => {
+    const guard = ensureAdminRoom(context);
+    if ("error" in guard) {
+      respond(cb, guard);
+      return;
+    }
+
+    const user = getSocketAuthUser(socket);
+    const email = user?.email?.trim().toLowerCase();
+    if (!email || !user?.userId) {
+      respond(cb, { error: "Authenticated host session required" });
+      return;
+    }
+    if (!guard.room.hasActiveHostEmail(email)) {
+      respond(cb, { error: "Only the current room host can finalize MoM" });
+      return;
+    }
+
+    const authorizationId = randomUUID();
+    guard.room.createMomFinalizeAuthorization(authorizationId, email);
+    respond(cb, {
+      token: jwt.sign(
+        {
+          jti: authorizationId,
+          purpose: "mom:finalize",
+          roomId: guard.room.id,
+          clientId: guard.room.clientId,
+          userId: user.userId,
+          email,
+        },
+        config.sfuSecret,
+        { expiresIn: MOM_FINALIZE_TOKEN_TTL_SECONDS },
+      ),
+      expiresIn: MOM_FINALIZE_TOKEN_TTL_SECONDS,
+    });
   });
 
   socket.on(

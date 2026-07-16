@@ -18,6 +18,9 @@ import * as Y from "yjs";
 import type {
   ActiveSpeakerChangedNotification,
   ChatMessage,
+  MeetingMusicPermission,
+  MeetingMusicState,
+  MeetingMusicTrack,
   ProducerInfo,
   VideoQuality,
   WebRtcTransportRole,
@@ -97,6 +100,8 @@ export const CHAT_IMAGE_ORPHAN_TTL_MS = 2 * 60 * 1000;
 const MAX_CHAT_IMAGE_ROOM_BYTES = 64 * 1024 * 1024;
 const MAX_CHAT_IMAGE_USER_BYTES = 24 * 1024 * 1024;
 const MAX_INVITE_CODE_LENGTH = 256;
+const MUSIC_SLOW_MODE_MS = 30_000;
+const MOM_FINALIZE_AUTHORIZATION_TTL_MS = 60_000;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 const normalizeInviteCode = (value: unknown): string => {
@@ -192,6 +197,15 @@ export class Room {
   private _areImageAttachmentsEnabled: boolean = true;
   private _reactionsDisabled: boolean = false;
   private _meetingInviteCodeHash: string | null = null;
+  private _musicPermission: MeetingMusicPermission = "off";
+  private _currentMusicTrack: MeetingMusicTrack | null = null;
+  private _musicRevision = 0;
+  private _momFinalizeAuthorizations = new Map<
+    string,
+    { email: string; expiresAt: number }
+  >();
+  public readonly musicSlowModeMs = MUSIC_SLOW_MODE_MS;
+  public lastMusicRequestByUserId: Map<string, number> = new Map();
   public appsState: { activeAppId: string | null; locked: boolean } = {
     activeAppId: null,
     locked: false,
@@ -689,6 +703,7 @@ export class Room {
     const departingUserKey = this.userKeysById.get(clientId);
     this.userKeysById.delete(clientId);
     this.handRaisedByUserId.delete(clientId);
+    this.lastMusicRequestByUserId.delete(clientId);
     // Drop the cached display name once NO live client still shares this userKey
     // (a user may be joined from two tabs under one key). Without this,
     // displayNamesByKey is only cleared on full room teardown, so a long-lived
@@ -1374,6 +1389,92 @@ export class Room {
     this._areImageAttachmentsEnabled = enabled;
   }
 
+  get musicPermission(): MeetingMusicPermission {
+    return this._musicPermission;
+  }
+
+  setMusicPermission(permission: MeetingMusicPermission): void {
+    if (this._musicPermission === permission) {
+      return;
+    }
+    this._musicPermission = permission;
+    this._musicRevision += 1;
+    if (permission === "off") {
+      this._currentMusicTrack = null;
+      this.lastMusicRequestByUserId.clear();
+    }
+  }
+
+  get currentMusicTrack(): MeetingMusicTrack | null {
+    return this._currentMusicTrack;
+  }
+
+  setCurrentMusicTrack(track: MeetingMusicTrack | null): void {
+    this._currentMusicTrack = track;
+    this._musicRevision += 1;
+  }
+
+  createMomFinalizeAuthorization(
+    id: string,
+    email: string,
+    now = Date.now(),
+  ): void {
+    this.pruneExpiredMomFinalizeAuthorizations(now);
+    this._momFinalizeAuthorizations.set(id, {
+      email: email.trim().toLowerCase(),
+      expiresAt: now + MOM_FINALIZE_AUTHORIZATION_TTL_MS,
+    });
+  }
+
+  consumeMomFinalizeAuthorization(
+    id: string,
+    email: string,
+    now = Date.now(),
+  ): boolean {
+    this.pruneExpiredMomFinalizeAuthorizations(now);
+    const authorization = this._momFinalizeAuthorizations.get(id);
+    if (!authorization) return false;
+    this._momFinalizeAuthorizations.delete(id);
+    return (
+      authorization.email === email.trim().toLowerCase() &&
+      this.hasActiveHostEmail(email)
+    );
+  }
+
+  hasActiveHostEmail(email: string): boolean {
+    const normalized = email.trim().toLowerCase();
+    const hostUserKey = this.hostUserKey?.trim().toLowerCase() ?? "";
+    if (!normalized || normalized !== hostUserKey) return false;
+    for (const [userId, userKey] of this.userKeysById.entries()) {
+      if (userKey.trim().toLowerCase() !== normalized) continue;
+      const client = this.clients.get(userId);
+      if (client instanceof Admin && !client.isObserver) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private pruneExpiredMomFinalizeAuthorizations(now = Date.now()): void {
+    for (const [id, authorization] of this._momFinalizeAuthorizations.entries()) {
+      if (authorization.expiresAt <= now) {
+        this._momFinalizeAuthorizations.delete(id);
+      }
+    }
+  }
+
+  get musicRevision(): number {
+    return this._musicRevision;
+  }
+
+  getMusicState(): MeetingMusicState {
+    return {
+      permission: this._musicPermission,
+      slowModeMs: this.musicSlowModeMs,
+      track: this._currentMusicTrack,
+    };
+  }
+
   addChatImageAsset(
     asset: RoomChatImageAsset,
   ): { ok: true } | { ok: false; error: string } {
@@ -1999,6 +2100,11 @@ export class Room {
     this.userKeysById.clear();
     this.adminUserKeys.clear();
     this.displayNamesByKey.clear();
+    this.lastMusicRequestByUserId.clear();
+    this._musicPermission = "off";
+    this._currentMusicTrack = null;
+    this._musicRevision += 1;
+    this._momFinalizeAuthorizations.clear();
     this.blockedUsers.clear();
     this.webinarActiveSpeakerUserId = null;
     this.webinarDominantSpeakerUserId = null;

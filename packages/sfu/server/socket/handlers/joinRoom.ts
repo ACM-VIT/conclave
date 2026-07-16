@@ -956,6 +956,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           areImageAttachmentsEnabled:
             context.currentRoom.areImageAttachmentsEnabled,
           isReactionsDisabled: context.currentRoom.isReactionsDisabled,
+          musicState: context.currentRoom.getMusicState(),
           meetingRequiresInviteCode: context.currentRoom.requiresMeetingInviteCode,
           webinarRole: context.currentClient.isWebinarAttendee
             ? "attendee"

@@ -21,7 +21,7 @@ import {
   Tag,
   X,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type {
   MeetingTranscriptController,
   TranscriptQaMessage,
@@ -76,6 +76,8 @@ interface TranscriptPanelProps {
    * hide the action for view-only attendees.
    */
   onPostRecap?: () => boolean;
+  canFinalizeMom?: boolean;
+  onAuthorizeMomFinalize?: () => Promise<string | null>;
 }
 
 type TranscriptTab = "transcript" | "ask" | "minutes";
@@ -968,6 +970,8 @@ export default function TranscriptPanel({
   onClose,
   initialTab,
   onPostRecap,
+  canFinalizeMom = false,
+  onAuthorizeMomFinalize,
 }: TranscriptPanelProps) {
   const [activeTab, setActiveTab] = useState<TranscriptTab>(
     initialTab ?? "transcript",
@@ -975,6 +979,15 @@ export default function TranscriptPanel({
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
     "idle",
   );
+  const [finalizeState, setFinalizeState] = useState<
+    | { status: "idle" }
+    | { status: "saving" }
+    | { status: "saved"; url: string | null }
+    | { status: "failed"; error: string }
+    | { status: "stopped" }
+  >({ status: "idle" });
+  const finalizeTokenRef = useRef(0);
+  const finalizeAbortRef = useRef<AbortController | null>(null);
   const session = transcript.session;
   const hasExportContent =
     transcript.allSegments.length > 0 || hasMinutesContent(transcript.minutes);
@@ -998,6 +1011,14 @@ export default function TranscriptPanel({
     }
   }, [activeTab, tabs]);
 
+  useEffect(
+    () => () => {
+      finalizeAbortRef.current?.abort();
+      finalizeAbortRef.current = null;
+    },
+    [],
+  );
+
   const handleCopy = async () => {
     if (!canExport) return;
     const markdown = transcript.exportMarkdown();
@@ -1016,6 +1037,63 @@ export default function TranscriptPanel({
       `conclave-${session.roomId}-transcript.md`,
       transcript.exportMarkdown(),
     );
+  };
+
+  const handleFinalizeMom = async () => {
+    if (
+      !canExport ||
+      !canFinalizeMom ||
+      !onAuthorizeMomFinalize ||
+      finalizeState.status === "saving"
+    ) {
+      return;
+    }
+    const token = finalizeTokenRef.current + 1;
+    finalizeTokenRef.current = token;
+    finalizeAbortRef.current?.abort();
+    const controller = new AbortController();
+    finalizeAbortRef.current = controller;
+    setFinalizeState({ status: "saving" });
+    try {
+      const finalizeToken = await onAuthorizeMomFinalize();
+      if (!finalizeToken) {
+        throw new Error("Only the current room host can finalize MoM.");
+      }
+      const response = await fetch("/api/conclave/mom/finalize", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          roomId: session.roomId,
+          finalizeToken,
+          title: `Meeting Minutes - ${session.roomId}`,
+          markdown: transcript.exportMarkdown(),
+        }),
+      });
+      const result = (await response.json().catch(() => null)) as
+        | { success?: boolean; url?: string | null; error?: string }
+        | null;
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error || "Failed to finalize MoM.");
+      }
+      if (finalizeTokenRef.current === token) {
+        setFinalizeState({ status: "saved", url: result.url ?? null });
+      }
+    } catch (error) {
+      if (controller.signal.aborted) {
+        if (finalizeTokenRef.current === token) {
+          setFinalizeState({ status: "stopped" });
+        }
+        return;
+      }
+      if (finalizeTokenRef.current === token) {
+        setFinalizeState({
+          status: "failed",
+          error:
+            error instanceof Error ? error.message : "Failed to finalize MoM.",
+        });
+      }
+    }
   };
 
   return (
@@ -1191,7 +1269,46 @@ export default function TranscriptPanel({
             )}
           </div>
 
-          <div className="flex shrink-0 items-center gap-2 border-t border-white/10 bg-[#18181b] px-3 py-3">
+          <div className="shrink-0 border-t border-white/10 bg-[#18181b] px-3 py-3">
+            {finalizeState.status !== "idle" ? (
+              <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2 text-[11.5px] text-[#a1a1aa]">
+                <span className="min-w-0 truncate">
+                  {finalizeState.status === "saving"
+                    ? "Finalizing MoM..."
+                    : finalizeState.status === "saved"
+                      ? finalizeState.url
+                        ? "MoM versioned in GitHub"
+                        : "MoM versioned"
+                      : finalizeState.status === "stopped"
+                        ? "Stopped waiting for MoM finalization"
+                        : finalizeState.error}
+                </span>
+                {finalizeState.status === "saved" && finalizeState.url ? (
+                  <a
+                    href={finalizeState.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="shrink-0 text-[#F95F4A] hover:text-[#ff8a78]"
+                  >
+                    Open
+                  </a>
+                ) : finalizeState.status === "saving" ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      finalizeTokenRef.current += 1;
+                      finalizeAbortRef.current?.abort();
+                      finalizeAbortRef.current = null;
+                      setFinalizeState({ status: "stopped" });
+                    }}
+                    className="shrink-0 text-[#F95F4A] hover:text-[#ff8a78]"
+                  >
+                    Abort
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="flex items-center gap-2">
             <button
               onClick={handleCopy}
               disabled={!canExport}
@@ -1212,6 +1329,25 @@ export default function TranscriptPanel({
               <Download size={14} strokeWidth={1.8} />
               Export
             </button>
+            {canFinalizeMom ? (
+              <button
+                onClick={handleFinalizeMom}
+                disabled={
+                  !canExport ||
+                  !onAuthorizeMomFinalize ||
+                  finalizeState.status === "saving"
+                }
+                className="inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-lg border border-[#F95F4A]/35 bg-[#F95F4A]/10 px-3 text-[12px] font-semibold text-[#F95F4A] transition-colors hover:bg-[#F95F4A]/15 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {finalizeState.status === "saving" ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <CheckCircle2 size={14} strokeWidth={1.8} />
+                )}
+                Finalize
+              </button>
+            ) : null}
+            </div>
           </div>
         </>
       ) : (

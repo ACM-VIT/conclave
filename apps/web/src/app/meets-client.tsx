@@ -597,6 +597,8 @@ export default function MeetsClient({
     setServerRestartNotice,
     adminNotice,
     setAdminNotice,
+    musicState,
+    setMusicState,
   } = useMeetState({ initialRoomId });
 
   const [serverActiveSpeakerAvailable, setServerActiveSpeakerAvailable] =
@@ -2293,6 +2295,7 @@ export default function MeetsClient({
     setIsDmEnabled,
     setAreImageAttachmentsEnabled,
     setIsReactionsDisabled,
+    setMusicState,
     setActiveScreenShareId,
     setActiveSpeakerId,
     setServerActiveSpeakerAvailable,
@@ -3400,6 +3403,8 @@ export default function MeetsClient({
         isDmEnabled={isDmEnabled}
         areImageAttachmentsEnabled={areImageAttachmentsEnabled}
         isReactionsDisabled={isReactionsDisabled}
+        musicState={musicState}
+        onAuthorizeMomFinalize={socket.authorizeMomFinalize}
         onToggleLock={() => {
           if (canModerateMeeting) void socket.toggleRoomLock(!isRoomLocked);
         }}

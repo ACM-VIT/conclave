@@ -71,8 +71,11 @@ export type RoomSnapshot = {
     dmEnabled: boolean;
     imageAttachmentsEnabled: boolean;
     reactionsDisabled: boolean;
+    musicPermission: ReturnType<Room["getMusicState"]>["permission"];
+    musicSlowModeMs: number;
     requiresMeetingInviteCode: boolean;
   };
+  music: ReturnType<Room["getMusicState"]>;
   access: {
     allowedUserKeys: string[];
     lockedAllowedUserKeys: string[];
@@ -146,6 +149,7 @@ export type RoomPolicyUpdate = {
   dmEnabled?: boolean;
   imageAttachmentsEnabled?: boolean;
   reactionsDisabled?: boolean;
+  musicPermission?: ReturnType<Room["getMusicState"]>["permission"];
 };
 
 type ProducerInfo = ReturnType<Client["getProducerInfos"]>[number];
@@ -157,6 +161,7 @@ const promoteNextAdmin = (room: Room): Admin | null => {
     }
     const promoted = room.promoteClientToAdmin(client.id);
     if (promoted) {
+      room.hostUserKey = room.userKeysById.get(promoted.id) ?? room.hostUserKey;
       return promoted;
     }
   }
@@ -345,8 +350,11 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
       dmEnabled: room.isDmEnabled,
       imageAttachmentsEnabled: room.areImageAttachmentsEnabled,
       reactionsDisabled: room.isReactionsDisabled,
+      musicPermission: room.getMusicState().permission,
+      musicSlowModeMs: room.musicSlowModeMs,
       requiresMeetingInviteCode: room.requiresMeetingInviteCode,
     },
+    music: room.getMusicState(),
     access: {
       allowedUserKeys: Array.from(room.allowedUsers.values()).sort(),
       lockedAllowedUserKeys: Array.from(room.lockedAllowedUsers.values()).sort(),
@@ -748,6 +756,20 @@ export const applyRoomPolicyUpdate = (
     io.to(room.channelId).emit("reactionsDisabledChanged", {
       disabled: update.reactionsDisabled,
       roomId: room.id,
+    });
+  }
+
+  if (
+    (update.musicPermission === "off" ||
+      update.musicPermission === "admin" ||
+      update.musicPermission === "everyone") &&
+    update.musicPermission !== room.musicPermission
+  ) {
+    room.setMusicPermission(update.musicPermission);
+    changed.musicPermission = update.musicPermission;
+    io.to(room.channelId).emit("musicStateChanged", {
+      roomId: room.id,
+      state: room.getMusicState(),
     });
   }
 
