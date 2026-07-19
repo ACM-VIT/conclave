@@ -564,6 +564,8 @@ export default function MeetsMainContent({
     closeApp,
     setLocked,
     refreshState,
+    isHiddenForMe,
+    showForMe,
   } = useApps();
   const { isActive: isGameActive, refresh: refreshGameState } = useGame();
   const [isGamesOpen, setIsGamesOpen] = useState(false);
@@ -1706,6 +1708,8 @@ export default function MeetsMainContent({
     isWhiteboardActive,
     onOpenWhiteboard: isAdmin ? openWhiteboard : undefined,
     onCloseWhiteboard: isAdmin ? closeWhiteboard : undefined,
+    isWhiteboardHiddenForMe: isHiddenForMe,
+    onShowWhiteboardForMe: showForMe,
     isWatchActive,
     onOpenWatch: isAdmin ? openWatch : undefined,
     onCloseWatch: isAdmin ? closeWatch : undefined,
@@ -2126,7 +2130,8 @@ export default function MeetsMainContent({
           )}
         </div>
       ) : ActiveMeetingApp &&
-        (!isDevPlaygroundActive || isDevPlaygroundEnabled) ? (
+        (!isDevPlaygroundActive || isDevPlaygroundEnabled) &&
+        !isHiddenForMe ? (
         <MeetingAppLayout
           app={ActiveMeetingApp}
           frameContent={!isDevPlaygroundActive}
