@@ -416,8 +416,11 @@ export function GameLobby({
   isAdmin,
   readOnly = false,
   canStart = true,
+  busy = false,
   startLabel = "Start",
+  busyLabel = "Starting…",
   disabledLabel,
+  error,
   onStart,
   waitingText = "The host will start the round",
 }: {
@@ -429,8 +432,11 @@ export function GameLobby({
   userId?: string | null;
   readOnly?: boolean;
   canStart?: boolean;
+  busy?: boolean;
   startLabel?: string;
+  busyLabel?: string;
   disabledLabel?: string;
+  error?: string | null;
   onStart: () => void;
   waitingText?: string;
 }) {
@@ -477,8 +483,12 @@ export function GameLobby({
 
         <div style={{ width: "100%", maxWidth: 300, marginTop: 26 }}>
           {isAdmin && !readOnly ? (
-            <PrimaryButton full disabled={!canStart} onClick={onStart}>
-              {canStart ? startLabel : disabledLabel ?? startLabel}
+            <PrimaryButton full disabled={!canStart || busy} onClick={onStart}>
+              {busy
+                ? busyLabel
+                : canStart
+                  ? startLabel
+                  : disabledLabel ?? startLabel}
             </PrimaryButton>
           ) : (
             <div
@@ -502,6 +512,11 @@ export function GameLobby({
               </span>
             </div>
           )}
+          {error ? (
+            <p role="alert" style={{ fontSize: 12, color: color.danger, margin: "12px 0 0" }}>
+              {error}
+            </p>
+          ) : null}
           <p style={{ fontSize: 12, color: color.textFaint, margin: "12px 0 0" }}>{count}</p>
         </div>
       </div>

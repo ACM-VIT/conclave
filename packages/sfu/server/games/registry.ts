@@ -6,6 +6,7 @@ import { reactionModule } from "./modules/reaction.js";
 import { triviaModule } from "./modules/trivia.js";
 import { wordleModule } from "./modules/wordle.js";
 import { wouldYouRatherModule } from "./modules/wouldYouRather.js";
+import { zipModule } from "./modules/zip.js";
 import type { GameCatalogEntry, GameModule } from "./types.js";
 
 // Register a game here (one line). The order is the order shown in the launcher.
@@ -18,6 +19,7 @@ const MODULES: GameModule[] = [
   imposterModule,
   wordleModule,
   chessModule,
+  zipModule,
 ];
 
 const REGISTRY = new Map<string, GameModule>(
