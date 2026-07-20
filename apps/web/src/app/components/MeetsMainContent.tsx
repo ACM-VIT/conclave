@@ -2041,9 +2041,6 @@ export default function MeetsMainContent({
             onPrejoinMediaCommit={onPrejoinMediaCommit}
             onEnterStart={onEnterMeetingStart}
             audioOnlyMode={viewSettings.audioOnlyMode}
-            onAudioOnlyModeChange={(audioOnlyMode) =>
-              onViewSettingsChange((current) => ({ ...current, audioOnlyMode }))
-            }
           />
         )
       ) : isWebinarAttendee ? (

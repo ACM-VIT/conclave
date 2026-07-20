@@ -1017,13 +1017,6 @@ struct JoinView: View {
                         onIcon: "video.fill", offIcon: "video.slash.fill",
                         androidOn: "video", androidOff: "video.off"
                     ) { toggleCamera() }
-
-                    previewToggle(
-                        accessibilityLabel: viewModel.state.isAudioOnlyMode ? "Turn audio-only mode off" : "Turn audio-only mode on",
-                        on: viewModel.state.isAudioOnlyMode,
-                        onIcon: "waveform", offIcon: "waveform",
-                        androidOn: "headphones", androidOff: "headphones"
-                    ) { toggleAudioOnlyMode() }
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
             }
@@ -3126,15 +3119,6 @@ struct JoinView: View {
             setupCamera()
         }
 #endif
-    }
-
-    private func toggleAudioOnlyMode() {
-        let enabled = !viewModel.state.isAudioOnlyMode
-        viewModel.state.isAudioOnlyMode = enabled
-        if enabled && isCameraOn {
-            stopPreviewCapture()
-        }
-        viewModel.state.isCameraOff = enabled || !isCameraOn
     }
 
     private func switchPreviewCamera() {
