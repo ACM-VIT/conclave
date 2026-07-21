@@ -151,6 +151,7 @@ final class MeetingState {
     var isChatLocked: Bool = false
     var isNoGuests: Bool = false
     var isDmEnabled: Bool = true
+    var isImageAttachmentsEnabled: Bool = true
     var isTtsDisabled: Bool = false
     var isReactionsDisabled: Bool = false
     var meetingRequiresInviteCode: Bool = false

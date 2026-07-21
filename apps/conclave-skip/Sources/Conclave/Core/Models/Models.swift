@@ -463,6 +463,39 @@ enum ConnectionQuality: String, Codable {
     case unknown
 }
 
+/// Separates user-visible transport latency from evidence that reducing media
+/// bitrate or resolution can actually help. High RTT alone makes a call feel
+/// delayed, but lowering camera resolution does not shorten the network path.
+enum RTCConnectionQualityPolicy {
+    static func transportQuality(
+        rttMs: Double?,
+        packetLoss: Double?,
+        jitterMs: Double?
+    ) -> ConnectionQuality {
+        guard rttMs != nil || packetLoss != nil || jitterMs != nil else {
+            return .unknown
+        }
+
+        if (rttMs ?? 0.0) >= 850.0 || (packetLoss ?? 0.0) >= 0.15 || (jitterMs ?? 0.0) >= 120.0 {
+            return .emergency
+        }
+        if (rttMs ?? 0.0) >= 500.0 || (packetLoss ?? 0.0) >= 0.08 || (jitterMs ?? 0.0) >= 60.0 {
+            return .poor
+        }
+        if (rttMs ?? 0.0) >= 250.0 || (packetLoss ?? 0.0) >= 0.05 || (jitterMs ?? 0.0) >= 30.0 {
+            return .fair
+        }
+        return .good
+    }
+
+    static func publishMediaPressureQuality(
+        packetLoss: Double?,
+        jitterMs: Double?
+    ) -> ConnectionQuality {
+        transportQuality(rttMs: nil, packetLoss: packetLoss, jitterMs: jitterMs)
+    }
+}
+
 /// Keeps one noisy RTC stats sample from immediately reconfiguring capture,
 /// simulcast layers, remote receive policy, and the visible quality banner.
 /// Emergency samples still apply immediately; ordinary degradation and

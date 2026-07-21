@@ -125,12 +125,24 @@ export const RATE_LIMITS = {
   adminBulkAction: { capacity: 8, refillPerSec: 1 },
   // Transport creation: roughly once per kind, allow a small retry burst.
   transportCreate: { capacity: 3, refillPerSec: 1 },
+  // Automatic network adaptation changes this at a slow, hysteretic cadence.
+  // The burst covers a reconnect plus one superseding profile decision.
+  producerTransportProfile: { capacity: 8, refillPerSec: 2 },
   // Producer allocation is expensive enough to reject rapid churn.
   mediaProduce: { capacity: 12, refillPerSec: 2 },
+  // Capabilities are stable per WebRTC handler; permit one refinement/retry,
+  // but prevent a client from repeatedly churning the room codec policy.
+  mediaCapabilities: { capacity: 2, refillPerSec: 0.05 },
+  // A browser may disprove optimistic VP9 SVC support once per connection.
+  mediaCodecFailure: { capacity: 1, refillPerSec: 0 },
   // ICE restarts are useful for recovery but allocate new ICE credentials.
   iceRestart: { capacity: 6, refillPerSec: 0.5 },
   // Consumer resume/preference/keyframe controls: recovery can be bursty.
   consumerControl: { capacity: 30, refillPerSec: 10 },
+  // A publisher-side source switch fans a key-frame request out to every live
+  // video consumer. Allow normal adaptation/recovery bursts without permitting
+  // a client to create a room-wide PLI storm.
+  producerKeyFrame: { capacity: 4, refillPerSec: 1 },
   // Batched preference updates are bounded by item count; keep event bursts modest.
   consumerControlBatch: { capacity: 8, refillPerSec: 2 },
   // Shared browser controls proxy to a separate service; keep them coalesced.

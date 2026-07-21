@@ -54,6 +54,7 @@ final class SocketIOManager {
     var onNewProducer: ((ProducerInfo) -> Void)?
     var onProducerClosed: ((ProducerClosedNotification) -> Void)?
     var onConsumerTelemetry: ((ConsumerTelemetryNotification) -> Void)?
+    var onWebcamReceiverCapacityProof: ((WebcamReceiverCapacityProofNotification) -> Void)?
 
     var onChatMessage: ((ChatMessage) -> Void)?
     var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Void)?
@@ -66,6 +67,7 @@ final class SocketIOManager {
     var onChatLockChanged: ((ChatLockChangedNotification) -> Void)?
     var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Void)?
     var onDmStateChanged: ((DmStateChangedNotification) -> Void)?
+    var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Void)?
     var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Void)?
     var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Void)?
     var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Void)?
@@ -100,14 +102,32 @@ final class SocketIOManager {
         kind: String,
         rtpParameters: RtpParameters,
         type: ProducerType,
-        paused: Bool
+        paused: Bool,
+        webcamReceiverCapacityTransition: WebcamReceiverCapacityTransition? = nil
     ) async throws -> String {
         fatalError()
     }
 
-    func consume(producerId: String, rtpCapabilities: RtpCapabilities, transportId: String?) async throws -> ConsumeResponse { fatalError() }
-    func resumeConsumer(consumerId: String, requestKeyFrame: Bool = false) async throws { fatalError() }
+    func consume(
+        producerId: String,
+        rtpCapabilities: RtpCapabilities,
+        transportId: String?,
+        preferredSpatialLayer: Int? = nil,
+        preferredTemporalLayer: Int? = nil,
+        priority: Int? = nil,
+        plannedHandoffRequestId: String? = nil,
+        plannedHandoffPredecessorConsumerId: String? = nil,
+        timeoutMilliseconds: Int? = nil
+    ) async throws -> ConsumeResponse { fatalError() }
+    func abortConsumerHandoffAndWait(
+        requestId: String,
+        producerId: String,
+        predecessorConsumerId: String,
+        timeoutMilliseconds: Int = 1_000
+    ) async throws -> AbortConsumerHandoffResponse { fatalError() }
+    func resumeConsumer(consumerId: String, requestKeyFrame: Bool = false, timeoutMilliseconds: Int? = nil) async throws { fatalError() }
     func closeConsumer(consumerId: String) { fatalError() }
+    func closeConsumerAndWait(consumerId: String, timeoutMilliseconds: Int = 1_250) async throws { fatalError() }
     func setConsumerPreferences(
         consumerId: String,
         spatialLayer: Int? = nil,

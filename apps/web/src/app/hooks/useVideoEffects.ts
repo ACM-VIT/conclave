@@ -35,6 +35,11 @@ import {
   prewarmMeetVideoPipeRuntime,
   startMeetVideoPipeEffect,
 } from "../lib/meet-videopipe-runtime";
+import {
+  VIDEO_EFFECTS_OUTPUT_MAX_FRAME_RATE as TARGET_FPS,
+  VIDEO_EFFECTS_OUTPUT_MAX_HEIGHT as MAX_EFFECTS_OUTPUT_HEIGHT,
+  VIDEO_EFFECTS_OUTPUT_MAX_WIDTH as MAX_EFFECTS_OUTPUT_WIDTH,
+} from "../lib/media-quality-settings";
 
 const SELFIE_SEGMENTATION_CDN =
   "https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747";
@@ -78,9 +83,6 @@ const TASKS_FACE_LANDMARKER_MODELS = [
   { source: "google-storage", url: TASKS_FACE_LANDMARKER_MODEL_CDN },
 ] as const;
 
-const TARGET_FPS = 30;
-const MAX_EFFECTS_OUTPUT_WIDTH = 1280;
-const MAX_EFFECTS_OUTPUT_HEIGHT = 720;
 const MAX_SEGMENTATION_MODEL_INPUT_WIDTH = 960;
 const MAX_SEGMENTATION_MODEL_INPUT_HEIGHT = 540;
 const MAX_FACE_MODEL_INPUT_WIDTH = 640;

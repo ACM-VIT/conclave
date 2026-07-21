@@ -6,15 +6,23 @@ final class VideoTrackWrapper: Identifiable {
     let id: String
     let userId: String
     let isLocal: Bool
+    let consumerGeneration: Int
 
     var rtcVideoTrack: Any?
     var isEnabled: Bool = false
 
-    init(id: String, userId: String, isLocal: Bool, track: Any? = nil) {
+    init(
+        id: String,
+        userId: String,
+        isLocal: Bool,
+        track: Any? = nil,
+        consumerGeneration: Int = 0
+    ) {
         self.id = id
         self.userId = userId
         self.isLocal = isLocal
         self.rtcVideoTrack = track
+        self.consumerGeneration = consumerGeneration
     }
 
     func setTrack(_ track: Any?) {
@@ -46,7 +54,7 @@ final class WebRTCClient {
     func createReceiveTransport() async throws { }
     func restartIce() async -> Bool { false }
     func restartIce(transportKind: String) async -> Bool { false }
-    func consumeProducer(producerId: String, producerUserId: String, producerKind: String? = nil, producerType: String = "webcam", preferHighWebcamLayer: Bool = false, initialReceiveConnectionQuality: ConnectionQuality = .unknown) async throws { }
+    func consumeProducer(producerId: String, producerUserId: String, producerKind: String? = nil, producerType: String = "webcam", preferHighWebcamLayer: Bool = false, initialReceiveConnectionQuality: ConnectionQuality = .unknown, roomId: String? = nil, meetingLifecycleGeneration: Int = 0) async throws { }
     func closeConsumer(producerId: String, userId: String) { }
     func applyRemoteConsumerBandwidthPolicy(
         focusedUserIds: Set<String>,
@@ -75,9 +83,19 @@ final class WebRTCClient {
         )
     }
     func consumerId(forProducer producerId: String) -> String? { nil }
+    func hasConsumerGeneration(forProducer producerId: String) -> Bool { false }
+    func waitForFirstDecodedVideoFrame(consumerId: String, timeoutMilliseconds: Int) async throws -> Bool { false }
+    func cancelFirstDecodedVideoFrameObservation(consumerId: String) { }
+    func closeConsumer(consumerId: String) { }
     func closeConsumers(exceptProducerIds producerIds: [String]) { }
     func closeConsumers(userIdPrefix: String) { }
     func applyConsumerTelemetry(_ notification: ConsumerTelemetryNotification) { }
+    func handleWebcamReceiverCapacityProof(
+        _ notification: WebcamReceiverCapacityProofNotification,
+        expectedRoomId: String
+    ) { }
+    func invalidateWebcamReceiverCapacityAuthority() { }
+    func consumeIntentionalLocalVideoProducerClose(producerId: String) -> Bool { false }
     func hasAudioConsumer(userIdPrefix: String) -> Bool { false }
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { }
     func setAudioEnabled(_ enabled: Bool) async throws { }

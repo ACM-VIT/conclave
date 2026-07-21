@@ -1,5 +1,6 @@
 import type { WebcamProducerNetworkProfile } from "./webcam-codec";
 import type { BrowserNetworkSnapshot } from "./network-information";
+import { hasBrowserMediaEmergencyEvidence } from "./connection-quality-policy";
 
 const SCREEN_SHARE_OUTGOING_FAIR_BPS = 1500000;
 const SCREEN_SHARE_OUTGOING_POOR_BPS = 550000;
@@ -56,7 +57,14 @@ type ScreenShareObservedPublishQuality =
 
 type ScreenShareBrowserNetworkHint = Pick<
   BrowserNetworkSnapshot,
-  "supported" | "quality" | "startupQuality" | "emergency" | "saveData"
+  | "supported"
+  | "quality"
+  | "startupQuality"
+  | "emergency"
+  | "effectiveType"
+  | "saveData"
+  | "downlinkMbps"
+  | "rttMs"
 >;
 
 type ScreenSharePublishProfileOptions = {
@@ -81,8 +89,18 @@ const getScreenShareStartupNetworkProfile = (
   if (observedPublishQuality && observedPublishQuality !== "unknown") {
     return null;
   }
-  if (browserNetwork.emergency) return "emergency";
+  if (hasBrowserMediaEmergencyEvidence(browserNetwork)) return "emergency";
   if (browserNetwork.saveData === true) return "poor";
+
+  if (browserNetwork.downlinkMbps !== null) {
+    if (browserNetwork.downlinkMbps <= 0.8) return "poor";
+    if (browserNetwork.downlinkMbps <= 1.5) return "fair";
+    return null;
+  }
+  const effectiveType = browserNetwork.effectiveType?.toLowerCase();
+  if (effectiveType === "slow-2g" || effectiveType === "2g") return "poor";
+  if (effectiveType === "3g") return "fair";
+  if (effectiveType === "4g") return null;
 
   const browserQuality =
     browserNetwork.quality === "unknown"

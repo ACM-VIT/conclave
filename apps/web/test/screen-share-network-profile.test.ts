@@ -86,4 +86,24 @@ describe("selectScreenSharePublishNetworkProfile", () => {
       }),
     ).toBe("emergency");
   });
+
+  it("does not crush screen detail for RTT-only browser emergency hints", () => {
+    expect(
+      selectScreenSharePublishNetworkProfile({
+        baseProfile: "good",
+        availableOutgoingBitrateBps: null,
+        emergencyMode: false,
+        browserNetwork: browserNetwork({
+          supported: true,
+          quality: "poor",
+          startupQuality: "poor",
+          emergency: true,
+          effectiveType: "4g",
+          downlinkMbps: 20,
+          rttMs: 1_200,
+        }),
+        observedPublishQuality: "unknown",
+      }),
+    ).toBe("good");
+  });
 });

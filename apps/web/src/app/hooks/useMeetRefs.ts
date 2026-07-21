@@ -12,7 +12,9 @@ import type {
   ProducerMapEntry,
   Transport,
   VideoQuality,
+  WebcamCodecPolicy,
 } from "../lib/types";
+import { BASELINE_WEBCAM_CODEC_POLICY } from "../lib/webcam-codec-policy";
 import type { CaptureControllerLike } from "../lib/captured-surface-control";
 import { getOrCreateSessionId } from "../lib/utils";
 
@@ -38,6 +40,42 @@ export type ConsumerTelemetrySnapshot = {
   receivedAt: number;
 };
 
+export type ConsumerGenerationResetDebugRecord = {
+  producerId: string;
+  previousConsumerId: string;
+  replacementConsumerId: string | null;
+  reason: "startup-simulcast-jitter-reset";
+  status:
+    | "waiting-for-high-layer"
+    | "queued"
+    | "replacing"
+    | "verifying"
+    | "retry-wait"
+    | "completed"
+    | "failed"
+    | "cancelled";
+  startedAt: number;
+  replacementStartedAt: number | null;
+  completedAt: number | null;
+  attempt: number;
+  maximumSpatialLayer: number;
+  observedSpatialLayer: number | null;
+  failureReason: string | null;
+};
+
+export type AdaptiveVideoReceiverLifecycleEvent =
+  | {
+      type: "added";
+      producerId: string;
+      consumer: Consumer;
+      info: ProducerMapEntry;
+    }
+  | {
+      type: "removing";
+      producerId: string;
+      consumer: Consumer;
+    };
+
 export function useMeetRefs() {
   const socketRef = useRef<Socket | null>(null);
   const deviceRef = useRef<Device | null>(null);
@@ -58,6 +96,12 @@ export function useMeetRefs() {
   const consumerTelemetryRef = useRef<Map<string, ConsumerTelemetrySnapshot>>(
     new Map(),
   );
+  const consumerGenerationResetDebugRef = useRef<
+    ConsumerGenerationResetDebugRecord[]
+  >([]);
+  const adaptiveVideoReceiverLifecycleRef = useRef<
+    (event: AdaptiveVideoReceiverLifecycleEvent) => void
+  >(() => {});
   const producerMapRef = useRef<Map<string, ProducerMapEntry>>(new Map());
   const pendingProducersRef = useRef<Map<string, ProducerInfo>>(new Map());
   const leaveTimeoutsRef = useRef<Map<string, number>>(new Map());
@@ -71,6 +115,9 @@ export function useMeetRefs() {
   const reconnectInFlightRef = useRef(false);
   const intentionalDisconnectRef = useRef(false);
   const videoQualityRef = useRef<VideoQuality>("standard");
+  const webcamCodecPolicyRef = useRef<WebcamCodecPolicy>({
+    ...BASELINE_WEBCAM_CODEC_POLICY,
+  });
   const currentRoomIdRef = useRef<string | null>(null);
   const handleRedirectRef = useRef<(roomId: string) => Promise<void>>(
     async () => {}
@@ -129,6 +176,8 @@ export function useMeetRefs() {
     consumersRef,
     adaptivelyPausedConsumerProducerIdsRef,
     consumerTelemetryRef,
+    consumerGenerationResetDebugRef,
+    adaptiveVideoReceiverLifecycleRef,
     producerMapRef,
     pendingProducersRef,
     leaveTimeoutsRef,
@@ -140,6 +189,7 @@ export function useMeetRefs() {
     reconnectInFlightRef,
     intentionalDisconnectRef,
     videoQualityRef,
+    webcamCodecPolicyRef,
     currentRoomIdRef,
     handleRedirectRef,
     handleReconnectRef,

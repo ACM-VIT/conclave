@@ -42,6 +42,11 @@ export const registerDisconnectHandlers = (
       const roomChannelId = room.channelId;
       const disconnectedSocketId = socket.id;
 
+      // Proofs are not allowed to survive the socket grace window. A receiver
+      // disconnect must revoke on the still-connected publisher immediately;
+      // an owner disconnect fails closed by expiry if its socket cannot receive.
+      room.refreshWebcamReceiverCapacityProofs();
+
       const finalizeDisconnect = () => {
         const activeRoom = state.rooms.get(roomChannelId);
         if (!activeRoom) {
@@ -229,6 +234,9 @@ export const registerDisconnectHandlers = (
           graceMs,
           finalizeDisconnect,
         );
+        // The pending-disconnect marker is itself authoritative even if a
+        // Socket.IO implementation has not flipped `connected` yet.
+        room.refreshWebcamReceiverCapacityProofs();
         // Browser background throttling can make a healthy hidden tab miss a
         // socket heartbeat. Keep the grace-window cleanup, but do not show peers
         // a premature "reconnecting" badge for a client that may recover before

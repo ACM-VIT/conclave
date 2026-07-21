@@ -13,6 +13,13 @@ import {
   shouldStartLowBandwidthVideo,
 } from "../lib/network-information";
 import type { VideoQuality } from "../lib/types";
+import {
+  getCameraBaseVideoQuality,
+  normalizeMediaQualitySettings,
+  readStoredMediaQualitySettings,
+  writeStoredMediaQualitySettings,
+  type MediaQualitySettings,
+} from "../lib/media-quality-settings";
 
 interface UseMeetMediaSettingsOptions {
   videoQualityRef: React.MutableRefObject<VideoQuality>;
@@ -20,8 +27,12 @@ interface UseMeetMediaSettingsOptions {
   allowNetworkAutoDowngrade: boolean;
 }
 
-const getInitialVideoQuality = (): VideoQuality => {
-  return shouldStartLowBandwidthVideo() ? "low" : "standard";
+const getInitialVideoQuality = (
+  mediaQualitySettings: MediaQualitySettings,
+): VideoQuality => {
+  return shouldStartLowBandwidthVideo()
+    ? "low"
+    : getCameraBaseVideoQuality(mediaQualitySettings.camera);
 };
 
 const NOISE_CANCELLATION_STORAGE_KEY = "conclave:noise-cancellation";
@@ -40,8 +51,16 @@ export function useMeetMediaSettings({
   networkManagedVideoQualityRef,
   allowNetworkAutoDowngrade,
 }: UseMeetMediaSettingsOptions) {
-  const [initialVideoQuality] = useState<VideoQuality>(getInitialVideoQuality);
-  const networkManagedQualityRef = useRef(initialVideoQuality === "low");
+  const [mediaQualitySettings, setMediaQualitySettingsState] =
+    useState<MediaQualitySettings>(readStoredMediaQualitySettings);
+  const mediaQualitySettingsRef = useRef(mediaQualitySettings);
+  const [initialVideoQuality] = useState<VideoQuality>(() =>
+    getInitialVideoQuality(mediaQualitySettings),
+  );
+  const networkManagedQualityRef = useRef(
+    initialVideoQuality === "low" &&
+      getCameraBaseVideoQuality(mediaQualitySettings.camera) !== "low",
+  );
   const [videoQuality, setVideoQualityState] =
     useState<VideoQuality>(initialVideoQuality);
   const [isMirrorCamera, setIsMirrorCamera] = useState(true);
@@ -55,6 +74,10 @@ export function useMeetMediaSettings({
     useState<string>();
   const [selectedVideoInputDeviceId, setSelectedVideoInputDeviceId] =
     useState<string>();
+
+  if (mediaQualitySettingsRef.current !== mediaQualitySettings) {
+    mediaQualitySettingsRef.current = mediaQualitySettings;
+  }
 
   if (videoQualityRef.current !== videoQuality) {
     videoQualityRef.current = videoQuality;
@@ -106,6 +129,16 @@ export function useMeetMediaSettings({
     [setNetworkManagedQuality],
   );
 
+  const setMediaQualitySettings: Dispatch<
+    SetStateAction<MediaQualitySettings>
+  > = useCallback((action) => {
+    setMediaQualitySettingsState((previous) =>
+      normalizeMediaQualitySettings(
+        typeof action === "function" ? action(previous) : action,
+      ),
+    );
+  }, []);
+
   useEffect(() => {
     videoQualityRef.current = videoQuality;
   }, [videoQuality, videoQualityRef]);
@@ -124,7 +157,7 @@ export function useMeetMediaSettings({
     }
 
     const handleNetworkChange = () => {
-      if (getInitialVideoQuality() !== "low") return;
+      if (!shouldStartLowBandwidthVideo()) return;
       if (videoQualityRef.current === "low") return;
       videoQualityRef.current = "low";
       setNetworkManagedVideoQuality("low");
@@ -143,6 +176,28 @@ export function useMeetMediaSettings({
   ]);
 
   useEffect(() => {
+    const cameraBaseQuality = getCameraBaseVideoQuality(
+      mediaQualitySettings.camera,
+    );
+    const shouldUseNetworkManagedLowQuality =
+      cameraBaseQuality !== "low" && shouldStartLowBandwidthVideo();
+    const nextQuality = shouldUseNetworkManagedLowQuality
+      ? "low"
+      : cameraBaseQuality;
+    setNetworkManagedQuality(shouldUseNetworkManagedLowQuality);
+    videoQualityRef.current = nextQuality;
+    setVideoQualityState(nextQuality);
+  }, [
+    mediaQualitySettings.camera,
+    setNetworkManagedQuality,
+    videoQualityRef,
+  ]);
+
+  useEffect(() => {
+    writeStoredMediaQualitySettings(mediaQualitySettings);
+  }, [mediaQualitySettings]);
+
+  useEffect(() => {
     try {
       window.localStorage.setItem(
         NOISE_CANCELLATION_STORAGE_KEY,
@@ -155,6 +210,9 @@ export function useMeetMediaSettings({
     videoQuality,
     setVideoQuality,
     setNetworkManagedVideoQuality,
+    mediaQualitySettings,
+    mediaQualitySettingsRef,
+    setMediaQualitySettings,
     isMirrorCamera,
     setIsMirrorCamera,
     isVideoSettingsOpen,

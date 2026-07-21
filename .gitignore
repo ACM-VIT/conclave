@@ -12,6 +12,7 @@
 /sfu/node_modules
 # testing
 /coverage
+artifacts/video-quality/
 /.kiro
 # next.js
 /.next/
