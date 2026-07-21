@@ -6074,7 +6074,8 @@ final class MeetingViewModel {
             } else {
                 handleProducerState(producer)
             }
-            if let consumerId = webRTCClient.consumerId(forProducer: producer.producerId) {
+            if let consumerId = webRTCClient.consumerId(forProducer: producer.producerId),
+               !(state.isAudioOnlyMode && producer.kind == "video") {
                 try? await socketManager.resumeConsumer(consumerId: consumerId, requestKeyFrame: false)
             } else if webRTCClient.hasConsumerGeneration(forProducer: producer.producerId) {
                 // A planned make-before-break reset owns this producer. Its
