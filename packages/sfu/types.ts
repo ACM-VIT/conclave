@@ -751,6 +751,31 @@ export interface ChatMessage {
   ttsVoiceToken?: string;
   /** Sender dismissed the link preview; clients must not render embeds. */
   suppressEmbeds?: boolean;
+  /**
+   * Emoji reactions on this message. Always emitted as the complete set so
+   * clients replace rather than merge. Absent means none.
+   */
+  reactions?: ChatMessageReaction[];
+}
+
+/** One emoji and every user who reacted with it. Mirrors @conclave/meeting-core. */
+export interface ChatMessageReaction {
+  emoji: string;
+  userIds: string[];
+}
+
+/** Caps distinct emoji per message; chat history is in-memory on the room. */
+export const MAX_REACTIONS_PER_CHAT_MESSAGE = 12;
+
+export interface ChatReactData {
+  messageId?: string;
+  emoji?: string;
+}
+
+export interface ChatReactionChangedNotification {
+  messageId: string;
+  reactions: ChatMessageReaction[];
+  roomId: string;
 }
 
 export interface ChatReplyPreview {

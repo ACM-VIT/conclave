@@ -958,3 +958,47 @@ select:focus {
     transform: translateY(0) scale(1);
   }
 }
+
+/* Reaction chip landing: a quick overshoot pop, Discord-style. Applied when a
+   chip first mounts and re-triggered on count change by re-keying the count. */
+@keyframes web-chat-reaction-pop {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes web-chat-reaction-count-pop {
+  0% {
+    transform: translateY(-0.35em);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.web-chat-reaction-chip {
+  animation: web-chat-reaction-pop 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.web-chat-reaction-count {
+  display: inline-block;
+  animation: web-chat-reaction-count-pop 140ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .web-chat-reaction-chip,
+  .web-chat-reaction-count {
+    animation: none;
+  }
+}

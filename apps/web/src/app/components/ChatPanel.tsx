@@ -9,11 +9,17 @@ import {
   Lock,
   Paperclip,
   Play,
-  Reply,
   Send,
   Square,
   X,
 } from "lucide-react";
+import ChatMessageActions from "./ChatMessageActions";
+import ChatReactionChips from "./ChatReactionChips";
+import ChatReactionViewer from "./ChatReactionViewer";
+import {
+  canReactToChatMessage,
+  toRenderableReactions,
+} from "../lib/chat-reactions";
 import {
   useCallback,
   useEffect,
@@ -111,6 +117,10 @@ interface ChatPanelProps {
   replyTarget?: ChatReplyPreview | null;
   onReply?: (message: ChatMessage) => void;
   onCancelReply?: () => void;
+  onToggleReaction?: (messageId: string, emoji: string) => void;
+  isReactionsDisabled?: boolean;
+  /** Names reactors in the chip tooltip and the reaction viewer. */
+  resolveDisplayName?: (userId: string) => string;
   /** Chat message id currently being spoken aloud by the TTS engine. */
   activeTtsMessageId?: string | null;
   onReplayTtsMessage?: (message: ChatMessage) => void;
@@ -237,6 +247,9 @@ function ChatPanel({
   replyTarget = null,
   onReply,
   onCancelReply,
+  onToggleReaction,
+  isReactionsDisabled = false,
+  resolveDisplayName,
   activeTtsMessageId = null,
   onReplayTtsMessage,
   onStopTts,
@@ -253,6 +266,15 @@ function ChatPanel({
   const highlightTimeoutRef = useRef<number | null>(null);
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
+  const [reactionViewerMessageId, setReactionViewerMessageId] = useState<
+    string | null
+  >(null);
+  // Departed reactors still appear in the stored userIds, so fall back to a
+  // stable label rather than rendering a raw id.
+  const resolveReactorName = useCallback(
+    (userId: string) => resolveDisplayName?.(userId) ?? "Someone",
+    [resolveDisplayName],
+  );
   const [isSendAnimating, setIsSendAnimating] = useState(false);
   const [pendingImage, setPendingImage] = useState<{
     file: File;
@@ -968,17 +990,20 @@ function ChatPanel({
                 </button>
               ) : null;
 
-              const replyButton = onReply && !isChatDisabled ? (
-                <button
-                  type="button"
-                  onClick={() => onReply(msg)}
-                  aria-label="Reply"
-                  title="Reply"
-                  className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full border border-white/10 bg-[#232327] text-[#a1a1aa] opacity-0 transition-[opacity,background-color,color] duration-100 hover:bg-[#2e2e33] hover:text-[#fafafa] focus-visible:opacity-100 group-hover:opacity-100"
-                >
-                  <Reply size={13} strokeWidth={2} />
-                </button>
-              ) : null;
+              // Reacting is a chat write, so it honours the chat lock as well
+              // as the reactions kill-switch (hosts keep access through both,
+              // mirroring ControlsBar). DMs are never retained in room history
+              // so they can't carry reactions at all.
+              const canReact =
+                Boolean(onToggleReaction) &&
+                canReactToChatMessage(msg) &&
+                !isChatDisabled &&
+                (!isReactionsDisabled || isAdmin);
+              const renderableReactions = toRenderableReactions(
+                msg.reactions,
+                currentUserId,
+              );
+              const canUseReply = Boolean(onReply) && !isChatDisabled;
 
               return (
                 <div
@@ -1042,7 +1067,9 @@ function ChatPanel({
                       // (items-end) this row is fit-content sized, and a reply
                       // quote's nowrap text would otherwise set its intrinsic
                       // width and blow the bubble past the panel edge.
-                      className={`flex max-w-full items-end gap-1.5 ${
+                      // relative anchors the hover action bar, which overlays
+                      // the bubble's top edge instead of consuming row width.
+                      className={`relative flex max-w-full items-end gap-1.5 ${
                         isOwn ? "flex-row-reverse" : ""
                       }`}
                     >
@@ -1098,8 +1125,38 @@ function ChatPanel({
                           </div>
                         )}
                       </div>
-                      {replyButton}
+                      <ChatMessageActions
+                        isOwn={isOwn}
+                        reactions={renderableReactions}
+                        onToggleReaction={
+                          canReact && onToggleReaction
+                            ? (emoji) => onToggleReaction(msg.id, emoji)
+                            : undefined
+                        }
+                        onReply={
+                          canUseReply && onReply
+                            ? () => onReply(msg)
+                            : undefined
+                        }
+                        onViewReactions={
+                          renderableReactions.length > 0
+                            ? () => setReactionViewerMessageId(msg.id)
+                            : undefined
+                        }
+                      />
                     </div>
+                    <ChatReactionChips
+                      isOwn={isOwn}
+                      reactions={renderableReactions}
+                      currentUserId={currentUserId}
+                      resolveDisplayName={resolveReactorName}
+                      disabled={!canReact}
+                      onToggle={
+                        canReact && onToggleReaction
+                          ? (emoji) => onToggleReaction(msg.id, emoji)
+                          : undefined
+                      }
+                    />
                     {embedUrls.length > 0 ? (
                       <div
                         className={`mt-1 flex w-full min-w-0 flex-col gap-1 ${
@@ -1531,6 +1588,30 @@ function ChatPanel({
           ) : null}
         </div>
       </form>
+
+      {reactionViewerMessageId ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Message reactions"
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget)
+              setReactionViewerMessageId(null);
+          }}
+        >
+          <ChatReactionViewer
+            reactions={toRenderableReactions(
+              messages.find((message) => message.id === reactionViewerMessageId)
+                ?.reactions,
+              currentUserId,
+            )}
+            currentUserId={currentUserId}
+            resolveDisplayName={resolveReactorName}
+            onClose={() => setReactionViewerMessageId(null)}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
