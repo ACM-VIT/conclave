@@ -3,6 +3,7 @@ import { Logger } from "../../utilities/loggers.js";
 import type { SfuState } from "../state.js";
 import { createConnectionContext, setSocketContext } from "./context.js";
 import { registerChatHandlers } from "./handlers/chatHandlers.js";
+import { registerChatReactionHandlers } from "./handlers/chatReactionHandlers.js";
 import { registerDisconnectHandlers } from "./handlers/disconnectHandlers.js";
 import { registerDisplayNameHandlers } from "./handlers/displayNameHandlers.js";
 import { registerHandHandlers } from "./handlers/handHandlers.js";
@@ -34,6 +35,7 @@ export const registerConnectionHandlers = (
     registerMediaHandlers(context);
     registerDisplayNameHandlers(context);
     registerChatHandlers(context);
+    registerChatReactionHandlers(context);
     registerReactionHandlers(context);
     registerHandHandlers(context);
     registerAppsHandlers(context);

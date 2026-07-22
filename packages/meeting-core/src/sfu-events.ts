@@ -54,6 +54,8 @@ export const SFU_EVENTS = {
     // Relays a signed streamed "@Conclave" AI answer for the whole room.
     conclaveAnswer: "conclaveAnswer",
     sendReaction: "sendReaction",
+    // Toggles the caller's emoji reaction on a specific chat message.
+    chatReact: "chat:react",
     setHandRaised: "setHandRaised",
     updateDisplayName: "updateDisplayName",
 
@@ -175,6 +177,8 @@ export const SFU_EVENTS = {
     conclaveMessage: "conclaveMessage",
     chatHistorySnapshot: "chatHistorySnapshot",
     reaction: "reaction",
+    // Authoritative reaction set for one chat message, after any toggle.
+    chatReactionChanged: "chat:reactionChanged",
     handRaised: "handRaised",
     handRaisedSnapshot: "handRaisedSnapshot",
     displayNameUpdated: "displayNameUpdated",

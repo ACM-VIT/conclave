@@ -6,9 +6,11 @@ import type {
   ChatGifAttachment,
   ChatImageAttachment,
   ChatMessage,
+  ChatMessageReaction,
   ChatReplyPreview,
   SendChatMessageOptions,
 } from "../lib/types";
+import { applyLocalReactionToggle } from "../lib/chat-reactions";
 import {
   createLocalChatMessage,
   formatActionContent,
@@ -555,6 +557,74 @@ export function useMeetChat({
     setReplyTarget(null);
   }, []);
 
+  /**
+   * Toggle our emoji reaction on a message.
+   *
+   * We apply the toggle optimistically so the chip responds instantly, then
+   * overwrite with the server's authoritative set from the ack (the same set
+   * every other client receives via `chat:reactionChanged`). On error we
+   * restore the pre-toggle set rather than re-inverting, so a rejected toggle
+   * can't drift out of sync with a concurrent reaction from someone else.
+   */
+  const toggleMessageReaction = useCallback(
+    (messageId: string, emoji: string) => {
+      const socket = socketRef.current;
+      if (!socket) return;
+
+      // Captured inside the updater, not from chatMessagesRef: that ref syncs
+      // in an effect and so lags a render, which would hand a rapid second
+      // toggle a stale set to roll back to.
+      let previous: ChatMessageReaction[] | undefined;
+
+      setChatMessages((prev) =>
+        prev.map((message) => {
+          if (message.id !== messageId) return message;
+          previous = message.reactions;
+          return {
+            ...message,
+            reactions: applyLocalReactionToggle(
+              message.reactions,
+              emoji,
+              currentUserId,
+            ),
+          };
+        }),
+      );
+
+      socket.emit(
+        "chat:react",
+        { messageId, emoji },
+        (
+          response:
+            | { success: true; reactions: ChatMessageReaction[] }
+            | { error: string },
+        ) => {
+          const settled =
+            "error" in response ? previous : (response.reactions ?? []);
+
+          if ("error" in response) {
+            console.error(
+              "[Meets] Failed to toggle message reaction:",
+              response.error,
+            );
+          }
+
+          setChatMessages((prev) =>
+            prev.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    reactions: settled?.length ? settled : undefined,
+                  }
+                : message,
+            ),
+          );
+        },
+      );
+    },
+    [currentUserId, setChatMessages, socketRef],
+  );
+
   const clearChat = useCallback(() => {
     setChatMessages([]);
     setChatOverlayMessages([]);
@@ -1003,6 +1073,7 @@ export function useMeetChat({
     replyTarget,
     startReply,
     cancelReply,
+    toggleMessageReaction,
     assistantApiKeyPrompt,
     submitAssistantApiKey,
     cancelAssistantApiKeyPrompt,

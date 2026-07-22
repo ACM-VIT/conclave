@@ -21,6 +21,7 @@ import type {
   AdminNoticeNotification,
   ChatHistorySnapshot,
   ChatMessage,
+  ChatReactionChangedNotification,
   ConnectionState,
   Consumer,
   ConsumeResponse,
@@ -8004,6 +8005,33 @@ export function useMeetSocket({
                 });
               }
             });
+
+            // The payload is the complete reaction set for that message, so we
+            // replace rather than merge. Messages we've never seen (evicted or
+            // never received) are ignored — the next history snapshot carries
+            // reactions inline.
+            socket.on(
+              "chat:reactionChanged",
+              ({
+                messageId,
+                reactions,
+                roomId: eventRoomId,
+              }: ChatReactionChangedNotification) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                if (!messageId || !Array.isArray(reactions)) return;
+
+                chat.setChatMessages((prev) =>
+                  prev.map((message) =>
+                    message.id === messageId
+                      ? {
+                          ...message,
+                          reactions: reactions.length ? reactions : undefined,
+                        }
+                      : message,
+                  ),
+                );
+              },
+            );
 
             socket.on(
               "handRaised",

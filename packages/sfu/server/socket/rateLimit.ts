@@ -116,6 +116,9 @@ export const RATE_LIMITS = {
   transcriptRelay: { capacity: 4, refillPerSec: 0.5 },
   // Reactions: ~5/s sustained, small burst.
   reaction: { capacity: 10, refillPerSec: 5 },
+  // Chat message reactions are click-driven (not held), so a tighter sustained
+  // rate than floating reactions is fine while still allowing a quick burst.
+  chatReaction: { capacity: 10, refillPerSec: 3 },
   // Hand raise toggles: low frequency.
   hand: { capacity: 5, refillPerSec: 2 },
   // Display-name changes broadcast room-wide and should be rare.

@@ -18,10 +18,12 @@ import * as Y from "yjs";
 import type {
   ActiveSpeakerChangedNotification,
   ChatMessage,
+  ChatMessageReaction,
   ProducerInfo,
   VideoQuality,
   WebRtcTransportRole,
 } from "../../types.js";
+import { MAX_REACTIONS_PER_CHAT_MESSAGE } from "../../types.js";
 import { Logger } from "../../utilities/loggers.js";
 import { config } from "../config.js";
 import { Admin } from "./Admin.js";
@@ -92,6 +94,11 @@ export type RoomChatImageAsset = {
 const WEBINAR_AUDIO_LEVEL_THRESHOLD = -70;
 const WEBINAR_AUDIO_LEVEL_INTERVAL_MS = 350;
 const CHAT_HISTORY_LIMIT = 100;
+
+export type ToggleChatReactionResult =
+  | { ok: true; reactions: ChatMessageReaction[] }
+  | { ok: false; reason: "not-found" | "too-many-reactions" };
+
 export const MAX_CHAT_IMAGE_BYTES = 6 * 1024 * 1024;
 export const CHAT_IMAGE_ORPHAN_TTL_MS = 2 * 60 * 1000;
 const MAX_CHAT_IMAGE_ROOM_BYTES = 64 * 1024 * 1024;
@@ -752,6 +759,50 @@ export class Room {
 
   getChatHistorySnapshot(): ChatMessage[] {
     return this.recentChatMessages.slice();
+  }
+
+  /**
+   * Toggle `userId`'s `emoji` reaction on a retained chat message.
+   *
+   * Reactions are stored on the retained message itself, so they replay to late
+   * joiners via getChatHistorySnapshot() and are evicted with the message. Only
+   * broadcast messages are retained (see recordChatMessage), so direct messages
+   * cannot be reacted to — the handler surfaces that as "Message not found".
+   */
+  toggleChatMessageReaction(
+    messageId: string,
+    userId: string,
+    emoji: string,
+  ): ToggleChatReactionResult {
+    const message = this.recentChatMessages.find((m) => m.id === messageId);
+    if (!message) {
+      return { ok: false, reason: "not-found" };
+    }
+
+    const reactions = message.reactions ?? [];
+    const existing = reactions.find((r) => r.emoji === emoji);
+
+    if (existing) {
+      const index = existing.userIds.indexOf(userId);
+      if (index === -1) {
+        existing.userIds.push(userId);
+      } else {
+        existing.userIds.splice(index, 1);
+      }
+    } else {
+      // Only adding a *new* emoji can grow the set, so this is the only place
+      // the cap needs enforcing. Removals below can shrink it again.
+      if (reactions.length >= MAX_REACTIONS_PER_CHAT_MESSAGE) {
+        return { ok: false, reason: "too-many-reactions" };
+      }
+      reactions.push({ emoji, userIds: [userId] });
+    }
+
+    // Drop emoji nobody is reacting with so counts never render as zero.
+    const remaining = reactions.filter((r) => r.userIds.length > 0);
+    message.reactions = remaining.length > 0 ? remaining : undefined;
+
+    return { ok: true, reactions: remaining };
   }
 
   getClient(clientId: string): Client | undefined {

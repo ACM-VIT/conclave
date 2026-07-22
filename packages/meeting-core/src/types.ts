@@ -59,7 +59,44 @@ export interface ChatMessage {
   ttsVoiceToken?: string;
   /** Sender dismissed the link preview; clients must not render embeds. */
   suppressEmbeds?: boolean;
+  /**
+   * Emoji reactions on this message. Server-authoritative and always sent as
+   * the complete set, so clients replace rather than merge. Absent means none.
+   */
+  reactions?: ChatMessageReaction[];
 }
+
+/**
+ * One emoji and everyone who reacted with it. User IDs (not a bare count) are
+ * on the wire so a client can render "you reacted" without extra bookkeeping,
+ * and so toggling stays idempotent across reconnects.
+ */
+export interface ChatMessageReaction {
+  emoji: string;
+  userIds: string[];
+}
+
+/**
+ * Caps the distinct emoji per message. Chat history is in-memory on the SFU,
+ * so this bounds how much a room can accumulate.
+ */
+export const MAX_REACTIONS_PER_CHAT_MESSAGE = 12;
+
+/**
+ * The canonical emoji set for both floating meeting reactions and chat message
+ * reactions. Mirrored by `allowedEmojiReactions` in the SFU (which stays
+ * dependency-free of this package) — keep the two in sync.
+ */
+export const CHAT_REACTION_EMOJIS = [
+  "👍",
+  "👏",
+  "😂",
+  "❤️",
+  "🎉",
+  "😮",
+  "😢",
+  "🤔",
+] as const;
 
 export interface SendChatMessageOptions {
   suppressEmbeds?: boolean;
@@ -140,6 +177,13 @@ export interface AdminNoticeNotification {
 
 export interface ChatHistorySnapshot {
   messages: ChatMessage[];
+  roomId?: string;
+}
+
+/** Complete post-toggle reaction set for one chat message. Replace, don't merge. */
+export interface ChatReactionChangedNotification {
+  messageId: string;
+  reactions: ChatMessageReaction[];
   roomId?: string;
 }
 

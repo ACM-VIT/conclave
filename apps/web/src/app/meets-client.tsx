@@ -1118,6 +1118,7 @@ export default function MeetsClient({
     replyTarget,
     startReply,
     cancelReply,
+    toggleMessageReaction,
     assistantApiKeyPrompt,
     submitAssistantApiKey,
     cancelAssistantApiKeyPrompt,
@@ -3396,6 +3397,7 @@ export default function MeetsClient({
         setChatOverlayMessages={setChatOverlayMessages}
         replyTarget={replyTarget}
         onReplyToMessage={startReply}
+        onToggleMessageReaction={toggleMessageReaction}
         onCancelReply={cancelReply}
         activeTtsMessageId={activeTtsMessageId}
         onReplayTtsMessage={handleReplayTtsMessage}
