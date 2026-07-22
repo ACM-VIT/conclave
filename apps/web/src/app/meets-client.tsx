@@ -3397,7 +3397,9 @@ export default function MeetsClient({
         setChatOverlayMessages={setChatOverlayMessages}
         replyTarget={replyTarget}
         onReplyToMessage={startReply}
-        onToggleMessageReaction={toggleMessageReaction}
+        onToggleMessageReaction={
+          isWebinarAttendee ? undefined : toggleMessageReaction
+        }
         onCancelReply={cancelReply}
         activeTtsMessageId={activeTtsMessageId}
         onReplayTtsMessage={handleReplayTtsMessage}

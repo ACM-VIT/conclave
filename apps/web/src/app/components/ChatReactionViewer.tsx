@@ -35,6 +35,7 @@ export default function ChatReactionViewer({
 }: ChatReactionViewerProps) {
   const [activeTab, setActiveTab] = useState(ALL_TAB);
   const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const baseId = useId();
 
   const totalCount = reactions.reduce((sum, r) => sum + r.count, 0);
@@ -67,6 +68,61 @@ export default function ChatReactionViewer({
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
+
+  // Modal focus management. The overlay is aria-modal, but on its own that only
+  // tells AT the background is inert — it doesn't move or contain focus. Without
+  // this, focus stays on the "View who reacted" trigger behind the overlay, so
+  // Tab walks the chat controls underneath instead of the viewer. Move focus in
+  // on open, keep Tab within the card while open, and restore it to the trigger
+  // on close.
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const container = containerRef.current;
+
+    const getFocusable = (): HTMLElement[] =>
+      Array.from(
+        container?.querySelectorAll<HTMLElement>("button, [href], [tabindex]") ??
+          [],
+      ).filter(
+        (el) =>
+          el.getAttribute("tabindex") !== "-1" &&
+          !el.hasAttribute("disabled") &&
+          el.offsetParent !== null,
+      );
+
+    // Prefer the selected tab (the only one in the tab order); fall back to the
+    // first focusable, e.g. the close button.
+    const initial =
+      container?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]') ??
+      getFocusable()[0];
+    initial?.focus();
+
+    const handleTab = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || !container) return;
+      const focusables = getFocusable();
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+
+      if (active && !container.contains(active)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleTab);
+    return () => {
+      document.removeEventListener("keydown", handleTab);
+      previouslyFocused?.focus?.();
+    };
+  }, []);
 
   if (reactions.length === 0) return null;
 
@@ -103,7 +159,10 @@ export default function ChatReactionViewer({
     );
 
   return (
-    <div className="flex max-h-[340px] w-[268px] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#232327] shadow-2xl shadow-black/60">
+    <div
+      ref={containerRef}
+      className="flex max-h-[340px] w-[268px] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#232327] shadow-2xl shadow-black/60"
+    >
       <div className="flex items-center justify-between px-3 pb-1.5 pt-2.5">
         <span className="text-[13px] font-semibold text-[#fafafa]">
           Reactions

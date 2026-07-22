@@ -142,4 +142,18 @@ describe("canReactToChatMessage", () => {
   it("blocks direct messages, which the SFU never retains", () => {
     expect(canReactToChatMessage(message({ isDirect: true }))).toBe(false);
   });
+
+  it("blocks locally generated notices (local-* ids), which have no server object", () => {
+    expect(
+      canReactToChatMessage(
+        message({ id: "local-123-abc", userId: "system" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("blocks still-unacked optimistic sends (optimistic-* ids)", () => {
+    expect(
+      canReactToChatMessage(message({ id: "optimistic-123-abc" })),
+    ).toBe(false);
+  });
 });

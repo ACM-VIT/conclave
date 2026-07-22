@@ -226,7 +226,8 @@ interface MeetsMainContentProps {
   setChatOverlayMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   replyTarget: ChatReplyPreview | null;
   onReplyToMessage: (message: ChatMessage) => void;
-  onToggleMessageReaction: (messageId: string, emoji: string) => void;
+  /** Withheld (undefined) for watch-only observers, who cannot react. */
+  onToggleMessageReaction?: (messageId: string, emoji: string) => void;
   onCancelReply: () => void;
   /** Chat message id currently being spoken by the TTS engine. */
   activeTtsMessageId?: string | null;

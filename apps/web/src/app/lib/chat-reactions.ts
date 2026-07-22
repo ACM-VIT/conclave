@@ -103,9 +103,17 @@ export const formatReactorSummary = (
 };
 
 /**
- * Direct messages are never retained in room chat history, so the SFU has no
- * object to hang a reaction on. Hide the affordance rather than letting the
- * click fail with "Message not found".
+ * Only server-retained messages can carry reactions. Three kinds never reach
+ * room history, so the SFU has no object to hang a reaction on:
+ *   - direct messages (never retained);
+ *   - locally generated notices — `/help`, command output, etc. — which use
+ *     `local-*` ids and the synthetic "system" author;
+ *   - still-unacked optimistic sends, which use `optimistic-*` ids until the
+ *     server assigns the real id.
+ * Reacting to any of them would apply optimistically and then roll back with
+ * "Message not found", so hide the affordance instead.
  */
 export const canReactToChatMessage = (message: ChatMessage): boolean =>
-  !message.isDirect;
+  !message.isDirect &&
+  !message.id.startsWith("local-") &&
+  !message.id.startsWith("optimistic-");

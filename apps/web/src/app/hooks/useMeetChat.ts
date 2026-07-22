@@ -570,6 +570,12 @@ export function useMeetChat({
     (messageId: string, emoji: string) => {
       const socket = socketRef.current;
       if (!socket) return;
+      // Watch-only attendees can't write chat; the server rejects their
+      // reactions outright. Bail before the optimistic flip so we never show a
+      // chip that is guaranteed to roll back. The affordance is also hidden in
+      // the UI (onToggleReaction is withheld for observers) — this is the
+      // defense-in-depth floor in case a caller reaches this directly.
+      if (isObserverMode) return;
 
       // Captured inside the updater, not from chatMessagesRef: that ref syncs
       // in an effect and so lags a render, which would hand a rapid second
@@ -622,7 +628,7 @@ export function useMeetChat({
         },
       );
     },
-    [currentUserId, setChatMessages, socketRef],
+    [currentUserId, isObserverMode, setChatMessages, socketRef],
   );
 
   const clearChat = useCallback(() => {

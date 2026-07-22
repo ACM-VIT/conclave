@@ -7632,8 +7632,31 @@ export function useMeetSocket({
                 );
                 if (visible.length === 0) return;
                 chat.setChatMessages((prev) => {
-                  const seen = new Set(prev.map((message) => message.id));
-                  const seeded = [...prev];
+                  const bySnapshotId = new Map(
+                    visible.map((message) => [message.id, message]),
+                  );
+                  // Reconnect recovery: a reaction that changed while we were
+                  // disconnected only reaches us through this snapshot — we
+                  // missed the live chat:reactionChanged. Overlay the
+                  // authoritative reaction set onto messages we already hold so
+                  // stale counts don't persist. Only reactions are reconciled;
+                  // the rest of a retained message is immutable and already
+                  // normalized. Reactionless messages keep their reference, so
+                  // the common case creates no new objects.
+                  const reconciled = prev.map((message) => {
+                    const snapshot = bySnapshotId.get(message.id);
+                    if (!snapshot) return message;
+                    const nextReactions = snapshot.reactions?.length
+                      ? snapshot.reactions
+                      : undefined;
+                    if (message.reactions === nextReactions) return message;
+                    return { ...message, reactions: nextReactions };
+                  });
+
+                  const seen = new Set(
+                    reconciled.map((message) => message.id),
+                  );
+                  const seeded = [...reconciled];
                   for (const message of visible) {
                     if (seen.has(message.id)) continue;
                     seen.add(message.id);
@@ -8007,9 +8030,11 @@ export function useMeetSocket({
             });
 
             // The payload is the complete reaction set for that message, so we
-            // replace rather than merge. Messages we've never seen (evicted or
-            // never received) are ignored — the next history snapshot carries
-            // reactions inline.
+            // replace rather than merge. A message we don't currently hold is
+            // ignored here; when we later receive it inline (a fresh message,
+            // or the host-only history snapshot on reconnect) its reactions
+            // come with it. The snapshot handler above reconciles reactions on
+            // messages we already hold, covering changes missed while away.
             socket.on(
               "chat:reactionChanged",
               ({

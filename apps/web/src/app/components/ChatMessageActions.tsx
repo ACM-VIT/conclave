@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { MoreHorizontal, Reply, SmilePlus } from "lucide-react";
 import AnchoredPopover from "./AnchoredPopover";
 import ChatReactionPicker from "./ChatReactionPicker";
@@ -55,9 +55,20 @@ const ChatMessageActionsImpl = ({
 
   const closePicker = useCallback(() => setIsPickerOpen(false), []);
 
+  // Reactions can go away while the picker is open — the host locks chat or
+  // flips the kill-switch, and onToggleReaction drops to undefined. The picker
+  // button and panel then unmount, but isPickerOpen would stay true: that pins
+  // the toolbar open and pointer-active with only Reply/More left, and silently
+  // reopens the picker if reactions come back. Reset so the toolbar returns to
+  // its idle, hover-gated state.
+  useEffect(() => {
+    if (!onToggleReaction) setIsPickerOpen(false);
+  }, [onToggleReaction]);
+
   // Keep the toolbar up while the picker is open, otherwise moving the pointer
-  // onto the panel would dismiss the thing you are aiming at.
-  const isPinned = isPickerOpen;
+  // onto the panel would dismiss the thing you are aiming at. Guarded on the
+  // handler so a stale isPickerOpen can never pin an un-dismissable toolbar.
+  const isPinned = isPickerOpen && Boolean(onToggleReaction);
 
   const ownEmojis = new Set(
     reactions.filter((r) => r.reactedByMe).map((r) => r.emoji),

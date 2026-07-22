@@ -184,7 +184,9 @@ export interface ChatHistorySnapshot {
 export interface ChatReactionChangedNotification {
   messageId: string;
   reactions: ChatMessageReaction[];
-  roomId?: string;
+  // Always set by the server (mirrors the sfu type); clients still guard with
+  // isRoomEvent before applying, but the contract is that it is present.
+  roomId: string;
 }
 
 export type {
