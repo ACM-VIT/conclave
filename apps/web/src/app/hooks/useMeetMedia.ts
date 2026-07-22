@@ -116,6 +116,7 @@ interface UseMeetMediaOptions {
   setIsMuted: (value: boolean) => void;
   isCameraOff: boolean;
   setIsCameraOff: (value: boolean) => void;
+  cameraDisabled?: boolean;
   isScreenSharing: boolean;
   setIsScreenSharing: (value: boolean) => void;
   activeScreenShareId: string | null;
@@ -497,6 +498,7 @@ export function useMeetMedia({
   setIsMuted,
   isCameraOff,
   setIsCameraOff,
+  cameraDisabled = false,
   isScreenSharing,
   setIsScreenSharing,
   activeScreenShareId,
@@ -3917,6 +3919,7 @@ export function useMeetMedia({
 
   const toggleCamera = useCallback(async () => {
     if (isObserverMode) return;
+    if (cameraDisabled && isCameraOff) return;
     if (toggleCameraInFlightRef.current) return;
     toggleCameraInFlightRef.current = true;
 
@@ -4085,6 +4088,7 @@ export function useMeetMedia({
     }
   }, [
     isObserverMode,
+    cameraDisabled,
     isCameraOff,
     attachLocalVideoTrackHandlers,
     handleLocalTrackEnded,

@@ -4475,6 +4475,7 @@ final class ConclaveTests: XCTestCase {
         viewModel.state.connectionState = ConnectionState.joined
         viewModel.state.isMuted = false
         viewModel.state.isCameraOff = false
+        viewModel.state.isAudioOnlyMode = true
         viewModel.state.isScreenSharing = true
         viewModel.state.activeScreenShareUserId = viewModel.state.userId
 
@@ -4482,6 +4483,7 @@ final class ConclaveTests: XCTestCase {
 
         XCTAssertTrue(viewModel.state.isMuted)
         XCTAssertTrue(viewModel.state.isCameraOff)
+        XCTAssertFalse(viewModel.state.isAudioOnlyMode)
         XCTAssertFalse(viewModel.state.isScreenSharing)
         XCTAssertNil(viewModel.state.activeScreenShareUserId)
     }

@@ -165,6 +165,7 @@ interface JoinScreenProps {
   onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   onEnterStart?: (action: "new" | "join") => void;
+  audioOnlyMode?: boolean;
 }
 
 // Flat, Google-Meet-style lobby (dark Carbon, no gradients/marketing): a single
@@ -311,6 +312,7 @@ function JoinScreen({
   onVideoEffectsChange,
   onPrejoinMediaCommit,
   onEnterStart,
+  audioOnlyMode = false,
 }: JoinScreenProps) {
   const normalizedRoomId =
     roomId === "undefined" || roomId === "null" ? "" : roomId;
@@ -1352,10 +1354,11 @@ function JoinScreen({
                   </button>
                   <button
                     onClick={toggleCamera}
+                    disabled={audioOnlyMode}
                     aria-label={isCameraOn ? "Turn off camera" : "Turn on camera"}
                     className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
                       isCameraOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
-                    }`}
+                    } disabled:cursor-not-allowed disabled:opacity-45`}
                   >
                     {isCameraOn ? <Video size={18} /> : <VideoOff size={18} />}
                   </button>

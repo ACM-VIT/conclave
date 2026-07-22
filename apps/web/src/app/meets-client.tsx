@@ -1198,6 +1198,7 @@ export default function MeetsClient({
     setIsMuted,
     isCameraOff,
     setIsCameraOff,
+    cameraDisabled: viewSettings.audioOnlyMode,
     isScreenSharing,
     setIsScreenSharing,
     activeScreenShareId,
@@ -2318,6 +2319,7 @@ export default function MeetsClient({
     activeVideoEffectsCount,
     connectionQualityRef: connectionQualityDebugRef,
     dataSaverMode: effectiveDataSaverMode,
+    audioOnlyMode: viewSettings.audioOnlyMode,
     isDocumentVisible,
     updateVideoQualityRef,
     requestMediaPermissions,
@@ -2342,6 +2344,10 @@ export default function MeetsClient({
     onLocalRoomEnded: handleLocalRoomEnded,
     bypassMediaPermissions,
   });
+
+  useEffect(() => {
+    if (viewSettings.audioOnlyMode && !isCameraOff) void toggleCamera();
+  }, [isCameraOff, toggleCamera, viewSettings.audioOnlyMode]);
 
   useEffect(() => {
     ensureProducerTransportRef.current = socket.ensureProducerTransport;
@@ -2584,6 +2590,7 @@ export default function MeetsClient({
     const targetRoomId = generateRoomCode();
     handleStopVoiceAgent();
     socket.cleanup();
+    setViewSettings((settings) => ({ ...settings, audioOnlyMode: false }));
     setMeetError(null);
     setMeetingEndedNotice(null);
     setWaitingMessage(null);
@@ -2614,6 +2621,7 @@ export default function MeetsClient({
     playNotificationSoundForEvents("leave");
     shouldResetMeetingSurfaceOnDisconnectRef.current = true;
     socket.cleanup();
+    setViewSettings((settings) => ({ ...settings, audioOnlyMode: false }));
     setIsCameraOff(true);
     setIsMuted(true);
   }, [

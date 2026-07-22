@@ -1959,6 +1959,17 @@ struct SettingsSheetView: View {
     private var audioVideoSettingsContent: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.xs) {
             MeetingSheetSectionCard {
+                settingsToggleRow(
+                    "Audio only",
+                    icon: "waveform",
+                    androidIcon: "headphones",
+                    isOn: Binding(
+                        get: { viewModel.state.isAudioOnlyMode },
+                        set: { viewModel.setAudioOnlyMode($0) }
+                    ),
+                    isActive: viewModel.state.isAudioOnlyMode
+                )
+                MoreRowDivider()
                 settingsNavigationRow(
                     "Microphone",
                     subtitle: microphoneSummary,

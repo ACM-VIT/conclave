@@ -2482,7 +2482,7 @@ struct JoinView: View {
         resetScheduledWebinarStatus()
         viewModel.state.displayName = resolvedDisplayName(fallback: "Host")
         viewModel.state.isMuted = !isMicOn
-        viewModel.state.isCameraOff = !shouldJoinWithCameraOn
+        viewModel.state.isCameraOff = viewModel.state.isAudioOnlyMode || !shouldJoinWithCameraOn
         viewModel.beginMeetingEntry(action: .new)
         let userPayload = sfuJoinUserPayload(displayName: viewModel.state.displayName)
         viewModel.joinRoom(
@@ -2533,7 +2533,7 @@ struct JoinView: View {
             viewModel.state.isCameraOff = true
         } else {
             viewModel.state.isMuted = !isMicOn
-            viewModel.state.isCameraOff = !shouldJoinWithCameraOn
+            viewModel.state.isCameraOff = viewModel.state.isAudioOnlyMode || !shouldJoinWithCameraOn
         }
         viewModel.beginMeetingEntry(action: .join)
         let userPayload = sfuJoinUserPayload(displayName: viewModel.state.displayName)
@@ -3104,6 +3104,7 @@ struct JoinView: View {
     }
 
     private func toggleCamera() {
+        guard !viewModel.state.isAudioOnlyMode else { return }
 #if SKIP
         if isCameraOn {
             cancelAndroidCameraPermissionWaiter()

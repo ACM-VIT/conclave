@@ -202,6 +202,7 @@ final class MeetingState {
     // Media State
     var isMuted: Bool = true
     var isCameraOff: Bool = true
+    var isAudioOnlyMode: Bool = false
     var isScreenSharing: Bool = false
     var isHandRaised: Bool = false
     var videoQuality: VideoQuality = .standard

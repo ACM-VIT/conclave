@@ -5363,6 +5363,7 @@ final class MeetingViewModel {
 
             guard !paused,
                   wasPaused == true,
+                  !(state.isAudioOnlyMode && kind == "video"),
                   let consumerId = webRTCClient.consumerId(forProducer: producer.producerId) else { continue }
             consumersToResume.append((consumerId: consumerId, requestKeyFrame: kind == "video"))
         }
@@ -6073,7 +6074,8 @@ final class MeetingViewModel {
             } else {
                 handleProducerState(producer)
             }
-            if let consumerId = webRTCClient.consumerId(forProducer: producer.producerId) {
+            if let consumerId = webRTCClient.consumerId(forProducer: producer.producerId),
+               !(state.isAudioOnlyMode && producer.kind == "video") {
                 try? await socketManager.resumeConsumer(consumerId: consumerId, requestKeyFrame: false)
             } else if webRTCClient.hasConsumerGeneration(forProducer: producer.producerId) {
                 // A planned make-before-break reset owns this producer. Its
@@ -6960,6 +6962,7 @@ final class MeetingViewModel {
         state.isHandRaised = false
         state.isScreenSharing = false
         state.isMuted = true
+        state.isAudioOnlyMode = false
         setLocalCameraOffState(true)
         state.activeScreenShareUserId = nil
         state.activeSpeakerId = nil
@@ -7248,6 +7251,7 @@ final class MeetingViewModel {
     }
 
     func toggleCamera() {
+        guard !state.isAudioOnlyMode else { return }
         guard MeetingMediaControlAvailabilityPolicy.canChangeLocalMediaIntent(
             connectionState: state.connectionState,
             isRecoveringConnection: state.isRecoveringConnection,
@@ -7287,6 +7291,18 @@ final class MeetingViewModel {
                 state.errorMessage = MeetingMediaErrorPresentation.message(for: error)
             }
         }
+    }
+
+    func setAudioOnlyMode(_ enabled: Bool) {
+        guard state.isAudioOnlyMode != enabled else { return }
+        state.isAudioOnlyMode = enabled
+        if enabled && !state.isCameraOff {
+            setLocalCameraOffState(true)
+            Task { @MainActor [weak self] in
+                await self?.webRTCClient.closeLocalVideoProducer()
+            }
+        }
+        scheduleRemoteConsumerBandwidthPolicyUpdate()
     }
 
     var localCameraFacing: LocalCameraFacing {
@@ -7764,6 +7780,7 @@ final class MeetingViewModel {
     }
 
     private var shouldReceiveRemoteVideoConsumers: Bool {
+        guard !state.isAudioOnlyMode else { return false }
         #if SKIP
         if PipController.inPipMode { return true }
         #endif
