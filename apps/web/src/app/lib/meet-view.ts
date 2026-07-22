@@ -114,10 +114,7 @@ export function normalizeMeetViewSettings(value: unknown): MeetViewSettings {
       typeof value.dataSaverMode === "boolean"
         ? value.dataSaverMode
         : DEFAULT_MEET_VIEW_SETTINGS.dataSaverMode,
-    audioOnlyMode:
-      typeof value.audioOnlyMode === "boolean"
-        ? value.audioOnlyMode
-        : DEFAULT_MEET_VIEW_SETTINGS.audioOnlyMode,
+    audioOnlyMode: DEFAULT_MEET_VIEW_SETTINGS.audioOnlyMode,
     selfViewMode: isMeetSelfViewMode(value.selfViewMode)
       ? value.selfViewMode
       : DEFAULT_MEET_VIEW_SETTINGS.selfViewMode,

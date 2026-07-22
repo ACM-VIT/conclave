@@ -9,12 +9,12 @@ describe("normalizeMeetViewSettings", () => {
     expect(normalizeMeetViewSettings({}).audioOnlyMode).toBe(false);
   });
 
-  it("preserves audio-only participant intent", () => {
+  it("resets audio-only mode between meetings", () => {
     expect(
       normalizeMeetViewSettings({
         ...DEFAULT_MEET_VIEW_SETTINGS,
         audioOnlyMode: true,
       }).audioOnlyMode,
-    ).toBe(true);
+    ).toBe(false);
   });
 });

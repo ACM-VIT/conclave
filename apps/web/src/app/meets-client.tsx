@@ -2346,7 +2346,7 @@ export default function MeetsClient({
   });
 
   useEffect(() => {
-    if (viewSettings.audioOnlyMode && !isCameraOff) toggleCamera();
+    if (viewSettings.audioOnlyMode && !isCameraOff) void toggleCamera();
   }, [isCameraOff, toggleCamera, viewSettings.audioOnlyMode]);
 
   useEffect(() => {
@@ -2590,6 +2590,7 @@ export default function MeetsClient({
     const targetRoomId = generateRoomCode();
     handleStopVoiceAgent();
     socket.cleanup();
+    setViewSettings((settings) => ({ ...settings, audioOnlyMode: false }));
     setMeetError(null);
     setMeetingEndedNotice(null);
     setWaitingMessage(null);
@@ -2620,6 +2621,7 @@ export default function MeetsClient({
     playNotificationSoundForEvents("leave");
     shouldResetMeetingSurfaceOnDisconnectRef.current = true;
     socket.cleanup();
+    setViewSettings((settings) => ({ ...settings, audioOnlyMode: false }));
     setIsCameraOff(true);
     setIsMuted(true);
   }, [
