@@ -78,6 +78,7 @@ interface VideoEffectsPanelProps {
   debugStats?: VideoEffectsDebugStats | null;
   activeCount: number;
   cameraPermissionBlocked?: boolean;
+  cameraActivationBlocked?: boolean;
   onRecenterFraming?: () => void;
   /** Turns the REAL meeting camera on/off (visible to everyone). */
   onToggleCamera?: () => void;
@@ -413,6 +414,7 @@ function VideoEffectsPreview({
   preparingLabel,
   onToggleCamera,
   cameraToggleDisabled = false,
+  cameraPreviewDisabled = cameraToggleDisabled,
   isPreviewOnly = false,
   isPreviewStarting = false,
   onStartPreview,
@@ -425,6 +427,7 @@ function VideoEffectsPreview({
   preparingLabel: string;
   onToggleCamera?: () => void;
   cameraToggleDisabled?: boolean;
+  cameraPreviewDisabled?: boolean;
   isPreviewOnly?: boolean;
   isPreviewStarting?: boolean;
   onStartPreview?: () => void;
@@ -476,7 +479,7 @@ function VideoEffectsPreview({
                 type="button"
                 data-testid="video-effects-start-preview"
                 onClick={onStartPreview}
-                disabled={cameraToggleDisabled || isPreviewStarting}
+                disabled={cameraPreviewDisabled || isPreviewStarting}
                 aria-busy={isPreviewStarting || undefined}
                 className="inline-flex items-center gap-2 rounded-full bg-[#F95F4A] px-4 py-2 text-[13px] font-medium text-white transition-[filter] duration-[120ms] hover:brightness-105 disabled:cursor-not-allowed disabled:bg-[#232327] disabled:text-[#fafafa]/40"
               >
@@ -565,6 +568,7 @@ export default function VideoEffectsPanel({
   debugStats = null,
   activeCount,
   cameraPermissionBlocked = false,
+  cameraActivationBlocked = false,
   onRecenterFraming,
   onToggleCamera,
   isCameraPreviewActive = false,
@@ -1191,7 +1195,10 @@ export default function VideoEffectsPanel({
           isPreparing={isPreparingEffects}
           preparingLabel={preparingLabel}
           onToggleCamera={onToggleCamera}
-          cameraToggleDisabled={cameraPermissionBlocked}
+          cameraToggleDisabled={
+            cameraPermissionBlocked || cameraActivationBlocked
+          }
+          cameraPreviewDisabled={cameraPermissionBlocked}
           isPreviewOnly={isCameraPreviewActive}
           isPreviewStarting={isCameraPreviewStarting}
           onStartPreview={onStartCameraPreview}
@@ -1209,14 +1216,20 @@ export default function VideoEffectsPanel({
             <span className="text-[12px] leading-snug text-[#fafafa]/74">
               Camera is off for the meeting.
             </span>
-            <button
-              type="button"
-              data-testid="video-effects-turn-on-for-everyone"
-              onClick={onToggleCamera}
-              className="shrink-0 rounded-full border border-[#F95F4A]/40 bg-[#F95F4A]/[0.14] px-3 py-1.5 text-[12px] font-medium text-[#F95F4A] transition-colors duration-[120ms] hover:bg-[#F95F4A] hover:text-white"
-            >
-              Turn on for everyone
-            </button>
+            {cameraActivationBlocked ? (
+              <span className="shrink-0 text-[12px] font-medium text-[#a1a1aa]">
+                Disabled by host
+              </span>
+            ) : (
+              <button
+                type="button"
+                data-testid="video-effects-turn-on-for-everyone"
+                onClick={onToggleCamera}
+                className="shrink-0 rounded-full border border-[#F95F4A]/40 bg-[#F95F4A]/[0.14] px-3 py-1.5 text-[12px] font-medium text-[#F95F4A] transition-colors duration-[120ms] hover:bg-[#F95F4A] hover:text-white"
+              >
+                Turn on for everyone
+              </button>
+            )}
           </div>
         ) : null}
         {cameraPreviewError ? (

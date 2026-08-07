@@ -101,6 +101,7 @@ import {
   rememberProvenVp9EncoderIncompatibility,
 } from "../lib/webcam-codec-policy";
 import { setNoiseCancellationTrackEnabled } from "../lib/noise-cancellation";
+import { applyBackgroundAudioBuffer } from "../lib/background-audio-playback";
 import {
   getMostConstrainedWebcamProducerNetworkProfile,
   getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate,
@@ -914,6 +915,8 @@ interface UseMeetSocketOptions {
   setIsDmEnabled: (value: boolean) => void;
   setAreImageAttachmentsEnabled: (value: boolean) => void;
   setIsReactionsDisabled: (value: boolean) => void;
+  setIsParticipantUnmuteAllowed: (value: boolean) => void;
+  setIsParticipantVideoAllowed: (value: boolean) => void;
   setActiveScreenShareId: (value: string | null) => void;
   setActiveSpeakerId: React.Dispatch<React.SetStateAction<string | null>>;
   setServerActiveSpeakerAvailable: (value: boolean) => void;
@@ -1027,6 +1030,8 @@ export function useMeetSocket({
   setIsDmEnabled,
   setAreImageAttachmentsEnabled,
   setIsReactionsDisabled,
+  setIsParticipantUnmuteAllowed,
+  setIsParticipantVideoAllowed,
   setActiveScreenShareId,
   setActiveSpeakerId,
   setServerActiveSpeakerAvailable,
@@ -1242,6 +1247,13 @@ export function useMeetSocket({
     iceRestartInFlightRef,
     producerSyncIntervalRef,
   } = refs;
+
+  useEffect(() => {
+    consumersRef.current.forEach((consumer) => {
+      if (consumer.kind !== "audio" || consumer.closed) return;
+      applyBackgroundAudioBuffer(consumer.rtpReceiver, isDocumentVisible);
+    });
+  }, [consumersRef, isDocumentVisible]);
 
   const writeWebcamStartupLatencyResetDebug = useCallback(
     (state: WebcamStartupLatencyResetRuntime) => {
@@ -4124,13 +4136,26 @@ export function useMeetSocket({
   );
 
   const produce = useCallback(
-    async (stream: MediaStream): Promise<void> => {
+    async (
+      stream: MediaStream,
+      participantMediaPermissions: {
+        unmuteAllowed: boolean;
+        videoAllowed: boolean;
+      } = { unmuteAllowed: true, videoAllowed: true },
+    ): Promise<void> => {
       const transport = producerTransportRef.current;
       if (!transport) return;
       const publicationWarnings: string[] = [];
       const mediaIntent = resolveMediaPublishIntent(stream);
-      const shouldPauseAudio = !mediaIntent.isMicOn;
-      const shouldPauseVideo = !mediaIntent.isCameraOn;
+      const shouldPauseAudio =
+        !mediaIntent.isMicOn || !participantMediaPermissions.unmuteAllowed;
+      const shouldPauseVideo =
+        !mediaIntent.isCameraOn || !participantMediaPermissions.videoAllowed;
+
+      if (mediaIntent.isMicOn && shouldPauseAudio) {
+        isMutedRef.current = true;
+        setIsMuted(true);
+      }
 
       let audioTrack = getFirstLiveTrack(stream.getAudioTracks());
       if (audioTrack) {
@@ -4188,7 +4213,7 @@ export function useMeetSocket({
           });
         } catch (err) {
           console.error("[Meets] Failed to produce audio:", err);
-          if (mediaIntent.isMicOn) {
+          if (mediaIntent.isMicOn && !shouldPauseAudio) {
             if (audioTrack.readyState === "live") {
               publicationWarnings.push("microphone publish retry scheduled");
               setNoiseCancellationTrackEnabled(audioTrack, true);
@@ -4219,8 +4244,16 @@ export function useMeetSocket({
         setIsMuted(true);
       }
 
-      if (!mediaIntent.isCameraOn) {
-        dropVideoTracksForCameraOff(stream, "camera-off publish intent");
+      if (shouldPauseVideo) {
+        dropVideoTracksForCameraOff(
+          stream,
+          mediaIntent.isCameraOn
+            ? "host-disabled camera publish intent"
+            : "camera-off publish intent",
+        );
+        if (mediaIntent.isCameraOn) {
+          setIsCameraOff(true);
+        }
         if (publicationWarnings.length > 0) {
           console.warn(
             `[Meets] Continuing join without some local media: ${publicationWarnings.join(", ")}`
@@ -4751,6 +4784,12 @@ export function useMeetSocket({
               }
 
               consumersRef.current.set(producerInfo.producerId, consumer);
+              if (consumer.kind === "audio") {
+                applyBackgroundAudioBuffer(
+                  consumer.rtpReceiver,
+                  isDocumentVisible,
+                );
+              }
               const stagedTelemetry =
                 pendingConsumerTelemetryByIdRef.current.get(consumer.id);
               pendingConsumerTelemetryByIdRef.current.delete(consumer.id);
@@ -6766,6 +6805,12 @@ export function useMeetSocket({
                 response.areImageAttachmentsEnabled ?? true,
               );
               setIsReactionsDisabled(response.isReactionsDisabled ?? false);
+              setIsParticipantUnmuteAllowed(
+                response.isParticipantUnmuteAllowed ?? true,
+              );
+              setIsParticipantVideoAllowed(
+                response.isParticipantVideoAllowed ?? true,
+              );
               resolve("waiting");
               return;
             }
@@ -6789,6 +6834,12 @@ export function useMeetSocket({
                 response.areImageAttachmentsEnabled ?? true,
               );
               setIsReactionsDisabled(response.isReactionsDisabled ?? false);
+              setIsParticipantUnmuteAllowed(
+                response.isParticipantUnmuteAllowed ?? true,
+              );
+              setIsParticipantVideoAllowed(
+                response.isParticipantVideoAllowed ?? true,
+              );
               if (
                 Object.prototype.hasOwnProperty.call(response, "activeSpeakerId")
               ) {
@@ -6899,8 +6950,21 @@ export function useMeetSocket({
                 createConsumerTransport(socket, device),
               ]);
 
+              const joiningUserIsHost =
+                response.webinarRole === "host" ||
+                response.hostUserId === userId ||
+                response.hostUserIds?.includes(userId) === true;
               const producePromise =
-                shouldProduce && stream ? produce(stream) : Promise.resolve();
+                shouldProduce && stream
+                  ? produce(stream, {
+                      unmuteAllowed:
+                        joiningUserIsHost ||
+                        (response.isParticipantUnmuteAllowed ?? true),
+                      videoAllowed:
+                        joiningUserIsHost ||
+                        (response.isParticipantVideoAllowed ?? true),
+                    })
+                  : Promise.resolve();
 
               for (const producer of response.existingProducers) {
                 if (producer.producerUserId !== userId) {
@@ -8473,6 +8537,23 @@ export function useMeetSocket({
             );
 
             socket.on(
+              "participantMediaPermissionsChanged",
+              ({
+                unmuteAllowed,
+                videoAllowed,
+                roomId: eventRoomId,
+              }: {
+                unmuteAllowed: boolean;
+                videoAllowed: boolean;
+                roomId?: string;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                setIsParticipantUnmuteAllowed(unmuteAllowed);
+                setIsParticipantVideoAllowed(videoAllowed);
+              },
+            );
+
+            socket.on(
               "noGuestsChanged",
               ({
                 noGuests,
@@ -9607,6 +9688,35 @@ export function useMeetSocket({
     [socketRef]
   );
 
+  const setParticipantMediaPermissions = useCallback(
+    (permissions: {
+      unmuteAllowed?: boolean;
+      videoAllowed?: boolean;
+    }): Promise<boolean> => {
+      const socket = socketRef.current;
+      if (!socket) return Promise.resolve(false);
+
+      return new Promise((resolve) => {
+        socket.emit(
+          "setParticipantMediaPermissions",
+          permissions,
+          (response: { success: boolean } | { error: string }) => {
+            if ("error" in response) {
+              console.error(
+                "[Meets] Failed to update participant media permissions:",
+                response.error,
+              );
+              resolve(false);
+              return;
+            }
+            resolve(response.success);
+          },
+        );
+      });
+    },
+    [socketRef],
+  );
+
   const endRoomForEveryone = useCallback(
     (
       options: { message?: string; delayMs?: number } = {},
@@ -10077,6 +10187,7 @@ export function useMeetSocket({
     toggleRoomLock,
     toggleNoGuests,
     toggleChatLock,
+    setParticipantMediaPermissions,
     endRoomForEveryone,
     getTranscriptToken,
     getTranscriptSfuRelayStatus,

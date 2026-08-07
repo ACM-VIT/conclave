@@ -75,6 +75,8 @@ export interface JoinRoomResponse {
   isDmEnabled?: boolean;
   areImageAttachmentsEnabled?: boolean;
   isReactionsDisabled?: boolean;
+  isParticipantUnmuteAllowed?: boolean;
+  isParticipantVideoAllowed?: boolean;
   meetingRequiresInviteCode?: boolean;
   webinarRole?: "attendee" | "participant" | "host";
   isWebinarEnabled?: boolean;

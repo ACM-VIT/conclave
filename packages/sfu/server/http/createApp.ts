@@ -969,6 +969,8 @@ export const createSfuApp = ({
       dmEnabled: readBoolean(body, "dmEnabled"),
       imageAttachmentsEnabled: readBoolean(body, "imageAttachmentsEnabled"),
       reactionsDisabled: readBoolean(body, "reactionsDisabled"),
+      participantUnmuteAllowed: readBoolean(body, "participantUnmuteAllowed"),
+      participantVideoAllowed: readBoolean(body, "participantVideoAllowed"),
     };
 
     const hasUpdates = Object.values(update).some((value) => value !== undefined);

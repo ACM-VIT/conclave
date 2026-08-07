@@ -1421,6 +1421,41 @@ export const registerAdminHandlers = (
   });
 
   socket.on(
+    "setParticipantMediaPermissions",
+    (
+      data: { unmuteAllowed?: boolean; videoAllowed?: boolean },
+      cb,
+    ) => {
+      const guard = ensureAdminRoom(context);
+      if ("error" in guard) {
+        respond(cb, guard);
+        return;
+      }
+      const unmuteAllowed =
+        typeof data?.unmuteAllowed === "boolean"
+          ? data.unmuteAllowed
+          : undefined;
+      const videoAllowed =
+        typeof data?.videoAllowed === "boolean" ? data.videoAllowed : undefined;
+      if (unmuteAllowed === undefined && videoAllowed === undefined) {
+        respond(cb, { error: "Invalid participant media permissions" });
+        return;
+      }
+
+      const update = applyRoomPolicyUpdate(io, guard.room, {
+        participantUnmuteAllowed: unmuteAllowed,
+        participantVideoAllowed: videoAllowed,
+      });
+      respond(cb, {
+        success: true,
+        changed: update.changed,
+        unmuteAllowed: guard.room.isParticipantUnmuteAllowed,
+        videoAllowed: guard.room.isParticipantVideoAllowed,
+      });
+    },
+  );
+
+  socket.on(
     "admin:setPolicies",
     (
       data: {
@@ -1431,6 +1466,8 @@ export const registerAdminHandlers = (
         dmEnabled?: boolean;
         imageAttachmentsEnabled?: boolean;
         reactionsDisabled?: boolean;
+        participantUnmuteAllowed?: boolean;
+        participantVideoAllowed?: boolean;
       },
       cb,
     ) => {
@@ -1457,6 +1494,14 @@ export const registerAdminHandlers = (
             : undefined,
         reactionsDisabled:
           typeof data?.reactionsDisabled === "boolean" ? data.reactionsDisabled : undefined,
+        participantUnmuteAllowed:
+          typeof data?.participantUnmuteAllowed === "boolean"
+            ? data.participantUnmuteAllowed
+            : undefined,
+        participantVideoAllowed:
+          typeof data?.participantVideoAllowed === "boolean"
+            ? data.participantVideoAllowed
+            : undefined,
       });
 
       respond(cb, {
@@ -1470,6 +1515,8 @@ export const registerAdminHandlers = (
           dmEnabled: guard.room.isDmEnabled,
           imageAttachmentsEnabled: guard.room.areImageAttachmentsEnabled,
           reactionsDisabled: guard.room.isReactionsDisabled,
+          participantUnmuteAllowed: guard.room.isParticipantUnmuteAllowed,
+          participantVideoAllowed: guard.room.isParticipantVideoAllowed,
         },
       });
     },

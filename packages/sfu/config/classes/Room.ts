@@ -222,6 +222,8 @@ export class Room {
   private _isDmEnabled: boolean = true;
   private _areImageAttachmentsEnabled: boolean = true;
   private _reactionsDisabled: boolean = false;
+  private _participantUnmuteAllowed: boolean = true;
+  private _participantVideoAllowed: boolean = true;
   private _meetingInviteCodeHash: string | null = null;
   public appsState: { activeAppId: string | null; locked: boolean } = {
     activeAppId: null,
@@ -1764,6 +1766,22 @@ export class Room {
 
   setReactionsDisabled(disabled: boolean): void {
     this._reactionsDisabled = disabled;
+  }
+
+  get isParticipantUnmuteAllowed(): boolean {
+    return this._participantUnmuteAllowed;
+  }
+
+  setParticipantUnmuteAllowed(allowed: boolean): void {
+    this._participantUnmuteAllowed = allowed;
+  }
+
+  get isParticipantVideoAllowed(): boolean {
+    return this._participantVideoAllowed;
+  }
+
+  setParticipantVideoAllowed(allowed: boolean): void {
+    this._participantVideoAllowed = allowed;
   }
 
   get requiresMeetingInviteCode(): boolean {

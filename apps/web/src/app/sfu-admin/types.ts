@@ -60,7 +60,10 @@ export type RoomPolicies = {
   noGuests: boolean;
   ttsDisabled: boolean;
   dmEnabled: boolean;
+  imageAttachmentsEnabled: boolean;
   reactionsDisabled: boolean;
+  participantUnmuteAllowed: boolean;
+  participantVideoAllowed: boolean;
   requiresMeetingInviteCode: boolean;
 };
 

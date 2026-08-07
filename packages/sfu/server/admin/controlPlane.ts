@@ -71,6 +71,8 @@ export type RoomSnapshot = {
     dmEnabled: boolean;
     imageAttachmentsEnabled: boolean;
     reactionsDisabled: boolean;
+    participantUnmuteAllowed: boolean;
+    participantVideoAllowed: boolean;
     requiresMeetingInviteCode: boolean;
   };
   access: {
@@ -146,6 +148,8 @@ export type RoomPolicyUpdate = {
   dmEnabled?: boolean;
   imageAttachmentsEnabled?: boolean;
   reactionsDisabled?: boolean;
+  participantUnmuteAllowed?: boolean;
+  participantVideoAllowed?: boolean;
 };
 
 type ProducerInfo = ReturnType<Client["getProducerInfos"]>[number];
@@ -345,6 +349,8 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
       dmEnabled: room.isDmEnabled,
       imageAttachmentsEnabled: room.areImageAttachmentsEnabled,
       reactionsDisabled: room.isReactionsDisabled,
+      participantUnmuteAllowed: room.isParticipantUnmuteAllowed,
+      participantVideoAllowed: room.isParticipantVideoAllowed,
       requiresMeetingInviteCode: room.requiresMeetingInviteCode,
     },
     access: {
@@ -747,6 +753,33 @@ export const applyRoomPolicyUpdate = (
     changed.reactionsDisabled = update.reactionsDisabled;
     io.to(room.channelId).emit("reactionsDisabledChanged", {
       disabled: update.reactionsDisabled,
+      roomId: room.id,
+    });
+  }
+
+  let participantMediaPermissionsChanged = false;
+  if (
+    typeof update.participantUnmuteAllowed === "boolean" &&
+    update.participantUnmuteAllowed !== room.isParticipantUnmuteAllowed
+  ) {
+    room.setParticipantUnmuteAllowed(update.participantUnmuteAllowed);
+    changed.participantUnmuteAllowed = update.participantUnmuteAllowed;
+    participantMediaPermissionsChanged = true;
+  }
+
+  if (
+    typeof update.participantVideoAllowed === "boolean" &&
+    update.participantVideoAllowed !== room.isParticipantVideoAllowed
+  ) {
+    room.setParticipantVideoAllowed(update.participantVideoAllowed);
+    changed.participantVideoAllowed = update.participantVideoAllowed;
+    participantMediaPermissionsChanged = true;
+  }
+
+  if (participantMediaPermissionsChanged) {
+    io.to(room.channelId).emit("participantMediaPermissionsChanged", {
+      unmuteAllowed: room.isParticipantUnmuteAllowed,
+      videoAllowed: room.isParticipantVideoAllowed,
       roomId: room.id,
     });
   }

@@ -16,12 +16,40 @@ export interface ReactionStore {
   clear: () => void;
 }
 
-export function createReactionStore(maxReactions: number): ReactionStore {
+export const getReactionRenderLimit = (participantCount: number) => {
+  if (participantCount >= 36) return 8;
+  if (participantCount >= 20) return 12;
+  return 20;
+};
+
+type ScheduleReactionStoreFlush = (flush: () => void) => void;
+
+const scheduleReactionStoreFlush: ScheduleReactionStoreFlush = (flush) => {
+  if (
+    typeof window !== "undefined" &&
+    typeof window.requestAnimationFrame === "function"
+  ) {
+    window.requestAnimationFrame(() => flush());
+    return;
+  }
+  queueMicrotask(flush);
+};
+
+export function createReactionStore(
+  maxReactions: number,
+  scheduleFlush: ScheduleReactionStoreFlush = scheduleReactionStoreFlush,
+): ReactionStore {
   let snapshot: ReactionEvent[] = [];
   const listeners = new Set<() => void>();
+  let flushScheduled = false;
 
   const emit = () => {
-    for (const listener of listeners) listener();
+    if (flushScheduled) return;
+    flushScheduled = true;
+    scheduleFlush(() => {
+      flushScheduled = false;
+      for (const listener of listeners) listener();
+    });
   };
 
   return {

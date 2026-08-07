@@ -10,10 +10,12 @@ import {
   MessageCircleQuestion,
   MessageSquare,
   MessageSquareLock,
+  Mic,
   RotateCw,
   ShieldBan,
   Smile,
   Users,
+  Video,
   Volume2,
   X,
   type LucideIcon,
@@ -66,6 +68,10 @@ interface MeetSettingsPanelProps {
   onToggleImageAttachments?: () => void;
   isReactionsDisabled: boolean;
   onToggleReactionsDisabled?: () => void;
+  isParticipantUnmuteAllowed: boolean;
+  onToggleParticipantUnmuteAllowed?: () => void;
+  isParticipantVideoAllowed: boolean;
+  onToggleParticipantVideoAllowed?: () => void;
   meetingRequiresInviteCode: boolean;
   onGetMeetingConfig?: () => Promise<MeetingConfigSnapshot | null>;
   onUpdateMeetingConfig?: (
@@ -457,6 +463,10 @@ export default function MeetSettingsPanel({
   onToggleImageAttachments,
   isReactionsDisabled,
   onToggleReactionsDisabled,
+  isParticipantUnmuteAllowed,
+  onToggleParticipantUnmuteAllowed,
+  isParticipantVideoAllowed,
+  onToggleParticipantVideoAllowed,
   meetingRequiresInviteCode,
   onGetMeetingConfig,
   onUpdateMeetingConfig,
@@ -677,6 +687,26 @@ export default function MeetSettingsPanel({
             tone="warning"
             onClick={onToggleNoGuests}
             disabled={!onToggleNoGuests}
+          />
+
+          <Separator />
+
+          <SectionHeader label="Participant media" />
+          <SwitchRow
+            icon={Mic}
+            label="Allow participants to unmute"
+            isOn={isParticipantUnmuteAllowed}
+            tone="success"
+            onClick={onToggleParticipantUnmuteAllowed}
+            disabled={!onToggleParticipantUnmuteAllowed}
+          />
+          <SwitchRow
+            icon={Video}
+            label="Allow participants to turn on video"
+            isOn={isParticipantVideoAllowed}
+            tone="success"
+            onClick={onToggleParticipantVideoAllowed}
+            disabled={!onToggleParticipantVideoAllowed}
           />
 
           <Separator />

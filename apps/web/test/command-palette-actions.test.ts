@@ -91,6 +91,38 @@ describe("buildPaletteActions", () => {
     expect(share?.label).toBe("Stop sharing");
   });
 
+  it("disables only participant media activation blocked by the host", () => {
+    const inactive = buildPaletteActions(
+      baseProps({
+        isMuted: true,
+        isCameraOff: true,
+        isMicrophoneUnmuteDisabled: true,
+        isCameraEnableDisabled: true,
+      }),
+      noDevices,
+    );
+    expect(inactive.find((action) => action.id === "mic")?.disabled).toBe(true);
+    expect(inactive.find((action) => action.id === "camera")?.disabled).toBe(
+      true,
+    );
+
+    const active = buildPaletteActions(
+      baseProps({
+        isMuted: false,
+        isCameraOff: false,
+        isMicrophoneUnmuteDisabled: true,
+        isCameraEnableDisabled: true,
+      }),
+      noDevices,
+    );
+    expect(active.find((action) => action.id === "mic")?.disabled).not.toBe(
+      true,
+    );
+    expect(active.find((action) => action.id === "camera")?.disabled).not.toBe(
+      true,
+    );
+  });
+
   it("only offers panel toggles whose handlers exist", () => {
     const without = buildPaletteActions(baseProps(), noDevices);
     expect(ids(without)).not.toContain("participants");

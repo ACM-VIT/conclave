@@ -139,6 +139,11 @@ select:focus {
   animation: reaction-float 2.8s ease-out forwards;
 }
 
+.meet-reaction-overlay {
+  contain: layout paint;
+  isolation: isolate;
+}
+
 @keyframes reaction-float {
   0% {
     opacity: 0;
@@ -188,6 +193,7 @@ select:focus {
   background: #131316;
   border-radius: 16px;
   overflow: hidden;
+  contain: layout paint;
   border: 1px solid rgba(250, 250, 250, 0.08);
   /* The active-speaker ring is an INSET shadow, not a border-width change;
      toggling 1px→2px border resized the video content box on every speaker

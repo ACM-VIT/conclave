@@ -50,8 +50,9 @@ export interface ControlsBarProps {
   coachAvatars?: { id: string; name: string }[];
   roomId?: string;
   isMuted: boolean;
-  isMuteTogglePending?: boolean;
+  isMicrophoneUnmuteDisabled?: boolean;
   isCameraOff: boolean;
+  isCameraEnableDisabled?: boolean;
   isAudioOnly?: boolean;
   isScreenSharing: boolean;
   activeScreenShareId: string | null;
@@ -287,16 +288,14 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
     {
       id: "mic",
       icon: p.isMuted ? MicOff : Mic,
-      label: p.isMuteTogglePending
-          ? p.isMuted
-            ? "Unmuting"
-            : "Muting"
-          : p.isMuted
-            ? "Unmute"
-            : "Mute",
+      label: p.isMuted && p.isMicrophoneUnmuteDisabled
+        ? "Microphone disabled by host"
+        : p.isMuted
+          ? "Unmute"
+          : "Mute",
       hotkey: HOTKEYS.toggleMute.keys,
       variant: p.isMuted ? "muted" : "default",
-      loading: Boolean(p.isMuteTogglePending),
+      disabled: Boolean(p.isMuted && p.isMicrophoneUnmuteDisabled),
       onPress: p.onToggleMute,
     },
     {
@@ -304,12 +303,16 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       icon: p.isCameraOff ? VideoOff : Video,
       label: p.isAudioOnly
         ? "Camera disabled in audio-only mode"
-        : p.isCameraOff
-          ? "Turn on camera"
-          : "Turn off camera",
+        : p.isCameraOff && p.isCameraEnableDisabled
+          ? "Camera disabled by host"
+          : p.isCameraOff
+            ? "Turn on camera"
+            : "Turn off camera",
       hotkey: HOTKEYS.toggleCamera.keys,
       variant: p.isCameraOff ? "muted" : "default",
-      disabled: p.isAudioOnly,
+      disabled: Boolean(
+        p.isAudioOnly || (p.isCameraOff && p.isCameraEnableDisabled),
+      ),
       onPress: p.onToggleCamera,
     },
   ];

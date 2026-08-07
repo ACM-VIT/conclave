@@ -41,6 +41,9 @@ interface ParticipantVideoProps {
   isDynamicCropEnabled?: boolean;
   isFullVideoShown?: boolean;
   onToggleFullVideo?: (userId: string) => void;
+  /** Known grid dimensions avoid one ResizeObserver/state path per tile. */
+  tileWidth?: number;
+  tileHeight?: number;
 }
 
 function ParticipantVideo({
@@ -62,12 +65,22 @@ function ParticipantVideo({
   isDynamicCropEnabled = false,
   isFullVideoShown = false,
   onToggleFullVideo,
+  tileWidth,
+  tileHeight,
 }: ParticipantVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   // The grid packer shrinks tiles well below the fixed chrome sizes in big
   // calls — measure the tile and scale the face/pill/badges to fit.
   const tileRef = useRef<HTMLDivElement>(null);
-  const tileSize = useElementSize(tileRef);
+  const hasKnownTileSize =
+    typeof tileWidth === "number" &&
+    tileWidth > 0 &&
+    typeof tileHeight === "number" &&
+    tileHeight > 0;
+  const measuredTileSize = useElementSize(tileRef, !hasKnownTileSize);
+  const tileSize = hasKnownTileSize
+    ? { width: tileWidth, height: tileHeight }
+    : measuredTileSize;
   const { dense, avatarSize, avatarLift } = computeTileChrome(tileSize, {
     maxAvatar: compact ? 48 : 80,
   });

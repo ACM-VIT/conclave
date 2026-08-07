@@ -577,6 +577,10 @@ export default function MeetsClient({
     setAreImageAttachmentsEnabled,
     isReactionsDisabled,
     setIsReactionsDisabled,
+    isParticipantUnmuteAllowed,
+    setIsParticipantUnmuteAllowed,
+    isParticipantVideoAllowed,
+    setIsParticipantVideoAllowed,
     isBrowserAudioMuted,
     setIsBrowserAudioMuted,
     meetVolume,
@@ -1182,6 +1186,11 @@ export default function MeetsClient({
     ],
   );
 
+  const isParticipantMicrophoneActivationBlocked =
+    !isAdminFlag && !isParticipantUnmuteAllowed;
+  const isParticipantCameraActivationBlocked =
+    !isAdminFlag && !isParticipantVideoAllowed;
+
   const {
     showPermissionHint,
     screenShareControlState,
@@ -1195,7 +1204,6 @@ export default function MeetsClient({
     requestCameraProducerRecovery,
     prepareAudioPublishTrack,
     toggleMute,
-    isMuteTogglePending,
     toggleCamera,
     toggleScreenShare,
     stopLocalTrack,
@@ -1211,6 +1219,8 @@ export default function MeetsClient({
     isCameraOff,
     setIsCameraOff,
     cameraDisabled: viewSettings.audioOnlyMode,
+    microphoneUnmuteDisabled: isParticipantMicrophoneActivationBlocked,
+    cameraEnableDisabled: isParticipantCameraActivationBlocked,
     isScreenSharing,
     setIsScreenSharing,
     activeScreenShareId,
@@ -2349,6 +2359,8 @@ export default function MeetsClient({
     setIsDmEnabled,
     setAreImageAttachmentsEnabled,
     setIsReactionsDisabled,
+    setIsParticipantUnmuteAllowed,
+    setIsParticipantVideoAllowed,
     setActiveScreenShareId,
     setActiveSpeakerId,
     setServerActiveSpeakerAvailable,
@@ -2836,6 +2848,8 @@ export default function MeetsClient({
       currentUserId: userId,
       isCameraOff,
       isMuted,
+      isMicrophoneUnmuteDisabled: isParticipantMicrophoneActivationBlocked,
+      isCameraEnableDisabled: isParticipantCameraActivationBlocked,
       mirrorLocalPreview,
       getDisplayName: resolveDisplayName,
       onToggleMute: () => {
@@ -3404,7 +3418,6 @@ export default function MeetsClient({
         onPrejoinMediaCommit={handlePrejoinMediaCommit}
         isCameraOff={isCameraOff}
         isMuted={isMuted}
-        isMuteTogglePending={isMuteTogglePending}
         isHandRaised={isHandRaised}
         participants={participants}
         isMirrorCamera={isMirrorCamera}
@@ -3498,6 +3511,22 @@ export default function MeetsClient({
         isDmEnabled={isDmEnabled}
         areImageAttachmentsEnabled={areImageAttachmentsEnabled}
         isReactionsDisabled={isReactionsDisabled}
+        isParticipantUnmuteAllowed={isParticipantUnmuteAllowed}
+        onToggleParticipantUnmuteAllowed={() => {
+          if (canModerateMeeting) {
+            void socket.setParticipantMediaPermissions({
+              unmuteAllowed: !isParticipantUnmuteAllowed,
+            });
+          }
+        }}
+        isParticipantVideoAllowed={isParticipantVideoAllowed}
+        onToggleParticipantVideoAllowed={() => {
+          if (canModerateMeeting) {
+            void socket.setParticipantMediaPermissions({
+              videoAllowed: !isParticipantVideoAllowed,
+            });
+          }
+        }}
         onToggleLock={() => {
           if (canModerateMeeting) void socket.toggleRoomLock(!isRoomLocked);
         }}

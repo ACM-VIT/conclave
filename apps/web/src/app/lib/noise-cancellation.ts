@@ -240,6 +240,28 @@ const resumeContext = (context: AudioContext) => {
   }
 };
 
+type AudioContextWithSilentSink = AudioContext & {
+  setSinkId?: (sinkId: string | { type: "none" }) => Promise<void>;
+};
+
+const connectSilentRealtimeDestination = async (
+  context: AudioContext,
+  source: AudioNode,
+): Promise<void> => {
+  const contextWithSink = context as AudioContextWithSilentSink;
+  if (typeof contextWithSink.setSinkId !== "function") return;
+
+  try {
+    // Chromium can throttle an AudioContext whose only destination is a
+    // MediaStream when its tab is hidden. Its silent sink keeps the realtime
+    // audio clock rendering without feeding the microphone back to speakers.
+    await contextWithSink.setSinkId({ type: "none" });
+    source.connect(context.destination);
+  } catch {
+    // The MediaStream destination remains the portable fallback.
+  }
+};
+
 const loadNoiseCancellationWorklet = (context: AudioContext): Promise<boolean> => {
   if (!context.audioWorklet) {
     return Promise.resolve(false);
@@ -439,6 +461,7 @@ export async function createNoiseCancellationPipeline(
     destination,
   ];
   connectNodes(nodes);
+  await connectSilentRealtimeDestination(context, outputGain);
 
   const outputTrack = destination.stream.getAudioTracks()[0];
   if (!outputTrack) {

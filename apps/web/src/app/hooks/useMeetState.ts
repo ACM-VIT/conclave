@@ -48,6 +48,10 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
   const [areImageAttachmentsEnabled, setAreImageAttachmentsEnabled] =
     useState(true);
   const [isReactionsDisabled, setIsReactionsDisabled] = useState(false);
+  const [isParticipantUnmuteAllowed, setIsParticipantUnmuteAllowed] =
+    useState(true);
+  const [isParticipantVideoAllowed, setIsParticipantVideoAllowed] =
+    useState(true);
   const [isBrowserAudioMuted, setIsBrowserAudioMuted] = useState(false);
   const [meetVolume, setMeetVolumeValue] = useState(DEFAULT_MEET_VOLUME);
   const setMeetVolume = useCallback((value: SetStateAction<number>) => {
@@ -131,6 +135,10 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     setAreImageAttachmentsEnabled,
     isReactionsDisabled,
     setIsReactionsDisabled,
+    isParticipantUnmuteAllowed,
+    setIsParticipantUnmuteAllowed,
+    isParticipantVideoAllowed,
+    setIsParticipantVideoAllowed,
     isBrowserAudioMuted,
     setIsBrowserAudioMuted,
     meetVolume,

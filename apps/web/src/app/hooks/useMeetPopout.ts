@@ -35,6 +35,8 @@ export interface UseMeetPopoutOptions {
   currentUserId: string;
   isCameraOff: boolean;
   isMuted: boolean;
+  isMicrophoneUnmuteDisabled?: boolean;
+  isCameraEnableDisabled?: boolean;
   mirrorLocalPreview: boolean;
   getDisplayName: (userId: string) => string;
   onToggleMute: () => void;
@@ -268,6 +270,13 @@ const POPOUT_CSS = `
     background: rgba(249, 95, 74, 0.12);
   }
 
+  .ctrl-btn:disabled,
+  .ctrl-btn:disabled:hover {
+    color: rgba(250, 250, 250, 0.3);
+    background: transparent;
+    cursor: not-allowed;
+  }
+
   .ctrl-btn svg {
     width: 15px;
     height: 15px;
@@ -314,6 +323,8 @@ export function useMeetPopout({
   currentUserId,
   isCameraOff,
   isMuted,
+  isMicrophoneUnmuteDisabled = false,
+  isCameraEnableDisabled = false,
   mirrorLocalPreview,
   getDisplayName,
   onToggleMute,
@@ -523,17 +534,30 @@ export function useMeetPopout({
       labelMuted.style.display = participant.isMuted ? "flex" : "none";
     }
 
-    const muteBtn = doc.getElementById("btn-mute");
-    const camBtn = doc.getElementById("btn-cam");
+    const muteBtn = doc.getElementById("btn-mute") as HTMLButtonElement | null;
+    const camBtn = doc.getElementById("btn-cam") as HTMLButtonElement | null;
     if (muteBtn) {
       muteBtn.className = `ctrl-btn${isMuted ? " muted" : ""}`;
       muteBtn.innerHTML = isMuted ? MIC_OFF_SVG : MIC_ON_SVG;
+      muteBtn.disabled = isMuted && isMicrophoneUnmuteDisabled;
+      muteBtn.title = muteBtn.disabled
+        ? "Microphone disabled by host"
+        : "Toggle mute";
     }
     if (camBtn) {
       camBtn.className = `ctrl-btn${isCameraOff ? " muted" : ""}`;
       camBtn.innerHTML = isCameraOff ? CAM_OFF_SVG : CAM_ON_SVG;
+      camBtn.disabled = isCameraOff && isCameraEnableDisabled;
+      camBtn.title = camBtn.disabled ? "Camera disabled by host" : "Toggle camera";
     }
-  }, [getVisibleParticipants, isMuted, isCameraOff, mirrorLocalPreview]);
+  }, [
+    getVisibleParticipants,
+    isMuted,
+    isCameraOff,
+    isMicrophoneUnmuteDisabled,
+    isCameraEnableDisabled,
+    mirrorLocalPreview,
+  ]);
 
   useEffect(() => { updatePopoutRef.current = updatePopoutContent; }, [updatePopoutContent]);
 

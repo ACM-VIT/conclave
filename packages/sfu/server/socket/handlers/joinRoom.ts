@@ -638,6 +638,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             isDmEnabled: room.isDmEnabled,
             areImageAttachmentsEnabled: room.areImageAttachmentsEnabled,
             isReactionsDisabled: room.isReactionsDisabled,
+            isParticipantUnmuteAllowed: room.isParticipantUnmuteAllowed,
+            isParticipantVideoAllowed: room.isParticipantVideoAllowed,
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
             webcamCodecPolicy: room.webcamCodecPolicy,
           });
@@ -687,6 +689,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             isDmEnabled: room.isDmEnabled,
             areImageAttachmentsEnabled: room.areImageAttachmentsEnabled,
             isReactionsDisabled: room.isReactionsDisabled,
+            isParticipantUnmuteAllowed: room.isParticipantUnmuteAllowed,
+            isParticipantVideoAllowed: room.isParticipantVideoAllowed,
             meetingRequiresInviteCode: room.requiresMeetingInviteCode,
             webcamCodecPolicy: room.webcamCodecPolicy,
           });
@@ -926,6 +930,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           roomId: context.currentRoom.id,
         });
 
+        socket.emit("participantMediaPermissionsChanged", {
+          unmuteAllowed: context.currentRoom.isParticipantUnmuteAllowed,
+          videoAllowed: context.currentRoom.isParticipantVideoAllowed,
+          roomId: context.currentRoom.id,
+        });
+
         socket.emit("apps:state", {
           activeAppId: context.currentRoom.appsState.activeAppId,
           locked: context.currentRoom.appsState.locked,
@@ -1016,6 +1026,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           areImageAttachmentsEnabled:
             context.currentRoom.areImageAttachmentsEnabled,
           isReactionsDisabled: context.currentRoom.isReactionsDisabled,
+          isParticipantUnmuteAllowed:
+            context.currentRoom.isParticipantUnmuteAllowed,
+          isParticipantVideoAllowed: context.currentRoom.isParticipantVideoAllowed,
           meetingRequiresInviteCode: context.currentRoom.requiresMeetingInviteCode,
           webinarRole: context.currentClient.isWebinarAttendee
             ? "attendee"
