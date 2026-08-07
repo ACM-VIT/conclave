@@ -99,7 +99,7 @@ import {
   createLatestWinsAsyncQueue,
   type LatestWinsAsyncQueue,
 } from "../lib/latest-wins-async-queue";
-import type { ConnectionQualityStats } from "./useConnectionQuality";
+import { resumeProducerWithServerConfirmation } from "../lib/media-toggle-policy";
 import {
   createLatestWinsTopologyReplacementQueue,
   getWebcamTopologyReplacementFailureDisposition,
@@ -108,6 +108,7 @@ import {
   type WebcamTopologyReplacementResult,
   type WebcamTopologyReplacementTarget,
 } from "../lib/webcam-topology-transition";
+import type { ConnectionQualityStats } from "./useConnectionQuality";
 
 interface UseMeetMediaOptions {
   isObserverMode?: boolean;
@@ -272,6 +273,7 @@ const getFallbackInputDeviceId = (devices: readonly MediaDeviceInfo[]) =>
 const TOGGLE_MUTE_STRICT_ACK_TIMEOUT_MS = 5000;
 const TOGGLE_MUTE_FAST_ACK_TIMEOUT_MS = 1500;
 const TOGGLE_MUTE_BACKGROUND_ACK_TIMEOUT_MS = 3000;
+const TOGGLE_CAMERA_ACK_TIMEOUT_MS = 5000;
 
 const getUsableProducerTransport = (
   transport: Transport | null | undefined,
@@ -1060,11 +1062,12 @@ export function useMeetMedia({
     }
   }, [getAudioContext]);
 
-  const emitToggleMute = useCallback(
+  const emitToggleMedia = useCallback(
     (
+      eventName: "toggleMute" | "toggleCamera",
       producerId: string,
       paused: boolean,
-      options?: { timeoutMs?: number },
+      timeoutMs: number,
     ) => {
       const socket = socketRef.current;
       if (!socket || !socket.connected) {
@@ -1076,16 +1079,14 @@ export function useMeetMedia({
 
       return new Promise<{ ok: boolean; error?: string }>((resolve) => {
         let settled = false;
-        const timeoutMs =
-          options?.timeoutMs ?? TOGGLE_MUTE_STRICT_ACK_TIMEOUT_MS;
         const timeout = window.setTimeout(() => {
           if (settled) return;
           settled = true;
-          resolve({ ok: false, error: "toggleMute timeout" });
+          resolve({ ok: false, error: `${eventName} timeout` });
         }, timeoutMs);
 
         socket.emit(
-          "toggleMute",
+          eventName,
           { producerId, paused },
           (response: { success: boolean } | { error: string }) => {
             if (settled) return;
@@ -1101,6 +1102,32 @@ export function useMeetMedia({
       });
     },
     [socketRef]
+  );
+
+  const emitToggleMute = useCallback(
+    (
+      producerId: string,
+      paused: boolean,
+      options?: { timeoutMs?: number },
+    ) =>
+      emitToggleMedia(
+        "toggleMute",
+        producerId,
+        paused,
+        options?.timeoutMs ?? TOGGLE_MUTE_STRICT_ACK_TIMEOUT_MS,
+      ),
+    [emitToggleMedia],
+  );
+
+  const emitToggleCamera = useCallback(
+    (producerId: string, paused: boolean) =>
+      emitToggleMedia(
+        "toggleCamera",
+        producerId,
+        paused,
+        TOGGLE_CAMERA_ACK_TIMEOUT_MS,
+      ),
+    [emitToggleMedia],
   );
 
   const closeLocalAudioProducerForReplacement = useCallback(
@@ -3984,13 +4011,21 @@ export function useMeetMedia({
         }
 
         if (producer.track?.readyState === "live") {
-          producer.resume();
-          setIsCameraOff(false);
-          socketRef.current?.emit(
-            "toggleCamera",
-            { producerId: producer.id, paused: false },
-            () => {}
+          const toggleResult = await resumeProducerWithServerConfirmation(
+            producer,
+            () => emitToggleCamera(producer.id, false),
           );
+          if (!toggleResult.ok) {
+            console.warn(
+              "[Meets] toggleCamera failed, rolling back camera resume:",
+              toggleResult.error,
+            );
+            isCameraOffRef.current = true;
+            setIsCameraOff(true);
+            return;
+          }
+          isCameraOffRef.current = false;
+          setIsCameraOff(false);
           return;
         }
 
@@ -4181,6 +4216,7 @@ export function useMeetMedia({
     videoQualityRef,
     setIsCameraOff,
     setMeetError,
+    emitToggleCamera,
     waitForPreferredVideoPublishTrack,
     buildVideoConstraints,
     getPublishNetworkProfile,

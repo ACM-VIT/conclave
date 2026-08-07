@@ -979,7 +979,7 @@ export const createSfuApp = ({
       return;
     }
 
-    const result = applyRoomPolicyUpdate(io, lookup.room, update);
+    const result = applyRoomPolicyUpdate(io, state, lookup.room, update);
     res.json({
       success: true,
       changed: result.changed,

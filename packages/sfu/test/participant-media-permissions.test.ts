@@ -1,10 +1,11 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { Producer, WebRtcTransport } from "mediasoup/types";
-import type { Socket } from "socket.io";
+import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
 import { Client } from "../config/classes/Client.js";
 import type { Room } from "../config/classes/Room.js";
+import { applyRoomPolicyUpdate } from "../server/admin/controlPlane.js";
 import type { ConnectionContext } from "../server/socket/context.js";
 import { registerMediaHandlers } from "../server/socket/handlers/mediaHandlers.js";
 import type { SfuState } from "../server/state.js";
@@ -88,8 +89,10 @@ const makeHarness = ({
 const addProducer = (
   client: Client,
   kind: "audio" | "video",
+  initialPaused = true,
 ): {
   producer: Producer;
+  close: ReturnType<typeof vi.fn>;
   pause: ReturnType<typeof vi.fn>;
   resume: ReturnType<typeof vi.fn>;
   setPaused: (paused: boolean) => void;
@@ -100,7 +103,7 @@ const addProducer = (
     id: `${kind}-producer`,
     kind,
     appData: { type: "webcam" },
-    paused: true,
+    paused: initialPaused,
     on: events.on.bind(events),
     observer,
   };
@@ -110,8 +113,12 @@ const addProducer = (
   const resume = vi.fn(async () => {
     producerState.paused = false;
   });
+  const close = vi.fn(() => {
+    observer.emit("close");
+  });
   const producer = {
     ...producerState,
+    close,
     pause,
     resume,
   } as unknown as Producer;
@@ -121,6 +128,7 @@ const addProducer = (
   client.addProducer(producer);
   return {
     producer,
+    close,
     pause,
     resume,
     setPaused: (paused) => {
@@ -130,6 +138,115 @@ const addProducer = (
 };
 
 describe("participant media permissions", () => {
+  it("stops active participant media when the host revokes permissions", () => {
+    const roomBroadcast = { emit: vi.fn() };
+    const io = {
+      to: vi.fn().mockReturnValue(roomBroadcast),
+    } as unknown as SocketIOServer;
+    const participantEmit = vi.fn();
+    const participantSocket = { emit: participantEmit } as unknown as Socket;
+    const pausedParticipantSocket = { emit: vi.fn() } as unknown as Socket;
+    const hostSocket = { emit: vi.fn() } as unknown as Socket;
+    const participant = new Client({
+      id: "participant",
+      socket: participantSocket,
+    });
+    const pausedParticipant = new Client({
+      id: "paused-participant",
+      socket: pausedParticipantSocket,
+    });
+    const host = new Admin({ id: "host", socket: hostSocket });
+    const participantAudio = addProducer(participant, "audio", false);
+    const participantVideo = addProducer(participant, "video", false);
+    const pausedAudio = addProducer(pausedParticipant, "audio", true);
+    const hostAudio = addProducer(host, "audio", false);
+    const hostVideo = addProducer(host, "video", false);
+    const clients = new Map<string, Client>([
+      [participant.id, participant],
+      [pausedParticipant.id, pausedParticipant],
+      [host.id, host],
+    ]);
+    const roomState = {
+      id: "room",
+      channelId: "instance:room",
+      clients,
+      isParticipantUnmuteAllowed: true,
+      isParticipantVideoAllowed: true,
+      setParticipantUnmuteAllowed: (allowed: boolean) => {
+        roomState.isParticipantUnmuteAllowed = allowed;
+      },
+      setParticipantVideoAllowed: (allowed: boolean) => {
+        roomState.isParticipantVideoAllowed = allowed;
+      },
+      getClient: (userId: string) => clients.get(userId),
+      removeProducerIndexById: vi.fn(),
+      clearScreenShareProducer: vi.fn(),
+    };
+    const room = roomState as unknown as Room;
+    const state = {
+      rooms: new Map([[room.channelId, room]]),
+      webinarConfigs: new Map(),
+      transcriptRelays: { syncRoom: vi.fn() },
+    } as unknown as SfuState;
+
+    const result = applyRoomPolicyUpdate(io, state, room, {
+      participantUnmuteAllowed: false,
+      participantVideoAllowed: false,
+    });
+
+    expect(result.changed).toEqual({
+      participantUnmuteAllowed: false,
+      participantVideoAllowed: false,
+    });
+    expect(participantAudio.close).toHaveBeenCalledOnce();
+    expect(participantVideo.close).toHaveBeenCalledOnce();
+    expect(participant.isMuted).toBe(true);
+    expect(participant.isCameraOff).toBe(true);
+    expect(pausedAudio.close).not.toHaveBeenCalled();
+    expect(hostAudio.close).not.toHaveBeenCalled();
+    expect(hostVideo.close).not.toHaveBeenCalled();
+    expect(participantEmit).toHaveBeenCalledWith(
+      "admin:mediaEnforced",
+      {
+        roomId: room.id,
+        userId: participant.id,
+        action: "closed",
+        reason: "Participant media permission revoked by host",
+        producers: [
+          {
+            producerId: "audio-producer",
+            kind: "audio",
+            type: "webcam",
+          },
+          {
+            producerId: "video-producer",
+            kind: "video",
+            type: "webcam",
+          },
+        ],
+      },
+    );
+    expect(roomBroadcast.emit).toHaveBeenCalledWith("participantMuted", {
+      userId: participant.id,
+      muted: true,
+      roomId: room.id,
+    });
+    expect(roomBroadcast.emit).toHaveBeenCalledWith("participantCameraOff", {
+      userId: participant.id,
+      cameraOff: true,
+      roomId: room.id,
+    });
+    expect(roomBroadcast.emit).toHaveBeenCalledWith(
+      "participantMediaPermissionsChanged",
+      {
+        unmuteAllowed: false,
+        videoAllowed: false,
+        roomId: room.id,
+      },
+    );
+    expect(state.transcriptRelays.syncRoom).toHaveBeenCalledWith(room);
+  });
+
   it("blocks a participant from resuming microphone and camera", async () => {
     const { client, handlers } = makeHarness({
       unmuteAllowed: false,

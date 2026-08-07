@@ -2,6 +2,22 @@ type ParticipantOrderEntry = {
   userId: string;
 };
 
+export const getVisibleRemoteParticipantLimit = ({
+  remoteParticipantCount,
+  maxRemoteWithoutOverflow,
+  isOverflowOpen,
+}: {
+  remoteParticipantCount: number;
+  maxRemoteWithoutOverflow: number;
+  isOverflowOpen: boolean;
+}): number => {
+  const hasOverflow = remoteParticipantCount > maxRemoteWithoutOverflow;
+  if (!hasOverflow || isOverflowOpen) {
+    return maxRemoteWithoutOverflow;
+  }
+  return Math.max(0, maxRemoteWithoutOverflow - 1);
+};
+
 export const isSpeakerOutsideVisibleWindow = ({
   speakerId,
   participants,

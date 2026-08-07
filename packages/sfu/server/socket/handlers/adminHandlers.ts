@@ -1246,7 +1246,7 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const update = applyRoomPolicyUpdate(io, guard.room, { locked });
+    const update = applyRoomPolicyUpdate(io, state, guard.room, { locked });
     Logger.info(`Room ${guard.room.id} ${locked ? "locked" : "unlocked"} by admin`);
 
     respond(cb, {
@@ -1263,7 +1263,7 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const update = applyRoomPolicyUpdate(io, guard.room, { noGuests });
+    const update = applyRoomPolicyUpdate(io, state, guard.room, { noGuests });
     Logger.info(
       `Room ${guard.room.id} ${noGuests ? "blocking" : "allowing"} guests`,
     );
@@ -1282,7 +1282,9 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const update = applyRoomPolicyUpdate(io, guard.room, { chatLocked: locked });
+    const update = applyRoomPolicyUpdate(io, state, guard.room, {
+      chatLocked: locked,
+    });
     Logger.info(`Chat in room ${guard.room.id} ${locked ? "locked" : "unlocked"} by admin`);
 
     respond(cb, {
@@ -1317,7 +1319,9 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const update = applyRoomPolicyUpdate(io, guard.room, { ttsDisabled: disabled });
+    const update = applyRoomPolicyUpdate(io, state, guard.room, {
+      ttsDisabled: disabled,
+    });
     Logger.info(
       `Room ${guard.room.id} TTS ${disabled ? "disabled" : "enabled"} by admin`,
     );
@@ -1349,7 +1353,9 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const update = applyRoomPolicyUpdate(io, guard.room, { dmEnabled: enabled });
+    const update = applyRoomPolicyUpdate(io, state, guard.room, {
+      dmEnabled: enabled,
+    });
     Logger.info(
       `Room ${guard.room.id} direct messages ${enabled ? "enabled" : "disabled"} by admin`,
     );
@@ -1373,7 +1379,7 @@ export const registerAdminHandlers = (
         respond(cb, { error: "Invalid image attachment state" });
         return;
       }
-      applyRoomPolicyUpdate(io, guard.room, {
+      applyRoomPolicyUpdate(io, state, guard.room, {
         imageAttachmentsEnabled: enabled,
       });
       respond(cb, {
@@ -1399,7 +1405,9 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const update = applyRoomPolicyUpdate(io, guard.room, { reactionsDisabled: disabled });
+    const update = applyRoomPolicyUpdate(io, state, guard.room, {
+      reactionsDisabled: disabled,
+    });
     Logger.info(
       `Room ${guard.room.id} reactions ${disabled ? "disabled" : "enabled"} by admin`,
     );
@@ -1442,7 +1450,7 @@ export const registerAdminHandlers = (
         return;
       }
 
-      const update = applyRoomPolicyUpdate(io, guard.room, {
+      const update = applyRoomPolicyUpdate(io, state, guard.room, {
         participantUnmuteAllowed: unmuteAllowed,
         participantVideoAllowed: videoAllowed,
       });
@@ -1477,7 +1485,7 @@ export const registerAdminHandlers = (
         return;
       }
 
-      const update = applyRoomPolicyUpdate(io, guard.room, {
+      const update = applyRoomPolicyUpdate(io, state, guard.room, {
         locked:
           typeof data?.locked === "boolean" ? data.locked : undefined,
         noGuests:

@@ -11,6 +11,7 @@ import type { ReactionEvent } from "./types";
 export interface ReactionStore {
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => ReactionEvent[];
+  setVisibleLimit: (limit: number) => void;
   add: (event: ReactionEvent) => void;
   remove: (id: string) => void;
   clear: () => void;
@@ -40,6 +41,7 @@ export function createReactionStore(
   scheduleFlush: ScheduleReactionStoreFlush = scheduleReactionStoreFlush,
 ): ReactionStore {
   let snapshot: ReactionEvent[] = [];
+  let visibleLimit = maxReactions;
   const listeners = new Set<() => void>();
   let flushScheduled = false;
 
@@ -60,9 +62,22 @@ export function createReactionStore(
       };
     },
     getSnapshot: () => snapshot,
+    setVisibleLimit(limit) {
+      const nextLimit = Math.min(
+        maxReactions,
+        Math.max(0, Math.floor(Number.isFinite(limit) ? limit : maxReactions)),
+      );
+      if (nextLimit === visibleLimit) return;
+      visibleLimit = nextLimit;
+      if (snapshot.length <= visibleLimit) return;
+      snapshot = visibleLimit === 0 ? [] : snapshot.slice(-visibleLimit);
+      emit();
+    },
     add(event) {
+      if (visibleLimit === 0) return;
       const next = [...snapshot, event];
-      snapshot = next.length > maxReactions ? next.slice(-maxReactions) : next;
+      snapshot =
+        next.length > visibleLimit ? next.slice(-visibleLimit) : next;
       emit();
     },
     remove(id) {

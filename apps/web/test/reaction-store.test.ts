@@ -59,4 +59,30 @@ describe("reaction store", () => {
     ]);
     expect(pendingFlushes).toHaveLength(1);
   });
+
+  it("permanently drops reactions excluded by the visible limit", () => {
+    const store = createReactionStore(30, () => {});
+    store.setVisibleLimit(2);
+
+    store.add(makeReaction("one"));
+    store.add(makeReaction("two"));
+    store.add(makeReaction("three"));
+    store.remove("three");
+
+    expect(store.getSnapshot().map((reaction) => reaction.id)).toEqual(["two"]);
+  });
+
+  it("prunes stored reactions when the visible limit shrinks", () => {
+    const store = createReactionStore(30, () => {});
+    store.add(makeReaction("one"));
+    store.add(makeReaction("two"));
+    store.add(makeReaction("three"));
+
+    store.setVisibleLimit(2);
+
+    expect(store.getSnapshot().map((reaction) => reaction.id)).toEqual([
+      "two",
+      "three",
+    ]);
+  });
 });

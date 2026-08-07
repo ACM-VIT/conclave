@@ -638,6 +638,8 @@ export const closeClientProducers = (options: {
     kind: MediaKind;
     type: ProducerType;
   }> = [];
+  let webcamAudioClosed = false;
+  let webcamVideoClosed = false;
 
   for (const info of infos) {
     const removed = target.removeProducerById(info.producerId);
@@ -654,9 +656,31 @@ export const closeClientProducers = (options: {
       kind: removed.kind,
       type: removed.type,
     });
+    if (removed.type === "webcam" && removed.kind === "audio") {
+      webcamAudioClosed = true;
+    } else if (removed.type === "webcam" && removed.kind === "video") {
+      webcamVideoClosed = true;
+    }
   }
 
   if (closedProducers.length > 0) {
+    if (webcamAudioClosed) {
+      target.isMuted = true;
+      io.to(room.channelId).emit("participantMuted", {
+        userId,
+        muted: true,
+        roomId: room.id,
+      });
+      void state.transcriptRelays.syncRoom(room);
+    }
+    if (webcamVideoClosed) {
+      target.isCameraOff = true;
+      io.to(room.channelId).emit("participantCameraOff", {
+        userId,
+        cameraOff: true,
+        roomId: room.id,
+      });
+    }
     emitWebinarFeedChanged(io, state, room);
     target.socket.emit("admin:mediaEnforced", {
       roomId: room.id,
@@ -672,6 +696,7 @@ export const closeClientProducers = (options: {
 
 export const applyRoomPolicyUpdate = (
   io: SocketIOServer,
+  state: SfuState,
   room: Room,
   update: RoomPolicyUpdate,
 ): { changed: RoomPolicyUpdate } => {
@@ -777,6 +802,42 @@ export const applyRoomPolicyUpdate = (
   }
 
   if (participantMediaPermissionsChanged) {
+    const revokedKinds: MediaKind[] = [];
+    if (changed.participantUnmuteAllowed === false) {
+      revokedKinds.push("audio");
+    }
+    if (changed.participantVideoAllowed === false) {
+      revokedKinds.push("video");
+    }
+
+    if (revokedKinds.length > 0) {
+      for (const client of room.clients.values()) {
+        if (client instanceof Admin || client.isObserver) {
+          continue;
+        }
+
+        const activeRevokedKinds = revokedKinds.filter((kind) => {
+          const producer = client.getProducer(kind, "webcam");
+          return Boolean(producer && !producer.paused);
+        });
+        if (activeRevokedKinds.length === 0) {
+          continue;
+        }
+
+        closeClientProducers({
+          io,
+          state,
+          room,
+          userId: client.id,
+          selector: {
+            kinds: activeRevokedKinds,
+            types: ["webcam"],
+          },
+          reason: "Participant media permission revoked by host",
+        });
+      }
+    }
+
     io.to(room.channelId).emit("participantMediaPermissionsChanged", {
       unmuteAllowed: room.isParticipantUnmuteAllowed,
       videoAllowed: room.isParticipantVideoAllowed,

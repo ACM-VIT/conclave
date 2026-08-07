@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useSyncExternalStore } from "react";
+import { memo, useEffect, useSyncExternalStore } from "react";
 import {
   getReactionRenderLimit,
   type ReactionStore,
@@ -24,13 +24,17 @@ function ReactionOverlay({
     store.getSnapshot,
     store.getSnapshot
   );
+  const renderLimit = getReactionRenderLimit(participantCount);
+
+  useEffect(() => {
+    store.setVisibleLimit(renderLimit);
+  }, [renderLimit, store]);
 
   if (reactions.length === 0) return null;
 
   // A wall of translucent animated layers is expensive to composite over a
   // large live-video grid. Keep the newest reactions visible while bounding
   // the amount of per-frame paint/composite work.
-  const renderLimit = getReactionRenderLimit(participantCount);
   const visibleReactions =
     reactions.length > renderLimit ? reactions.slice(-renderLimit) : reactions;
 

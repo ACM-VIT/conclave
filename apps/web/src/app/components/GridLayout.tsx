@@ -37,6 +37,7 @@ import {
   getRenderableParticipantVideoStream,
   isRenderingParticipantScreenShare,
 } from "../lib/participant-media";
+import { getVisibleRemoteParticipantLimit } from "../lib/participant-order-policy";
 import type { Participant } from "../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../lib/utils";
 import { observeRemoteVideoPresentation } from "../lib/remote-video-presentation";
@@ -1357,6 +1358,11 @@ function GridLayout({
     0,
     maxGridTiles - gridReservedTiles,
   );
+  const maxVisibleRemoteParticipants = getVisibleRemoteParticipantLimit({
+    remoteParticipantCount: remoteInput.length,
+    maxRemoteWithoutOverflow,
+    isOverflowOpen,
+  });
   const orderedRemoteParticipants = useSmartParticipantOrder(
     remoteInput,
     activeSpeakerId,
@@ -1364,7 +1370,7 @@ function GridLayout({
       promoteDelayMs: ROOM_TILING_PROMOTE_DELAY_MS,
       minSwitchIntervalMs: ROOM_TILING_MIN_SWITCH_INTERVAL_MS,
       minParticipantsForReorder: maxRemoteWithoutOverflow + 1,
-      visibleParticipantLimit: maxRemoteWithoutOverflow,
+      visibleParticipantLimit: maxVisibleRemoteParticipants,
     },
   );
   const orderedRemoteParticipantIds = useMemo(
@@ -1404,13 +1410,7 @@ function GridLayout({
       setPinnedId(null);
     }
   }, [pinnedId, hasPresentation]);
-  const hasOverflow = orderedRemoteParticipants.length > maxRemoteWithoutOverflow;
   const isSolo = orderedRemoteParticipants.length === 0 && !hasPresentation;
-  const maxVisibleRemoteParticipants = hasOverflow
-    ? isOverflowOpen
-      ? maxRemoteWithoutOverflow
-      : Math.max(0, maxGridTiles - gridReservedTiles - 1)
-    : maxRemoteWithoutOverflow;
   const visibleParticipants = useMemo(() => {
     if (maxVisibleRemoteParticipants <= 0) {
       return [];
