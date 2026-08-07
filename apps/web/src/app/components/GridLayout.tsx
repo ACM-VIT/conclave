@@ -37,6 +37,7 @@ import {
   getRenderableParticipantVideoStream,
   isRenderingParticipantScreenShare,
 } from "../lib/participant-media";
+import { getVisibleRemoteParticipantLimit } from "../lib/participant-order-policy";
 import type { Participant } from "../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../lib/utils";
 import { observeRemoteVideoPresentation } from "../lib/remote-video-presentation";
@@ -282,8 +283,8 @@ const computeMobilePortraitGridLayout = (
   };
 };
 const ROOM_TILING_METADATA_INTERVAL_MS = 200;
-const ROOM_TILING_PROMOTE_DELAY_MS = 220;
-const ROOM_TILING_MIN_SWITCH_INTERVAL_MS = 2200;
+const ROOM_TILING_PROMOTE_DELAY_MS = 1200;
+const ROOM_TILING_MIN_SWITCH_INTERVAL_MS = 8000;
 const FLIP_DURATION_MS = 220;
 // Discrete side-panel reflow glides over the SAME duration/easing as the panel
 // slide (meet-panel-in) so the stage and the panel move together.
@@ -1357,6 +1358,11 @@ function GridLayout({
     0,
     maxGridTiles - gridReservedTiles,
   );
+  const maxVisibleRemoteParticipants = getVisibleRemoteParticipantLimit({
+    remoteParticipantCount: remoteInput.length,
+    maxRemoteWithoutOverflow,
+    isOverflowOpen,
+  });
   const orderedRemoteParticipants = useSmartParticipantOrder(
     remoteInput,
     activeSpeakerId,
@@ -1364,6 +1370,7 @@ function GridLayout({
       promoteDelayMs: ROOM_TILING_PROMOTE_DELAY_MS,
       minSwitchIntervalMs: ROOM_TILING_MIN_SWITCH_INTERVAL_MS,
       minParticipantsForReorder: maxRemoteWithoutOverflow + 1,
+      visibleParticipantLimit: maxVisibleRemoteParticipants,
     },
   );
   const orderedRemoteParticipantIds = useMemo(
@@ -1403,13 +1410,7 @@ function GridLayout({
       setPinnedId(null);
     }
   }, [pinnedId, hasPresentation]);
-  const hasOverflow = orderedRemoteParticipants.length > maxRemoteWithoutOverflow;
   const isSolo = orderedRemoteParticipants.length === 0 && !hasPresentation;
-  const maxVisibleRemoteParticipants = hasOverflow
-    ? isOverflowOpen
-      ? maxRemoteWithoutOverflow
-      : Math.max(0, maxGridTiles - gridReservedTiles - 1)
-    : maxRemoteWithoutOverflow;
   const visibleParticipants = useMemo(() => {
     if (maxVisibleRemoteParticipants <= 0) {
       return [];
@@ -3290,6 +3291,8 @@ function GridLayout({
               isDynamicCropEnabled={usesAutoDynamicCrop}
               isFullVideoShown={fullVideoTileIds.has(participant.userId)}
               onToggleFullVideo={toggleFullVideoTile}
+              tileWidth={layout.tileWidth || undefined}
+              tileHeight={layout.tileHeight || undefined}
             />
           </div>
         ))}
@@ -3358,6 +3361,8 @@ function GridLayout({
               isAdmin={isAdmin}
               isPinned={false}
               videoObjectFit={getGridVideoObjectFit(participant.userId)}
+              tileWidth={layout.tileWidth || undefined}
+              tileHeight={layout.tileHeight || undefined}
               // No interactive controls on a warm (off-screen, aria-hidden) tile
               // — passing onTogglePin would render a focusable pin button that a
               // keyboard / screen reader could still reach inside aria-hidden.

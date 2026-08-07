@@ -173,7 +173,6 @@ interface MeetsMainContentProps {
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   isCameraOff: boolean;
   isMuted: boolean;
-  isMuteTogglePending?: boolean;
   isHandRaised: boolean;
   participants: Map<string, Participant>;
   isMirrorCamera: boolean;
@@ -304,6 +303,10 @@ interface MeetsMainContentProps {
   isDmEnabled: boolean;
   areImageAttachmentsEnabled: boolean;
   isReactionsDisabled: boolean;
+  isParticipantUnmuteAllowed: boolean;
+  onToggleParticipantUnmuteAllowed: () => void;
+  isParticipantVideoAllowed: boolean;
+  onToggleParticipantVideoAllowed: () => void;
   meetingRequiresInviteCode: boolean;
   webinarConfig?: WebinarConfigSnapshot | null;
   webinarRole?: "attendee" | "participant" | "host" | null;
@@ -450,7 +453,6 @@ export default function MeetsMainContent({
   onPrejoinMediaCommit,
   isCameraOff,
   isMuted,
-  isMuteTogglePending = false,
   isHandRaised,
   participants,
   isMirrorCamera,
@@ -565,6 +567,10 @@ export default function MeetsMainContent({
   isDmEnabled,
   areImageAttachmentsEnabled,
   isReactionsDisabled,
+  isParticipantUnmuteAllowed,
+  onToggleParticipantUnmuteAllowed,
+  isParticipantVideoAllowed,
+  onToggleParticipantVideoAllowed,
   meetingRequiresInviteCode,
   webinarConfig,
   webinarRole,
@@ -1717,6 +1723,10 @@ export default function MeetsMainContent({
   const toggleAppsLock = useCallback(() => {
     void handleToggleAppsLock();
   }, [handleToggleAppsLock]);
+  const isParticipantMicrophoneActivationBlocked =
+    !isAdmin && !isParticipantUnmuteAllowed;
+  const isParticipantCameraActivationBlocked =
+    !isAdmin && !isParticipantVideoAllowed;
   // Assembled once so the bar and the Mod+K quick-actions palette stay in
   // lockstep: every control the bar offers is exactly what the palette can
   // search and run.
@@ -1726,8 +1736,9 @@ export default function MeetsMainContent({
     coachAvatars,
     roomId,
     isMuted,
-    isMuteTogglePending,
+    isMicrophoneUnmuteDisabled: isParticipantMicrophoneActivationBlocked,
     isCameraOff,
+    isCameraEnableDisabled: isParticipantCameraActivationBlocked,
     isAudioOnly: viewSettings.audioOnlyMode,
     isScreenSharing,
     activeScreenShareId,
@@ -2047,6 +2058,7 @@ export default function MeetsMainContent({
         <ReactionOverlay
           store={reactionStore}
           getDisplayName={resolveDisplayName}
+          participantCount={nonSystemParticipants.length + 1}
         />
       )}
       {isDevToolsEnabled && isJoined && !isWebinarAttendee && (
@@ -2538,6 +2550,12 @@ export default function MeetsMainContent({
             onToggleImageAttachments={handleToggleImageAttachments}
             isReactionsDisabled={isReactionsDisabled}
             onToggleReactionsDisabled={handleToggleReactionsDisabled}
+            isParticipantUnmuteAllowed={isParticipantUnmuteAllowed}
+            onToggleParticipantUnmuteAllowed={
+              onToggleParticipantUnmuteAllowed
+            }
+            isParticipantVideoAllowed={isParticipantVideoAllowed}
+            onToggleParticipantVideoAllowed={onToggleParticipantVideoAllowed}
             meetingRequiresInviteCode={meetingRequiresInviteCode}
             onGetMeetingConfig={onGetMeetingConfig}
             onUpdateMeetingConfig={onUpdateMeetingConfig}
@@ -2566,6 +2584,7 @@ export default function MeetsMainContent({
           activeCount={activeVideoEffectsCount}
           deferPreload={deferVideoEffectsPreload}
           cameraPermissionBlocked={isCameraPermissionBlocked}
+          cameraActivationBlocked={isParticipantCameraActivationBlocked}
           onToggleCamera={toggleCamera}
           isCameraPreviewActive={panelPreviewIsLocalOnly}
           isCameraPreviewStarting={isCameraPreviewStarting}

@@ -20,10 +20,12 @@ export interface ElementSize {
  */
 export function useElementSize(
   ref: RefObject<HTMLElement | null>,
+  enabled = true,
 ): ElementSize | null {
   const [size, setSize] = useState<ElementSize | null>(null);
 
   useLayoutEffect(() => {
+    if (!enabled) return;
     const el = ref.current;
     if (!el) {
       setSize(null);
@@ -42,7 +44,7 @@ export function useElementSize(
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [ref]);
+  }, [enabled, ref]);
 
   return size;
 }

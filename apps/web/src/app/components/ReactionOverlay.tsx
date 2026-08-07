@@ -1,14 +1,22 @@
 "use client";
 
-import { memo, useSyncExternalStore } from "react";
-import type { ReactionStore } from "../lib/reaction-store";
+import { memo, useEffect, useSyncExternalStore } from "react";
+import {
+  getReactionRenderLimit,
+  type ReactionStore,
+} from "../lib/reaction-store";
 
 interface ReactionOverlayProps {
   store: ReactionStore;
   getDisplayName: (userId: string) => string;
+  participantCount: number;
 }
 
-function ReactionOverlay({ store, getDisplayName }: ReactionOverlayProps) {
+function ReactionOverlay({
+  store,
+  getDisplayName,
+  participantCount,
+}: ReactionOverlayProps) {
   // Subscribing here (instead of receiving reactions as a prop) keeps
   // reaction traffic from re-rendering anything above this overlay.
   const reactions = useSyncExternalStore(
@@ -16,12 +24,27 @@ function ReactionOverlay({ store, getDisplayName }: ReactionOverlayProps) {
     store.getSnapshot,
     store.getSnapshot
   );
+  const renderLimit = getReactionRenderLimit(participantCount);
+
+  useEffect(() => {
+    store.setVisibleLimit(renderLimit);
+  }, [renderLimit, store]);
 
   if (reactions.length === 0) return null;
 
+  // A wall of translucent animated layers is expensive to composite over a
+  // large live-video grid. Keep the newest reactions visible while bounding
+  // the amount of per-frame paint/composite work.
+  const visibleReactions =
+    reactions.length > renderLimit ? reactions.slice(-renderLimit) : reactions;
+
   return (
-    <div className="pointer-events-none absolute inset-0 z-20">
-      {reactions.map((reaction) => {
+    <div
+      className="meet-reaction-overlay pointer-events-none absolute inset-0 z-20"
+      data-meet-reaction-count={visibleReactions.length}
+      data-meet-reaction-limit={renderLimit}
+    >
+      {visibleReactions.map((reaction) => {
         const displayName = getDisplayName(reaction.userId);
         return (
           <div
@@ -33,6 +56,7 @@ function ReactionOverlay({ store, getDisplayName }: ReactionOverlayProps) {
               <div
                 className="animate-reaction-float flex flex-col items-center gap-1.5"
                 style={{ animationDuration: "2s" }}
+                onAnimationEnd={() => store.remove(reaction.id)}
               >
                 <div className="flex h-11 w-11 items-center justify-center rounded-full border border-[#fafafa]/10 bg-[#18181b]/90 text-2xl sm:h-14 sm:w-14 sm:text-3xl">
                   {reaction.kind === "emoji" ? (

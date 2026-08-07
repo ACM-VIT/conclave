@@ -16,8 +16,8 @@ const playerConfigs = {
   participant: {
     playbackErrorMessage: "[Meets] Audio play error:",
     audioOutputErrorMessage: "[Meets] Failed to update audio output:",
-    replayOnForeground: false,
-    preload: "none",
+    replayOnForeground: true,
+    preload: "auto",
   },
   screenShare: {
     playbackErrorMessage: "[Meets] Screen share audio play error:",
@@ -148,9 +148,11 @@ function AudioStreamPlayer({
     const scheduleReplay = playbackRecovery.schedule;
     const audioTrack = stream.getAudioTracks()[0];
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        scheduleReplay();
-      }
+      // Assert playback at both lifecycle edges. The hidden transition happens
+      // before background timer throttling and keeps the live media element in
+      // the browser's audible-playback path; the visible transition repairs a
+      // player suspended by page freezing or an output-device handoff.
+      scheduleReplay();
     };
     const handleUserGesture = () => {
       if (autoplayBlockedRef.current) {

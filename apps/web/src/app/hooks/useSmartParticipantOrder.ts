@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  isSpeakerOutsideVisibleWindow,
+  placeParticipantAtVisibleBoundary,
+} from "../lib/participant-order-policy";
 
 interface ParticipantWithMediaHints {
   userId: string;
@@ -16,6 +20,7 @@ interface UseSmartParticipantOrderOptions {
   promoteDelayMs?: number;
   minSwitchIntervalMs?: number;
   minParticipantsForReorder?: number;
+  visibleParticipantLimit?: number;
 }
 
 interface SmartParticipantOrderResult<T extends ParticipantWithMediaHints> {
@@ -57,6 +62,7 @@ function useSmartParticipantOrderWithMetadata<
     promoteDelayMs = 700,
     minSwitchIntervalMs = 2200,
     minParticipantsForReorder = DEFAULT_MIN_PARTICIPANTS_FOR_REORDER,
+    visibleParticipantLimit,
   } = options;
   const canReorderParticipants = participants.length >= minParticipantsForReorder;
   const participantIdsKey = useMemo(
@@ -165,6 +171,20 @@ function useSmartParticipantOrderWithMetadata<
       return;
     }
 
+    if (
+      activeSpeakerId === featuredSpeakerIdRef.current ||
+      !isSpeakerOutsideVisibleWindow({
+        speakerId: activeSpeakerId,
+        participants: participantsRef.current,
+        previousOrder: previousOrderRef.current,
+        visibleParticipantLimit,
+      })
+    ) {
+      candidateIdRef.current = null;
+      candidateSinceRef.current = 0;
+      return;
+    }
+
     const now = Date.now();
     if (candidateIdRef.current !== activeSpeakerId) {
       candidateIdRef.current = activeSpeakerId;
@@ -178,6 +198,16 @@ function useSmartParticipantOrderWithMetadata<
         return;
       }
       if (featuredSpeakerIdRef.current === candidateId) return;
+      if (
+        !isSpeakerOutsideVisibleWindow({
+          speakerId: candidateId,
+          participants: participantsRef.current,
+          previousOrder: previousOrderRef.current,
+          visibleParticipantLimit,
+        })
+      ) {
+        return;
+      }
 
       const nowMs = Date.now();
       const elapsedSinceSwitch = nowMs - lastSwitchAtRef.current;
@@ -207,6 +237,7 @@ function useSmartParticipantOrderWithMetadata<
     participantIdsKey,
     promoteDelayMs,
     minSwitchIntervalMs,
+    visibleParticipantLimit,
   ]);
 
   const orderedParticipants = useMemo(() => {
@@ -222,10 +253,13 @@ function useSmartParticipantOrderWithMetadata<
       raisedOrder.map((userId, index) => [userId, index] as const)
     );
 
-    return [...participants].sort((left, right) => {
+    const sortedParticipants = [...participants].sort((left, right) => {
       const leftIsFeatured = left.userId === featuredSpeakerId ? 1 : 0;
       const rightIsFeatured = right.userId === featuredSpeakerId ? 1 : 0;
-      if (leftIsFeatured !== rightIsFeatured) {
+      if (
+        visibleParticipantLimit === undefined &&
+        leftIsFeatured !== rightIsFeatured
+      ) {
         return rightIsFeatured - leftIsFeatured;
       }
 
@@ -269,7 +303,19 @@ function useSmartParticipantOrderWithMetadata<
 
       return left.userId.localeCompare(right.userId);
     });
-  }, [canReorderParticipants, participants, featuredSpeakerId, raisedOrder]);
+
+    return placeParticipantAtVisibleBoundary(
+      sortedParticipants,
+      featuredSpeakerId,
+      visibleParticipantLimit,
+    );
+  }, [
+    canReorderParticipants,
+    participants,
+    featuredSpeakerId,
+    raisedOrder,
+    visibleParticipantLimit,
+  ]);
 
   // Return the SAME array reference when the resulting order is element-
   // identical (e.g. a participant's mute toggled but the sort didn't move

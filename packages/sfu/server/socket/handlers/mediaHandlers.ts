@@ -16,6 +16,7 @@ import type {
   ToggleMediaData,
 } from "../../../types.js";
 import type { Client } from "../../../config/classes/Client.js";
+import { Admin } from "../../../config/classes/Admin.js";
 import type { Room } from "../../../config/classes/Room.js";
 import { Logger } from "../../../utilities/loggers.js";
 import {
@@ -60,6 +61,21 @@ class ConsumerGenerationDisplacedError extends Error {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
+
+const getParticipantMediaActivationError = (
+  client: Client,
+  room: Room,
+  kind: "audio" | "video",
+): string | null => {
+  if (client instanceof Admin && !client.isObserver) return null;
+  if (kind === "audio" && room.isParticipantUnmuteAllowed === false) {
+    return "The host has blocked participants from unmuting";
+  }
+  if (kind === "video" && room.isParticipantVideoAllowed === false) {
+    return "The host has blocked participants from turning on video";
+  }
+  return null;
+};
 
 const normalizeMediaId = (value: unknown): string | null => {
   if (typeof value !== "string") return null;
@@ -669,6 +685,14 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
         const paused = appData.paused === true;
+        const activationError =
+          type === "webcam" && !paused
+            ? getParticipantMediaActivationError(currentClient, room, kind)
+            : null;
+        if (activationError) {
+          respond(callback, { error: activationError });
+          return;
+        }
         const rtpParameters = data.rtpParameters;
         const transitionValue = appData.webcamReceiverCapacityTransition;
         const transitionIntent =
@@ -761,6 +785,24 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             ? { keyFrameRequestDelay: getVideoKeyFrameRequestDelayMs(type) }
             : {}),
         });
+
+        const postCreationActivationError =
+          type === "webcam" && !paused
+            ? getParticipantMediaActivationError(currentClient, room, kind)
+            : null;
+        if (postCreationActivationError) {
+          if (capacityTransitionReservation) {
+            room.cancelWebcamReceiverCapacityTransition(
+              capacityTransitionReservation,
+            );
+            capacityTransitionReservation = null;
+          }
+          try {
+            producer.close();
+          } catch {}
+          respond(callback, { error: postCreationActivationError });
+          return;
+        }
 
         // The room policy can change while mediasoup is creating the producer
         // (for example, an incompatible late join). Revalidate the actual
@@ -1627,6 +1669,17 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           respond(callback, { error: "Invalid mute state" });
           return;
         }
+        const activationError = !data.paused
+          ? getParticipantMediaActivationError(
+              context.currentClient,
+              context.currentRoom,
+              "audio",
+            )
+          : null;
+        if (activationError) {
+          respond(callback, { error: activationError });
+          return;
+        }
 
         const audioProducer = context.currentClient.getProducer("audio", "webcam");
         if (!audioProducer) {
@@ -1634,10 +1687,19 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
+        let postResumeActivationError: string | null = null;
         if (data.paused) {
           await audioProducer.pause();
         } else {
           await audioProducer.resume();
+          postResumeActivationError = getParticipantMediaActivationError(
+            context.currentClient,
+            context.currentRoom,
+            "audio",
+          );
+          if (postResumeActivationError) {
+            await audioProducer.pause();
+          }
         }
 
         const muted = audioProducer.paused;
@@ -1651,7 +1713,12 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         emitWebinarFeedChanged(io, state, context.currentRoom);
         void state.transcriptRelays.syncRoom(context.currentRoom);
 
-        respond(callback, { success: true });
+        respond(
+          callback,
+          postResumeActivationError
+            ? { error: postResumeActivationError }
+            : { success: true },
+        );
       } catch (error) {
         respond(callback, { error: (error as Error).message });
       }
@@ -1679,6 +1746,17 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           respond(callback, { error: "Invalid camera state" });
           return;
         }
+        const activationError = !data.paused
+          ? getParticipantMediaActivationError(
+              context.currentClient,
+              context.currentRoom,
+              "video",
+            )
+          : null;
+        if (activationError) {
+          respond(callback, { error: activationError });
+          return;
+        }
 
         const videoProducer = context.currentClient.getProducer("video", "webcam");
         if (!videoProducer) {
@@ -1686,10 +1764,19 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
+        let postResumeActivationError: string | null = null;
         if (data.paused) {
           await videoProducer.pause();
         } else {
           await videoProducer.resume();
+          postResumeActivationError = getParticipantMediaActivationError(
+            context.currentClient,
+            context.currentRoom,
+            "video",
+          );
+          if (postResumeActivationError) {
+            await videoProducer.pause();
+          }
         }
 
         context.currentRoom.refreshWebcamReceiverCapacityProof(
@@ -1706,7 +1793,12 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         });
         emitWebinarFeedChanged(io, state, context.currentRoom);
 
-        respond(callback, { success: true });
+        respond(
+          callback,
+          postResumeActivationError
+            ? { error: postResumeActivationError }
+            : { success: true },
+        );
       } catch (error) {
         respond(callback, { error: (error as Error).message });
       }
