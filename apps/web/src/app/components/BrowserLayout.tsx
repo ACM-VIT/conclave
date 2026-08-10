@@ -1,13 +1,12 @@
 "use client";
 
 import { errorName } from "../lib/utils";
-import { ArrowRight, Globe, Hand, Loader2, Mic, MicOff } from "lucide-react";
-import { memo, useEffect, useRef, useState, type FormEvent } from "react";
+import { Globe, Hand, Loader2, Mic, MicOff } from "lucide-react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import {
     isSystemUserId,
-    normalizeBrowserUrl,
     resolveNoVncUrl,
 } from "../lib/utils";
 import ParticipantVideo from "./ParticipantVideo";
@@ -15,7 +14,6 @@ import { Avatar, NamePlate } from "@conclave/ui-tokens/web";
 import { color } from "@conclave/ui-tokens";
 
 interface BrowserLayoutProps {
-    browserUrl: string;
     noVncUrl: string;
     controllerName: string;
     localStream: MediaStream | null;
@@ -32,14 +30,11 @@ interface BrowserLayoutProps {
     onAudioPlaybackStarted?: () => void;
     audioPlaybackAttemptToken?: number;
     getDisplayName: (userId: string) => string;
-    isAdmin?: boolean;
-    isBrowserLaunching?: boolean;
-    onNavigateBrowser?: (url: string) => Promise<boolean>;
+    provider?: "chromium" | "kitesurf";
     browserVideoStream?: MediaStream | null;
 }
 
 function BrowserLayout({
-    browserUrl,
     noVncUrl,
     controllerName,
     localStream,
@@ -56,17 +51,13 @@ function BrowserLayout({
     onAudioPlaybackStarted,
     audioPlaybackAttemptToken,
     getDisplayName,
-    isAdmin,
-    isBrowserLaunching = false,
-    onNavigateBrowser,
+    provider = "chromium",
     browserVideoStream,
 }: BrowserLayoutProps) {
     const localVideoRef = useRef<HTMLVideoElement>(null);
     const browserVideoRef = useRef<HTMLVideoElement>(null);
     const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
     const [isReady, setIsReady] = useState(false);
-    const [navInput, setNavInput] = useState(browserUrl);
-    const [navError, setNavError] = useState<string | null>(null);
 
     // The shared browser frame reveals itself on its own `load` event. The
     // timer is only a fallback so a frame that never fires `load` (e.g. blocked
@@ -131,109 +122,67 @@ function BrowserLayout({
         };
     }, [browserVideoStream]);
 
-    useEffect(() => {
-        setNavInput(browserUrl);
-    }, [browserUrl]);
-
-    const displayUrl = (() => {
-        try {
-            const url = new URL(browserUrl);
-            return url.hostname;
-        } catch {
-            return browserUrl;
-        }
-    })();
-
     const resolvedNoVncUrl = resolveNoVncUrl(noVncUrl);
-    const remoteParticipants = useSmartParticipantOrder(
-        Array.from(participants.values()).filter(
+    const remoteParticipantList = useMemo(
+        () => Array.from(participants.values()).filter(
             (participant) =>
                 participant.userId !== currentUserId &&
                 !isSystemUserId(participant.userId),
         ),
+        [currentUserId, participants],
+    );
+    const remoteParticipants = useSmartParticipantOrder(
+        remoteParticipantList,
         activeSpeakerId
     );
 
     const localName = getDisplayName(currentUserId) || userEmail;
+    const displayControllerName = controllerName.trim() || "host";
+    const isKitesurf = provider === "kitesurf";
+    const providerLabel = isKitesurf ? "Kitesurf" : "Shared browser";
+    const providerDetail = isKitesurf ? "Cloudflare Browser Run" : "Chromium";
 
     return (
-        <div className="mt-5 flex flex-1 min-h-0 min-w-0 flex-col gap-4 overflow-hidden sm:flex-row">
-            <div
-                className="flex-1 min-h-0 min-w-0 rounded-2xl overflow-hidden relative flex flex-col"
+        <div className="mt-3 grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_13rem] lg:overflow-hidden">
+            <section
+                className="relative flex min-h-[420px] min-w-0 flex-col overflow-hidden rounded-2xl lg:min-h-0"
                 style={{
                     backgroundColor: color.surface,
                     border: `1px solid ${color.border}`,
                 }}
+                aria-label="Shared browser workspace"
+                data-browser-provider={provider}
             >
-                {isAdmin && onNavigateBrowser && (
-                    <div
-                        className="px-3 py-2.5"
-                        style={{ borderBottom: `1px solid ${color.border}` }}
-                    >
-                        <form
-                            onSubmit={async (event: FormEvent) => {
-                                event.preventDefault();
-                                const normalized = normalizeBrowserUrl(navInput);
-                                if (!normalized.url) {
-                                    setNavError(normalized.error ?? "Enter a valid URL.");
-                                    return;
-                                }
-                                setNavError(null);
-                                await onNavigateBrowser(normalized.url);
-                            }}
-                            className="flex items-center gap-2"
+                <header
+                    className="flex h-10 shrink-0 items-center justify-between gap-3 px-3"
+                    style={{ borderBottom: `1px solid ${color.border}` }}
+                >
+                    <div className="flex min-w-0 items-center gap-2">
+                        <span
+                            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
+                            style={{ backgroundColor: color.accentSoft, color: color.accent }}
                         >
-                            <div
-                                className="flex flex-1 items-center gap-2 rounded-full px-3 py-2 transition-[border-color] duration-[120ms] focus-within:border-text/25"
-                                style={{
-                                    backgroundColor: color.bgAlt,
-                                    border: `1px solid ${color.border}`,
-                                }}
-                            >
-                                <Globe
-                                    size={18}
-                                    strokeWidth={1.75}
-                                    className="shrink-0"
-                                    style={{ color: color.textMuted }}
-                                />
-                                <input
-                                    type="text"
-                                    value={navInput}
-                                    onChange={(event) => {
-                                        setNavInput(event.target.value);
-                                        if (navError) {
-                                            setNavError(null);
-                                        }
-                                    }}
-                                    placeholder="Navigate to a URL"
-                                    className="flex-1 bg-transparent text-[14px] focus:outline-none"
-                                    style={{ color: color.text }}
-                                />
-                            </div>
-                            <button
-                                type="submit"
-                                disabled={!navInput.trim() || isBrowserLaunching}
-                                className="inline-flex items-center justify-center gap-1.5 rounded-full px-4 py-2 text-[14px] font-medium text-white transition-[filter] duration-[120ms] hover:brightness-110 active:brightness-95 disabled:opacity-35 disabled:cursor-not-allowed"
-                                style={{ backgroundColor: color.accent }}
-                            >
-                                {isBrowserLaunching ? (
-                                    <Loader2 size={18} strokeWidth={1.75} className="animate-spin" />
-                                ) : (
-                                    <>
-                                        Go
-                                        <ArrowRight size={18} strokeWidth={1.75} />
-                                    </>
-                                )}
-                            </button>
-                        </form>
-                        {navError && (
-                            <p className="mt-2 text-[12.5px]" style={{ color: color.accent }}>
-                                {navError}
-                            </p>
-                        )}
+                            <Globe size={13} strokeWidth={1.8} />
+                        </span>
+                        <span className="truncate text-[11px] font-semibold" style={{ color: color.text }}>
+                            {providerLabel}
+                        </span>
+                        <span className="hidden text-[10px] sm:inline" style={{ color: color.textFaint }}>
+                            {providerDetail}
+                        </span>
                     </div>
-                )}
-                <div className="flex-1 min-h-0 flex items-center justify-center bg-black overflow-hidden">
+                    <div className="flex shrink-0 items-center gap-2.5 text-[10px]" style={{ color: color.textFaint }}>
+                        <span className="inline-flex items-center gap-1.5 font-medium uppercase tracking-[0.12em]">
+                            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color.success }} />
+                            Live
+                        </span>
+                        <span className="hidden sm:inline">
+                            Shared by <span style={{ color: color.textMuted }}>{displayControllerName}</span>
+                        </span>
+                    </div>
+                </header>
+
+                <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black">
                     {browserVideoStream ? (
                         <div
                             className="relative bg-black"
@@ -303,39 +252,27 @@ function BrowserLayout({
                     )}
                 </div>
 
-                <div
-                    className="flex items-center justify-between px-3 py-2.5"
-                    style={{ borderTop: `1px solid ${color.border}` }}
-                >
-                    <div className="flex items-center gap-2 min-w-0">
-                        <Globe
-                            size={18}
-                            strokeWidth={1.75}
-                            className="shrink-0"
-                            style={{ color: color.textMuted }}
-                        />
-                        <span
-                            className="truncate text-[12.5px] font-medium"
-                            style={{ color: color.text }}
-                        >
-                            {displayUrl}
-                        </span>
-                    </div>
-                    <div
-                        className="flex shrink-0 items-center gap-2 text-[12.5px]"
-                        style={{ color: color.textMuted }}
-                    >
-                        <span
-                            className="h-1.5 w-1.5 rounded-full"
-                            style={{ backgroundColor: color.success }}
-                        />
-                        {controllerName} is sharing
-                    </div>
-                </div>
-            </div>
+            </section>
 
-            <div className="flex h-36 w-full shrink-0 flex-row gap-3 overflow-x-auto overflow-y-visible pb-1 sm:h-auto sm:w-64 sm:flex-col sm:overflow-y-auto sm:overflow-x-visible sm:px-1 sm:pb-0">
-                <div className={`acm-video-tile h-36 w-48 shrink-0 sm:w-auto ${isLocalActiveSpeaker ? "speaking" : ""}`}>
+            <aside className="min-h-[160px] min-w-0 lg:min-h-0">
+                <section
+                    className="overflow-hidden rounded-2xl"
+                    style={{ backgroundColor: color.surface, border: `1px solid ${color.border}` }}
+                    aria-label="Meeting participants"
+                >
+                    <header
+                        className="flex h-9 items-center justify-between px-3"
+                        style={{ borderBottom: `1px solid ${color.border}` }}
+                    >
+                        <span className="text-[10px] font-medium uppercase tracking-[0.14em]" style={{ color: color.textFaint }}>
+                            In the room
+                        </span>
+                        <span className="text-[10px]" style={{ color: color.textFaint }}>
+                            {remoteParticipants.length + 1}
+                        </span>
+                    </header>
+                    <div className="flex max-h-44 gap-2 overflow-auto p-2 lg:max-h-52 lg:flex-col">
+                <div className={`acm-video-tile h-28 w-40 shrink-0 lg:w-auto ${isLocalActiveSpeaker ? "speaking" : ""}`}>
                         <video
                             ref={localVideoRef}
                             autoPlay
@@ -349,7 +286,7 @@ function BrowserLayout({
                                 className="absolute inset-0 flex items-center justify-center"
                                 style={{ backgroundColor: color.surface }}
                             >
-                                <Avatar name={localName} id={currentUserId} size={48} />
+                                <Avatar name={localName} id={currentUserId} size={38} />
                             </div>
                         )}
                         {isHandRaised && (
@@ -395,7 +332,7 @@ function BrowserLayout({
                         </div>
                 </div>
 
-                {remoteParticipants.map((participant) => (
+                    {remoteParticipants.map((participant) => (
                         <ParticipantVideo
                             key={participant.userId}
                             participant={participant}
@@ -408,7 +345,9 @@ function BrowserLayout({
                             audioPlaybackAttemptToken={audioPlaybackAttemptToken}
                         />
                     ))}
-            </div>
+                    </div>
+                </section>
+            </aside>
         </div>
     );
 }

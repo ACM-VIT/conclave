@@ -24,7 +24,6 @@ import {
 import { HOTKEYS } from "../lib/hotkeys";
 import { CONCLAVE_MENTION_TOKEN } from "../lib/conclave-assistant";
 import {
-  BROWSER_APPS,
   buildControlsConfig,
   type ControlsBarProps,
 } from "./controls-config";
@@ -239,25 +238,6 @@ export function buildPaletteActions(
       run: row.onPress,
     });
   }
-  if (
-    p.showBrowserControls &&
-    p.isAdmin &&
-    p.onLaunchBrowser &&
-    !p.isBrowserActive
-  ) {
-    for (const app of BROWSER_APPS) {
-      actions.push({
-        id: `browser-launch-${app.id}`,
-        section: "Apps & tools",
-        label: `Open ${app.name} in shared browser`,
-        keywords: `browser launch ${app.description.toLowerCase()}`,
-        icon: app.icon,
-        disabled: p.isBrowserLaunching,
-        run: () => void p.onLaunchBrowser?.(app.url),
-      });
-    }
-  }
-
   const voiceAgentHandler = p.isVoiceAgentRunning
     ? p.onStopVoiceAgent
     : p.onStartVoiceAgent;

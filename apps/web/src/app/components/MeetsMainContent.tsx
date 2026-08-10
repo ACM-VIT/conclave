@@ -1801,6 +1801,7 @@ export default function MeetsMainContent({
     isBrowserLaunching,
     showBrowserControls,
     onLaunchBrowser,
+    onNavigateBrowser,
     onCloseBrowser,
     hasBrowserAudio,
     isBrowserAudioMuted,
@@ -2302,7 +2303,6 @@ export default function MeetsMainContent({
         />
       ) : browserState?.active && browserState.noVncUrl ? (
         <BrowserLayout
-          browserUrl={browserState.url || ""}
           noVncUrl={browserState.noVncUrl}
           controllerName={resolveDisplayName(
             browserState.controllerUserId || "",
@@ -2321,9 +2321,7 @@ export default function MeetsMainContent({
           onAudioPlaybackStarted={handleParticipantAudioPlaybackStarted}
           audioPlaybackAttemptToken={participantAudioPlaybackAttempt}
           getDisplayName={resolveDisplayName}
-          isAdmin={isAdmin}
-          isBrowserLaunching={isBrowserLaunching}
-          onNavigateBrowser={onNavigateBrowser}
+          provider={browserState.provider}
           browserVideoStream={browserVideoStream}
         />
       ) : (
@@ -2373,7 +2371,7 @@ export default function MeetsMainContent({
             browserLaunchError
               ? {
                   id: "browser",
-                  label: "Browser error",
+                  label: "Shared browser",
                   message: browserLaunchError,
                   tone: "danger" as const,
                   onDismiss: onClearBrowserError,

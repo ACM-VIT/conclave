@@ -1233,12 +1233,6 @@ struct SharedBrowserSheetView: View {
     @State private var browserURLInput = ""
     @State private var hasEditedBrowserURLInput = false
 
-    private let browserLaunchOptions = BrowserLaunchOption.defaults
-    private let browserLaunchColumns = [
-        GridItem(.flexible(), spacing: ACMSpacing.xs),
-        GridItem(.flexible(), spacing: ACMSpacing.xs)
-    ]
-
     var body: some View {
         VStack(spacing: 0) {
             MeetingSheetHeader(title: "Shared browser", onBack: onBack, onDone: { dismiss() })
@@ -1281,8 +1275,6 @@ struct SharedBrowserSheetView: View {
                                     }
                                 } else if canManageSharedBrowser {
                                     browserURLRow
-                                    MoreRowDivider()
-                                    browserQuickLaunchGrid
                                     MoreRowDivider()
                                     launchBrowserRow
                                 } else if canToggleBrowserAudio {
@@ -1378,36 +1370,6 @@ struct SharedBrowserSheetView: View {
         }
         .padding(.horizontal, ACMSpacing.sm)
         .frame(height: 52)
-    }
-
-    private var browserQuickLaunchGrid: some View {
-        LazyVGrid(columns: browserLaunchColumns, spacing: ACMSpacing.xs) {
-            ForEach(browserLaunchOptions) { option in
-                Button {
-                    if viewModel.launchSharedBrowser(url: option.url) {
-                        hasEditedBrowserURLInput = false
-                    }
-                } label: {
-                    Text(option.name)
-                        .font(ACMFont.trial(13, weight: .medium))
-                        .foregroundStyle(ACMColors.text)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 36)
-                        .acmColorBackground(ACMColors.surfaceRaised)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        #if !SKIP
-                        .contentShape(Rectangle())
-                        #endif
-                }
-                .buttonStyle(.plain)
-                .disabled(!canManageSharedBrowser || viewModel.state.isBrowserLaunching)
-            }
-        }
-        .padding(.horizontal, ACMSpacing.sm)
-        .padding(.vertical, ACMSpacing.sm)
-        .opacity(canManageSharedBrowser && !viewModel.state.isBrowserLaunching ? 1.0 : 0.45)
     }
 
     private var launchBrowserRow: some View {
@@ -2484,22 +2446,6 @@ struct ViewSettingsSheetView: View {
             viewModel.setSelfViewCorner(corner)
         }
     }
-}
-
-private struct BrowserLaunchOption: Identifiable {
-    let id: String
-    let name: String
-    let url: String
-
-    static let defaults = [
-        BrowserLaunchOption(id: "figma", name: "Figma", url: "https://www.figma.com"),
-        BrowserLaunchOption(id: "miro", name: "Miro", url: "https://miro.com"),
-        BrowserLaunchOption(id: "notion", name: "Notion", url: "https://www.notion.so"),
-        BrowserLaunchOption(id: "google-docs", name: "Docs", url: "https://docs.google.com"),
-        BrowserLaunchOption(id: "trello", name: "Trello", url: "https://trello.com"),
-        BrowserLaunchOption(id: "youtube", name: "YouTube", url: "https://www.youtube.com"),
-        BrowserLaunchOption(id: "loom", name: "Loom", url: "https://www.loom.com")
-    ]
 }
 
 struct MoreRow: View {

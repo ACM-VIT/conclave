@@ -15,6 +15,7 @@ RUN corepack enable && corepack prepare pnpm@11.7.0 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/sfu/package.json packages/sfu/package.json
+COPY packages/shared-browser/package.json packages/shared-browser/package.json
 COPY packages/ui-tokens/package.json packages/ui-tokens/package.json
 RUN pnpm install --filter @conclave/sfu... --frozen-lockfile
 

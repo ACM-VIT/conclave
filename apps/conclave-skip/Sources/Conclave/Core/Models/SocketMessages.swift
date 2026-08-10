@@ -254,7 +254,20 @@ struct NavigateBrowserRequest: Codable {
 struct LaunchBrowserResponse: Codable {
     let success: Bool?
     let noVncUrl: String?
+    let provider: String?
     let error: String?
+
+    init(
+        success: Bool?,
+        noVncUrl: String?,
+        provider: String? = nil,
+        error: String?
+    ) {
+        self.success = success
+        self.noVncUrl = noVncUrl
+        self.provider = provider
+        self.error = error
+    }
 }
 
 struct AppsOpenRequest: Codable {
@@ -1991,7 +2004,24 @@ struct BrowserStateNotification: Codable {
     let url: String?
     let noVncUrl: String?
     let controllerUserId: String?
+    let provider: String?
     let roomId: String?
+
+    init(
+        active: Bool,
+        url: String?,
+        noVncUrl: String?,
+        controllerUserId: String?,
+        provider: String? = nil,
+        roomId: String?
+    ) {
+        self.active = active
+        self.url = url
+        self.noVncUrl = noVncUrl
+        self.controllerUserId = controllerUserId
+        self.provider = provider
+        self.roomId = roomId
+    }
 }
 
 struct BrowserClosedNotification: Codable {

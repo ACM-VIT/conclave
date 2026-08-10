@@ -4507,6 +4507,7 @@ final class MeetingViewModel {
             state.browserURL = notification.url
             state.browserNoVncURL = notification.noVncUrl
             state.browserControllerUserId = notification.controllerUserId
+            state.browserProvider = notification.provider
             startBrowserActivityLoop()
         } else {
             clearBrowserState()
@@ -4525,6 +4526,7 @@ final class MeetingViewModel {
         state.browserURL = nil
         state.browserNoVncURL = nil
         state.browserControllerUserId = nil
+        state.browserProvider = nil
     }
 
     private func clearBrowserMediaState() {
@@ -9908,6 +9910,7 @@ final class MeetingViewModel {
                 state.browserURL = normalizedURL
                 state.browserNoVncURL = response.noVncUrl
                 state.browserControllerUserId = state.userId
+                state.browserProvider = response.provider
                 if state.isBrowserActive {
                     startBrowserActivityLoop()
                 }

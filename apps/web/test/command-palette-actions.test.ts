@@ -213,21 +213,17 @@ describe("buildPaletteActions", () => {
     expect(change).toHaveBeenCalledWith("mic-a");
   });
 
-  it("offers shared-browser quick launches only for admins without an active browser", () => {
+  it("does not add website presets for the shared browser", () => {
     const launch = vi.fn().mockResolvedValue(true);
-    const props = baseProps({
-      isAdmin: true,
-      showBrowserControls: true,
-      onLaunchBrowser: launch,
-    });
-    const actions = buildPaletteActions(props, noDevices);
-    expect(ids(actions)).toContain("browser-launch-youtube");
-
-    const whileActive = buildPaletteActions(
-      { ...props, isBrowserActive: true },
+    const actions = buildPaletteActions(
+      baseProps({
+        isAdmin: true,
+        showBrowserControls: true,
+        onLaunchBrowser: launch,
+      }),
       noDevices,
     );
-    expect(ids(whileActive)).not.toContain("browser-launch-youtube");
+    expect(ids(actions).some((id) => id.startsWith("browser-launch-"))).toBe(false);
   });
 
   it("flips the voice agent action with running state", () => {

@@ -92,7 +92,9 @@ struct SharedBrowserLayoutView: View {
 
     private func browserCard(browserURL: String?) -> some View {
         VStack(spacing: 0) {
-            if viewModel.state.isAdmin && !viewModel.state.isWebinarAttendee {
+            if viewModel.state.isAdmin &&
+                !viewModel.state.isWebinarAttendee &&
+                viewModel.state.browserProvider != "kitesurf" {
                 browserToolbar
             }
 

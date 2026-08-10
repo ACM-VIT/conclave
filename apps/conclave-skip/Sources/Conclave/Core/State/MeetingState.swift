@@ -227,6 +227,7 @@ final class MeetingState {
     var browserNoVncURL: String?
     var browserControllerUserId: String?
     var isBrowserNavigating: Bool = false
+    var browserProvider: String?
 
     // Apps Runtime
     var activeAppId: String?

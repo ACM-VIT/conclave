@@ -8,6 +8,7 @@ import {
   GlobeIcon,
   ListTreeIcon,
   PencilLineIcon,
+  PanelsTopLeftIcon,
   type LucideIcon,
 } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
@@ -61,6 +62,11 @@ const TASK_META: Record<
     icon: GithubIcon,
     running: "Preparing a GitHub issue",
     done: "Finished the GitHub issue request",
+  },
+  browser: {
+    icon: PanelsTopLeftIcon,
+    running: "Using the shared browser",
+    done: "Used the shared browser",
   },
   answer: {
     icon: PencilLineIcon,
@@ -119,7 +125,8 @@ function ConclaveMessage({
     (task) =>
       task.kind === "web_search" ||
       task.kind === "transcript" ||
-      task.kind === "github_issue",
+      task.kind === "github_issue" ||
+      task.kind === "browser",
   );
   const reasoning = message.reasoning?.trim() ?? "";
   const answer = message.content.trim();

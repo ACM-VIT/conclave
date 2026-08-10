@@ -29,7 +29,7 @@
     "test:deploy-preflight": "node --test scripts/deploy-sfu-preflight.test.mjs",
     "build:conclave-skip:android": "bash scripts/build-conclave-skip-android-debug.sh",
     "build": "pnpm --filter conclave-web --filter @conclave/shared-browser run build",
-    "test": "pnpm run test:quality-harness && pnpm run test:deploy-preflight && pnpm --filter conclave-web --filter @conclave/meeting-core --filter @conclave/sfu run test",
+    "test": "pnpm run test:quality-harness && pnpm run test:deploy-preflight && pnpm --filter conclave-web --filter @conclave/meeting-core --filter @conclave/sfu --filter @conclave/shared-browser run test",
     "typecheck": "pnpm --filter conclave-web --filter @conclave/apps-sdk --filter @conclave/meeting-core --filter @conclave/sfu --filter @conclave/shared-browser run typecheck",
     "konsistent": "konsistent",
     "lint:packages": "eslint packages",

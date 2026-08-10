@@ -38,6 +38,7 @@ import {
 import { shutdownAnalytics } from "./analytics/posthog.js";
 import { createSfuState } from "./state.js";
 import type { SfuState } from "./state.js";
+import { shutdownBrowserBackend } from "./browserServiceClient.js";
 
 export type SfuServer = {
   app: Express;
@@ -190,6 +191,8 @@ export const createSfuServer = (
       }
     }
     state.workers = [];
+
+    await shutdownBrowserBackend();
 
     // Flush and close product analytics last so any buffered game events are
     // delivered before the process exits. No-op when analytics is disabled.

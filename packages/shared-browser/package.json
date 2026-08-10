@@ -1,18 +1,23 @@
 {
     "name": "@conclave/shared-browser",
     "version": "0.1.0",
-    "description": "VNC-based shared browser service for Conclave",
+    "description": "Chromium and Cloudflare Kitesurf shared browser service for Conclave",
     "type": "module",
+    "exports": {
+        "./kitesurf": "./src/kitesurf.ts"
+    },
     "scripts": {
         "dev": "tsx watch src/server.ts",
         "start": "node dist/server.js",
         "build": "tsc",
-        "typecheck": "tsc --noEmit"
+        "typecheck": "tsc --noEmit",
+        "test": "tsx --test test/*.test.ts"
     },
     "dependencies": {
         "cors": "^2.8.6",
         "dockerode": "^5.0.0",
-        "express": "^5.2.1"
+        "express": "^5.2.1",
+        "puppeteer-core": "^24.43.1"
     },
     "devDependencies": {
         "@types/cors": "^2.8.19",

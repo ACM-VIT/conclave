@@ -1,5 +1,7 @@
 import Docker from "dockerode";
 import type {
+    BrowserCapabilities,
+    BrowserManager,
     BrowserServiceConfig,
     BrowserSession,
     LaunchBrowserOptions,
@@ -8,7 +10,13 @@ import type {
 } from "./types.js";
 import { defaultConfig } from "./types.js";
 
-export class ContainerManager {
+export class ContainerManager implements BrowserManager {
+    readonly capabilities: BrowserCapabilities = {
+        provider: "chromium",
+        audio: true,
+        video: true,
+        agentic: false,
+    };
     private docker: Docker;
     private config: BrowserServiceConfig;
     private sessions: Map<string, BrowserSession> = new Map();
@@ -124,6 +132,10 @@ export class ContainerManager {
         }
     }
 
+    async checkHealth(): Promise<void> {
+        await this.docker.ping();
+    }
+
     async launchBrowser(options: LaunchBrowserOptions): Promise<LaunchBrowserResult> {
         const { roomId, url, controllerUserId, audioTarget, videoTarget } = options;
 
@@ -204,6 +216,7 @@ export class ContainerManager {
                 noVncUrl,
                 currentUrl: url,
                 createdAt: new Date(),
+                provider: "chromium",
                 controllerUserId,
                 audioTarget: audioTarget ?? undefined,
                 videoTarget: videoTarget ?? undefined,
@@ -285,7 +298,7 @@ export class ContainerManager {
         }
     }
 
-    getSession(roomId: string): BrowserSession | undefined {
+    async getSession(roomId: string): Promise<BrowserSession | undefined> {
         const session = this.sessions.get(roomId);
         if (session) {
             this.resetIdleTimer(roomId);
@@ -297,7 +310,7 @@ export class ContainerManager {
         return Array.from(this.sessions.values());
     }
 
-    markActivity(roomId: string): void {
+    async markActivity(roomId: string): Promise<void> {
         if (this.sessions.has(roomId)) {
             this.resetIdleTimer(roomId);
         }
