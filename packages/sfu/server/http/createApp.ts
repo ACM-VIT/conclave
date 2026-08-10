@@ -48,6 +48,10 @@ import {
   verifyChatImageUploadToken,
 } from "../chatImages.js";
 import { moderateChatImage } from "../chatImageModeration.js";
+import {
+  callBrowserService,
+  getBrowserServiceCapabilities,
+} from "../browserServiceClient.js";
 
 export type CreateSfuAppOptions = {
   state: SfuState;
@@ -1708,6 +1712,82 @@ export const createSfuApp = ({
     }
 
     await handleDrain(req, res);
+  });
+
+  // Internal bridge used by the web assistant. Browser session ownership stays
+  // with the room's SFU, so an embedded Kitesurf backend and a legacy Chromium
+  // service share the same authorization and lifecycle boundary.
+  app.get("/internal/browser/health", async (req, res) => {
+    if (!requireSecret(req, res)) return;
+    try {
+      const capabilities = await getBrowserServiceCapabilities();
+      res.json({ ok: true, capabilities });
+    } catch {
+      res.status(503).json({ ok: false });
+    }
+  });
+
+  const authorizeBrowserAgentHost = (
+    body: Record<string, unknown>,
+    res: Response,
+  ): string | null => {
+    const roomId = normalizeIdentifier(body.roomId, 512);
+    const userId = normalizeIdentifier(body.userId, MAX_USER_ID_LENGTH);
+    if (!roomId || !userId) {
+      res.status(400).json({ error: "Room ID and user ID are required" });
+      return null;
+    }
+    const room = state.rooms.get(roomId);
+    const client = room?.getClient(userId);
+    if (!room || !client) {
+      res.status(410).json({ error: "This room or host is no longer active" });
+      return null;
+    }
+    if (!room.isAdminClient(client)) {
+      res.status(403).json({ error: "Only a current meeting host can use the browser agent" });
+      return null;
+    }
+    return roomId;
+  };
+
+  app.post("/internal/browser/agent/observe", async (req, res) => {
+    if (!requireSecret(req, res)) return;
+    const body = requestBody(req);
+    const roomId = authorizeBrowserAgentHost(body, res);
+    if (!roomId) return;
+    try {
+      const result = await callBrowserService<{ observation: unknown }>(
+        "/agent/observe",
+        { payload: { roomId } },
+      );
+      res.json(result);
+    } catch (error) {
+      res.status(502).json({
+        error: error instanceof Error ? error.message : "Browser inspection failed",
+      });
+    }
+  });
+
+  app.post("/internal/browser/agent/action", async (req, res) => {
+    if (!requireSecret(req, res)) return;
+    const body = requestBody(req);
+    if (typeof body.action !== "object" || body.action === null) {
+      res.status(400).json({ error: "A browser action is required" });
+      return;
+    }
+    const roomId = authorizeBrowserAgentHost(body, res);
+    if (!roomId) return;
+    try {
+      const result = await callBrowserService<{ success: boolean }>(
+        "/agent/action",
+        { payload: { roomId, action: body.action } },
+      );
+      res.json(result);
+    } catch (error) {
+      res.status(502).json({
+        error: error instanceof Error ? error.message : "Browser action failed",
+      });
+    }
   });
 
   registerScheduledWebinarRoutes(app, {

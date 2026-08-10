@@ -42,6 +42,7 @@ const CONCLAVE_TASK_KINDS = new Set([
   "web_search",
   "transcript",
   "github_issue",
+  "browser",
   "answer",
 ]);
 const CONCLAVE_AUTH_TOKEN_TTL_SECONDS = 5 * 60;
@@ -507,6 +508,7 @@ const createConclaveAuthorizationToken = (options: {
   questionMessageId: string;
   userId: string;
   displayName: string;
+  isAdmin: boolean;
   room: Room;
 }): string =>
   jwt.sign(
@@ -519,6 +521,8 @@ const createConclaveAuthorizationToken = (options: {
       roomId: options.room.id,
       clientId: options.room.clientId,
       channelId: options.room.channelId,
+      isAdmin: options.isAdmin,
+      sfuUrl: config.instancePublicUrl || undefined,
     },
     config.sfuSecret,
     {
@@ -1004,6 +1008,7 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
             displayName:
               room.getDisplayNameForUser(sender.id) ||
               fallbackDisplayNameFromUserId(sender.id),
+            isAdmin: sender instanceof Admin,
             room,
           }),
         });

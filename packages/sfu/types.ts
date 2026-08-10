@@ -1096,6 +1096,7 @@ export interface LaunchBrowserData {
 export interface LaunchBrowserResponse {
   success: boolean;
   noVncUrl?: string;
+  provider?: "chromium" | "kitesurf";
   error?: string;
 }
 
@@ -1108,6 +1109,7 @@ export interface BrowserStateNotification {
   url?: string;
   noVncUrl?: string;
   controllerUserId?: string;
+  provider?: "chromium" | "kitesurf";
   roomId?: string;
 }
 

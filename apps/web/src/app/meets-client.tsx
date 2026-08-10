@@ -860,8 +860,6 @@ export default function MeetsClient({
     useState(false);
   const [browserAudioPlaybackAttempt, setBrowserAudioPlaybackAttempt] =
     useState(0);
-  const [isBrowserServiceAvailable, setIsBrowserServiceAvailable] =
-    useState(false);
   const [isVoiceAgentDialogOpen, setIsVoiceAgentDialogOpen] = useState(false);
   const toggleMuteCommandRef = useRef<(() => void | Promise<void>) | null>(null);
   const toggleCameraCommandRef = useRef<(() => void | Promise<void>) | null>(
@@ -2491,6 +2489,7 @@ export default function MeetsClient({
 
   const {
     browserState,
+    isAvailable: isBrowserServiceAvailable,
     isLaunching: isBrowserLaunching,
     launchError: browserLaunchError,
     launchBrowser,
@@ -2500,6 +2499,7 @@ export default function MeetsClient({
   } = useSharedBrowser({
     socketRef: refs.socketRef,
     isAdmin: canModerateMeeting,
+    isConnected: connectionState === "joined",
   });
   const showBrowserControls = Boolean(
     browserState?.active || isBrowserServiceAvailable,
@@ -2731,39 +2731,6 @@ export default function MeetsClient({
   }, []);
   const handleBrowserAudioPlaybackStarted = useCallback(() => {
     setBrowserAudioNeedsGesture(false);
-  }, []);
-
-  useEffect(() => {
-    let isMounted = true;
-    const checkBrowserService = async () => {
-      try {
-        const response = await fetch("/api/shared-browser/health", {
-          cache: "no-store",
-        });
-        if (!isMounted) return;
-        if (!response.ok) {
-          setIsBrowserServiceAvailable(false);
-          return;
-        }
-        const data = (await response.json().catch(() => null)) as {
-          ok?: boolean;
-        } | null;
-        setIsBrowserServiceAvailable(Boolean(data?.ok));
-      } catch (_error) {
-        if (isMounted) {
-          setIsBrowserServiceAvailable(false);
-        }
-      }
-    };
-
-    void checkBrowserService();
-    const interval = setInterval(() => {
-      void checkBrowserService();
-    }, 30000);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
   }, []);
 
   const screenTrack = refs.screenProducerRef.current?.track;

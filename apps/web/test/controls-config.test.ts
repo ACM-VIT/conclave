@@ -5,6 +5,7 @@ import {
 } from "../src/app/components/controls-config";
 
 const noop = () => {};
+const noopAsync = async () => true;
 
 const buildProps = (isMuted: boolean): ControlsBarProps => ({
   roomId: "test-room",
@@ -36,5 +37,27 @@ describe("microphone control", () => {
 
     expect(mic?.label).toBe(label);
     expect(mic?.loading).not.toBe(true);
+  });
+});
+
+describe("shared browser controls", () => {
+  it("keeps navigation and close actions available while a browser is active", () => {
+    const overflow = buildControlsConfig({
+      ...buildProps(false),
+      isAdmin: true,
+      showBrowserControls: true,
+      isBrowserActive: true,
+      onLaunchBrowser: noopAsync,
+      onNavigateBrowser: noopAsync,
+      onCloseBrowser: noopAsync,
+    }).overflow;
+
+    expect(overflow.find((row) => row.id === "browser-navigate")).toMatchObject({
+      label: "Navigate shared browser",
+      opensBrowserLauncher: true,
+    });
+    expect(overflow.find((row) => row.id === "browser")).toMatchObject({
+      label: "Close shared browser",
+    });
   });
 });

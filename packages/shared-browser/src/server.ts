@@ -1,10 +1,14 @@
 import express, { type Express } from "express";
 import cors from "cors";
-import { ContainerManager } from "./ContainerManager.js";
-import { defaultConfig, type AudioTarget } from "./types.js";
+import { createBrowserManager } from "./createBrowserManager.js";
+import {
+    defaultConfig,
+    type AudioTarget,
+    type BrowserAgentAction,
+} from "./types.js";
 
 const app: Express = express();
-const containerManager = new ContainerManager();
+const browserManager = createBrowserManager();
 
 // Express types `req.body` as `any`; narrow it once at the boundary so every
 // field is validated before it reaches the container manager.
@@ -68,21 +72,45 @@ app.use((req, res, next) => {
     res.status(401).json({ error: "Unauthorized" });
 });
 
-app.get("/health", (_req, res) => {
-    res.json({ status: "ok", sessions: containerManager.getAllSessions().length });
+app.get("/health", async (_req, res) => {
+    try {
+        await browserManager.checkHealth();
+        res.json({
+            status: "ok",
+            sessions: browserManager.getAllSessions().length,
+            capabilities: browserManager.capabilities,
+        });
+    } catch {
+        res.status(503).json({ status: "unavailable" });
+    }
+});
+
+app.get("/capabilities", async (_req, res) => {
+    try {
+        await browserManager.checkHealth();
+        res.json({ capabilities: browserManager.capabilities });
+    } catch {
+        res.status(503).json({ error: "Browser backend is unavailable" });
+    }
 });
 
 app.get("/sessions", (_req, res) => {
-    const sessions = containerManager.getAllSessions();
+    const sessions = browserManager.getAllSessions();
     res.json({ sessions });
 });
 
-app.get("/sessions/:roomId", (req, res) => {
-    const session = containerManager.getSession(req.params.roomId);
-    if (session) {
-        res.json({ session });
-    } else {
-        res.status(404).json({ error: "Session not found" });
+app.get("/sessions/:roomId", async (req, res) => {
+    try {
+        const session = await browserManager.getSession(req.params.roomId);
+        if (session) {
+            res.json({ session });
+        } else {
+            res.status(404).json({ error: "Session not found" });
+        }
+    } catch (error) {
+        res.status(502).json({
+            error: error instanceof Error ? error.message : "Failed to refresh session",
+        });
     }
 });
 
@@ -97,14 +125,47 @@ const decodeRtpTargets = (
     | { ok: true; audioTarget?: AudioTarget; videoTarget?: AudioTarget }
     | { ok: false; error: string } => {
     const audioTarget = readRtpTarget(body, "audioTarget");
-    if (body.audioTarget !== undefined && !audioTarget) {
+    if (body.audioTarget !== undefined && body.audioTarget !== null && !audioTarget) {
         return { ok: false, error: "Invalid audioTarget" };
     }
     const videoTarget = readRtpTarget(body, "videoTarget");
-    if (body.videoTarget !== undefined && !videoTarget) {
+    if (body.videoTarget !== undefined && body.videoTarget !== null && !videoTarget) {
         return { ok: false, error: "Invalid videoTarget" };
     }
     return { ok: true, audioTarget, videoTarget };
+};
+
+const readAgentAction = (value: unknown): BrowserAgentAction | undefined => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+    const action = value as Record<string, unknown>;
+    if (action.type === "click" && typeof action.elementId === "string") {
+        return { type: "click", elementId: action.elementId };
+    }
+    if (
+        action.type === "type" &&
+        typeof action.elementId === "string" &&
+        typeof action.text === "string"
+    ) {
+        return {
+            type: "type",
+            elementId: action.elementId,
+            text: action.text,
+            submit: action.submit === true,
+        };
+    }
+    if (action.type === "scroll" && (action.direction === "up" || action.direction === "down")) {
+        return { type: "scroll", direction: action.direction };
+    }
+    if (action.type === "navigate" && typeof action.url === "string") {
+        return { type: "navigate", url: action.url };
+    }
+    if (
+        action.type === "wait" &&
+        (action.durationMs === undefined || typeof action.durationMs === "number")
+    ) {
+        return { type: "wait", durationMs: action.durationMs };
+    }
+    return undefined;
 };
 
 app.post("/launch", async (req, res) => {
@@ -123,7 +184,7 @@ app.post("/launch", async (req, res) => {
         return;
     }
 
-    const result = await containerManager.launchBrowser({
+    const result = await browserManager.launchBrowser({
         roomId,
         url,
         controllerUserId: readString(body, "controllerUserId"),
@@ -154,7 +215,7 @@ app.post("/navigate", async (req, res) => {
         return;
     }
 
-    const result = await containerManager.navigateTo({
+    const result = await browserManager.navigateTo({
         roomId,
         url,
         audioTarget: targets.audioTarget,
@@ -176,7 +237,7 @@ app.post("/close", async (req, res) => {
         return;
     }
 
-    const result = await containerManager.closeBrowser(roomId);
+    const result = await browserManager.closeBrowser(roomId);
 
     if (result.success) {
         res.json(result);
@@ -185,7 +246,7 @@ app.post("/close", async (req, res) => {
     }
 });
 
-app.post("/activity", (req, res) => {
+app.post("/activity", async (req, res) => {
     const roomId = readString(requestBody(req), "roomId");
 
     if (!roomId) {
@@ -193,8 +254,56 @@ app.post("/activity", (req, res) => {
         return;
     }
 
-    containerManager.markActivity(roomId);
-    res.json({ success: true });
+    try {
+        await browserManager.markActivity(roomId);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(502).json({
+            error: error instanceof Error ? error.message : "Failed to keep session alive",
+        });
+    }
+});
+
+app.post("/agent/observe", async (req, res) => {
+    const roomId = readString(requestBody(req), "roomId");
+    if (!roomId) {
+        res.status(400).json({ error: "roomId is required" });
+        return;
+    }
+    if (!browserManager.observeForAgent) {
+        res.status(409).json({ error: "The active browser provider does not support agents" });
+        return;
+    }
+    try {
+        const observation = await browserManager.observeForAgent(roomId);
+        res.json({ observation });
+    } catch (error) {
+        res.status(502).json({
+            error: error instanceof Error ? error.message : "Failed to inspect the browser",
+        });
+    }
+});
+
+app.post("/agent/action", async (req, res) => {
+    const body = requestBody(req);
+    const roomId = readString(body, "roomId");
+    const action = readAgentAction(body.action);
+    if (!roomId || !action) {
+        res.status(400).json({ error: "roomId and a valid action are required" });
+        return;
+    }
+    if (!browserManager.performAgentAction) {
+        res.status(409).json({ error: "The active browser provider does not support agents" });
+        return;
+    }
+    try {
+        await browserManager.performAgentAction(roomId, action);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(502).json({
+            error: error instanceof Error ? error.message : "Browser action failed",
+        });
+    }
 });
 
 let isShuttingDown = false;
@@ -207,7 +316,7 @@ const gracefulShutdown = async () => {
 
     console.log("\n[Server] Received shutdown signal, cleaning up...");
     try {
-        await containerManager.shutdown();
+        await browserManager.shutdown();
         process.exit(0);
     } catch (error) {
         console.error("[Server] Failed to clean up browser sessions:", error);
@@ -221,7 +330,10 @@ process.on("SIGINT", () => void gracefulShutdown());
 const port = defaultConfig.port;
 app.listen(port, "0.0.0.0", () => {
     console.log(`[Server] Shared Browser Service running on port ${port}`);
-    console.log(`[Server] noVNC port range: ${defaultConfig.noVncPortStart}-${defaultConfig.noVncPortEnd}`);
+    console.log(`[Server] Browser provider: ${browserManager.capabilities.provider}`);
+    if (browserManager.capabilities.provider === "chromium") {
+        console.log(`[Server] noVNC port range: ${defaultConfig.noVncPortStart}-${defaultConfig.noVncPortEnd}`);
+    }
 });
 
-export { app, containerManager };
+export { app, browserManager };

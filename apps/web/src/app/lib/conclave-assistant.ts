@@ -61,6 +61,7 @@ type AssistantTaskKind =
   | "web_search"
   | "transcript"
   | "github_issue"
+  | "browser"
   | "answer";
 
 export interface AssistantTask {

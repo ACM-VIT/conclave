@@ -115,6 +115,7 @@ export interface ControlsBarProps {
   isBrowserLaunching?: boolean;
   showBrowserControls?: boolean;
   onLaunchBrowser?: (url: string) => Promise<boolean>;
+  onNavigateBrowser?: (url: string) => Promise<boolean>;
   onCloseBrowser?: () => Promise<boolean>;
   hasBrowserAudio?: boolean;
   isBrowserAudioMuted?: boolean;
@@ -194,16 +195,6 @@ export interface ControlsConfig {
   center: ControlDescriptor[];
   overflow: OverflowRow[];
 }
-
-export const BROWSER_APPS: { id: string; name: string; description: string; url: string; icon: LucideIcon }[] = [
-  { id: "figma", name: "Figma", description: "Design board", url: "https://www.figma.com", icon: StickyNote },
-  { id: "miro", name: "Miro", description: "Whiteboard", url: "https://miro.com", icon: StickyNote },
-  { id: "notion", name: "Notion", description: "Docs + tasks", url: "https://www.notion.so", icon: StickyNote },
-  { id: "google-docs", name: "Docs", description: "Write together", url: "https://docs.google.com", icon: StickyNote },
-  { id: "trello", name: "Trello", description: "Kanban board", url: "https://trello.com", icon: StickyNote },
-  { id: "youtube", name: "YouTube", description: "Video watch", url: "https://www.youtube.com", icon: StickyNote },
-  { id: "loom", name: "Loom", description: "Quick demo", url: "https://www.loom.com", icon: StickyNote },
-];
 
 function canManageWhiteboard(p: ControlsBarProps): boolean {
   return Boolean(p.isAdmin && (p.onOpenWhiteboard || p.onCloseWhiteboard));
@@ -436,6 +427,15 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
   }
   if (p.showBrowserControls && p.isAdmin && p.onLaunchBrowser) {
     if (p.isBrowserActive) {
+      if (p.onNavigateBrowser) {
+        overflow.push({
+          id: "browser-navigate",
+          icon: Globe,
+          label: "Navigate shared browser",
+          disabled: p.isBrowserLaunching,
+          opensBrowserLauncher: true,
+        });
+      }
       overflow.push({
         id: "browser",
         icon: Globe,

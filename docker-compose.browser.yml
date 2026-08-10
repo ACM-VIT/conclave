@@ -4,8 +4,9 @@ services:
       context: ./packages/shared-browser
     network_mode: "host"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${BROWSER_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     environment:
+      BROWSER_PROVIDER: ${BROWSER_PROVIDER:-chromium}
       BROWSER_SERVICE_PORT: ${BROWSER_SERVICE_PORT:-3040}
       NOVNC_PORT_START: ${NOVNC_PORT_START:-6080}
       NOVNC_PORT_END: ${NOVNC_PORT_END:-6100}
@@ -18,4 +19,9 @@ services:
       SFU_HOST: ${SFU_HOST:-}
       BROWSER_SERVICE_TOKEN: ${BROWSER_SERVICE_TOKEN:-}
       CONTAINER_IDLE_TIMEOUT: ${CONTAINER_IDLE_TIMEOUT:-1800000}
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
+      CLOUDFLARE_BROWSER_RUN_TOKEN: ${CLOUDFLARE_BROWSER_RUN_TOKEN:-}
+      CLOUDFLARE_BROWSER_RUN_BASE_URL: ${CLOUDFLARE_BROWSER_RUN_BASE_URL:-}
+      CLOUDFLARE_BROWSER_RUN_TIMEOUT_MS: ${CLOUDFLARE_BROWSER_RUN_TIMEOUT_MS:-15000}
+      KITESURF_KEEP_ALIVE_MS: ${KITESURF_KEEP_ALIVE_MS:-600000}
     restart: unless-stopped

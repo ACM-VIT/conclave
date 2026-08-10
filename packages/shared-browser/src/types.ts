@@ -1,9 +1,45 @@
+export type BrowserProvider = "chromium" | "kitesurf";
+
+export interface BrowserCapabilities {
+    provider: BrowserProvider;
+    audio: boolean;
+    video: boolean;
+    agentic: boolean;
+}
+
+export interface BrowserAgentElement {
+    id: string;
+    tag: string;
+    role?: string;
+    text?: string;
+    label?: string;
+    href?: string;
+    inputType?: string;
+    formMethod?: string;
+    isSearchForm?: boolean;
+}
+
+export interface BrowserAgentObservation {
+    url: string;
+    title: string;
+    text: string;
+    elements: BrowserAgentElement[];
+}
+
+export type BrowserAgentAction =
+    | { type: "click"; elementId: string }
+    | { type: "type"; elementId: string; text: string; submit?: boolean }
+    | { type: "scroll"; direction: "up" | "down" }
+    | { type: "navigate"; url: string }
+    | { type: "wait"; durationMs?: number };
+
 export interface BrowserSession {
     roomId: string;
     containerId: string;
     noVncUrl: string;
     currentUrl: string;
     createdAt: Date;
+    provider: BrowserProvider;
     controllerUserId?: string;
     audioTarget?: AudioTarget;
     videoTarget?: AudioTarget;
@@ -40,6 +76,7 @@ export interface NavigateOptions {
 
 export interface BrowserServiceConfig {
     port: number;
+    provider: BrowserProvider;
     dockerImageName: string;
     noVncPortStart: number;
     noVncPortEnd: number;
@@ -50,6 +87,25 @@ export interface BrowserServiceConfig {
     audioTargetHost?: string;
     videoTargetHost?: string;
     serviceToken?: string;
+    cloudflareAccountId?: string;
+    cloudflareApiToken?: string;
+    cloudflareBrowserRunBaseUrl?: string;
+    cloudflareRequestTimeoutMs: number;
+    kitesurfKeepAliveMs: number;
+}
+
+export interface BrowserManager {
+    readonly capabilities: BrowserCapabilities;
+    checkHealth(): Promise<void>;
+    launchBrowser(options: LaunchBrowserOptions): Promise<LaunchBrowserResult>;
+    navigateTo(options: NavigateOptions): Promise<LaunchBrowserResult>;
+    closeBrowser(roomId: string): Promise<{ success: boolean; error?: string }>;
+    getSession(roomId: string): Promise<BrowserSession | undefined>;
+    getAllSessions(): BrowserSession[];
+    markActivity(roomId: string): Promise<void>;
+    observeForAgent?(roomId: string): Promise<BrowserAgentObservation>;
+    performAgentAction?(roomId: string, action: BrowserAgentAction): Promise<void>;
+    shutdown(): Promise<void>;
 }
 
 type IntegerEnvOptions = {
@@ -105,8 +161,23 @@ if (parsedNoVncPortEnd < noVncPortStart) {
     );
 }
 
+const parseBrowserProvider = (): BrowserProvider => {
+    const value = process.env.BROWSER_PROVIDER?.trim().toLowerCase();
+    if (!value || value === "chromium") {
+        return "chromium";
+    }
+    if (value === "kitesurf") {
+        return "kitesurf";
+    }
+    console.warn(
+        `[Config] Ignoring invalid BROWSER_PROVIDER=${JSON.stringify(value)}; using chromium`,
+    );
+    return "chromium";
+};
+
 export const defaultConfig: BrowserServiceConfig = {
     port: servicePort,
+    provider: parseBrowserProvider(),
     dockerImageName: process.env.BROWSER_IMAGE_NAME || "conclave-browser:latest",
     noVncPortStart,
     noVncPortEnd,
@@ -131,4 +202,20 @@ export const defaultConfig: BrowserServiceConfig = {
         process.env.SFU_HOST ||
         undefined,
     serviceToken: process.env.BROWSER_SERVICE_TOKEN || undefined,
+    cloudflareAccountId: process.env.CLOUDFLARE_ACCOUNT_ID || undefined,
+    cloudflareApiToken:
+        process.env.CLOUDFLARE_BROWSER_RUN_TOKEN ||
+        process.env.CLOUDFLARE_API_TOKEN ||
+        undefined,
+    cloudflareBrowserRunBaseUrl:
+        process.env.CLOUDFLARE_BROWSER_RUN_BASE_URL || undefined,
+    cloudflareRequestTimeoutMs: parseIntegerEnv(
+        "CLOUDFLARE_BROWSER_RUN_TIMEOUT_MS",
+        15000,
+        { min: 1000, max: 120000 },
+    ),
+    kitesurfKeepAliveMs: parseIntegerEnv("KITESURF_KEEP_ALIVE_MS", 600000, {
+        min: 60000,
+        max: 600000,
+    }),
 };

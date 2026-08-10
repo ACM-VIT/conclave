@@ -34,6 +34,12 @@ else
   COMPOSE=(docker compose -f "$COMPOSE_FILE")
 fi
 
+BROWSER_PROVIDER="${BROWSER_PROVIDER:-chromium}"
+if [[ "$BROWSER_PROVIDER" == "kitesurf" ]]; then
+  BUILD_RUNTIME_IMAGE="false"
+  export BROWSER_DOCKER_SOCKET="${BROWSER_DOCKER_SOCKET:-/dev/null}"
+fi
+
 RUNTIME_IMAGE_NAME="${BROWSER_IMAGE_NAME:-conclave-browser:latest}"
 
 if [[ "$BUILD_RUNTIME_IMAGE" == "true" ]]; then
@@ -53,15 +59,18 @@ echo "Deploying shared browser service..."
 echo ""
 echo "Shared browser service deployed."
 echo "Control API: http://<browser-host>:${BROWSER_SERVICE_PORT:-3040}/health"
-echo "noVNC ports: ${NOVNC_PORT_START:-6080}-${NOVNC_PORT_END:-6100}"
+echo "Provider: ${BROWSER_PROVIDER}"
+if [[ "$BROWSER_PROVIDER" == "chromium" ]]; then
+  echo "noVNC ports: ${NOVNC_PORT_START:-6080}-${NOVNC_PORT_END:-6100}"
+fi
 
-if [[ -z "${BROWSER_PUBLIC_BASE_URL:-}" && "${BROWSER_HOST_ADDRESS:-localhost}" == "localhost" ]]; then
+if [[ "$BROWSER_PROVIDER" == "chromium" && -z "${BROWSER_PUBLIC_BASE_URL:-}" && "${BROWSER_HOST_ADDRESS:-localhost}" == "localhost" ]]; then
   echo ""
   echo "Warning: BROWSER_PUBLIC_BASE_URL is unset and BROWSER_HOST_ADDRESS=localhost."
   echo "Clients will receive localhost noVNC URLs unless you set one of these values."
 fi
 
-if [[ -z "${BROWSER_RTP_TARGET_HOST:-}" && -z "${BROWSER_AUDIO_TARGET_HOST:-}" && -z "${BROWSER_VIDEO_TARGET_HOST:-}" && -z "${SFU_HOST:-}" ]]; then
+if [[ "$BROWSER_PROVIDER" == "chromium" && -z "${BROWSER_RTP_TARGET_HOST:-}" && -z "${BROWSER_AUDIO_TARGET_HOST:-}" && -z "${BROWSER_VIDEO_TARGET_HOST:-}" && -z "${SFU_HOST:-}" ]]; then
   echo ""
   echo "Note: No explicit RTP target host override is set."
   echo "Ensure SFU sets PLAIN_TRANSPORT_ANNOUNCED_IP to a browser-host-reachable IP."

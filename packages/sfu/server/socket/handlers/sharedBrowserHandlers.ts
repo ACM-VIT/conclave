@@ -11,16 +11,15 @@ import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
+import {
+    callBrowserService,
+    describeBrowserServiceError,
+    getCachedBrowserServiceCapabilities,
+    getBrowserServiceCapabilities,
+    isMissingBrowserSessionError,
+    type BrowserServiceCapabilities,
+} from "../../browserServiceClient.js";
 
-const BROWSER_SERVICE_URL = (process.env.BROWSER_SERVICE_URL || "http://localhost:3040").replace(
-    /\/+$/,
-    ""
-);
-const BROWSER_SERVICE_TOKEN = process.env.BROWSER_SERVICE_TOKEN || "";
-const BROWSER_SERVICE_TIMEOUT_MS = (() => {
-    const parsed = Number(process.env.BROWSER_SERVICE_TIMEOUT_MS || "5000");
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 5000;
-})();
 const BROWSER_AUDIO_USER_ID_PREFIX = "shared-browser";
 const BROWSER_AUDIO_PAYLOAD_TYPE = 111;
 const BROWSER_AUDIO_CLOCK_RATE = 48000;
@@ -37,6 +36,7 @@ interface RoomBrowserState {
     url?: string;
     noVncUrl?: string;
     controllerUserId?: string;
+    provider?: "chromium" | "kitesurf";
 }
 
 interface BrowserServiceSessionResponse {
@@ -44,6 +44,7 @@ interface BrowserServiceSessionResponse {
     error?: string;
     session?: {
         noVncUrl?: string;
+        provider?: "chromium" | "kitesurf";
     };
 }
 
@@ -142,43 +143,6 @@ const normalizeBrowserUrl = (value: unknown): string | null => {
     }
 
     return url.toString();
-};
-
-const callBrowserService = async <T>(
-    path: string,
-    payload: Record<string, unknown>
-): Promise<T> => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), BROWSER_SERVICE_TIMEOUT_MS);
-    const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-    };
-
-    if (BROWSER_SERVICE_TOKEN) {
-        headers["x-browser-service-token"] = BROWSER_SERVICE_TOKEN;
-    }
-
-    try {
-        const response = await fetch(`${BROWSER_SERVICE_URL}${path}`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify(payload),
-            signal: controller.signal,
-        });
-
-        const result = (await response.json().catch(() => ({}))) as T & {
-            error?: string;
-        };
-
-        if (!response.ok) {
-            const message = result.error || `Browser service request failed with HTTP ${response.status}`;
-            throw new Error(message);
-        }
-
-        return result;
-    } finally {
-        clearTimeout(timeout);
-    }
 };
 
 export const getBrowserState = (channelId: string): RoomBrowserState => {
@@ -427,13 +391,16 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
             data: LaunchBrowserData,
             callback: (response: LaunchBrowserResponse | { error: string }) => void
         ) => {
+            let requestedChannelId: string | undefined;
             try {
-                if (!context.currentClient || !context.currentRoom) {
+                const client = context.currentClient;
+                const room = context.currentRoom;
+                if (!client || !room) {
                     respond(callback, { error: "Not in a room" });
                     return;
                 }
 
-                if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
+                if (!(client instanceof Admin) || client.isObserver) {
                     respond(callback, { error: "Only admins can launch the shared browser" });
                     return;
                 }
@@ -449,8 +416,10 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     return;
                 }
 
-                const channelId = context.currentRoom.channelId;
-                const userId = context.currentClient.id;
+                const channelId = room.channelId;
+                const roomId = room.id;
+                const userId = client.id;
+                requestedChannelId = channelId;
 
                 const currentState = getBrowserState(channelId);
                 if (currentState.active) {
@@ -458,30 +427,34 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     return;
                 }
 
+                const capabilities = await getBrowserServiceCapabilities({ verifyBackend: false });
                 let audioTarget = null;
-                try {
-                    audioTarget = await createBrowserAudioProducer(context, channelId);
-                } catch (error) {
-                    Logger.error("[SharedBrowser] Failed to setup browser audio:", error);
+                if (capabilities.audio) {
+                    try {
+                        audioTarget = await createBrowserAudioProducer(context, channelId);
+                    } catch (error) {
+                        Logger.error("[SharedBrowser] Failed to setup browser audio:", error);
+                    }
                 }
 
                 let videoTarget = null;
-                try {
-                    videoTarget = await createBrowserVideoProducer(context, channelId);
-                } catch (error) {
-                    Logger.error("[SharedBrowser] Failed to setup browser video:", error);
+                if (capabilities.video) {
+                    try {
+                        videoTarget = await createBrowserVideoProducer(context, channelId);
+                    } catch (error) {
+                        Logger.error("[SharedBrowser] Failed to setup browser video:", error);
+                    }
                 }
 
-                const result = await callBrowserService<BrowserServiceSessionResponse>(
-                    "/launch",
-                    {
+                const result = await callBrowserService<BrowserServiceSessionResponse>("/launch", {
+                    payload: {
                         roomId: channelId,
                         url,
                         controllerUserId: userId,
                         audioTarget,
                         videoTarget,
-                    }
-                );
+                    },
+                });
 
                 if (!result.success) {
                     await cleanupBrowserAudio(channelId, context);
@@ -495,27 +468,32 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     url,
                     noVncUrl: result.session?.noVncUrl,
                     controllerUserId: userId,
+                    provider: result.session?.provider ?? capabilities.provider,
                 };
                 setBrowserState(channelId, newState);
 
-                socket.to(channelId).emit("browser:state", {
+                context.io.to(channelId).emit("browser:state", {
                     active: true,
                     url,
                     noVncUrl: result.session?.noVncUrl,
                     controllerUserId: userId,
-                    roomId: context.currentRoom.id,
+                    provider: newState.provider,
+                    roomId,
                 });
 
-                Logger.success(`Browser launched in room ${context.currentRoom.id}: ${url}`);
-                respond(callback, { success: true, noVncUrl: result.session?.noVncUrl });
+                Logger.success(`Browser launched in room ${roomId}: ${url}`);
+                respond(callback, {
+                    success: true,
+                    noVncUrl: result.session?.noVncUrl,
+                    provider: newState.provider,
+                });
             } catch (error) {
                 Logger.error("[SharedBrowser] Failed to launch:", error);
-                if (context.currentRoom) {
-                    const channelId = context.currentRoom.channelId;
-                    await cleanupBrowserAudio(channelId, context);
-                    await cleanupBrowserVideo(channelId, context);
+                if (requestedChannelId) {
+                    await cleanupBrowserAudio(requestedChannelId, context);
+                    await cleanupBrowserVideo(requestedChannelId, context);
                 }
-                respond(callback, { error: "Failed to connect to browser service" });
+                respond(callback, { error: describeBrowserServiceError(error) });
             }
         }
     );
@@ -527,12 +505,14 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
             callback: (response: LaunchBrowserResponse | { error: string }) => void
         ) => {
             try {
-                if (!context.currentClient || !context.currentRoom) {
+                const client = context.currentClient;
+                const room = context.currentRoom;
+                if (!client || !room) {
                     respond(callback, { error: "Not in a room" });
                     return;
                 }
 
-                if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
+                if (!(client instanceof Admin) || client.isObserver) {
                     respond(callback, { error: "Only admins can control the shared browser" });
                     return;
                 }
@@ -548,7 +528,8 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     return;
                 }
 
-                const channelId = context.currentRoom.channelId;
+                const channelId = room.channelId;
+                const roomId = room.id;
                 const currentState = getBrowserState(channelId);
 
                 if (!currentState.active) {
@@ -556,29 +537,33 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     return;
                 }
 
+                const capabilities = await getBrowserServiceCapabilities({ verifyBackend: false });
                 let audioTarget = null;
-                try {
-                    audioTarget = await createBrowserAudioProducer(context, channelId);
-                } catch (error) {
-                    Logger.error("[SharedBrowser] Failed to setup browser audio:", error);
+                if (capabilities.audio) {
+                    try {
+                        audioTarget = await createBrowserAudioProducer(context, channelId);
+                    } catch (error) {
+                        Logger.error("[SharedBrowser] Failed to setup browser audio:", error);
+                    }
                 }
 
                 let videoTarget = null;
-                try {
-                    videoTarget = await createBrowserVideoProducer(context, channelId);
-                } catch (error) {
-                    Logger.error("[SharedBrowser] Failed to setup browser video:", error);
+                if (capabilities.video) {
+                    try {
+                        videoTarget = await createBrowserVideoProducer(context, channelId);
+                    } catch (error) {
+                        Logger.error("[SharedBrowser] Failed to setup browser video:", error);
+                    }
                 }
 
-                const result = await callBrowserService<BrowserServiceSessionResponse>(
-                    "/navigate",
-                    {
+                const result = await callBrowserService<BrowserServiceSessionResponse>("/navigate", {
+                    payload: {
                         roomId: channelId,
                         url,
                         audioTarget,
                         videoTarget,
-                    }
-                );
+                    },
+                });
 
                 if (!result.success) {
                     respond(callback, { error: result.error || "Failed to navigate" });
@@ -589,19 +574,24 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                 currentState.noVncUrl = result.session?.noVncUrl;
                 setBrowserState(channelId, currentState);
 
-                socket.to(channelId).emit("browser:state", {
+                context.io.to(channelId).emit("browser:state", {
                     active: true,
                     url,
                     noVncUrl: result.session?.noVncUrl,
                     controllerUserId: currentState.controllerUserId,
-                    roomId: context.currentRoom.id,
+                    provider: currentState.provider,
+                    roomId,
                 });
 
-                Logger.info(`Browser navigated in room ${context.currentRoom.id}: ${url}`);
-                respond(callback, { success: true, noVncUrl: result.session?.noVncUrl });
+                Logger.info(`Browser navigated in room ${roomId}: ${url}`);
+                respond(callback, {
+                    success: true,
+                    noVncUrl: result.session?.noVncUrl,
+                    provider: currentState.provider,
+                });
             } catch (error) {
                 Logger.error("[SharedBrowser] Failed to navigate:", error);
-                respond(callback, { error: "Failed to connect to browser service" });
+                respond(callback, { error: describeBrowserServiceError(error) });
             }
         }
     );
@@ -610,12 +600,14 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
         "browser:close",
         async (callback: (response: { success: boolean } | { error: string }) => void) => {
             try {
-                if (!context.currentClient || !context.currentRoom) {
+                const client = context.currentClient;
+                const room = context.currentRoom;
+                if (!client || !room) {
                     respond(callback, { error: "Not in a room" });
                     return;
                 }
 
-                if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
+                if (!(client instanceof Admin) || client.isObserver) {
                     respond(callback, { error: "Only admins can close the shared browser" });
                     return;
                 }
@@ -625,7 +617,8 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     return;
                 }
 
-                const channelId = context.currentRoom.channelId;
+                const channelId = room.channelId;
+                const roomId = room.id;
                 const currentState = getBrowserState(channelId);
 
                 if (!currentState.active) {
@@ -634,7 +627,7 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                 }
 
                 await callBrowserService<{ success: boolean; error?: string }>("/close", {
-                    roomId: channelId,
+                    payload: { roomId: channelId },
                 });
 
                 clearBrowserState(channelId);
@@ -642,12 +635,12 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                 await cleanupBrowserAudio(channelId, context);
                 await cleanupBrowserVideo(channelId, context);
 
-                socket.to(channelId).emit("browser:closed", {
-                    closedBy: context.currentClient.id,
-                    roomId: context.currentRoom.id,
+                context.io.to(channelId).emit("browser:closed", {
+                    closedBy: client.id,
+                    roomId,
                 });
 
-                Logger.info(`Browser closed in room ${context.currentRoom.id}`);
+                Logger.info(`Browser closed in room ${roomId}`);
                 respond(callback, { success: true });
             } catch (error) {
                 Logger.error("[SharedBrowser] Failed to close:", error);
@@ -657,26 +650,100 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     await cleanupBrowserAudio(channelId, context);
                     await cleanupBrowserVideo(channelId, context);
                 }
-                respond(callback, { error: "Failed to connect to browser service" });
+                respond(callback, { error: describeBrowserServiceError(error) });
             }
         }
     );
 
-    socket.on("browser:getState", (callback: (state: BrowserStateNotification) => void) => {
-        if (!context.currentRoom) {
+    socket.on("browser:getState", async (callback: (state: BrowserStateNotification) => void) => {
+        const room = context.currentRoom;
+        if (!room) {
             callback({ active: false });
             return;
         }
 
-        const state = getBrowserState(context.currentRoom.channelId);
+        const channelId = room.channelId;
+        const roomId = room.id;
+        const state = getBrowserState(channelId);
+        if (state.active) {
+            try {
+                const response = await callBrowserService<{
+                    session?: { noVncUrl?: string; currentUrl?: string };
+                }>(`/sessions/${encodeURIComponent(channelId)}`);
+                if (!response.session) {
+                    clearBrowserState(channelId);
+                    await cleanupBrowserAudio(channelId, context);
+                    await cleanupBrowserVideo(channelId, context);
+                    context.io.to(channelId).emit("browser:closed", {
+                        roomId,
+                    });
+                    callback({ active: false, roomId });
+                    return;
+                }
+                state.noVncUrl = response.session?.noVncUrl ?? state.noVncUrl;
+                state.url = response.session?.currentUrl ?? state.url;
+                setBrowserState(channelId, state);
+            } catch (error) {
+                if (isMissingBrowserSessionError(error)) {
+                    clearBrowserState(channelId);
+                    await cleanupBrowserAudio(channelId, context);
+                    await cleanupBrowserVideo(channelId, context);
+                    context.io.to(channelId).emit("browser:closed", {
+                        roomId,
+                    });
+                    callback({ active: false, roomId });
+                    return;
+                }
+                // The cached state still lets connected viewers continue when a
+                // transient refresh fails.
+            }
+        }
         callback({
             active: state.active,
             url: state.url,
             noVncUrl: state.noVncUrl,
             controllerUserId: state.controllerUserId,
-            roomId: context.currentRoom.id,
+            provider: state.provider,
+            roomId,
         });
     });
+
+    socket.on(
+        "browser:getCapabilities",
+        async (
+            callback: (
+                response:
+                    | ({ available: true } & BrowserServiceCapabilities)
+                    | { available: false }
+            ) => void,
+        ) => {
+            if (
+                !context.currentRoom ||
+                !(context.currentClient instanceof Admin) ||
+                context.currentClient.isObserver
+            ) {
+                respond(callback, { available: false });
+                return;
+            }
+            if (
+                !takeToken(
+                    socket,
+                    "browser:getCapabilities",
+                    RATE_LIMITS.sharedBrowserCapabilities,
+                )
+            ) {
+                respond(callback, { available: false });
+                return;
+            }
+
+            try {
+                const capabilities = await getCachedBrowserServiceCapabilities();
+                respond(callback, { available: true, ...capabilities });
+            } catch {
+                respond(callback, { available: false });
+            }
+        },
+    );
 
     socket.on("browser:activity", async () => {
         if (!context.currentRoom || !context.currentClient) return;
@@ -689,11 +756,12 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
 
         try {
             await callBrowserService<{ success: boolean; error?: string }>("/activity", {
-                roomId: channelId,
+                payload: { roomId: channelId },
             });
         } catch {
         }
     });
+
 };
 
 export const cleanupRoomBrowser = async (channelId: string): Promise<void> => {
@@ -702,7 +770,7 @@ export const cleanupRoomBrowser = async (channelId: string): Promise<void> => {
     if (state.active) {
         try {
             await callBrowserService<{ success: boolean; error?: string }>("/close", {
-                roomId: channelId,
+                payload: { roomId: channelId },
             });
         } catch (error) {
             Logger.error("[SharedBrowser] Failed to cleanup on room close:", error);

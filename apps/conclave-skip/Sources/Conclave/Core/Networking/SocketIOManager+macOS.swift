@@ -248,13 +248,13 @@ final class SocketIOManager {
         WebinarLinkResponse(slug: "", link: "", publicAccess: false, linkVersion: 0)
     }
     func getBrowserState() async throws -> BrowserStateNotification {
-        BrowserStateNotification(active: false, url: nil, noVncUrl: nil, controllerUserId: nil, roomId: nil)
+        BrowserStateNotification(active: false, url: nil, noVncUrl: nil, controllerUserId: nil, provider: nil, roomId: nil)
     }
     func launchBrowser(url: String) async throws -> LaunchBrowserResponse {
-        LaunchBrowserResponse(success: true, noVncUrl: nil, error: nil)
+        LaunchBrowserResponse(success: true, noVncUrl: nil, provider: nil, error: nil)
     }
     func navigateBrowser(url: String) async throws -> LaunchBrowserResponse {
-        LaunchBrowserResponse(success: true, noVncUrl: nil, error: nil)
+        LaunchBrowserResponse(success: true, noVncUrl: nil, provider: nil, error: nil)
     }
     func closeBrowser() async throws { }
     func sendBrowserActivity() { }

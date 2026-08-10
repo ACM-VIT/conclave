@@ -1,6 +1,6 @@
 "use client";
 
-import { X } from "lucide-react";
+import { AlertTriangle, Info, X } from "lucide-react";
 import { color } from "@conclave/ui-tokens";
 
 export interface ToastItem {
@@ -18,34 +18,40 @@ export default function ToastQueue({ toasts }: { toasts: (ToastItem | null | und
   const toast = active[0];
   const queuedCount = active.length - 1;
   const isDanger = toast.tone === "danger";
-  const stripeColor = isDanger ? color.danger : color.accent;
-  const labelColor = isDanger ? color.danger : color.accent;
-  // Errors get a slightly lighter surface so they stand apart from the stage.
-  const surfaceColor = isDanger ? color.surfaceRaised : color.surface;
+  const accentColor = isDanger ? color.danger : color.accent;
+  const Icon = isDanger ? AlertTriangle : Info;
   return (
     <div
-      className="pointer-events-none absolute bottom-28 left-1/2 z-50 -translate-x-1/2 px-4"
-      role="status"
+      className="pointer-events-none absolute bottom-24 left-1/2 z-50 w-full max-w-[340px] -translate-x-1/2 px-3"
+      role={isDanger ? "alert" : "status"}
       aria-live={isDanger ? "assertive" : "polite"}
     >
       <div
-        className="pointer-events-auto flex max-w-[360px] items-start gap-3 overflow-hidden rounded-xl border py-3 pr-4"
+        className="pointer-events-auto flex items-center gap-2.5 rounded-xl border p-2.5 shadow-[0_12px_36px_rgba(0,0,0,0.34)] backdrop-blur-xl"
         style={{
-          backgroundColor: surfaceColor,
+          backgroundColor: color.surfaceRaised,
           borderColor: color.border,
-          borderLeft: `4px solid ${stripeColor}`,
-          paddingLeft: "calc(1rem - 3px)",
         }}
       >
-        <div className="min-w-0">
-          <p className="text-[13px] font-medium" style={{ color: labelColor }}>
+        <span
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
+          style={{ backgroundColor: `${accentColor}18`, color: accentColor }}
+          aria-hidden="true"
+        >
+          <Icon size={15} strokeWidth={1.8} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p
+            className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: accentColor }}
+          >
             {toast.label}
           </p>
-          <p className="mt-1 text-[12px] leading-snug" style={{ color: color.textMuted }}>
+          <p className="mt-0.5 line-clamp-2 text-[11.5px] leading-[1.35]" style={{ color: color.textMuted }}>
             {toast.message}
           </p>
           {queuedCount > 0 && (
-            <p className="mt-1.5 text-[11px]" style={{ color: color.textFaint }}>
+            <p className="mt-1 text-[10px]" style={{ color: color.textFaint }}>
               +{queuedCount} more
             </p>
           )}
@@ -55,10 +61,10 @@ export default function ToastQueue({ toasts }: { toasts: (ToastItem | null | und
             type="button"
             onClick={toast.onDismiss}
             aria-label="Dismiss"
-            className="ml-auto transition-[color] duration-[120ms]"
+            className="ml-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-[background-color,color] duration-[120ms] hover:bg-white/[0.06]"
             style={{ color: color.textMuted }}
           >
-            <X className="h-4 w-4" />
+            <X size={14} strokeWidth={1.8} />
           </button>
         )}
       </div>

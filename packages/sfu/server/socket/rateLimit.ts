@@ -154,6 +154,9 @@ export const RATE_LIMITS = {
   consumerControlBatch: { capacity: 8, refillPerSec: 2 },
   // Shared browser controls proxy to a separate service; keep them coalesced.
   sharedBrowserControl: { capacity: 10, refillPerSec: 2 },
+  // Capability checks may reach a managed browser API. Allow reconnect retries,
+  // but keep custom clients from turning readiness into an outbound request loop.
+  sharedBrowserCapabilities: { capacity: 3, refillPerSec: 1 / 30 },
   // Game moves (answers, votes): tapping should feel instant, abuse should not.
   gameMove: { capacity: 20, refillPerSec: 8 },
   // Game lifecycle (start/end/state): low frequency, admin-driven.

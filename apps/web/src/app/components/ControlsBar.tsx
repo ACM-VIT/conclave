@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowRight,
   ArrowLeft,
   MoreHorizontal,
   PhoneOff,
@@ -40,7 +41,6 @@ import { useOneTimeHint } from "../hooks/useOneTimeHint";
 import { useMeetVolume } from "../hooks/useMeetVolume";
 import { clampMeetVolume } from "../lib/meet-volume";
 import {
-  BROWSER_APPS,
   buildControlsConfig,
   type ControlDescriptor,
   type ControlsBarProps,
@@ -652,8 +652,10 @@ function ControlsBar(props: ControlsBarProps) {
     onLeave,
     onEndForEveryone,
     isAdmin,
+    isBrowserActive = false,
     isBrowserLaunching = false,
     onLaunchBrowser,
+    onNavigateBrowser,
     isHostControlsOpen = false,
     onToggleHostControls,
     isReactionsDisabled = false,
@@ -768,20 +770,24 @@ function ControlsBar(props: ControlsBarProps) {
     [onSendReaction],
   );
 
-  const launchBrowser = useCallback(
+  const browserUrlHandler = isBrowserActive
+    ? onNavigateBrowser
+    : onLaunchBrowser;
+  const submitBrowserUrl = useCallback(
     async (url: string) => {
       const normalized = normalizeBrowserUrl(url);
       if (!normalized.url) {
         setBrowserError(normalized.error ?? "Enter a valid URL.");
         return;
       }
+      if (!browserUrlHandler) return;
       setBrowserError(null);
       setBrowserUrl("");
       setBrowserOpen(false);
       setMoreOpen(false);
-      await onLaunchBrowser?.(normalized.url);
+      await browserUrlHandler(normalized.url);
     },
-    [onLaunchBrowser],
+    [browserUrlHandler],
   );
 
   const showHost = Boolean(isAdmin);
@@ -1044,7 +1050,7 @@ function ControlsBar(props: ControlsBarProps) {
                 volumePercent={meetVolumePercent}
                 onVolumePercentChange={(value) => setMeetVolume(value / 100)}
               />
-              {browserOpen && onLaunchBrowser && (
+              {browserOpen && browserUrlHandler && (
                 <BrowserLauncher
                   url={browserUrl}
                   error={browserError}
@@ -1053,7 +1059,7 @@ function ControlsBar(props: ControlsBarProps) {
                     setBrowserUrl(v);
                     if (browserError) setBrowserError(null);
                   }}
-                  onLaunch={launchBrowser}
+                  onLaunch={submitBrowserUrl}
                 />
               )}
             </div>
@@ -1166,7 +1172,7 @@ function ControlsBar(props: ControlsBarProps) {
                       volumePercent={meetVolumePercent}
                       onVolumePercentChange={(value) => setMeetVolume(value / 100)}
                     />
-                    {browserOpen && onLaunchBrowser && (
+                    {browserOpen && browserUrlHandler && (
                       <BrowserLauncher
                         url={browserUrl}
                         error={browserError}
@@ -1175,7 +1181,7 @@ function ControlsBar(props: ControlsBarProps) {
                           setBrowserUrl(v);
                           if (browserError) setBrowserError(null);
                         }}
-                        onLaunch={launchBrowser}
+                        onLaunch={submitBrowserUrl}
                       />
                     )}
                   </div>
@@ -1404,52 +1410,30 @@ function BrowserLauncher({
 }) {
   return (
     <div className="mt-1.5 border-t pt-2" style={{ borderColor: color.border }}>
-      <div className="grid grid-cols-2 gap-1.5">
-        {BROWSER_APPS.map((app) => {
-          const Icon = app.icon;
-          return (
-            <button
-              key={app.id}
-              type="button"
-              disabled={busy}
-              onClick={() => onLaunch(app.url)}
-              className="flex items-center gap-2.5 rounded-lg border p-2 text-left transition-[background-color] duration-[120ms] hover:bg-white/[0.06] disabled:opacity-40"
-              style={{ borderColor: color.border }}
-            >
-              <span
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
-                style={{ backgroundColor: color.surface, color: color.textMuted }}
-              >
-                <Icon size={MENU_ICON} strokeWidth={STROKE} />
-              </span>
-              <span className="text-[13px] font-medium" style={{ color: color.text }}>
-                {app.name}
-              </span>
-            </button>
-          );
-        })}
-      </div>
       <form
         onSubmit={(e: FormEvent) => {
           e.preventDefault();
           if (url.trim()) onLaunch(url);
         }}
-        className="mt-2 flex gap-2"
+        className="flex min-w-0 items-center gap-2"
       >
         <input
           type="text"
           value={url}
           onChange={(e) => onUrlChange(e.target.value)}
           placeholder="Paste a URL"
-          className="flex-1 rounded-lg border px-3 py-2 text-[13px] focus:outline-none"
+          aria-label="Shared browser URL"
+          className="h-9 min-w-0 flex-1 rounded-lg border px-3 text-[13px] focus:outline-none"
           style={{ backgroundColor: color.bg, borderColor: color.border, color: color.text }}
         />
         <button
           type="submit"
           disabled={!url.trim() || busy}
-          className="rounded-lg bg-[#F95F4A] px-4 py-2 text-[13px] font-medium text-white transition-colors duration-[120ms] hover:bg-[#e8553f] active:bg-[#d34933] disabled:opacity-40"
+          aria-label="Open URL in shared browser"
+          title="Open URL"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#F95F4A] p-0 text-white transition-colors duration-[120ms] hover:bg-[#e8553f] active:bg-[#d34933] disabled:opacity-40"
         >
-          Go
+          <ArrowRight size={16} strokeWidth={STROKE} />
         </button>
       </form>
       {error && (
