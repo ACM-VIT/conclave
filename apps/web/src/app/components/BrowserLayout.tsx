@@ -260,91 +260,80 @@ function BrowserLayout({
                     style={{ backgroundColor: color.surface, border: `1px solid ${color.border}` }}
                     aria-label="Meeting participants"
                 >
-                    <header
-                        className="flex h-9 items-center justify-between px-3"
-                        style={{ borderBottom: `1px solid ${color.border}` }}
-                    >
-                        <span className="text-[10px] font-medium uppercase tracking-[0.14em]" style={{ color: color.textFaint }}>
-                            In the room
-                        </span>
-                        <span className="text-[10px]" style={{ color: color.textFaint }}>
-                            {remoteParticipants.length + 1}
-                        </span>
-                    </header>
                     <div className="flex max-h-44 gap-2 overflow-auto p-2 lg:max-h-52 lg:flex-col">
-                <div className={`acm-video-tile h-28 w-40 shrink-0 lg:w-auto ${isLocalActiveSpeaker ? "speaking" : ""}`}>
-                        <video
-                            ref={localVideoRef}
-                            autoPlay
-                            muted
-                            playsInline
-                            className={`w-full h-full object-cover ${isCameraOff ? "hidden" : ""
-                                } ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
-                        />
-                        {isCameraOff && (
-                            <div
-                                className="absolute inset-0 flex items-center justify-center"
-                                style={{ backgroundColor: color.surface }}
-                            >
-                                <Avatar name={localName} id={currentUserId} size={38} />
-                            </div>
-                        )}
-                        {isHandRaised && (
-                            <div
-                                className="absolute top-3 left-3 rounded-full p-1.5 text-amber-300"
-                                style={{
-                                    backgroundColor: "rgba(251, 191, 36, 0.2)",
-                                    border: "1px solid rgba(251, 191, 36, 0.4)",
-                                }}
-                                title="Hand raised"
-                            >
-                                <Hand size={18} strokeWidth={1.75} className="h-3.5 w-3.5" />
-                            </div>
-                        )}
-                        <div className="absolute bottom-3 left-3 flex max-w-[80%] items-center gap-1.5">
-                            <NamePlate name="You" isLocal />
-                            {isLocalActiveSpeaker && !isMuted ? (
-                                <span
-                                    className="rounded-full px-2 py-1"
-                                    style={{
-                                        backgroundColor: color.scrim,
-                                        border: `1px solid ${color.border}`,
-                                    }}
+                        <div className={`acm-video-tile h-28 w-40 shrink-0 lg:w-auto ${isLocalActiveSpeaker ? "speaking" : ""}`}>
+                            <video
+                                ref={localVideoRef}
+                                autoPlay
+                                muted
+                                playsInline
+                                className={`w-full h-full object-cover ${isCameraOff ? "hidden" : ""
+                                    } ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
+                            />
+                            {isCameraOff && (
+                                <div
+                                    className="absolute inset-0 flex items-center justify-center"
+                                    style={{ backgroundColor: color.surface }}
                                 >
-                                    <span className="acm-voice-activity" aria-label="Speaking">
-                                        <span />
-                                        <span />
-                                        <span />
-                                    </span>
-                                </span>
-                            ) : null}
-                        </div>
-                        <div
-                            className="absolute bottom-3 right-3 inline-flex items-center justify-center rounded-full p-1.5"
-                            style={{ backgroundColor: color.scrim, border: `1px solid ${color.border}` }}
-                            title={isMuted ? "Microphone off" : "Microphone on"}
-                        >
-                            {isMuted ? (
-                                <MicOff size={18} strokeWidth={1.75} className="h-3.5 w-3.5" style={{ color: color.accent }} />
-                            ) : (
-                                <Mic size={18} strokeWidth={1.75} className="h-3.5 w-3.5" style={{ color: color.success }} />
+                                    <Avatar name={localName} id={currentUserId} size={38} />
+                                </div>
                             )}
+                            {isHandRaised && (
+                                <div
+                                    className="absolute top-3 left-3 rounded-full p-1.5 text-amber-300"
+                                    style={{
+                                        backgroundColor: "rgba(251, 191, 36, 0.2)",
+                                        border: "1px solid rgba(251, 191, 36, 0.4)",
+                                    }}
+                                    title="Hand raised"
+                                >
+                                    <Hand size={18} strokeWidth={1.75} className="h-3.5 w-3.5" />
+                                </div>
+                            )}
+                            <div className="absolute bottom-3 left-3 flex max-w-[80%] items-center gap-1.5">
+                                <NamePlate name="You" isLocal />
+                                {isLocalActiveSpeaker && !isMuted ? (
+                                    <span
+                                        className="rounded-full px-2 py-1"
+                                        style={{
+                                            backgroundColor: color.scrim,
+                                            border: `1px solid ${color.border}`,
+                                        }}
+                                    >
+                                        <span className="acm-voice-activity" aria-label="Speaking">
+                                            <span />
+                                            <span />
+                                            <span />
+                                        </span>
+                                    </span>
+                                ) : null}
+                            </div>
+                            <div
+                                className="absolute bottom-3 right-3 inline-flex items-center justify-center rounded-full p-1.5"
+                                style={{ backgroundColor: color.scrim, border: `1px solid ${color.border}` }}
+                                title={isMuted ? "Microphone off" : "Microphone on"}
+                            >
+                                {isMuted ? (
+                                    <MicOff size={18} strokeWidth={1.75} className="h-3.5 w-3.5" style={{ color: color.accent }} />
+                                ) : (
+                                    <Mic size={18} strokeWidth={1.75} className="h-3.5 w-3.5" style={{ color: color.success }} />
+                                )}
+                            </div>
                         </div>
-                </div>
 
-                    {remoteParticipants.map((participant) => (
-                        <ParticipantVideo
-                            key={participant.userId}
-                            participant={participant}
-                            displayName={getDisplayName(participant.userId)}
-                            isActiveSpeaker={activeSpeakerId === participant.userId}
-                            compact
-                            audioOutputDeviceId={audioOutputDeviceId}
-                            onAudioAutoplayBlocked={onAudioAutoplayBlocked}
-                            onAudioPlaybackStarted={onAudioPlaybackStarted}
-                            audioPlaybackAttemptToken={audioPlaybackAttemptToken}
-                        />
-                    ))}
+                        {remoteParticipants.map((participant) => (
+                            <ParticipantVideo
+                                key={participant.userId}
+                                participant={participant}
+                                displayName={getDisplayName(participant.userId)}
+                                isActiveSpeaker={activeSpeakerId === participant.userId}
+                                compact
+                                audioOutputDeviceId={audioOutputDeviceId}
+                                onAudioAutoplayBlocked={onAudioAutoplayBlocked}
+                                onAudioPlaybackStarted={onAudioPlaybackStarted}
+                                audioPlaybackAttemptToken={audioPlaybackAttemptToken}
+                            />
+                        ))}
                     </div>
                 </section>
             </aside>
