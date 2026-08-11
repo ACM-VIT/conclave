@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { Browser } from "puppeteer-core";
 import {
     buildAgentSearchUrl,
     KitesurfManager,
@@ -13,8 +14,29 @@ const jsonResponse = (body: unknown, status = 200) =>
         headers: { "Content-Type": "application/json" },
     });
 
+type RecordedViewport = {
+    width: number;
+    height: number;
+    deviceScaleFactor?: number;
+};
+
+const createBrowserConnector = (viewports: RecordedViewport[] = []) =>
+    async (): Promise<Browser> =>
+        ({
+            pages: async () => [
+                {
+                    url: () => "https://example.com",
+                    setViewport: async (viewport: RecordedViewport | null) => {
+                        if (viewport) viewports.push(viewport);
+                    },
+                },
+            ],
+            disconnect: async () => undefined,
+        }) as unknown as Browser;
+
 test("launches, refreshes, navigates, and closes a Kitesurf session", async () => {
     const requests: Array<{ url: string; method: string; authorization: string | null }> = [];
+    const configuredViewports: RecordedViewport[] = [];
     let targetNumber = 1;
     const fetchImpl: typeof fetch = async (input, init) => {
         const url = String(input);
@@ -61,6 +83,7 @@ test("launches, refreshes, navigates, and closes a Kitesurf session", async () =
             containerIdleTimeoutMs: 60_000,
         },
         fetchImpl,
+        createBrowserConnector(configuredViewports),
     );
 
     const launched = await manager.launchBrowser({
@@ -73,6 +96,9 @@ test("launches, refreshes, navigates, and closes a Kitesurf session", async () =
     assert.match(launched.session?.noVncUrl || "", /mode=tab/);
     assert.equal(manager.capabilities.agentic, true);
     assert.equal(manager.capabilities.audio, false);
+    assert.deepEqual(configuredViewports, [
+        { width: 1920, height: 1080, deviceScaleFactor: 1 },
+    ]);
 
     const refreshed = await manager.getSession("room-1");
     assert.match(refreshed?.noVncUrl || "", /refreshed/);
@@ -83,6 +109,10 @@ test("launches, refreshes, navigates, and closes a Kitesurf session", async () =
     });
     assert.equal(navigated.success, true);
     assert.equal(navigated.session?.currentUrl, "https://example.org/next");
+    assert.deepEqual(configuredViewports, [
+        { width: 1920, height: 1080, deviceScaleFactor: 1 },
+        { width: 1920, height: 1080, deviceScaleFactor: 1 },
+    ]);
 
     const closed = await manager.closeBrowser("room-1");
     assert.deepEqual(closed, { success: true });
@@ -139,6 +169,7 @@ test("checks Browser Run readiness with the configured credentials", async () =>
             cloudflareBrowserRunBaseUrl: "https://api.cloudflare.test/browser-run",
         },
         fetchImpl,
+        createBrowserConnector(),
     );
 
     await manager.checkHealth();
@@ -190,6 +221,7 @@ test("forgets sessions whose Cloudflare target has expired", async () => {
             cloudflareBrowserRunBaseUrl: "https://api.cloudflare.test/browser-run",
         },
         fetchImpl,
+        createBrowserConnector(),
     );
 
     assert.equal(
@@ -224,6 +256,7 @@ test("rejects untrusted Live View origins", async () => {
             cloudflareBrowserRunBaseUrl: "https://api.cloudflare.test/browser-run",
         },
         fetchImpl,
+        createBrowserConnector(),
     );
     const result = await manager.launchBrowser({
         roomId: "room-unsafe",
@@ -355,6 +388,7 @@ test("failed Kitesurf navigation preserves the active target", async () => {
             cloudflareBrowserRunBaseUrl: "https://api.cloudflare.test/browser-run",
         },
         fetchImpl,
+        createBrowserConnector(),
     );
 
     const launched = await manager.launchBrowser({
@@ -427,6 +461,7 @@ test("a stale refresh cannot delete a replacement navigation session", async () 
             cloudflareBrowserRunBaseUrl: "https://api.cloudflare.test/browser-run",
         },
         fetchImpl,
+        createBrowserConnector(),
     );
     assert.equal(
         (await manager.launchBrowser({
@@ -499,6 +534,7 @@ test("serializes Kitesurf navigation within a room", async () => {
             cloudflareBrowserRunBaseUrl: "https://api.cloudflare.test/browser-run",
         },
         fetchImpl,
+        createBrowserConnector(),
     );
     assert.equal(
         (await manager.launchBrowser({
@@ -574,6 +610,7 @@ test("does not restore a session closed while navigation is in progress", async 
             cloudflareBrowserRunBaseUrl: "https://api.cloudflare.test/browser-run",
         },
         fetchImpl,
+        createBrowserConnector(),
     );
     assert.equal(
         (await manager.launchBrowser({
@@ -651,6 +688,7 @@ test("rejects a concurrent launch for the same room", async () => {
             cloudflareBrowserRunBaseUrl: "https://api.cloudflare.test/browser-run",
         },
         fetchImpl,
+        createBrowserConnector(),
     );
 
     const firstLaunch = manager.launchBrowser({

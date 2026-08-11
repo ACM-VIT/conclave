@@ -13,6 +13,7 @@ import { defaultConfig } from "./types.js";
 import puppeteer, { type Browser, type Page } from "puppeteer-core";
 
 type FetchLike = typeof fetch;
+type BrowserConnector = typeof puppeteer.connect;
 
 type CloudflareSession = {
     sessionId?: string;
@@ -307,6 +308,7 @@ export class KitesurfManager implements BrowserManager {
 
     private readonly config: BrowserServiceConfig;
     private readonly fetchImpl: FetchLike;
+    private readonly connectBrowser: BrowserConnector;
     private readonly apiBaseUrl: string;
     private readonly sessions = new Map<string, KitesurfSession>();
     private readonly idleTimers = new Map<string, NodeJS.Timeout>();
@@ -316,9 +318,11 @@ export class KitesurfManager implements BrowserManager {
     constructor(
         config: Partial<BrowserServiceConfig> = {},
         fetchImpl: FetchLike = fetch,
+        connectBrowser: BrowserConnector = (options) => puppeteer.connect(options),
     ) {
         this.config = { ...defaultConfig, ...config, provider: "kitesurf" };
         this.fetchImpl = fetchImpl;
+        this.connectBrowser = connectBrowser;
 
         const accountId = this.config.cloudflareAccountId?.trim();
         const apiToken = this.config.cloudflareApiToken?.trim();
@@ -432,6 +436,42 @@ export class KitesurfManager implements BrowserManager {
         );
     }
 
+    private async withConnectedPage<T>(
+        webSocketDebuggerUrl: string,
+        currentUrl: string,
+        operation: (page: Page) => Promise<T>,
+    ): Promise<T> {
+        let browser: Browser | undefined;
+        try {
+            browser = await this.connectBrowser({
+                browserWSEndpoint: webSocketDebuggerUrl,
+                headers: { Authorization: `Bearer ${this.config.cloudflareApiToken}` },
+            });
+            const pages = await browser.pages();
+            const page =
+                pages.find((candidate) => candidate.url() === currentUrl) ||
+                [...pages].reverse().find((candidate) => candidate.url() !== "about:blank") ||
+                pages.at(-1);
+            if (!page) throw new Error("Kitesurf has no active page");
+            return await operation(page);
+        } finally {
+            await browser?.disconnect();
+        }
+    }
+
+    private async configureViewport(
+        webSocketDebuggerUrl: string,
+        currentUrl: string,
+    ): Promise<void> {
+        await this.withConnectedPage(webSocketDebuggerUrl, currentUrl, (page) =>
+            page.setViewport({
+                width: this.config.kitesurfViewportWidth,
+                height: this.config.kitesurfViewportHeight,
+                deviceScaleFactor: 1,
+            }),
+        );
+    }
+
     async checkHealth(): Promise<void> {
         const payload = await this.request("/devtools/session", { method: "GET" });
         if (!Array.isArray(payload)) {
@@ -465,6 +505,7 @@ export class KitesurfManager implements BrowserManager {
             }
 
             const target = await this.createTarget(cloudflareSessionId, url);
+            await this.configureViewport(cloudflareSession.webSocketDebuggerUrl, target.url || url);
             const session: KitesurfSession = {
                 roomId,
                 containerId: cloudflareSessionId,
@@ -506,6 +547,10 @@ export class KitesurfManager implements BrowserManager {
         let target: CloudflareTarget | undefined;
         try {
             target = await this.createTarget(session.containerId, options.url);
+            await this.configureViewport(
+                session.webSocketDebuggerUrl,
+                target.url || options.url,
+            );
             if (this.sessions.get(options.roomId) !== session) {
                 throw new Error("Browser session was closed or replaced during navigation");
             }
@@ -599,25 +644,16 @@ export class KitesurfManager implements BrowserManager {
         const session = this.sessions.get(roomId);
         if (!session) throw new Error("No browser session found for this room");
 
-        let browser: Browser | undefined;
-        try {
-            browser = await puppeteer.connect({
-                browserWSEndpoint: session.webSocketDebuggerUrl,
-                headers: { Authorization: `Bearer ${this.config.cloudflareApiToken}` },
-            });
-            const pages = await browser.pages();
-            const page =
-                pages.find((candidate) => candidate.url() === session.currentUrl) ||
-                [...pages].reverse().find((candidate) => candidate.url() !== "about:blank") ||
-                pages.at(-1);
-            if (!page) throw new Error("Kitesurf has no active page");
-            const result = await operation(page);
-            session.currentUrl = page.url() || session.currentUrl;
-            this.resetIdleTimer(roomId);
-            return result;
-        } finally {
-            await browser?.disconnect();
-        }
+        return this.withConnectedPage(
+            session.webSocketDebuggerUrl,
+            session.currentUrl,
+            async (page) => {
+                const result = await operation(page);
+                session.currentUrl = page.url() || session.currentUrl;
+                this.resetIdleTimer(roomId);
+                return result;
+            },
+        );
     }
 
     async observeForAgent(roomId: string): Promise<BrowserAgentObservation> {

@@ -101,6 +101,16 @@ const getEmbeddedKitesurf = (): BrowserManager => {
       MAX_BACKEND_REQUEST_TIMEOUT_MS,
     ),
     kitesurfKeepAliveMs: parseInteger(process.env.KITESURF_KEEP_ALIVE_MS, 600000),
+    kitesurfViewportWidth: parseInteger(
+      process.env.KITESURF_VIEWPORT_WIDTH,
+      1920,
+      3840,
+    ),
+    kitesurfViewportHeight: parseInteger(
+      process.env.KITESURF_VIEWPORT_HEIGHT,
+      1080,
+      2160,
+    ),
     containerIdleTimeoutMs: parseInteger(
       process.env.KITESURF_IDLE_TIMEOUT_MS || process.env.CONTAINER_IDLE_TIMEOUT,
       1800000,

@@ -92,6 +92,8 @@ export interface BrowserServiceConfig {
     cloudflareBrowserRunBaseUrl?: string;
     cloudflareRequestTimeoutMs: number;
     kitesurfKeepAliveMs: number;
+    kitesurfViewportWidth: number;
+    kitesurfViewportHeight: number;
 }
 
 export interface BrowserManager {
@@ -217,5 +219,13 @@ export const defaultConfig: BrowserServiceConfig = {
     kitesurfKeepAliveMs: parseIntegerEnv("KITESURF_KEEP_ALIVE_MS", 600000, {
         min: 60000,
         max: 600000,
+    }),
+    kitesurfViewportWidth: parseIntegerEnv("KITESURF_VIEWPORT_WIDTH", 1920, {
+        min: 800,
+        max: 3840,
+    }),
+    kitesurfViewportHeight: parseIntegerEnv("KITESURF_VIEWPORT_HEIGHT", 1080, {
+        min: 600,
+        max: 2160,
     }),
 };

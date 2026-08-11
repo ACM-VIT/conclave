@@ -77,6 +77,7 @@ These are read from root `.env` (or current shell env):
 - `CLOUDFLARE_ACCOUNT_ID` (required for Kitesurf)
 - `CLOUDFLARE_BROWSER_RUN_TOKEN` (required for Kitesurf)
 - `KITESURF_KEEP_ALIVE_MS` (defaults to Cloudflare's maximum `600000`)
+- `KITESURF_VIEWPORT_WIDTH` / `KITESURF_VIEWPORT_HEIGHT` (default `1920x1080`)
 
 If `BROWSER_PUBLIC_BASE_URL` is unset and `BROWSER_HOST_ADDRESS=localhost`, clients will receive localhost noVNC links.
 
