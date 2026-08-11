@@ -70,13 +70,15 @@ let cachedCapabilities:
   | undefined;
 let pendingCapabilities: Promise<BrowserServiceCapabilities> | undefined;
 
-const parseInteger = (
+export const parseBrowserInteger = (
   value: string | undefined,
   fallback: number,
   maximum = Number.POSITIVE_INFINITY,
+  minimum = 1,
 ): number => {
   const parsed = Number(value);
-  const configured = Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  const configured =
+    Number.isInteger(parsed) && parsed >= minimum ? parsed : fallback;
   return Math.min(configured, maximum);
 };
 
@@ -95,23 +97,28 @@ const getEmbeddedKitesurf = (): BrowserManager => {
     cloudflareApiToken: credentials.apiToken,
     cloudflareBrowserRunBaseUrl:
       process.env.CLOUDFLARE_BROWSER_RUN_BASE_URL?.trim() || undefined,
-    cloudflareRequestTimeoutMs: parseInteger(
+    cloudflareRequestTimeoutMs: parseBrowserInteger(
       process.env.CLOUDFLARE_BROWSER_RUN_TIMEOUT_MS,
       15000,
       MAX_BACKEND_REQUEST_TIMEOUT_MS,
     ),
-    kitesurfKeepAliveMs: parseInteger(process.env.KITESURF_KEEP_ALIVE_MS, 600000),
-    kitesurfViewportWidth: parseInteger(
+    kitesurfKeepAliveMs: parseBrowserInteger(
+      process.env.KITESURF_KEEP_ALIVE_MS,
+      600000,
+    ),
+    kitesurfViewportWidth: parseBrowserInteger(
       process.env.KITESURF_VIEWPORT_WIDTH,
       1920,
       3840,
+      800,
     ),
-    kitesurfViewportHeight: parseInteger(
+    kitesurfViewportHeight: parseBrowserInteger(
       process.env.KITESURF_VIEWPORT_HEIGHT,
       1080,
       2160,
+      600,
     ),
-    containerIdleTimeoutMs: parseInteger(
+    containerIdleTimeoutMs: parseBrowserInteger(
       process.env.KITESURF_IDLE_TIMEOUT_MS || process.env.CONTAINER_IDLE_TIMEOUT,
       1800000,
     ),

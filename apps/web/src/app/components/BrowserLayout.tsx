@@ -255,12 +255,8 @@ function BrowserLayout({
             </section>
 
             <aside className="min-h-[160px] min-w-0 lg:min-h-0">
-                <section
-                    className="overflow-hidden rounded-2xl"
-                    style={{ backgroundColor: color.surface, border: `1px solid ${color.border}` }}
-                    aria-label="Meeting participants"
-                >
-                    <div className="flex max-h-44 gap-2 overflow-auto p-2 lg:max-h-52 lg:flex-col">
+                <section aria-label="Meeting participants">
+                    <div className="flex max-h-44 gap-2 overflow-auto lg:max-h-52 lg:flex-col">
                         <div className={`acm-video-tile h-28 w-40 shrink-0 lg:w-auto ${isLocalActiveSpeaker ? "speaking" : ""}`}>
                             <video
                                 ref={localVideoRef}

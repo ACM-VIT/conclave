@@ -4,6 +4,7 @@ import {
   getCachedBrowserServiceCapabilities,
   getBrowserServiceCapabilities,
   isMissingBrowserSessionError,
+  parseBrowserInteger,
   shutdownBrowserBackend,
 } from "../server/browserServiceClient.js";
 
@@ -152,5 +153,14 @@ describe("external browser service errors", () => {
     expect(second).toEqual(first);
     expect(third).toEqual(first);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("embedded browser configuration", () => {
+  it("falls back when viewport dimensions are below their supported minimums", () => {
+    expect(parseBrowserInteger("1", 1920, 3840, 800)).toBe(1920);
+    expect(parseBrowserInteger("1", 1080, 2160, 600)).toBe(1080);
+    expect(parseBrowserInteger("800", 1920, 3840, 800)).toBe(800);
+    expect(parseBrowserInteger("600", 1080, 2160, 600)).toBe(600);
   });
 });
