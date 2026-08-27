@@ -57,11 +57,33 @@ describe("media quality settings", () => {
     expect(resolveScreenSharePublishSettings(settings.screenShare)).toMatchObject({
       idealWidth: 1920,
       idealHeight: 1080,
-      maxWidth: 3840,
-      maxHeight: 2160,
-      frameRate: 24,
+      maxWidth: 1920,
+      maxHeight: 1080,
+      frameRate: 30,
       maxBitrate: 2_500_000,
       includeAudio: true,
+    });
+  });
+
+  it("migrates the previous automatic 4K profile to the current safe preset", () => {
+    const settings = normalizeMediaQualitySettings({
+      screenShare: {
+        preset: "auto",
+        resolution: "2160p",
+        frameRate: 24,
+        maxBitrateKbps: 2500,
+        contentHint: "detail",
+        degradationPreference: "maintain-resolution",
+        cursor: "never",
+        includeAudio: false,
+      },
+    });
+
+    expect(settings.screenShare).toEqual({
+      preset: "auto",
+      ...SCREEN_SHARE_QUALITY_PRESETS.auto,
+      cursor: "never",
+      includeAudio: false,
     });
   });
 
@@ -189,8 +211,8 @@ describe("media quality settings", () => {
     expect(resolveScreenSharePublishSettings(updated)).toMatchObject({
       idealWidth: 1920,
       idealHeight: 1080,
-      maxWidth: 3840,
-      maxHeight: 2160,
+      maxWidth: 1920,
+      maxHeight: 1080,
       includeAudio: false,
       cursor: "never",
     });
@@ -393,9 +415,9 @@ describe("media quality settings", () => {
         publishSettings,
       ),
     ).toMatchObject({
-      width: { ideal: 1600, max: 1920 },
-      height: { ideal: 900, max: 1080 },
-      frameRate: { ideal: 5, max: 5 },
+      width: { ideal: 1280, max: 1280 },
+      height: { ideal: 720, max: 720 },
+      frameRate: { ideal: 10, max: 10 },
     });
 
     const producer = {} as Producer;
