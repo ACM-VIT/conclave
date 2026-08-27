@@ -112,10 +112,11 @@ const getScreenShareStartupNetworkProfile = (
   }
   if (browserQuality === "good") return null;
 
-  // Jitsi defaults desktop sharing to low FPS because static text needs
-  // pixels more than motion. Use that bias only before WebRTC stats can prove
-  // the publish path is healthy, so fast unsupported browsers can recover.
-  return browserNetwork.supported ? null : "fair";
+  // Absence of Network Information API data is not evidence of a constrained
+  // upload. Starting every unsupported browser in a reduced temporal profile
+  // made otherwise healthy Firefox/Safari shares visibly choppy until enough
+  // WebRTC stats accumulated.
+  return null;
 };
 
 export const selectScreenSharePublishNetworkProfile = ({

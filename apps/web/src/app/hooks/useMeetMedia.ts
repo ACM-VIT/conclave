@@ -54,7 +54,6 @@ import {
   applyScreenShareProducerNetworkProfile,
   applyWebcamProducerNetworkProfile,
   applyScreenShareTrackNetworkProfile,
-  buildScreenShareVideoConstraintsForNetworkProfile,
   getFallbackWebcamCodec,
   getPreferredScreenShareCodec,
   getPreferredWebcamCodec,
@@ -2996,6 +2995,11 @@ export function useMeetMedia({
     if (track && "contentHint" in track) {
       track.contentHint = publishSettings.contentHint;
     }
+    await applyScreenShareTrackNetworkProfile(
+      track,
+      "good",
+      publishSettings,
+    );
     await applyScreenShareProducerNetworkProfile(
       producer,
       getScreenSharePublishNetworkProfile(),
@@ -5914,18 +5918,11 @@ export function useMeetMedia({
       const screenPublishSettings = getScreenSharePublishSettings();
 
       let captureController = createCaptureController();
-      const screenVideoConstraints =
-        buildScreenShareVideoConstraintsForNetworkProfile(
-          screenNetworkProfile,
-          screenPublishSettings,
-        );
-      const constrainedDisplayVideoConstraints: DisplayMediaVideoConstraints = {
-        frameRate: screenVideoConstraints.frameRate,
-        width: screenVideoConstraints.width,
-        height: screenVideoConstraints.height,
-        cursor: screenVideoConstraints.cursor ?? screenPublishSettings.cursor,
-      };
-      const relaxedDisplayVideoConstraints: DisplayMediaVideoConstraints = {
+      // Acquire the user-selected surface without dimension constraints. The
+      // screen-capture spec applies those constraints after selection anyway,
+      // and doing both caused Chromium to reconfigure full-monitor capture
+      // multiple times before the first encoded frame.
+      const displayVideoConstraints: DisplayMediaVideoConstraints = {
         cursor: screenPublishSettings.cursor,
       };
       const getDisplayMedia = (
@@ -5948,27 +5945,16 @@ export function useMeetMedia({
 
       let stream: MediaStream;
       try {
-        stream =
-          await getDisplayMedia(
-            constrainedDisplayVideoConstraints,
-            captureController,
-          );
+        stream = await getDisplayMedia(
+          displayVideoConstraints,
+          captureController,
+        );
       } catch (err) {
         if (!isDisplayMediaConstraintRetryableError(err)) {
           throw err;
         }
         captureController = null;
-        try {
-          stream = await getDisplayMedia(
-            constrainedDisplayVideoConstraints,
-            null,
-          );
-        } catch (retryErr) {
-          if (!isDisplayMediaConstraintRetryableError(retryErr)) {
-            throw retryErr;
-          }
-          stream = await getDisplayMedia(relaxedDisplayVideoConstraints, null);
-        }
+        stream = await getDisplayMedia(displayVideoConstraints, null);
       }
       acquiredScreenShareStream = stream;
       if (screenSharePublishingDisabledRef.current) {
@@ -5996,7 +5982,10 @@ export function useMeetMedia({
       attachLocalScreenShareTrackHandlers(track);
       await applyScreenShareTrackNetworkProfile(
         track,
-        screenNetworkProfile,
+        // Capture once at the configured ceiling. Network adaptation scales
+        // the RTP sender from this stable source so recovery can increase
+        // quality without restarting the monitor capture pipeline.
+        "good",
         screenPublishSettings,
       );
       if (screenSharePublishingDisabledRef.current) {
@@ -6007,6 +5996,7 @@ export function useMeetMedia({
 
       const preferredScreenShareCodec = getPreferredScreenShareCodec(
         deviceRef.current,
+        displaySurface,
       );
       const producer = await produceScreenShareTrack({
         transport,

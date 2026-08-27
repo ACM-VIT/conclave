@@ -6,6 +6,7 @@ import type {
 } from "mediasoup-client/types";
 import {
   applyScreenShareProducerNetworkProfile,
+  applyScreenShareTrackNetworkProfile,
   applyWebcamTrackNetworkProfile,
   applyWebcamProducerNetworkProfile,
   buildWebcamCodecOptions,
@@ -151,6 +152,25 @@ describe("getPreferredScreenShareCodec", () => {
     const codec = getPreferredScreenShareCodec(device);
 
     expect(codec?.mimeType).toBe("video/VP8");
+  });
+
+  it("prefers hardware-friendly H264 for full-monitor shares", () => {
+    const device: ScreenShareCodecDevice = {
+      rtpCapabilities: {
+        codecs: [
+          videoCodec("video/VP9", 101),
+          videoCodec("video/VP8", 102),
+          videoCodec("video/H264", 103),
+        ],
+      },
+    };
+
+    expect(getPreferredScreenShareCodec(device, "monitor")?.mimeType).toBe(
+      "video/H264",
+    );
+    expect(getPreferredScreenShareCodec(device, "window")?.mimeType).toBe(
+      "video/VP8",
+    );
   });
 
   it("uses VP9 only when the safer screen-share codecs are unavailable", () => {
@@ -1280,10 +1300,26 @@ describe("webcam encoding topology", () => {
 });
 
 describe("screen-share network profile application", () => {
-  it("applies RTP caps but rejects when capture constraints fail", async () => {
-    vi.spyOn(console, "debug").mockImplementation(() => {});
-    const constraintError = new Error("capture constraints rejected");
-    const applyConstraints = vi.fn().mockRejectedValue(constraintError);
+  it("configures capture in one stable downscale operation", async () => {
+    const applyConstraints = vi.fn().mockResolvedValue(undefined);
+    const track = {
+      readyState: "live",
+      applyConstraints,
+    } as unknown as MediaStreamTrack;
+
+    await applyScreenShareTrackNetworkProfile(track, "good");
+
+    expect(applyConstraints).toHaveBeenCalledOnce();
+    expect(applyConstraints).toHaveBeenCalledWith({
+      frameRate: { ideal: 30, max: 30 },
+      width: { ideal: 1920, max: 3840 },
+      height: { ideal: 1080, max: 2160 },
+      resizeMode: "crop-and-scale",
+    });
+  });
+
+  it("adapts RTP without reconfiguring the live capture track", async () => {
+    const applyConstraints = vi.fn();
     const setParameters = vi.fn().mockResolvedValue(undefined);
     const producer = {
       kind: "video",
@@ -1302,8 +1338,8 @@ describe("screen-share network profile application", () => {
 
     await expect(
       applyScreenShareProducerNetworkProfile(producer, "poor"),
-    ).rejects.toBe(constraintError);
-    expect(applyConstraints).toHaveBeenCalledTimes(2);
+    ).resolves.toBeUndefined();
+    expect(applyConstraints).not.toHaveBeenCalled();
     expect(setParameters).toHaveBeenCalledTimes(1);
   });
 });

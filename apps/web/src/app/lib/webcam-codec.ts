@@ -19,7 +19,6 @@ import {
   buildScreenShareEncoding,
 } from "./video-encodings";
 import type { WebcamProducerTopology } from "./webcam-topology-transition";
-import { toError } from "./utils";
 import type {
   ResolvedCameraPublishSettings,
   ResolvedScreenSharePublishSettings,
@@ -66,6 +65,15 @@ const SIMULCAST_FRIENDLY_CODEC_MIME_TYPES = [
 const SCREEN_SHARE_CODEC_MIME_TYPES = [
   "video/VP8",
   "video/H264",
+  "video/VP9",
+] as const;
+const MONITOR_SCREEN_SHARE_CODEC_MIME_TYPES = [
+  // Full-monitor capture is the heaviest path and frequently exceeds the
+  // real-time budget of Chromium's software VP8 encoder on high-DPI screens.
+  // Prefer the broadly hardware-accelerated H.264 path for monitors only;
+  // tabs and windows retain the more detail-efficient VP8 preference.
+  "video/H264",
+  "video/VP8",
   "video/VP9",
 ] as const;
 
@@ -195,10 +203,15 @@ export const getFallbackWebcamCodec = (
 
 export const getPreferredScreenShareCodec = (
   device: CodecCapabilityDevice | null | undefined,
+  displaySurface?: string | null,
 ): RtpCodecCapability | undefined => {
   const codecs = getSendVideoCodecs(device);
+  const preferredMimeTypes =
+    displaySurface === "monitor"
+      ? MONITOR_SCREEN_SHARE_CODEC_MIME_TYPES
+      : SCREEN_SHARE_CODEC_MIME_TYPES;
 
-  for (const mimeType of SCREEN_SHARE_CODEC_MIME_TYPES) {
+  for (const mimeType of preferredMimeTypes) {
     const codec = codecs.find((candidate) =>
       isPreferredVideoCodec(candidate, mimeType),
     );
@@ -1055,28 +1068,28 @@ const SCREEN_SHARE_CAPS: Record<WebcamProducerNetworkProfile, ScreenShareCap> = 
     maxHeight: 2160,
   },
   fair: {
-    maxBitrate: 1200000,
-    maxFramerate: 12,
+    maxBitrate: 1500000,
+    maxFramerate: 20,
     idealWidth: 1920,
     idealHeight: 1080,
-    maxWidth: 2560,
-    maxHeight: 1440,
-  },
-  poor: {
-    maxBitrate: 450000,
-    maxFramerate: 5,
-    idealWidth: 1600,
-    idealHeight: 900,
     maxWidth: 1920,
     maxHeight: 1080,
   },
-  emergency: {
-    maxBitrate: 220000,
-    maxFramerate: 3,
+  poor: {
+    maxBitrate: 650000,
+    maxFramerate: 10,
     idealWidth: 1280,
     idealHeight: 720,
     maxWidth: 1280,
     maxHeight: 720,
+  },
+  emergency: {
+    maxBitrate: 300000,
+    maxFramerate: 5,
+    idealWidth: 960,
+    idealHeight: 540,
+    maxWidth: 960,
+    maxHeight: 540,
   },
 };
 
@@ -1202,19 +1215,11 @@ const applyScreenShareProducerNetworkProfileNow = async (
   if (producer.kind !== "video" || producer.closed) return;
 
   const cap = getScreenShareCap(profile, publishSettings);
-  let trackProfileError: Error | null = null;
-  try {
-    await applyScreenShareTrackNetworkProfile(
-      producer.track,
-      profile,
-      publishSettings,
-    );
-  } catch (error) {
-    // RTP caps can still protect the connection when a browser rejects one of
-    // the capture constraints, but the caller must not cache this profile as
-    // fully applied. Retain the error and throw it after the RTP mutation.
-    trackProfileError = toError(error);
-  }
+  // Keep display capture stable for the life of the share. Network adaptation
+  // belongs on RTCRtpSender: repeatedly resizing a live monitor track can
+  // restart the browser/GPU capture pipeline and has produced black frames on
+  // full-screen shares. Initial capture and explicit user quality changes are
+  // the only places that mutate MediaStreamTrack constraints.
   const scaleResolutionDownBy = getScreenShareScaleResolutionDownBy(
     profile,
     getTrackCaptureSize(producer.track),
@@ -1243,7 +1248,6 @@ const applyScreenShareProducerNetworkProfileNow = async (
           priority: SCREEN_SHARE_RTP_PRIORITY,
         },
       );
-      if (trackProfileError) throw trackProfileError;
       return;
     }
   }
@@ -1253,7 +1257,6 @@ const applyScreenShareProducerNetworkProfileNow = async (
     maxFramerate: cap.maxFramerate,
     scaleResolutionDownBy,
   });
-  if (trackProfileError) throw trackProfileError;
 };
 
 export function applyScreenShareProducerNetworkProfile(
@@ -1281,48 +1284,24 @@ export async function applyScreenShareTrackNetworkProfile(
     profile,
     publishSettings,
   );
-  let constraintError: Error | null = null;
-
-  try {
-    await track.applyConstraints({
-      frameRate: constraints.frameRate,
-    });
-  } catch (error) {
-    constraintError = toError(error);
-    if (profile !== "good") {
-      console.debug(
-        "[Meets] Screen-share capture frame-rate cap was not applied:",
-        error,
-      );
-    }
-  }
-
-  if (track.readyState !== "live") {
-    throw (
-      constraintError ??
-      new Error("Screen-share track ended while applying capture constraints")
-    );
-  }
-
-  const dimensionConstraints: MediaTrackConstraints = {
+  const captureConstraints: MediaTrackConstraints & {
+    resizeMode?: "none" | "crop-and-scale";
+  } = {
     frameRate: constraints.frameRate,
     width: constraints.width,
     height: constraints.height,
+    resizeMode: "crop-and-scale",
   };
 
   try {
-    await track.applyConstraints(dimensionConstraints);
-    // This full constraint set includes frameRate, so it supersedes a failed
-    // frame-rate-only attempt when the browser accepts the combined request.
-    constraintError = null;
+    await track.applyConstraints(captureConstraints);
   } catch (error) {
-    constraintError ??= toError(error);
     console.debug(
-      "[Meets] Screen-share capture dimension cap was not applied:",
+      "[Meets] Screen-share capture profile was not applied:",
       error,
     );
+    throw error;
   }
-  if (constraintError) throw constraintError;
 }
 
 function buildScreenShareEncodingForNetworkProfile(

@@ -131,8 +131,12 @@ export const SCREEN_SHARE_QUALITY_PRESETS: Record<
   ScreenSharePresetValues
 > = {
   auto: {
-    resolution: "2160p",
-    frameRate: 24,
+    // A native Retina/4K monitor is substantially more expensive to capture
+    // and software-encode than a tab or window. Keep the automatic path at a
+    // stable 1080p/30; users who explicitly need more detail can still choose
+    // Presentation or Custom.
+    resolution: "1080p",
+    frameRate: 30,
     maxBitrateKbps: 2500,
     contentHint: "detail",
     degradationPreference: "maintain-resolution",
@@ -201,6 +205,18 @@ export const normalizeMediaQualitySettings = (
   const rawScreenShare = isRecord(root.screenShare) ? root.screenShare : {};
   const cameraFallback = DEFAULT_MEDIA_QUALITY_SETTINGS.camera;
   const screenFallback = DEFAULT_MEDIA_QUALITY_SETTINGS.screenShare;
+  const screenPreset = getEnum(
+    rawScreenShare.preset,
+    ["auto", "presentation", "motion", "custom"],
+    screenFallback.preset,
+  );
+  // Presets are versioned product policy, not a second set of custom fields.
+  // Canonicalizing their video values migrates the previous 4K/24 Auto preset
+  // without discarding picker-only cursor and audio preferences.
+  const screenPresetValues =
+    screenPreset === "custom"
+      ? null
+      : SCREEN_SHARE_QUALITY_PRESETS[screenPreset];
 
   return {
     camera: {
@@ -234,37 +250,40 @@ export const normalizeMediaQualitySettings = (
       ),
     },
     screenShare: {
-      preset: getEnum(
-        rawScreenShare.preset,
-        ["auto", "presentation", "motion", "custom"],
-        screenFallback.preset,
-      ),
-      resolution: getResolution(
-        rawScreenShare.resolution,
-        screenFallback.resolution,
-      ),
-      frameRate: getBoundedInteger(
-        rawScreenShare.frameRate,
-        screenFallback.frameRate,
-        1,
-        60,
-      ),
-      maxBitrateKbps: getBoundedInteger(
-        rawScreenShare.maxBitrateKbps,
-        screenFallback.maxBitrateKbps,
-        150,
-        15000,
-      ),
-      contentHint: getEnum(
-        rawScreenShare.contentHint,
-        ["detail", "text", "motion"],
-        screenFallback.contentHint,
-      ),
-      degradationPreference: getEnum(
-        rawScreenShare.degradationPreference,
-        ["balanced", "maintain-framerate", "maintain-resolution"],
-        screenFallback.degradationPreference,
-      ),
+      preset: screenPreset,
+      resolution:
+        screenPresetValues?.resolution ??
+        getResolution(rawScreenShare.resolution, screenFallback.resolution),
+      frameRate:
+        screenPresetValues?.frameRate ??
+        getBoundedInteger(
+          rawScreenShare.frameRate,
+          screenFallback.frameRate,
+          1,
+          60,
+        ),
+      maxBitrateKbps:
+        screenPresetValues?.maxBitrateKbps ??
+        getBoundedInteger(
+          rawScreenShare.maxBitrateKbps,
+          screenFallback.maxBitrateKbps,
+          150,
+          15000,
+        ),
+      contentHint:
+        screenPresetValues?.contentHint ??
+        getEnum(
+          rawScreenShare.contentHint,
+          ["detail", "text", "motion"],
+          screenFallback.contentHint,
+        ),
+      degradationPreference:
+        screenPresetValues?.degradationPreference ??
+        getEnum(
+          rawScreenShare.degradationPreference,
+          ["balanced", "maintain-framerate", "maintain-resolution"],
+          screenFallback.degradationPreference,
+        ),
       cursor: getEnum(
         rawScreenShare.cursor,
         ["always", "motion", "never"],

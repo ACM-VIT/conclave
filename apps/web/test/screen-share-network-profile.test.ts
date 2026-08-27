@@ -17,7 +17,7 @@ const browserNetwork = (
 });
 
 describe("selectScreenSharePublishNetworkProfile", () => {
-  it("starts unsupported unknown links in a fair detail-first profile", () => {
+  it("does not penalize unsupported browsers without network evidence", () => {
     expect(
       selectScreenSharePublishNetworkProfile({
         baseProfile: "good",
@@ -26,7 +26,7 @@ describe("selectScreenSharePublishNetworkProfile", () => {
         browserNetwork: browserNetwork(),
         observedPublishQuality: "unknown",
       }),
-    ).toBe("fair");
+    ).toBe("good");
   });
 
   it("restores the base profile after WebRTC publish stats are observed", () => {

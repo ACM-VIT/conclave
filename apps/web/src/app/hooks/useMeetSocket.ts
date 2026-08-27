@@ -91,6 +91,7 @@ import {
   produceWebcamTrack,
   type WebcamProducerNetworkProfile,
 } from "../lib/webcam-codec";
+import { getCapturedDisplaySurface } from "../lib/captured-surface-control";
 import {
   BASELINE_WEBCAM_CODEC_POLICY,
   classifyVp9CodecFailure,
@@ -1650,11 +1651,12 @@ export function useMeetSocket({
       const screenNetworkProfile = getScreenSharePublishNetworkProfile();
       await applyScreenShareTrackNetworkProfile(
         videoTrack,
-        screenNetworkProfile,
+        "good",
         screenPublishSettings,
       );
       const preferredScreenShareCodec = getPreferredScreenShareCodec(
         deviceRef.current,
+        getCapturedDisplaySurface(videoTrack),
       );
       const producer = await produceScreenShareTrack({
         transport,
