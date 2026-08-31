@@ -3,6 +3,7 @@
 import { useEffect, useEffectEvent, useRef } from "react";
 import { useMeetVolume } from "../hooks/useMeetVolume";
 import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
+import { clampParticipantVolume } from "../lib/meet-volume";
 import { telemetry } from "../lib/telemetry";
 import { errorName } from "../lib/utils";
 
@@ -44,6 +45,7 @@ type AudioStreamPlayerProps = {
   playbackErrorContext?: string;
   restartToken?: string | number | boolean | null;
   elementKey?: string;
+  volumeMultiplier?: number;
 };
 
 const hiddenAudioStyle = {
@@ -65,6 +67,7 @@ function AudioStreamPlayer({
   playbackErrorContext,
   restartToken,
   elementKey,
+  volumeMultiplier = 1,
 }: AudioStreamPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const autoplayBlockedRef = useRef(false);
@@ -221,6 +224,7 @@ function AudioStreamPlayer({
     };
   }, [
     elementKey,
+    kind,
     muted,
     playbackAudioOutputDeviceId,
     replayOnForeground,
@@ -253,8 +257,9 @@ function AudioStreamPlayer({
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    audio.volume = meetVolume;
-  }, [meetVolume]);
+    const participantVolume = clampParticipantVolume(volumeMultiplier);
+    audio.volume = Math.min(1, meetVolume * participantVolume);
+  }, [elementKey, meetVolume, volumeMultiplier]);
 
   return (
     <audio
