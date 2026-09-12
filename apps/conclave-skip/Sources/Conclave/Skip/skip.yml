@@ -5,20 +5,23 @@ build:
   contents:
     - block: 'dependencies'
       contents:
-        - 'implementation("io.socket:socket.io-client:2.1.1")'
-        - 'implementation("com.mediasfu:mediasoup-client:1.0.1")'
-        - 'implementation("com.google.android.gms:play-services-auth:21.2.0")'
-        - 'implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")'
+        - 'implementation("io.socket:socket.io-client:2.1.2")'
+        - 'implementation("com.mediasfu:mediasoup-client:1.0.8")'
+        - 'implementation("com.google.android.gms:play-services-auth:22.0.0")'
+        - 'implementation("androidx.credentials:credentials:1.6.0")'
+        - 'implementation("androidx.credentials:credentials-play-services-auth:1.6.0")'
+        - 'implementation("com.google.android.libraries.identity.googleid:googleid:1.2.0")'
+        - 'implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")'
         - 'implementation("androidx.compose.material:material-icons-extended")'
         # dotLottie powers the branded meeting-entry takeover animation.
-        - 'implementation("com.github.LottieFiles:dotlottie-android:0.13.7")'
+        - 'implementation("com.github.LottieFiles:dotlottie-android:0.16.0")'
         # Native Android bottom sheet presentation for meeting controls.
-        - 'implementation("com.github.skydoves:flexible-bottomsheet-material3-android:0.2.0")'
+        - 'implementation("com.github.skydoves:flexible-bottomsheet-material3-android:0.3.0")'
         # CameraX powers the native pre-join camera preview.
-        - 'implementation("androidx.camera:camera-core:1.4.2")'
-        - 'implementation("androidx.camera:camera-camera2:1.4.2")'
-        - 'implementation("androidx.camera:camera-lifecycle:1.4.2")'
-        - 'implementation("androidx.camera:camera-view:1.4.2")'
+        - 'implementation("androidx.camera:camera-core:1.6.2")'
+        - 'implementation("androidx.camera:camera-camera2:1.6.2")'
+        - 'implementation("androidx.camera:camera-lifecycle:1.6.2")'
+        - 'implementation("androidx.camera:camera-view:1.6.2")'
 
 # this is a transpiled Skip Lite module
 skip:

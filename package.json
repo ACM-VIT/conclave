@@ -1,7 +1,7 @@
 {
   "name": "conclave",
   "private": true,
-  "packageManager": "pnpm@11.7.0",
+  "packageManager": "pnpm@12.4.1",
   "workspaces": [
     "apps/*",
     "!apps/mobile",
@@ -38,8 +38,12 @@
     "check": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm -C packages/apps-sdk run check:apps && pnpm run check:video-effect-assets && pnpm run check:swift-events"
   },
   "devDependencies": {
-    "eslint": "^10.6.0",
-    "konsistent": "1.0.0-beta.1",
-    "typescript-eslint": "^8.62.1"
+    "eslint": "^10.10.0",
+    "konsistent": "1.0.0-beta.4",
+    "typescript-eslint": "^8.70.0",
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
+  },
+  "engines": {
+    "node": ">=22.22.0"
   }
 }

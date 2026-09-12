@@ -288,20 +288,18 @@ describe("chess vs computer", () => {
 });
 
 describe("chess bot engine", () => {
-  it("returns only legal moves at every level", () => {
-    const fens = [
-      new Chess().fen(),
-      "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
-      "8/2k5/8/8/3q4/8/2K5/8 b - - 0 1",
-    ];
-    for (const fen of fens) {
-      for (const level of ["easy", "medium", "hard"] as const) {
-        const move = pickBotMove(fen, level, rng(0.5));
-        expect(move).not.toBeNull();
-        const game = new Chess(fen);
-        expect(() => game.move({ from: move!.from, to: move!.to, promotion: move!.promotion ?? "q" })).not.toThrow();
-      }
-    }
+  const positions = [
+    new Chess().fen(),
+    "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
+    "8/2k5/8/8/3q4/8/2K5/8 b - - 0 1",
+  ];
+  it.each(positions.flatMap((fen) =>
+    (["easy", "medium", "hard"] as const).map((level) => ({ fen, level })),
+  ))("returns a legal $level move for $fen", ({ fen, level }) => {
+    const move = pickBotMove(fen, level, rng(0.5));
+    expect(move).not.toBeNull();
+    const game = new Chess(fen);
+    expect(() => game.move({ from: move!.from, to: move!.to, promotion: move!.promotion ?? "q" })).not.toThrow();
   });
 
   it("finds mate in one on hard", () => {

@@ -52,7 +52,7 @@ const rnnoiseWorkletLoadPromises = new WeakMap<
 // RNNoise assets are copied from @sapphi-red/web-noise-suppressor into
 // public/ by scripts/sync-noise-suppressor-assets.mjs. The version suffix must
 // match the installed package so the immutable cache stays correct.
-const NOISE_SUPPRESSOR_ASSET_VERSION = "0.3.5";
+const NOISE_SUPPRESSOR_ASSET_VERSION = "0.4.0";
 const NOISE_SUPPRESSOR_ASSET_BASE = `/noise-suppressor/${NOISE_SUPPRESSOR_ASSET_VERSION}`;
 const RNNOISE_WASM_URL = `${NOISE_SUPPRESSOR_ASSET_BASE}/rnnoise.wasm`;
 const RNNOISE_SIMD_WASM_URL = `${NOISE_SUPPRESSOR_ASSET_BASE}/rnnoise_simd.wasm`;

@@ -10,14 +10,14 @@ let package = Package(
         .library(name: "Conclave", type: .dynamic, targets: ["Conclave"]),
     ],
     dependencies: [
-        .package(url: "https://source.skip.tools/skip.git", from: "1.7.0"),
-        .package(url: "https://source.skip.tools/skip-ui.git", from: "1.0.0"),
-        .package(url: "https://source.skip.tools/skip-fuse.git", from: "1.0.0"),
-        .package(url: "https://source.skip.tools/skip-model.git", from: "1.0.0"),
-        .package(url: "https://source.skip.tools/skip-kit.git", from: "0.6.0"),
-        .package(url: "https://github.com/google/GoogleSignIn-iOS", from: "9.0.0"),
+        .package(url: "https://github.com/skiptools/skip.git", from: "1.9.8"),
+        .package(url: "https://github.com/skiptools/skip-ui.git", from: "1.59.3"),
+        .package(url: "https://github.com/skiptools/skip-fuse.git", from: "1.0.3"),
+        .package(url: "https://github.com/skiptools/skip-model.git", from: "1.7.9"),
+        .package(url: "https://github.com/skiptools/skip-kit.git", from: "1.1.3"),
+        .package(url: "https://github.com/google/GoogleSignIn-iOS", from: "10.0.0"),
         .package(url: "https://github.com/socketio/socket.io-client-swift.git", from: "16.1.1"),
-        .package(url: "https://github.com/VLprojects/mediasoup-client-swift", from: "0.9.0")
+        .package(url: "https://github.com/VLprojects/mediasoup-client-swift", from: "0.13.2")
     ],
     targets: [
         .target(name: "Conclave", dependencies: [

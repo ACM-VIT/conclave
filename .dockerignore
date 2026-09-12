@@ -5,6 +5,8 @@
 !packages/
 !packages/sfu/
 !packages/sfu/**
+!packages/shared-browser/
+!packages/shared-browser/**
 !packages/ui-tokens/
 !packages/ui-tokens/package.json
 !packages/ui-tokens/src/
@@ -14,3 +16,7 @@ packages/sfu/dist
 packages/sfu/.env
 packages/sfu/.env.*
 packages/sfu/*.log
+packages/shared-browser/node_modules
+packages/shared-browser/dist
+packages/shared-browser/.env
+packages/shared-browser/.env.*

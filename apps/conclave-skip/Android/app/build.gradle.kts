@@ -80,7 +80,6 @@ val allowDebugReleaseSigning = configuredValue("ALLOW_DEBUG_RELEASE_SIGNING")
     .equals("true", ignoreCase = true)
 
 plugins {
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.android.application)
     id("skip-build-plugin")
@@ -97,7 +96,8 @@ kotlin {
 
 android {
     namespace = group as String
-    compileSdk = libs.versions.android.sdk.compile.get().toInt()
+    // OkHttp 5.5 requires Android 17 APIs at compile time.
+    compileSdk = 37
     compileOptions {
         sourceCompatibility = JavaVersion.toVersion(libs.versions.jvm.get())
         targetCompatibility = JavaVersion.toVersion(libs.versions.jvm.get())
@@ -180,13 +180,12 @@ android {
             manifestPlaceholders["CONCLAVE_AUTH_BASE_URL"] = productionConclaveBaseUrl
             manifestPlaceholders["SFU_JOIN_URL"] = productionSfuJoinUrl
             manifestPlaceholders["USES_CLEARTEXT_TRAFFIC"] = "false"
-            proguardFiles(getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro")
         }
     }
 }
 
 dependencies {
-    implementation(platform("com.squareup.okhttp3:okhttp-bom:4.12.0"))
+    implementation(platform("com.squareup.okhttp3:okhttp-bom:5.5.0"))
     implementation("com.squareup.okhttp3:okhttp")
 
     // The Activity theme (res/values/themes.xml) is `Theme.Material3.Dark.*`,
@@ -194,5 +193,5 @@ dependencies {
     // Material Components XML library. Compose Material3 does NOT provide the
     // XML theme attrs, so this AAR must be a direct dependency or the merged
     // resources fail with "style attribute 'attr/colorOnPrimary' not found".
-    implementation("com.google.android.material:material:1.12.0")
+    implementation("com.google.android.material:material:1.14.0")
 }

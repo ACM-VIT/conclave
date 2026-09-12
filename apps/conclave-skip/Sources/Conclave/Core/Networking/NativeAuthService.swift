@@ -305,6 +305,9 @@ enum NativeAuthService {
     }
 
     static func signOut() async {
+        #if SKIP
+        NativeGoogleSignInBridge.clearCredentialState()
+        #endif
         guard let baseURL = resolveAppBaseURL(),
               let url = authURL(path: "/api/auth/sign-out", baseURL: baseURL) else {
             clearStoredSessionCookies()

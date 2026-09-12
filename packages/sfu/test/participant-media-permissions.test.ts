@@ -93,8 +93,8 @@ const addProducer = (
 ): {
   producer: Producer;
   close: ReturnType<typeof vi.fn>;
-  pause: ReturnType<typeof vi.fn>;
-  resume: ReturnType<typeof vi.fn>;
+  pause: ReturnType<typeof vi.fn<Producer["pause"]>>;
+  resume: ReturnType<typeof vi.fn<Producer["resume"]>>;
   setPaused: (paused: boolean) => void;
 } => {
   const events = new EventEmitter();

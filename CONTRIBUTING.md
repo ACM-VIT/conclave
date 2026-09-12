@@ -17,11 +17,20 @@ This repository includes:
 1. Fork the repository.
 2. Clone your fork.
 3. Create a feature branch.
-4. Install dependencies:
+4. Use Node.js 22.22 or newer and pnpm 12.4.1, then install dependencies:
 
 ```bash
 pnpm install
 ```
+
+Older Corepack/pnpm shims cannot launch pnpm 12's native executable. If your
+existing `pnpm` command fails, use `npx get-pnpm 12.4.1` to install it, or run
+commands through `npm exec --yes --package=pnpm@12.4.1 -- pnpm`.
+
+Type checking uses TypeScript 7 via the `@typescript/native` npm alias. The
+`typescript` alias supplies the TypeScript 6 compiler API for ESLint, which
+does not yet support the native compiler API. Keep both aliases when updating
+the toolchain.
 
 Native checks use Swift directly:
 
@@ -30,6 +39,9 @@ cd apps/conclave-skip
 swift build
 swift test -q
 ```
+
+Android builds also require Android SDK Platform 37 for OkHttp 5.5. Google
+sign-in uses Android Credential Manager with the existing web OAuth client ID.
 
 ## Development Commands
 

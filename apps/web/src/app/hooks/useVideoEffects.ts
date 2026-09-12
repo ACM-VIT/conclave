@@ -45,7 +45,7 @@ const SELFIE_SEGMENTATION_CDN =
   "https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747";
 const FACE_MESH_CDN =
   "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619";
-const TASKS_VISION_VERSION = "0.10.35";
+const TASKS_VISION_VERSION = "1.0.1";
 const TASKS_VISION_WASM_LOCAL_PATH = `/mediapipe/tasks-vision/${TASKS_VISION_VERSION}/wasm`;
 const TASKS_VISION_WASM_CDN = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TASKS_VISION_VERSION}/wasm`;
 const TASKS_SELFIE_SEGMENTER_SQUARE_MODEL_LOCAL_PATH =

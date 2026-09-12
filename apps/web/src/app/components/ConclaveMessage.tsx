@@ -4,7 +4,7 @@ import {
   BrainIcon,
   ChevronDownIcon,
   FileTextIcon,
-  GithubIcon,
+  CircleDotIcon,
   GlobeIcon,
   ListTreeIcon,
   PencilLineIcon,
@@ -59,7 +59,7 @@ const TASK_META: Record<
     done: "Read the meeting transcript",
   },
   github_issue: {
-    icon: GithubIcon,
+    icon: CircleDotIcon,
     running: "Preparing a GitHub issue",
     done: "Finished the GitHub issue request",
   },
@@ -230,7 +230,7 @@ function ConclaveMessage({
             <div className="mb-1 overflow-hidden rounded-xl border border-white/10 bg-black/25">
               <div className="px-3.5 py-3">
                 <div className="flex items-center gap-2 text-[12px] font-semibold text-[#fafafa]">
-                  <GithubIcon className="size-3.5 text-[#F95F4A]" />
+                  <CircleDotIcon className="size-3.5 text-[#F95F4A]" />
                   Create GitHub issue
                 </div>
                 <p className="mt-1.5 text-[13px] font-medium leading-snug text-[#f4f4f5]">

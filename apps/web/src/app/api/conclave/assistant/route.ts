@@ -1130,18 +1130,9 @@ export async function POST(request: Request) {
                 status: "done",
                 ...(action?.query ? { query: action.query } : {}),
               });
+            } else if (event.item.type === "function_call") {
+              emitFunctionTask(event.item, "running");
             }
-          });
-
-          responseStream.on("response.function_call_arguments.done", (event) => {
-            emitFunctionTask(
-              {
-                id: event.item_id,
-                call_id: event.item_id,
-                name: event.name,
-              },
-              "running",
-            );
           });
 
           responseStream.on("response.failed", (event) => {

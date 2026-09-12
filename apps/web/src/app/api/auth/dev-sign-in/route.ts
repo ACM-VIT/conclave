@@ -71,11 +71,8 @@ const withAuthCookies = (data: unknown, authHeaders: Headers): NextResponse => {
   const response = NextResponse.json(data, {
     headers: { "Cache-Control": "no-store" },
   });
-  const getSetCookie = (
-    authHeaders as Headers & { getSetCookie?: () => string[] }
-  ).getSetCookie;
-  const setCookies = getSetCookie
-    ? getSetCookie.call(authHeaders)
+  const setCookies = typeof authHeaders.getSetCookie === "function"
+    ? authHeaders.getSetCookie()
     : authHeaders.get("set-cookie")
       ? [authHeaders.get("set-cookie") as string]
       : [];

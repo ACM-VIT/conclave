@@ -12,12 +12,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const webRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const pkgRoot = join(
-  webRoot,
-  "node_modules",
-  "@sapphi-red",
-  "web-noise-suppressor",
-);
+const pkgRoot = dirname(dirname(fileURLToPath(
+  import.meta.resolve("@sapphi-red/web-noise-suppressor"),
+)));
 const { version } = JSON.parse(
   readFileSync(join(pkgRoot, "package.json"), "utf8"),
 );

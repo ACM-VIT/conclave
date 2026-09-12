@@ -42,7 +42,7 @@ type FaceProcessorRequest =
     }
   | { type: "CLOSE" };
 
-const TASKS_VISION_VERSION = "0.10.35";
+const TASKS_VISION_VERSION = "1.0.1";
 const TASKS_VISION_WASM_LOCAL_PATH = `/mediapipe/tasks-vision/${TASKS_VISION_VERSION}/wasm`;
 const TASKS_FACE_LANDMARKER_MODEL_LOCAL_PATH =
   "/mediapipe/models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
