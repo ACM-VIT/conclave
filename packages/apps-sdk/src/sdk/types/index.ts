@@ -75,6 +75,10 @@ export type AppsContextValue = {
   participants?: AppUser[];
   isAdmin?: boolean;
   isReadOnly?: boolean;
+  /** Local-only ("close for me") visibility toggle; not synced to other clients. */
+  isHiddenForMe: boolean;
+  hideForMe: () => void;
+  showForMe: () => void;
 };
 
 export type ConclaveApp = {

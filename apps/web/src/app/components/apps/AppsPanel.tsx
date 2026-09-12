@@ -34,8 +34,17 @@ export function AppsPanel({
   maxDockWidth?: number;
   onDockWidthChange?: (width: number) => void;
 }) {
-  const { apps, state, openApp, closeApp, setLocked, isAdmin, isReadOnly } =
-    useApps();
+  const {
+    apps,
+    state,
+    openApp,
+    closeApp,
+    setLocked,
+    isAdmin,
+    isReadOnly,
+    isHiddenForMe,
+    showForMe,
+  } = useApps();
   const [busyAppId, setBusyAppId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,8 +60,14 @@ export function AppsPanel({
   };
 
   const handlePick = (appId: string) => {
-    if (!canManage || busyAppId) return;
+    if (busyAppId) return;
     const isActive = state.activeAppId === appId;
+    // Anyone can bring back an app they hid just for themselves, admin or not.
+    if (isActive && isHiddenForMe) {
+      showForMe();
+      return;
+    }
+    if (!canManage) return;
     void run(appId, () => (isActive ? closeApp() : openApp(appId)));
   };
 
@@ -84,8 +99,9 @@ export function AppsPanel({
 
           {apps.map((app) => {
             const isActive = state.activeAppId === app.id;
+            const isHiddenHere = isActive && isHiddenForMe;
             const isBusy = busyAppId === app.id;
-            const interactive = canManage && !busyAppId;
+            const interactive = (canManage || isHiddenHere) && !busyAppId;
             return (
               <button
                 key={app.id}
@@ -93,7 +109,11 @@ export function AppsPanel({
                 disabled={!interactive}
                 onClick={() => handlePick(app.id)}
                 aria-label={
-                  isActive ? `Close ${app.name}` : `Open ${app.name}`
+                  isHiddenHere
+                    ? `Show ${app.name} (still open for others)`
+                    : isActive
+                      ? `Close ${app.name}`
+                      : `Open ${app.name}`
                 }
                 className="group relative flex w-full items-center gap-3 overflow-hidden rounded-xl border p-3 text-left transition-colors disabled:cursor-default"
                 style={{
@@ -117,10 +137,16 @@ export function AppsPanel({
                   <span className="text-[14.5px] font-medium text-[#fafafa]">
                     {app.name}
                   </span>
-                  {app.description && (
-                    <span className="truncate text-[12px] text-[#a1a1aa]">
-                      {app.description}
+                  {isHiddenHere ? (
+                    <span className="truncate text-[12px]" style={{ color: color.accent }}>
+                      In use by others — tap to rejoin
                     </span>
+                  ) : (
+                    app.description && (
+                      <span className="truncate text-[12px] text-[#a1a1aa]">
+                        {app.description}
+                      </span>
+                    )
                   )}
                 </span>
                 <span className="flex shrink-0 items-center gap-2">
@@ -131,6 +157,13 @@ export function AppsPanel({
                       className="animate-spin text-[#a1a1aa]"
                       aria-hidden="true"
                     />
+                  ) : isHiddenHere ? (
+                    <span
+                      className="text-[11.5px] font-medium"
+                      style={{ color: color.accent }}
+                    >
+                      Rejoin
+                    </span>
                   ) : isActive ? (
                     // The accent border + icon already say "this one is on";
                     // a quiet dot marks it without LIVE-badge chrome.

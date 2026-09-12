@@ -144,9 +144,9 @@ const ExportIcon = () => (
 type ShapeKind = Extract<ToolKind, "rect" | "ellipse" | "line" | "arrow">;
 
 const SHAPE_KINDS: { id: ShapeKind; label: string; key: string; icon: React.FC }[] = [
-  { id: "rect", label: "Rectangle", key: "5", icon: RectIcon },
-  { id: "ellipse", label: "Ellipse", key: "6", icon: EllipseIcon },
-  { id: "line", label: "Line", key: "7", icon: LineIcon },
+  { id: "rect", label: "Rectangle", key: "R", icon: RectIcon },
+  { id: "ellipse", label: "Ellipse", key: "O", icon: EllipseIcon },
+  { id: "line", label: "Line", key: "L", icon: LineIcon },
   { id: "arrow", label: "Arrow", key: "A", icon: ArrowIcon },
 ];
 
@@ -257,6 +257,7 @@ function PopupCard({
 
 function BarButton({
   label,
+  hotkey,
   active,
   disabled,
   onClick,
@@ -264,6 +265,8 @@ function BarButton({
   buttonRef,
 }: {
   label: string;
+  /** Single-letter/digit hotkey shown as a small persistent badge, Excalidraw-style. */
+  hotkey?: string;
   active?: boolean;
   disabled?: boolean;
   onClick: () => void;
@@ -297,6 +300,15 @@ function BarButton({
       }
     >
       {children}
+      {hotkey ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-0 right-0.5 text-[8.5px] font-medium leading-none"
+          style={{ color: active ? ACCENT : "rgba(255,255,255,0.4)" }}
+        >
+          {hotkey}
+        </span>
+      ) : null}
     </button>
   );
 }
@@ -328,7 +340,7 @@ function ShapeSlot({
   return (
     <div className="relative flex shrink-0 items-center">
       <BarButton
-        label={`Shapes (${SHAPE_KINDS.find((kind) => kind.id === current)?.key ?? "5"})`}
+        label={`Shapes (${SHAPE_KINDS.find((kind) => kind.id === current)?.key ?? "R"})`}
         active={active}
         disabled={disabled}
         buttonRef={triggerRef}
@@ -641,17 +653,18 @@ export function WhiteboardToolbar({
         boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
       }}
     >
-      <BarButton label="Select (1)" active={tool === "select"} onClick={() => onToolChange("select")}>
+      <BarButton label="Select (V)" hotkey="V" active={tool === "select"} onClick={() => onToolChange("select")}>
         <SelectIcon />
       </BarButton>
-      <BarButton label="Pan (H)" active={tool === "pan"} onClick={() => onToolChange("pan")}>
+      <BarButton label="Pan (H)" hotkey="H" active={tool === "pan"} onClick={() => onToolChange("pan")}>
         <PanIcon />
       </BarButton>
 
       <BarDivider />
 
       <BarButton
-        label="Pen (2)"
+        label="Pen (P)"
+        hotkey="P"
         active={tool === "pen"}
         disabled={editDisabled}
         onClick={() => onToolChange("pen")}
@@ -660,6 +673,7 @@ export function WhiteboardToolbar({
       </BarButton>
       <BarButton
         label="Highlighter (3)"
+        hotkey="3"
         active={tool === "highlighter"}
         disabled={editDisabled}
         onClick={() => onToolChange("highlighter")}
@@ -667,7 +681,8 @@ export function WhiteboardToolbar({
         <HighlighterIcon />
       </BarButton>
       <BarButton
-        label="Eraser (4)"
+        label="Eraser (E)"
+        hotkey="E"
         active={tool === "eraser"}
         disabled={editDisabled}
         onClick={() => onToolChange("eraser")}
@@ -679,7 +694,8 @@ export function WhiteboardToolbar({
 
       <ShapeSlot tool={tool} onToolChange={onToolChange} disabled={editDisabled} />
       <BarButton
-        label="Text (8)"
+        label="Text (T)"
+        hotkey="T"
         active={tool === "text"}
         disabled={editDisabled}
         onClick={() => onToolChange("text")}
@@ -687,14 +703,15 @@ export function WhiteboardToolbar({
         <TextIcon />
       </BarButton>
       <BarButton
-        label="Sticky note (9)"
+        label="Sticky note (S)"
+        hotkey="S"
         active={tool === "sticky"}
         disabled={editDisabled}
         onClick={() => onToolChange("sticky")}
       >
         <StickyIcon />
       </BarButton>
-      <BarButton label="Laser pointer (L)" active={tool === "laser"} onClick={() => onToolChange("laser")}>
+      <BarButton label="Laser pointer (K)" hotkey="K" active={tool === "laser"} onClick={() => onToolChange("laser")}>
         <LaserIcon />
       </BarButton>
 
