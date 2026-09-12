@@ -9,6 +9,7 @@ import type { Socket } from "socket.io-client";
 import { SFU_EVENTS } from "@conclave/meeting-core/sfu-events";
 import type { RoomInfo } from "@/lib/sfu-types";
 import { useSession } from "@/lib/auth-client";
+import { shouldRetainMeetingSurface } from "./lib/meeting-surface-policy";
 import {
   AppsProvider,
   GameProvider,
@@ -2369,7 +2370,6 @@ export default function MeetsClient({
     connectionQualityRef: connectionQualityDebugRef,
     dataSaverMode: effectiveDataSaverMode,
     audioOnlyMode: viewSettings.audioOnlyMode,
-    isDocumentVisible,
     updateVideoQualityRef,
     requestMediaPermissions,
     requestAudioProducerRecovery,
@@ -2601,12 +2601,13 @@ export default function MeetsClient({
     }
     if (
       connectionState === "disconnected" &&
-      shouldResetMeetingSurfaceOnDisconnectRef.current
+      (shouldResetMeetingSurfaceOnDisconnectRef.current ||
+        refs.intentionalDisconnectRef.current)
     ) {
       shouldResetMeetingSurfaceOnDisconnectRef.current = false;
       setHasEnteredMeetingSurface(false);
     }
-  }, [connectionState]);
+  }, [connectionState, refs.intentionalDisconnectRef]);
 
   // Pre-join occupancy: keep the room-presence indicator fresh while the user is
   // still on the join screen. Poll when there's a room code to inspect (so guests
@@ -3138,27 +3139,15 @@ export default function MeetsClient({
     return () => window.clearTimeout(timeout);
   }, [enterAction, enterErrored]);
 
-  const meetingSurfaceWakeLockEnabled =
-    connectionState === "joined" ||
-    (hasEnteredMeetingSurface &&
-      (connectionState === "reconnecting" ||
-        connectionState === "connecting" ||
-        connectionState === "connected" ||
-        connectionState === "joining" ||
-        connectionState === "disconnected"));
-  useScreenWakeLock({ enabled: meetingSurfaceWakeLockEnabled });
+  const isJoined = shouldRetainMeetingSurface({
+    connectionState,
+    hasEnteredMeetingSurface,
+    intentionalDisconnect: refs.intentionalDisconnectRef.current,
+  });
+  useScreenWakeLock({ enabled: isJoined });
 
   if (!mounted) return null;
 
-  const isRejoiningMeetingSurface =
-    hasEnteredMeetingSurface &&
-    (connectionState === "reconnecting" ||
-      connectionState === "connecting" ||
-      connectionState === "connected" ||
-      connectionState === "joining" ||
-      connectionState === "disconnected" ||
-      connectionState === "error");
-  const isJoined = connectionState === "joined" || isRejoiningMeetingSurface;
   const isLoading =
     connectionState === "connecting" ||
     connectionState === "joining" ||

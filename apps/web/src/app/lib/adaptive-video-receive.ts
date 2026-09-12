@@ -97,7 +97,6 @@ export const advanceWebcamReceiveRecoveryProbe = ({
   emergencyMode,
   receiveContinuityRisk,
   dataSaverMode,
-  isDocumentVisible,
   isVisible,
 }: {
   previousState: WebcamReceiveRecoveryProbeState | null | undefined;
@@ -125,7 +124,6 @@ export const advanceWebcamReceiveRecoveryProbe = ({
     consumerScoreQuality === "good" &&
     !emergencyMode &&
     !dataSaverMode &&
-    isDocumentVisible &&
     isVisible;
 
   if (state.phase === "active") {

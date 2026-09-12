@@ -1625,9 +1625,10 @@ export default function MeetsMainContent({
       ? (isSecondaryPanelOpen ? DOCKED_PANEL_WIDTH : 0) +
         (isGameDockPresent ? gameDockWidth : 0)
       : 0;
-  const mainContentStyle = isJoined
-    ? { paddingRight: `calc(1rem + ${dockedPanelReserve}px)` }
-    : undefined;
+  const mainContentStyle =
+    isJoined && !isWebinarAttendee
+      ? { paddingRight: `calc(1rem + ${dockedPanelReserve}px)` }
+      : undefined;
   // When docked panels eat into the stage, the full controls bar (clock +
   // center + side cluster) gets cramped. Degrade in two steps: first demote
   // the least-used center controls (hand, screen share) into More so the bar
@@ -2072,21 +2073,24 @@ export default function MeetsMainContent({
       {!isJoined ? (
         hideJoinUI ? (
           (() => {
+            const hasEnded = Boolean(meetingEndedNotice);
             const errorMessage = meetError?.message ?? "";
             const isWaitingForHost =
               /not live|not started|no room|not ready/i.test(errorMessage);
             const isFatal = errorMessage && !isWaitingForHost;
-            const headline = isFatal
-              ? "we hit a snag"
-              : isWaitingForHost
-                ? "waiting for the host to start"
-                : isLoading
-                  ? "getting you in"
-                  : "almost there";
+            const headline = hasEnded
+              ? "Webinar ended"
+              : isFatal
+                ? "we hit a snag"
+                : isWaitingForHost
+                  ? "waiting for the host to start"
+                  : isLoading
+                    ? "getting you in"
+                    : "almost there";
             return (
               <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-6 py-10 text-[#fafafa]">
                 <div className="animate-fade-in w-full max-w-md text-center">
-                  {!isFatal && !isWaitingForHost ? (
+                  {!hasEnded && !isFatal && !isWaitingForHost ? (
                     <div className="relative mx-auto mb-5 h-9 w-9">
                       <div className="absolute inset-0 rounded-full border-2 border-[#fafafa]/10" />
                       <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-[#F95F4A]" />
@@ -2099,13 +2103,22 @@ export default function MeetsMainContent({
                     {headline}
                   </h1>
                   <p className="mx-auto mt-3 max-w-[340px] text-pretty text-[13.5px] leading-relaxed text-[#fafafa]/55">
-                    {isWaitingForHost
-                      ? "Hang tight. This page will refresh on its own the moment the host opens the room."
-                      : isFatal
-                        ? errorMessage
-                        : "Sit tight. Getting the room ready in a moment."}
+                    {hasEnded
+                      ? meetingEndedNotice
+                      : isWaitingForHost
+                        ? "Hang tight. This page will refresh on its own the moment the host opens the room."
+                        : isFatal
+                          ? errorMessage
+                          : "Sit tight. Getting the room ready in a moment."}
                   </p>
-                  {isFatal ? (
+                  {hasEnded ? (
+                    <a
+                      href="/"
+                      className="mt-7 inline-flex h-11 items-center justify-center rounded-full bg-[#F95F4A] px-6 text-[14px] font-medium text-white transition-[filter] duration-150 hover:brightness-105"
+                    >
+                      Back to home
+                    </a>
+                  ) : isFatal ? (
                     <button
                       type="button"
                       onClick={() => window.location.reload()}

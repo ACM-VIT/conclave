@@ -715,7 +715,7 @@ const getScreenShareTargetTemporalLayer = (
   return isLargePresentation ? bounds.maxTemporalLayer : 1;
 };
 
-const getDesiredPreferences = (
+export const getDesiredPreferences = (
   info: ProducerMapEntry,
   bounds: LayerBounds | null,
   options: {
@@ -762,14 +762,6 @@ const getDesiredPreferences = (
       );
 
   if (info.type === "screen") {
-    if (!options.isDocumentVisible) {
-      return {
-        preferredLayers: bounds ? buildLayerPreference(0, 0, bounds) : undefined,
-        priority: HIDDEN_SCREEN_SHARE_KEEPALIVE_PRIORITY,
-        paused: false,
-      };
-    }
-
     const screenShareQuality = worstQuality(
       worstQuality(
         quality,
@@ -810,16 +802,6 @@ const getDesiredPreferences = (
         : undefined,
       priority: screenSharePriority,
       paused: false,
-    };
-  }
-
-  if (!options.isDocumentVisible) {
-    return {
-      preferredLayers: bounds
-        ? buildWebcamLayerPreference(0, bounds)
-        : undefined,
-      priority: OFFSCREEN_WEBCAM_PARK_PRIORITY,
-      paused: true,
     };
   }
 

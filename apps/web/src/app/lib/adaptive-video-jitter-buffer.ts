@@ -47,16 +47,11 @@ export const getAdaptiveVideoJitterBufferTargetMs = ({
   quality,
   emergencyMode,
   dataSaverMode,
-  isDocumentVisible,
 }: AdaptiveVideoJitterBufferPolicyOptions): AdaptiveVideoJitterBufferTargetMs | null => {
   if (!enabled || mediaKind !== "video") return null;
 
-  // Webcam consumers are parked while offscreen or in data-saver mode. Do not
-  // retain extra requested playout delay for a stream we intentionally pause.
-  if (
-    sourceType === "webcam" &&
-    (dataSaverMode || !isDocumentVisible)
-  ) {
+  // Keep the explicit data-saver policy independent of tab visibility.
+  if (sourceType === "webcam" && dataSaverMode) {
     return null;
   }
 

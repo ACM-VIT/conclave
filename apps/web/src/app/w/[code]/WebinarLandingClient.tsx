@@ -152,6 +152,7 @@ export default function WebinarLandingClient({
   const [storedGuestName, setStoredGuestName] = useState<string | null>(null);
   const [isGuestNameReady, setIsGuestNameReady] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+  const [isAttendeeReady, setIsAttendeeReady] = useState(false);
 
   useEffect(() => {
     setStoredGuestName(readStoredGuestName());
@@ -210,11 +211,24 @@ export default function WebinarLandingClient({
     return now >= webinar.scheduledStartAt - earlyMs;
   }, [webinar, now]);
 
+  // Guest session refetches become pending again on window focus. Once admitted,
+  // keep the meeting mounted: unmounting it runs the socket/media cleanup.
+  useEffect(() => {
+    if (
+      isOpen &&
+      isGuestNameReady &&
+      !isAuthSessionPending &&
+      (authSession?.user || storedGuestName)
+    ) {
+      setIsAttendeeReady(true);
+    }
+  }, [authSession?.user, isAuthSessionPending, isGuestNameReady, isOpen, storedGuestName]);
+
   if (isOpen) {
-    if (!isGuestNameReady || isAuthSessionPending) {
+    if (!isAttendeeReady && (!isGuestNameReady || isAuthSessionPending)) {
       return null;
     }
-    if (needsAttendeeName) {
+    if (!isAttendeeReady && needsAttendeeName) {
       return (
         <PageShell>
           <StatusCard>

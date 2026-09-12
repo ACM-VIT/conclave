@@ -76,7 +76,7 @@ describe("getAdaptiveVideoJitterBufferTargetMs", () => {
 
   it("clears parked webcam targets without weakening live screen continuity", () => {
     expect(policy({ dataSaverMode: true })).toBeNull();
-    expect(policy({ isDocumentVisible: false })).toBeNull();
+    expect(policy({ isDocumentVisible: false })).toBe(policy());
     expect(policy({ sourceType: "screen", dataSaverMode: true })).toBe(
       ADAPTIVE_VIDEO_JITTER_BUFFER_TARGET_MS.fair,
     );

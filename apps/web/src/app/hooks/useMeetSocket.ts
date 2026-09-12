@@ -102,7 +102,6 @@ import {
   rememberProvenVp9EncoderIncompatibility,
 } from "../lib/webcam-codec-policy";
 import { setNoiseCancellationTrackEnabled } from "../lib/noise-cancellation";
-import { applyBackgroundAudioBuffer } from "../lib/background-audio-playback";
 import {
   getMostConstrainedWebcamProducerNetworkProfile,
   getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate,
@@ -417,7 +416,7 @@ const getTransportDisconnectGraceMs = (): number => {
   return TRANSPORT_DISCONNECT_GRACE_MS;
 };
 
-const shouldDeferTransportRecoveryUntilVisible = (): boolean =>
+const isMeetingDocumentHidden = (): boolean =>
   typeof document !== "undefined" && document.visibilityState !== "visible";
 
 const getRawReconnectErrorMessage = (error: unknown): string => {
@@ -928,7 +927,6 @@ interface UseMeetSocketOptions {
   connectionQualityRef?: React.MutableRefObject<ConnectionQualityStats | null>;
   dataSaverMode?: boolean;
   audioOnlyMode?: boolean;
-  isDocumentVisible?: boolean;
   updateVideoQualityRef: React.MutableRefObject<
     (
       quality: VideoQuality,
@@ -1043,7 +1041,6 @@ export function useMeetSocket({
   connectionQualityRef,
   dataSaverMode = false,
   audioOnlyMode = false,
-  isDocumentVisible = true,
   updateVideoQualityRef,
   requestMediaPermissions,
   requestAudioProducerRecovery,
@@ -1248,13 +1245,6 @@ export function useMeetSocket({
     iceRestartInFlightRef,
     producerSyncIntervalRef,
   } = refs;
-
-  useEffect(() => {
-    consumersRef.current.forEach((consumer) => {
-      if (consumer.kind !== "audio" || consumer.closed) return;
-      applyBackgroundAudioBuffer(consumer.rtpReceiver, isDocumentVisible);
-    });
-  }, [consumersRef, isDocumentVisible]);
 
   const writeWebcamStartupLatencyResetDebug = useCallback(
     (state: WebcamStartupLatencyResetRuntime) => {
@@ -2112,15 +2102,21 @@ export function useMeetSocket({
     console.info("[Meets] Running full cleanup...");
 
     intentionalDisconnectRef.current = true;
+    // Invalidate pending joins and reconnects before closing their transports.
+    reconnectGenerationRef.current += 1;
+    reconnectInFlightRef.current = false;
     cleanupRoomResources();
     if (producerSyncIntervalRef.current) {
       window.clearInterval(producerSyncIntervalRef.current);
       producerSyncIntervalRef.current = null;
     }
 
-    localStream?.getTracks().forEach((track) => {
-      stopLocalTrack(track);
-    });
+    const localTracks = new Set([
+      ...(localStreamRef.current?.getTracks() ?? []),
+      ...(localStream?.getTracks() ?? []),
+    ]);
+    localStreamRef.current = null;
+    localTracks.forEach(stopLocalTrack);
 
     socketRef.current?.disconnect();
     socketRef.current = null;
@@ -2148,7 +2144,9 @@ export function useMeetSocket({
   }, [
     cleanupRoomResources,
     intentionalDisconnectRef,
+    reconnectInFlightRef,
     localStream,
+    localStreamRef,
     reconnectAttemptsRef,
     setConnectionState,
     setIsCameraOff,
@@ -2283,9 +2281,22 @@ export function useMeetSocket({
         stream: summarizeStreamForLog(candidateStream),
       });
 
+      const mediaGeneration = reconnectGenerationRef.current;
       const refreshedStream = await requestMediaPermissions(
         buildRequestMediaPermissionsOptions(mediaNeeds),
       );
+      if (
+        mediaGeneration !== reconnectGenerationRef.current ||
+        intentionalDisconnectRef.current
+      ) {
+        // Device permission prompts can outlive the meeting. Release this
+        // request's tracks without touching media owned by a subsequent join.
+        const currentTracks = new Set(localStreamRef.current?.getTracks() ?? []);
+        refreshedStream?.getTracks().forEach((track) => {
+          if (!currentTracks.has(track)) stopLocalTrack(track);
+        });
+        return null;
+      }
       if (!refreshedStream) {
         console.warn("[Meets] Local media refresh failed before join:", {
           reason,
@@ -2323,6 +2334,7 @@ export function useMeetSocket({
       isCameraOff,
       isMuted,
       getJoinMediaNeeds,
+      intentionalDisconnectRef,
       localStreamRef,
       requestMediaPermissions,
       setLocalStream,
@@ -3787,12 +3799,6 @@ export function useMeetSocket({
                         !intentionalDisconnectRef.current &&
                         transport.connectionState === "disconnected"
                       ) {
-                        if (shouldDeferTransportRecoveryUntilVisible()) {
-                          console.info(
-                            "[Meets] Producer transport recovery deferred until foreground.",
-                          );
-                          return;
-                        }
                         void attemptIceRestart("producer").then((restarted) => {
                           if (!restarted) {
                             const enabledTurnFallback = enableTurnFallback(
@@ -3825,12 +3831,6 @@ export function useMeetSocket({
 
               if (state === "failed") {
                 if (!intentionalDisconnectRef.current) {
-                  if (shouldDeferTransportRecoveryUntilVisible()) {
-                    console.info(
-                      "[Meets] Producer transport failure recovery deferred until foreground.",
-                    );
-                    return;
-                  }
                   void attemptIceRestart("producer").then((restarted) => {
                     if (!restarted) {
                       const enabledTurnFallback = enableTurnFallback(
@@ -4060,12 +4060,6 @@ export function useMeetSocket({
                         !intentionalDisconnectRef.current &&
                         transport.connectionState === "disconnected"
                       ) {
-                        if (shouldDeferTransportRecoveryUntilVisible()) {
-                          console.info(
-                            "[Meets] Consumer transport recovery deferred until foreground.",
-                          );
-                          return;
-                        }
                         void attemptIceRestart("consumer").then((restarted) => {
                           if (!restarted) {
                             const enabledTurnFallback = enableTurnFallback(
@@ -4093,12 +4087,6 @@ export function useMeetSocket({
 
               if (state === "failed") {
                 if (!intentionalDisconnectRef.current) {
-                  if (shouldDeferTransportRecoveryUntilVisible()) {
-                    console.info(
-                      "[Meets] Consumer transport failure recovery deferred until foreground.",
-                    );
-                    return;
-                  }
                   void attemptIceRestart("consumer").then((restarted) => {
                     if (!restarted) {
                       const enabledTurnFallback = enableTurnFallback(
@@ -4558,7 +4546,7 @@ export function useMeetSocket({
             (info) => info.kind === "video" && info.type === "screen",
           );
         const shouldStartWebcamConsumerPausedForReceiveBudget =
-          (dataSaverMode || !isDocumentVisible) &&
+          dataSaverMode &&
           producerInfo.kind === "video" &&
           producerInfo.type === "webcam";
         const producerPauseRevisionAtRequest =
@@ -4786,12 +4774,6 @@ export function useMeetSocket({
               }
 
               consumersRef.current.set(producerInfo.producerId, consumer);
-              if (consumer.kind === "audio") {
-                applyBackgroundAudioBuffer(
-                  consumer.rtpReceiver,
-                  isDocumentVisible,
-                );
-              }
               const stagedTelemetry =
                 pendingConsumerTelemetryByIdRef.current.get(consumer.id);
               pendingConsumerTelemetryByIdRef.current.delete(consumer.id);
@@ -5370,7 +5352,6 @@ export function useMeetSocket({
       announcedRemoteProducersRef,
       suppressedVideoProducersRef,
       dataSaverMode,
-      isDocumentVisible,
       userId,
     ],
   );
@@ -6706,6 +6687,16 @@ export function useMeetSocket({
     ): Promise<"joined" | "waiting"> => {
       const socket = socketRef.current;
       if (!socket) throw new Error("Socket not connected");
+      const assertJoinCurrent = () => {
+        if (
+          intentionalDisconnectRef.current ||
+          socketRef.current !== socket ||
+          !socket.connected
+        ) {
+          throw new Error("Meeting join was cancelled");
+        }
+      };
+      assertJoinCurrent();
 
       // Construct the mediasoup handler before membership so the SFU can make
       // a room-wide codec decision without a transient incompatible producer.
@@ -6725,6 +6716,7 @@ export function useMeetSocket({
         },
       );
 
+      assertJoinCurrent();
       setWaitingMessage(null);
       setConnectionState("joining");
 
@@ -6746,6 +6738,12 @@ export function useMeetSocket({
           },
           async (response: JoinRoomResponse | JoinRoomErrorResponse) => {
             if (!settleJoinRoom()) return;
+            try {
+              assertJoinCurrent();
+            } catch (error) {
+              reject(toError(error));
+              return;
+            }
             if ("error" in response) {
               reject(getJoinRoomRedirectError(response) ?? new Error(response.error));
               return;
@@ -6887,6 +6885,7 @@ export function useMeetSocket({
               await device.load({
                 routerRtpCapabilities: response.rtpCapabilities,
               });
+              assertJoinCurrent();
               deviceRef.current = device;
               const loadedMediaCapabilities =
                 detectLoadedDeviceWebcamCodecCapabilities(device, {
@@ -6935,6 +6934,7 @@ export function useMeetSocket({
                   },
                 );
               });
+              assertJoinCurrent();
               console.info(
                 `[Meets] Device loaded in ${(performance.now() - joinedTime).toFixed(0)}ms`,
               );
@@ -6952,6 +6952,7 @@ export function useMeetSocket({
                 createConsumerTransport(socket, device),
               ]);
 
+              assertJoinCurrent();
               const joiningUserIsHost =
                 response.webinarRole === "host" ||
                 response.hostUserId === userId ||
@@ -6992,6 +6993,7 @@ export function useMeetSocket({
               );
 
               await Promise.all([producePromise, ...consumePromises]);
+              assertJoinCurrent();
               try {
                 await republishScreenShare("reconnect");
               } catch (screenErr) {
@@ -7010,6 +7012,7 @@ export function useMeetSocket({
                 });
               }
               await flushPendingProducers();
+              assertJoinCurrent();
 
               setConnectionState("joined");
               setHostUserId(response.hostUserId ?? null);
@@ -7030,6 +7033,7 @@ export function useMeetSocket({
     },
     [
       socketRef,
+      intentionalDisconnectRef,
       sessionIdRef,
       applyWebcamCodecPolicyNotification,
       setWaitingMessage,
@@ -7072,6 +7076,7 @@ export function useMeetSocket({
       targetRoomId: string,
       options?: { sfuUrlOverride?: string },
     ): Promise<Socket> => {
+      const connectionGeneration = reconnectGenerationRef.current;
       return new Promise((resolve, reject) => {
         void (async () => {
           try {
@@ -7115,6 +7120,12 @@ export function useMeetSocket({
               tokenPromise,
               socketIoPromise,
             ]);
+            if (
+              connectionGeneration !== reconnectGenerationRef.current ||
+              intentionalDisconnectRef.current
+            ) {
+              throw new Error("Meeting connection was cancelled");
+            }
             const socketUrl = sfuUrlOverride ?? sfuUrl;
 
             if (Array.isArray(iceServers)) {
@@ -7141,6 +7152,14 @@ export function useMeetSocket({
 
             socket.on("connect", () => {
               clearTimeout(connectionTimeout);
+              if (
+                socketRef.current !== socket ||
+                connectionGeneration !== reconnectGenerationRef.current
+              ) {
+                socket.disconnect();
+                reject(new Error("Meeting connection was cancelled"));
+                return;
+              }
               console.info(
                 `[Meets] Connected to SFU in ${(performance.now() - joinStartTime).toFixed(0)}ms`,
               );
@@ -7155,6 +7174,7 @@ export function useMeetSocket({
 
             socket.on("disconnect", (reason) => {
               console.info("[Meets] Disconnected:", reason);
+              if (socketRef.current !== socket) return;
               if (intentionalDisconnectRef.current) {
                 setConnectionState("disconnected");
                 return;
@@ -7221,6 +7241,13 @@ export function useMeetSocket({
 
             socket.on("connect_error", (err) => {
               clearTimeout(connectionTimeout);
+              if (
+                socketRef.current !== socket ||
+                intentionalDisconnectRef.current
+              ) {
+                reject(err);
+                return;
+              }
               console.error("[Meets] Connection error:", err);
               const reconnectFailure = describeReconnectFailure(err);
               setMeetError({
@@ -8389,6 +8416,8 @@ export function useMeetSocket({
             );
 
             socket.on("joinApproved", async () => {
+              if (intentionalDisconnectRef.current || socketRef.current !== socket) return;
+              const approvalGeneration = reconnectGenerationRef.current;
               console.info("[Meets] Join approved! Re-attempting join...");
               const joinOptions = joinOptionsRef.current;
               let stream = localStreamRef.current;
@@ -8406,6 +8435,11 @@ export function useMeetSocket({
                   "join approval",
                 );
               }
+              if (
+                approvalGeneration !== reconnectGenerationRef.current ||
+                intentionalDisconnectRef.current ||
+                socketRef.current !== socket
+              ) return;
               if (
                 currentRoomIdRef.current &&
                 (stream ||
@@ -8770,6 +8804,13 @@ export function useMeetSocket({
             socketRef.current = socket;
             onSocketReady?.(socket);
           } catch (err) {
+            if (
+              connectionGeneration !== reconnectGenerationRef.current ||
+              intentionalDisconnectRef.current
+            ) {
+              reject(toError(err));
+              return;
+            }
             console.error("Failed to get join info:", err);
             const reconnectFailure = describeReconnectFailure(err);
             const isRecoverable = isRecoverableReconnectFailure(err);
@@ -8929,7 +8970,7 @@ export function useMeetSocket({
         // notice ("The host ended the meeting.") with "Failed to reconnect".
         if (intentionalDisconnectRef.current) return;
         const shouldSurfaceReconnectState =
-          !shouldDeferTransportRecoveryUntilVisible();
+          !isMeetingDocumentHidden();
         if (shouldSurfaceReconnectState) {
           setConnectionState("reconnecting");
         } else {
@@ -9039,6 +9080,10 @@ export function useMeetSocket({
             joinOptions,
             "reconnect",
           );
+          if (
+            reconnectGeneration !== reconnectGenerationRef.current ||
+            intentionalDisconnectRef.current
+          ) return;
           const shouldRetryLocalMediaAfterJoin =
             !stream &&
             !joinOptions.isRecorder &&
@@ -9326,6 +9371,7 @@ export function useMeetSocket({
   const startJoin = useCallback(
     async (targetRoomId: string) => {
       if (refs.abortControllerRef.current?.signal.aborted) return;
+      const joinGeneration = reconnectGenerationRef.current;
 
       telemetry.capture("meet_join_attempt", {
         roomId: targetRoomId,
@@ -9382,6 +9428,10 @@ export function useMeetSocket({
               )
             : Promise.resolve(candidateStream),
         ]);
+        if (
+          joinGeneration !== reconnectGenerationRef.current ||
+          intentionalDisconnectRef.current
+        ) return;
 
         if (
           shouldRequestMedia &&
@@ -9485,6 +9535,10 @@ export function useMeetSocket({
           }
         }
       } catch (err) {
+        if (
+          joinGeneration !== reconnectGenerationRef.current ||
+          intentionalDisconnectRef.current
+        ) return;
         console.error("[Meets] Error joining room:", err);
         telemetry.capture("meet_join_failure", {
           roomId: targetRoomId,
@@ -9523,6 +9577,7 @@ export function useMeetSocket({
       bypassMediaPermissions,
       refs.abortControllerRef,
       refs.intentionalDisconnectRef,
+      intentionalDisconnectRef,
       setConnectionState,
       setLocalStream,
       setMeetError,

@@ -495,10 +495,15 @@ describe("bounded webcam receive recovery probe", () => {
     });
   });
 
+  it("continues a healthy webcam recovery probe in a background tab", () => {
+    expect(
+      advanceWebcamReceiveRecoveryProbe({ ...baseline, isDocumentVisible: false }),
+    ).toEqual(advanceWebcamReceiveRecoveryProbe(baseline));
+  });
+
   it.each([
     { emergencyMode: true },
     { dataSaverMode: true },
-    { isDocumentVisible: false },
     { isVisible: false },
   ])("does not arm under independent $emergencyMode$ data/visibility pressure", (override) => {
     expect(
