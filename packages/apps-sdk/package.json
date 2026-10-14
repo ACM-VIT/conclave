@@ -25,13 +25,13 @@
   "dependencies": {
     "react-player": "^3.4.0",
     "y-protocols": "^1.0.7",
-    "yjs": "13.6.32"
+    "yjs": "13.6.33"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "@typescript/native": "npm:typescript@^7.0.2"
   },

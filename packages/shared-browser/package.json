@@ -16,15 +16,15 @@
     "dependencies": {
         "cors": "^2.8.6",
         "dockerode": "^5.0.1",
-        "express": "^5.2.1",
-        "puppeteer-core": "^25.10.0"
+        "express": "^5.3.0",
+        "puppeteer-core": "^25.14.0"
     },
     "devDependencies": {
         "@types/cors": "^2.8.19",
-        "@types/dockerode": "^4.0.1",
+        "@types/dockerode": "^4.0.2",
         "@types/express": "^5.0.6",
-        "@types/node": "^22.20.2",
-        "tsx": "^4.23.13",
+        "@types/node": "^26.6.5",
+        "tsx": "^4.23.15",
         "typescript": "npm:@typescript/typescript6@^6.0.2",
         "@typescript/native": "npm:typescript@^7.0.2"
     }
