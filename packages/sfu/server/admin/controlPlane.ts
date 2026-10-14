@@ -18,6 +18,7 @@ import {
 } from "../webinarNotifications.js";
 import { getSocketContext } from "../socket/context.js";
 import { registerAdminHandlers } from "../socket/handlers/adminHandlers.js";
+import { isSuperAdminClient } from "./moderation.js";
 
 type ParticipantRole = "host" | "admin" | "participant" | "attendee";
 
@@ -999,7 +1000,7 @@ export const kickClient = (
   options?: { io?: SocketIOServer; state?: SfuState },
 ): boolean => {
   const target = room.getClient(userId);
-  if (!target) {
+  if (!target || isSuperAdminClient(target)) {
     return false;
   }
   target.socket.emit("kicked", { reason, roomId: room.id });

@@ -8,6 +8,7 @@ import {
   resolveServerSfuClientId,
 } from "@/lib/sfu-client-id";
 import { lookupScheduledWebinarByRoomId } from "@/lib/sfu-user-auth";
+import { isSfuSuperAdminEmail } from "@/lib/sfu-super-admin";
 import {
   normalizeSfuUrl,
   resolveSfuUrls,
@@ -133,14 +134,6 @@ const isSyntheticGuestEmail = (value: string | undefined): boolean =>
 
 const isSyntheticGuestUserId = (value: string | undefined): boolean =>
   Boolean(value && value.startsWith("guest-"));
-
-const parseEmailList = (value: string | undefined): Set<string> =>
-  new Set(
-    (value ?? "")
-      .split(",")
-      .map((entry) => normalizeEmail(entry))
-      .filter((entry): entry is string => Boolean(entry)),
-  );
 
 const isScheduledRoomId = (value: string): boolean =>
   /^sched-[a-f0-9]{8}$/i.test(value);
@@ -487,15 +480,6 @@ const resolveRoutedSfuUrl = async (options: {
   return { ok: false, reason: "placement-unavailable" };
 };
 
-const alwaysHostEmails = parseEmailList(
-  firstNonEmpty(
-    process.env.SFU_ALWAYS_HOST_EMAILS,
-    process.env.SFU_ALWAYS_HOST_EMAIL,
-    process.env.ALWAYS_HOST_EMAILS,
-    process.env.ALWAYS_HOST_EMAIL,
-  ),
-);
-
 let turnCredentialWarningLogged = false;
 
 const resolveStunIceServers = (): IceServer[] => {
@@ -701,11 +685,10 @@ export async function POST(request: Request) {
   const baseUserId = email || providedId || `guest-${sessionId}`;
   const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
   const isScheduledHostRoom = isScheduledRoomId(roomId);
-  const isForcedHost =
-    !isWebinarAttendeeJoin &&
-    Boolean(
-      normalizedSessionEmail && alwaysHostEmails.has(normalizedSessionEmail),
-    );
+  // Only the authenticated session may confer super admin status; native/body
+  // identity fields are not proof of ownership of an allowlisted email.
+  const isSuperAdmin = isSfuSuperAdminEmail(normalizedSessionEmail);
+  const isForcedHost = !isWebinarAttendeeJoin && isSuperAdmin;
   const requestedHost = Boolean(body?.isHost ?? body?.isAdmin);
 
   // For scheduled webinar rooms, only the actual host or a registered co-host
@@ -773,6 +756,7 @@ export async function POST(request: Request) {
       email,
       name,
       isForcedHost,
+      isSuperAdmin,
       isHost,
       isAdmin: isHost,
       allowRoomCreation,

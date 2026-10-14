@@ -11,12 +11,16 @@ import {
   closeClientProducers,
   closeProducerById,
   closeProducerForMediaKey,
-  forceRemoveClientNow,
   kickClient,
   rejectAllPendingUsers,
   toPendingUserSnapshots,
   toRoomSnapshot,
 } from "../../admin/controlPlane.js";
+import {
+  includesSuperAdminUserKey,
+  isSuperAdminClient,
+  SUPER_ADMIN_REMOVAL_ERROR,
+} from "../../admin/moderation.js";
 import { forceCloseRoom, markRoomEnded } from "../../rooms.js";
 import { getSocketAuthUser } from "../auth.js";
 import { getSocketContext, type ConnectionContext } from "../context.js";
@@ -386,6 +390,12 @@ export const registerAdminHandlers = (
       return;
     }
 
+    if (isSuperAdminClient(guard.room.getClient(normalizedTargetId))) {
+      Logger.warn(`Admin ${guard.adminId} attempted to kick super admin ${normalizedTargetId} in room ${guard.room.id}`);
+      respond(cb, { error: SUPER_ADMIN_REMOVAL_ERROR });
+      return;
+    }
+
     const kicked = kickClient(guard.room, normalizedTargetId, "Removed by host", {
       io,
       state,
@@ -395,7 +405,7 @@ export const registerAdminHandlers = (
       return;
     }
 
-    Logger.info(`Admin ${guard.adminId} kicked ${normalizedTargetId} in room ${guard.room.id}`);
+    Logger.warn(`Admin ${guard.adminId} kicked ${normalizedTargetId} in room ${guard.room.id}`);
     respond(cb, { success: true });
   });
 
@@ -963,6 +973,11 @@ export const registerAdminHandlers = (
       }
 
       const kickPresent = data?.kickPresent !== false;
+      if (includesSuperAdminUserKey(guard.room, userKeys)) {
+        Logger.warn(`Admin ${guard.adminId} attempted to block a super admin in room ${guard.room.id}`);
+        respond(cb, { error: SUPER_ADMIN_REMOVAL_ERROR });
+        return;
+      }
       const reason =
         typeof data?.reason === "string" && data.reason.trim()
           ? normalizePlainText(data.reason, {
@@ -993,13 +1008,9 @@ export const registerAdminHandlers = (
             ...guard.room.userKeysById.entries(),
           ]) {
             if (key !== userKey) continue;
-            const target = guard.room.getClient(userId);
-            if (!target) continue;
-            target.socket.emit("kicked", { reason, roomId: guard.room.id });
-            target.socket.disconnect(true);
-            // Deterministically stop media now (cancel any disconnect grace).
-            forceRemoveClientNow({ io, state, room: guard.room, userId });
-            kickedUserIds.add(userId);
+            if (kickClient(guard.room, userId, reason, { io, state })) {
+              kickedUserIds.add(userId);
+            }
           }
         }
       }
@@ -1008,6 +1019,8 @@ export const registerAdminHandlers = (
         users: toPendingUserSnapshots(guard.room),
         roomId: guard.room.id,
       });
+
+      Logger.warn(`Admin ${guard.adminId} blocked ${userKeys.join(", ")} in room ${guard.room.id}; kicked ${Array.from(kickedUserIds).join(", ") || "none"}`);
 
       respond(cb, {
         success: true,

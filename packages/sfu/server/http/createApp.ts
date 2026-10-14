@@ -18,7 +18,6 @@ import {
   clearAllRaisedHands,
   closeClientProducers,
   closeProducerById,
-  forceRemoveClientNow,
   kickClient,
   rejectAllPendingUsers,
   resolveRoom,
@@ -26,6 +25,11 @@ import {
   toRoomSnapshot,
   toWorkerSnapshots,
 } from "../admin/controlPlane.js";
+import {
+  includesSuperAdminUserKey,
+  isSuperAdminClient,
+  SUPER_ADMIN_REMOVAL_ERROR,
+} from "../admin/moderation.js";
 import { recordAdminAudit } from "../admin/adminAudit.js";
 import { createTranscriptSpectatorToken } from "../socket/handlers/transcriptHandlers.js";
 import { forceCloseRoom, getRoomChannelId, markRoomEnded } from "../rooms.js";
@@ -885,13 +889,18 @@ export const createSfuApp = ({
     }
     res.on("finish", () => {
       if (res.statusCode < 200 || res.statusCode >= 300) return;
+      const operator = req.header("x-sfu-operator")?.trim() || "unknown";
+      const path = (req.originalUrl || req.url).split("?")[0] || req.path;
       recordAdminAudit({
         at: Date.now(),
-        operator: req.header("x-sfu-operator")?.trim() || "unknown",
+        operator,
         method: req.method,
-        path: (req.originalUrl || req.url).split("?")[0] || req.path,
+        path,
         ok: true,
       });
+      if (/\/(?:kick|block|remove-non-admins)$/.test(req.path)) {
+        Logger.warn(`Operator ${operator} ${req.method} ${path}`);
+      }
     });
     next();
   });
@@ -1084,6 +1093,10 @@ export const createSfuApp = ({
       requestBody(req).reason,
       "Removed by host",
     );
+    if (isSuperAdminClient(lookup.room.getClient(userId))) {
+      res.status(403).json({ error: SUPER_ADMIN_REMOVAL_ERROR });
+      return;
+    }
     const kicked = kickClient(lookup.room, userId, reason, { io, state });
 
     if (!kicked) {
@@ -1263,6 +1276,10 @@ export const createSfuApp = ({
     }
 
     const kickPresent = body.kickPresent !== false;
+    if (includesSuperAdminUserKey(lookup.room, userKeys)) {
+      res.status(403).json({ error: SUPER_ADMIN_REMOVAL_ERROR });
+      return;
+    }
     const reason = normalizeOperatorReason(body.reason, "Blocked by operator");
     const kickedUserIds = new Set<string>();
     const rejectedPending: string[] = [];
@@ -1281,13 +1298,9 @@ export const createSfuApp = ({
           ...lookup.room.userKeysById.entries(),
         ]) {
           if (key !== userKey) continue;
-          const client = lookup.room.getClient(userId);
-          if (!client) continue;
-          client.socket.emit("kicked", { reason, roomId: lookup.room.id });
-          client.socket.disconnect(true);
-          // Deterministically stop media now (cancel any disconnect grace).
-          forceRemoveClientNow({ io, state, room: lookup.room, userId });
-          kickedUserIds.add(userId);
+          if (kickClient(lookup.room, userId, reason, { io, state })) {
+            kickedUserIds.add(userId);
+          }
         }
       }
     }
@@ -1368,11 +1381,9 @@ export const createSfuApp = ({
       if (!includeAttendees && client.isWebinarAttendee) {
         continue;
       }
-      client.socket.emit("kicked", { reason, roomId: lookup.room.id });
-      client.socket.disconnect(true);
-      // Deterministically stop media now (cancel any disconnect grace).
-      forceRemoveClientNow({ io, state, room: lookup.room, userId: client.id });
-      kickedUserIds.push(client.id);
+      if (kickClient(lookup.room, client.id, reason, { io, state })) {
+        kickedUserIds.push(client.id);
+      }
     }
 
     res.json({
@@ -1410,18 +1421,17 @@ export const createSfuApp = ({
       return;
     }
 
+    if (includesSuperAdminUserKey(lookup.room, [userKey])) {
+      res.status(403).json({ error: SUPER_ADMIN_REMOVAL_ERROR });
+      return;
+    }
+
     const reason = normalizeOperatorReason(
       requestBody(req).reason,
       "Blocked by operator",
     );
     lookup.room.blockUser(userKey);
-    const target = lookup.room.getClient(userId);
-    if (target) {
-      target.socket.emit("kicked", { reason, roomId: lookup.room.id });
-      target.socket.disconnect(true);
-      // Deterministically stop media now (cancel any disconnect grace).
-      forceRemoveClientNow({ io, state, room: lookup.room, userId });
-    }
+    kickClient(lookup.room, userId, reason, { io, state });
 
     res.json({
       success: true,

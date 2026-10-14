@@ -17,6 +17,7 @@ export type SfuAuthPayload = JwtPayload & {
   isHost?: boolean;
   isAdmin?: boolean;
   isForcedHost?: boolean;
+  isSuperAdmin?: boolean;
   allowRoomCreation?: boolean;
 };
 
