@@ -1,6 +1,7 @@
 import {
   AudioLines,
   Blocks,
+  Eye,
   Gamepad2,
   FileText,
   Globe,
@@ -123,6 +124,8 @@ export interface ControlsBarProps {
   isWhiteboardActive?: boolean;
   onOpenWhiteboard?: () => void;
   onCloseWhiteboard?: () => void;
+  isWhiteboardHiddenForMe?: boolean;
+  onShowWhiteboardForMe?: () => void;
   isWatchActive?: boolean;
   onOpenWatch?: () => void;
   onCloseWatch?: () => void;
@@ -198,6 +201,9 @@ export interface ControlsConfig {
 
 function canManageWhiteboard(p: ControlsBarProps): boolean {
   return Boolean(p.isAdmin && (p.onOpenWhiteboard || p.onCloseWhiteboard));
+}
+function canShowWhiteboardForMe(p: ControlsBarProps): boolean {
+  return Boolean(p.isWhiteboardActive && p.isWhiteboardHiddenForMe && p.onShowWhiteboardForMe);
 }
 function canManageWatch(p: ControlsBarProps): boolean {
   return Boolean(p.isAdmin && (p.onOpenWatch || p.onCloseWatch));
@@ -474,6 +480,15 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       active: p.isWhiteboardActive,
       paletteOnly: appsPanelOwnsApps,
       onPress: () => (p.isWhiteboardActive ? p.onCloseWhiteboard?.() : p.onOpenWhiteboard?.()),
+    });
+  }
+  if (canShowWhiteboardForMe(p)) {
+    overflow.push({
+      id: "whiteboard-show-for-me",
+      icon: Eye,
+      label: "Show whiteboard",
+      paletteOnly: appsPanelOwnsApps,
+      onPress: () => p.onShowWhiteboardForMe?.(),
     });
   }
   if (canManageWatch(p)) {

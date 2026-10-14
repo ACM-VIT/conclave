@@ -132,6 +132,17 @@ export function AppsProvider({
 }: AppsProviderProps) {
   const [state, setState] = useState<AppsState>({ activeAppId: null, locked: false });
   const [roster, setRoster] = useState<AppUser[]>(() => participants ?? []);
+  // Local-only, per-tab visibility toggle ("close for me"). Not synced to
+  // other clients, and resets whenever the active app changes so a fresh
+  // open always shows for everyone.
+  const [isHiddenForMe, setIsHiddenForMe] = useState(false);
+
+  useEffect(() => {
+    setIsHiddenForMe(false);
+  }, [state.activeAppId]);
+
+  const hideForMe = useCallback(() => setIsHiddenForMe(true), []);
+  const showForMe = useCallback(() => setIsHiddenForMe(false), []);
 
   useEffect(() => {
     const next = participants ?? [];
@@ -498,6 +509,9 @@ export function AppsProvider({
       participants: roster,
       isAdmin,
       isReadOnly,
+      isHiddenForMe,
+      hideForMe,
+      showForMe,
     }),
     [
       state,
@@ -512,6 +526,9 @@ export function AppsProvider({
       roster,
       isAdmin,
       isReadOnly,
+      isHiddenForMe,
+      hideForMe,
+      showForMe,
     ]
   );
 

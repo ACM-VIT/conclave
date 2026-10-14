@@ -12,6 +12,7 @@ import { buildRenderList } from "../../core/exports/renderList";
 import type { ToolKind, ToolSettings } from "../../core/tools/engine";
 import { ToolEngine } from "../../core/tools/engine";
 import { getPageElements, removeElement, updateElement } from "../../core/doc/index";
+import { computeSnapAdjustment, type SnapEdge, type SnapGuide } from "../../core/tools/snapping";
 import { useWhiteboardElements } from "../../shared/hooks/useWhiteboardElements";
 import { renderCanvas } from "../renderer/renderCanvas";
 import type { AppUser } from "../../../../sdk/types/index";
@@ -69,29 +70,70 @@ const ROTATE_HANDLE_HIT_RADIUS = 10;
 const ROTATION_EPSILON = 0.0001;
 const SELECTION_COLOR = "#F95F4A";
 const ERASER_HIT_RADIUS = 12;
+const SNAP_THRESHOLD_SCREEN_PX = 8;
+const SNAP_GUIDE_COLOR = "#F95F4A";
 
 // Laser trails live in awareness only and fade out after this long. Points travel
 // as [x, y, ageMs] relative to send time so receiver clocks never need to agree.
-const LASER_TTL_MS = 1000;
+const LASER_TTL_MS = 1400;
 const LASER_MAX_POINTS = 48;
 const LASER_GAP_RESET_MS = 300;
+// The tip dot tracks the live cursor independently of the trail, so hovering
+// (no hold) shows just a dot and releasing lets the trail fade out on its own
+// instead of snapping away. It goes stale shortly after motion stops.
+const LASER_DOT_TTL_MS = 500;
+// Points are drawn in a handful of smoothed, independently-faded bands rather
+// than one segment per point pair — far fewer strokes, no beaded-dot look.
+const LASER_TRAIL_BANDS = 6;
 
 type LaserPoint = { x: number; y: number; t: number };
-type LaserTrail = { points: LaserPoint[]; color: string };
+type LaserTrail = { points: LaserPoint[]; dot: LaserPoint | null; color: string };
+type ParsedLaser = { points: LaserPoint[]; dot: LaserPoint | null };
 
-const parseLaserField = (value: unknown, receivedAt: number): LaserPoint[] | null => {
-  const record = value as { pts?: unknown } | null;
-  if (!record || !Array.isArray(record.pts)) return null;
+const parseLaserPoint = (entry: unknown, receivedAt: number): LaserPoint | null => {
+  if (!Array.isArray(entry) || entry.length < 3) return null;
+  const [x, y, age] = entry as readonly unknown[];
+  if (typeof x !== "number" || typeof y !== "number" || typeof age !== "number") return null;
+  return { x, y, t: receivedAt - age };
+};
+
+const parseLaserField = (value: unknown, receivedAt: number): ParsedLaser | null => {
+  const record = value as { pts?: unknown; dot?: unknown } | null;
+  if (!record) return null;
+
   const points: LaserPoint[] = [];
-  const rawPoints: readonly unknown[] = record.pts;
-  for (const entry of rawPoints) {
-    if (!Array.isArray(entry) || entry.length < 3) continue;
-    const tuple: readonly unknown[] = entry;
-    const [x, y, age] = tuple;
-    if (typeof x !== "number" || typeof y !== "number" || typeof age !== "number") continue;
-    points.push({ x, y, t: receivedAt - age });
+  if (Array.isArray(record.pts)) {
+    for (const entry of record.pts as readonly unknown[]) {
+      const point = parseLaserPoint(entry, receivedAt);
+      if (point) points.push(point);
+    }
   }
-  return points.length > 0 ? points : null;
+
+  const dot = parseLaserPoint(record.dot, receivedAt);
+
+  if (points.length === 0 && !dot) return null;
+  return { points, dot };
+};
+
+/** Smooth multi-point path via quadratic curves through segment midpoints. */
+const strokeSmoothPath = (ctx: CanvasRenderingContext2D, points: LaserPoint[]) => {
+  if (points.length < 2) return;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  if (points.length === 2) {
+    ctx.lineTo(points[1].x, points[1].y);
+  } else {
+    for (let i = 1; i < points.length - 1; i += 1) {
+      const current = points[i];
+      const next = points[i + 1];
+      const midX = (current.x + next.x) / 2;
+      const midY = (current.y + next.y) / 2;
+      ctx.quadraticCurveTo(current.x, current.y, midX, midY);
+    }
+    const last = points[points.length - 1];
+    ctx.lineTo(last.x, last.y);
+  }
+  ctx.stroke();
 };
 
 const measureTextBounds = (text: string, fontSize: number) => {
@@ -233,6 +275,13 @@ const getRotateHandlePoint = (bounds: Bounds) => ({
 const isPointOnRotateHandle = (bounds: Bounds, point: { x: number; y: number }) => {
   const handle = getRotateHandlePoint(bounds);
   return Math.hypot(point.x - handle.x, point.y - handle.y) <= ROTATE_HANDLE_HIT_RADIUS;
+};
+
+const RESIZE_HANDLE_EDGES: Record<ResizeHandle, { x: SnapEdge; y: SnapEdge }> = {
+  nw: { x: "start", y: "start" },
+  ne: { x: "end", y: "start" },
+  sw: { x: "start", y: "end" },
+  se: { x: "end", y: "end" },
 };
 
 const getResizeHandleAtPoint = (
@@ -428,9 +477,55 @@ export function WhiteboardCanvas({
   const laserSyncRafRef = useRef<number | null>(null);
   const eraserRingRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef(viewport);
+  const snapOverlayRef = useRef<HTMLCanvasElement>(null);
+  const snapGuidesRef = useRef<SnapGuide[]>([]);
+
+  const paintSnapGuides = useCallback(() => {
+    const overlay = snapOverlayRef.current;
+    const container = containerRef.current;
+    if (!overlay || !container) return;
+
+    const rect = container.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const pixelWidth = Math.max(1, Math.round(rect.width * dpr));
+    const pixelHeight = Math.max(1, Math.round(rect.height * dpr));
+    if (overlay.width !== pixelWidth || overlay.height !== pixelHeight) {
+      overlay.width = pixelWidth;
+      overlay.height = pixelHeight;
+      overlay.style.width = `${rect.width}px`;
+      overlay.style.height = `${rect.height}px`;
+    }
+    const ctx = overlay.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+    const guides = snapGuidesRef.current;
+    if (guides.length === 0) return;
+
+    const vp = viewportRef.current;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.translate(vp.translateX, vp.translateY);
+    ctx.scale(vp.scale, vp.scale);
+    ctx.strokeStyle = SNAP_GUIDE_COLOR;
+    ctx.lineWidth = 1 / vp.scale;
+
+    for (const guide of guides) {
+      ctx.beginPath();
+      if (guide.axis === "x") {
+        ctx.moveTo(guide.position, guide.spanStart);
+        ctx.lineTo(guide.position, guide.spanEnd);
+      } else {
+        ctx.moveTo(guide.spanStart, guide.position);
+        ctx.lineTo(guide.spanEnd, guide.position);
+      }
+      ctx.stroke();
+    }
+  }, []);
 
   useEffect(() => {
     viewportRef.current = viewport;
+    engineRef.current?.setSnapThreshold(SNAP_THRESHOLD_SCREEN_PX / viewport.scale);
   }, [viewport]);
 
   const paintLaserFrame = useCallback(() => {
@@ -443,7 +538,10 @@ export function WhiteboardCanvas({
     const trails = laserTrailsRef.current;
     for (const [key, trail] of trails) {
       trail.points = trail.points.filter((point) => now - point.t < LASER_TTL_MS);
-      if (trail.points.length === 0) {
+      if (trail.dot && now - trail.dot.t >= LASER_DOT_TTL_MS) {
+        trail.dot = null;
+      }
+      if (trail.points.length === 0 && !trail.dot) {
         trails.delete(key);
         if (key === "self") {
           awareness.setLocalStateField("laser", null);
@@ -476,29 +574,29 @@ export function WhiteboardCanvas({
 
     for (const trail of trails.values()) {
       const points = trail.points;
-      for (let i = 1; i < points.length; i += 1) {
-        const from = points[i - 1];
-        const to = points[i];
-        const life = 1 - (now - to.t) / LASER_TTL_MS;
-        if (life <= 0) continue;
-        ctx.strokeStyle = trail.color;
-        ctx.globalAlpha = Math.min(0.9, life);
-        ctx.lineWidth = (1 + 2.6 * life) / vp.scale;
-        ctx.beginPath();
-        ctx.moveTo(from.x, from.y);
-        ctx.lineTo(to.x, to.y);
-        ctx.stroke();
-      }
-      const head = points[points.length - 1];
-      if (head) {
-        const life = 1 - (now - head.t) / LASER_TTL_MS;
-        if (life > 0) {
-          ctx.globalAlpha = Math.min(1, life + 0.1);
-          ctx.fillStyle = trail.color;
-          ctx.beginPath();
-          ctx.arc(head.x, head.y, 3.4 / vp.scale, 0, Math.PI * 2);
-          ctx.fill();
+      const n = points.length;
+      if (n >= 2) {
+        const bandCount = Math.min(LASER_TRAIL_BANDS, n - 1);
+        for (let band = 0; band < bandCount; band += 1) {
+          const startIdx = Math.floor((band * (n - 1)) / bandCount);
+          const endIdx = Math.floor(((band + 1) * (n - 1)) / bandCount);
+          const segment = points.slice(startIdx, endIdx + 1);
+          if (segment.length < 2) continue;
+          const newest = segment[segment.length - 1];
+          const life = 1 - (now - newest.t) / LASER_TTL_MS;
+          if (life <= 0) continue;
+          ctx.strokeStyle = trail.color;
+          ctx.globalAlpha = Math.min(0.9, life);
+          ctx.lineWidth = (1 + 2.6 * life) / vp.scale;
+          strokeSmoothPath(ctx, segment);
         }
+      }
+      if (trail.dot) {
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = trail.color;
+        ctx.beginPath();
+        ctx.arc(trail.dot.x, trail.dot.y, 3.4 / vp.scale, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
     ctx.globalAlpha = 1;
@@ -518,36 +616,45 @@ export function WhiteboardCanvas({
     laserSyncRafRef.current = requestAnimationFrame(() => {
       laserSyncRafRef.current = null;
       const trail = laserTrailsRef.current.get("self");
-      if (!trail || trail.points.length === 0) return;
+      if (!trail || (trail.points.length === 0 && !trail.dot)) return;
       const now = Date.now();
       awareness.setLocalStateField("laser", {
         pts: trail.points.map((point) => [point.x, point.y, now - point.t]),
+        dot: trail.dot ? [trail.dot.x, trail.dot.y, now - trail.dot.t] : null,
       });
     });
   }, [awareness]);
 
   const appendOwnLaserPoint = useCallback(
-    (point: { x: number; y: number }) => {
+    (point: { x: number; y: number }, held: boolean) => {
       const now = Date.now();
       const trails = laserTrailsRef.current;
-      let trail = trails.get("self");
       const color = getColorForUser(user?.id ?? "guest");
-      // A pause breaks the trail instead of drawing a catch-up streak
-      if (trail && trail.points.length > 0) {
-        const last = trail.points[trail.points.length - 1];
-        if (now - last.t > LASER_GAP_RESET_MS) {
-          trail.points = [];
-        }
-      }
+
+      let trail = trails.get("self");
       if (!trail) {
-        trail = { points: [], color };
+        trail = { points: [], dot: null, color };
         trails.set("self", trail);
       }
       trail.color = color;
-      trail.points.push({ x: point.x, y: point.y, t: now });
-      if (trail.points.length > LASER_MAX_POINTS) {
-        trail.points.splice(0, trail.points.length - LASER_MAX_POINTS);
+      // The dot always tracks the live cursor; releasing the button just
+      // stops growing the trail behind it, letting it fade out on its own.
+      trail.dot = { x: point.x, y: point.y, t: now };
+
+      if (held) {
+        // A pause breaks the trail instead of drawing a catch-up streak
+        if (trail.points.length > 0) {
+          const last = trail.points[trail.points.length - 1];
+          if (now - last.t > LASER_GAP_RESET_MS) {
+            trail.points = [];
+          }
+        }
+        trail.points.push({ x: point.x, y: point.y, t: now });
+        if (trail.points.length > LASER_MAX_POINTS) {
+          trail.points.splice(0, trail.points.length - LASER_MAX_POINTS);
+        }
       }
+
       syncOwnLaser();
       kickLaserLoop();
     },
@@ -562,10 +669,11 @@ export function WhiteboardCanvas({
       awareness.getStates().forEach((state, clientId) => {
         if (clientId === awareness.clientID) return;
         const record = state as { laser?: unknown; user?: { color?: string } } | null;
-        const points = parseLaserField(record?.laser, receivedAt);
-        if (!points) return;
+        const parsed = parseLaserField(record?.laser, receivedAt);
+        if (!parsed) return;
         laserTrailsRef.current.set(clientId, {
-          points,
+          points: parsed.points,
+          dot: parsed.dot,
           color: record?.user?.color ?? "#a1a1aa",
         });
         changed = true;
@@ -640,6 +748,7 @@ export function WhiteboardCanvas({
   useEffect(() => {
     if (!engineRef.current) {
       engineRef.current = new ToolEngine(doc, pageId, tool, settings);
+      engineRef.current.setSnapThreshold(SNAP_THRESHOLD_SCREEN_PX / viewportRef.current.scale);
     }
     engineRef.current.setPage(pageId);
     engineRef.current.setTool(tool);
@@ -892,7 +1001,11 @@ export function WhiteboardCanvas({
     moveRafRef.current = null;
     if (!point || locked) return;
     engineRef.current?.onPointerMove(point);
-  }, [locked]);
+    if (tool === "select") {
+      snapGuidesRef.current = engineRef.current?.getSnapGuides() ?? [];
+      paintSnapGuides();
+    }
+  }, [locked, tool, paintSnapGuides]);
 
   const queuePointerMove = useCallback(
     (point: { x: number; y: number; pressure?: number }) => {
@@ -1076,7 +1189,7 @@ export function WhiteboardCanvas({
       const canvasPoint = toCanvasPoint(event.clientX, event.clientY, rect);
       const point = { x: canvasPoint.x, y: canvasPoint.y, pressure: event.pressure };
       if (tool === "laser") {
-        appendOwnLaserPoint(point);
+        appendOwnLaserPoint(point, true);
         scheduleCursorSync(point.x, point.y);
         return;
       }
@@ -1168,8 +1281,8 @@ export function WhiteboardCanvas({
         return;
       }
       if (tool === "laser") {
-        // No click needed: pointing is the whole gesture
-        appendOwnLaserPoint(point);
+        // Hovering shows a dot; holding the button paints a trail
+        appendOwnLaserPoint(point, Boolean(event.buttons));
         scheduleCursorSync(point.x, point.y);
         return;
       }
@@ -1202,13 +1315,34 @@ export function WhiteboardCanvas({
         if (resizeSession) {
           event.preventDefault();
           const { minWidth, minHeight } = getResizeMinimums(resizeSession.startElement);
-          const nextBounds = getResizedBounds(
+          let nextBounds = getResizedBounds(
             resizeSession.startBounds,
             resizeSession.handle,
             point,
             minWidth,
             minHeight
           );
+          const activeEdges = RESIZE_HANDLE_EDGES[resizeSession.handle];
+          const otherBounds = getPageElements(doc, pageId)
+            .filter((item) => item.id !== resizeSession.elementId)
+            .map(getBoundsForElement);
+          const snap = computeSnapAdjustment(
+            nextBounds,
+            otherBounds,
+            SNAP_THRESHOLD_SCREEN_PX / viewport.scale,
+            { xEdges: [activeEdges.x], yEdges: [activeEdges.y] }
+          );
+          if (snap.dx !== 0 || snap.dy !== 0) {
+            nextBounds = getResizedBounds(
+              resizeSession.startBounds,
+              resizeSession.handle,
+              { x: point.x + snap.dx, y: point.y + snap.dy },
+              minWidth,
+              minHeight
+            );
+          }
+          snapGuidesRef.current = snap.guides;
+          paintSnapGuides();
           const nextElement = applyResizedBounds(
             resizeSession.startElement,
             resizeSession.startBounds,
@@ -1230,10 +1364,12 @@ export function WhiteboardCanvas({
       moveEraserRing,
       onPanMove,
       pageId,
+      paintSnapGuides,
       queuePointerMove,
       scheduleCursorSync,
       toCanvasPoint,
       tool,
+      viewport,
     ]
   );
 
@@ -1247,6 +1383,9 @@ export function WhiteboardCanvas({
       return;
     }
     if (tool === "laser") {
+      const rect = event.currentTarget.getBoundingClientRect();
+      const canvasPoint = toCanvasPoint(event.clientX, event.clientY, rect);
+      appendOwnLaserPoint(canvasPoint, false);
       return;
     }
     const rotateSession = rotateSessionRef.current;
@@ -1260,6 +1399,8 @@ export function WhiteboardCanvas({
     if (resizeSession) {
       resizeSessionRef.current = null;
       setSelectedId(resizeSession.elementId);
+      snapGuidesRef.current = [];
+      paintSnapGuides();
       clearCursor();
       return;
     }
@@ -1267,9 +1408,20 @@ export function WhiteboardCanvas({
       flushPendingMove();
       engineRef.current?.onPointerUp();
       setSelectedId(engineRef.current?.getSelectedId() ?? null);
+      snapGuidesRef.current = [];
+      paintSnapGuides();
     }
     clearCursor();
-  }, [locked, clearCursor, flushPendingMove, onPanEnd, tool]);
+  }, [
+    appendOwnLaserPoint,
+    locked,
+    clearCursor,
+    flushPendingMove,
+    onPanEnd,
+    paintSnapGuides,
+    toCanvasPoint,
+    tool,
+  ]);
 
   const handlePointerLeave = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1494,6 +1646,11 @@ export function WhiteboardCanvas({
       />
       <canvas
         ref={laserOverlayRef}
+        className="absolute inset-0 pointer-events-none"
+        aria-hidden
+      />
+      <canvas
+        ref={snapOverlayRef}
         className="absolute inset-0 pointer-events-none"
         aria-hidden
       />
