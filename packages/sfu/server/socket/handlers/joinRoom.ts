@@ -512,7 +512,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             : isAdminForExistingRoom;
         const hasPrivilegedJoinAccess = isAdminJoin;
 
-        if (!hasPrivilegedJoinAccess && room.isBlocked(userKey)) {
+        if (
+          !hasPrivilegedJoinAccess &&
+          user?.isSuperAdmin !== true &&
+          room.isBlocked(userKey)
+        ) {
           Logger.info(`Blocked identity ${userKey} denied access to room ${roomId}`);
           respond(callback, { error: "You are not allowed to join this meeting." });
           return;

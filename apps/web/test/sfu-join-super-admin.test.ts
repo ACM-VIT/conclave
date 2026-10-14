@@ -53,6 +53,16 @@ describe("join token super admin authorization", () => {
     });
   });
 
+  it("mints the protected claim for the dashboard email fallback", async () => {
+    vi.stubEnv("SFU_ADMIN_ALLOWLIST_EMAILS", "");
+    vi.stubEnv("SFU_ADMIN_ALLOWED_EMAILS", "");
+    vi.stubEnv("SFU_DASHBOARD_ALLOWLIST_EMAILS", "admin@example.com");
+    getSession.mockResolvedValue({ user: { id: "admin", email: "admin@example.com", name: "Admin" } });
+    expect(await join({ email: "guest@example.com" })).toMatchObject({
+      isSuperAdmin: true, isForcedHost: true, isHost: true, isAdmin: true,
+    });
+  });
+
   it("uses the authenticated session over a forged allowlisted body email", async () => {
     getSession.mockResolvedValue({ user: { id: "guest", email: "guest@example.com", name: "Guest" } });
     expect(await join({ email: "admin@example.com" })).toMatchObject({
