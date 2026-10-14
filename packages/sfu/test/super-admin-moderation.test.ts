@@ -9,12 +9,15 @@ import { config } from "../config/config.js";
 import { kickClient } from "../server/admin/controlPlane.js";
 import { SUPER_ADMIN_REMOVAL_ERROR } from "../server/admin/moderation.js";
 import { createSfuApp } from "../server/http/createApp.js";
+import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
 import { registerAdminHandlers } from "../server/socket/handlers/adminHandlers.js";
+import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { createSfuState } from "../server/state.js";
+import { getOrCreateWebinarRoomConfig, setCustomWebinarLinkSlug } from "../server/webinar.js";
 
-type Handler = (...args: never[]) => void;
+type Handler = (...args: never[]) => void | Promise<void>;
 const servers: Server[] = [];
 
 afterEach(async () => {
@@ -35,6 +38,10 @@ const makeSocket = (user: SfuAuthPayload = {}) => {
     on: (event: string, handler: Handler) => handlers.set(event, handler),
     emit,
     disconnect,
+    connected: true,
+    join: vi.fn(),
+    leave: vi.fn(),
+    to: () => ({ emit: vi.fn() }),
   } as unknown as Socket;
   return { socket, handlers, emit, disconnect };
 };
@@ -48,7 +55,13 @@ const makeHarness = ({
   targetClaims?: SfuAuthPayload;
   targetAdmin?: boolean;
 } = {}) => {
-  const state = createSfuState();
+  const state = createSfuState({
+    roomRegistry: new LocalRoomRegistry({
+      instanceId: "moderation-test",
+      instanceUrl: "http://localhost",
+      ttlMs: 45000,
+    }),
+  });
   const room = new Room({
     id: "room",
     clientId: "conclave",
@@ -77,7 +90,7 @@ const makeHarness = ({
     const handler = actorSocket.handlers.get(event);
     if (!handler) throw new Error(`Missing handler: ${event}`);
     const ack = vi.fn();
-    handler(...[data, ack] as never[]);
+    void handler(...[data, ack] as never[]);
     return ack;
   };
   return { state, room, io, target, targetSocket, closeTransport, invoke };
@@ -147,6 +160,69 @@ describe("super admin socket moderation", () => {
     expect(h.room.isBlocked("admin@example.com")).toBe(true);
     expect(h.room.getClient("target")).toBeUndefined();
     expect(h.closeTransport).toHaveBeenCalledOnce();
+  });
+});
+
+describe("super admin join roles and blocked rejoin", () => {
+  const setup = () => {
+    const h = makeHarness();
+    h.room.removeClient("target");
+    const webinar = getOrCreateWebinarRoomConfig(h.state.webinarConfigs, h.room.channelId);
+    webinar.enabled = true;
+    webinar.publicAccess = true;
+    setCustomWebinarLinkSlug({ webinarConfig: webinar, webinarLinks: h.state.webinarLinks, room: h.room, slug: "review-webinar" });
+    const join = async (joinMode: "meeting" | "webinar_attendee", isSuperAdmin: boolean) => {
+      const peer = makeSocket({
+        userId: "admin@example.com", email: "admin@example.com", clientId: "conclave",
+        sessionId: "admin-session", joinMode, isSuperAdmin,
+      });
+      const context = createConnectionContext(h.io, peer.socket, h.state);
+      registerJoinRoomHandler(context);
+      const ack = vi.fn();
+      await peer.handlers.get("joinRoom")!(...[
+        { roomId: joinMode === "meeting" ? h.room.id : "review-webinar", sessionId: "admin-session" }, ack,
+      ] as never[]);
+      return { context, peer, ack };
+    };
+    return { ...h, join };
+  };
+
+  it("grants host rights from an isSuperAdmin-only meeting token", async () => {
+    const h = setup();
+    const { context, peer, ack } = await h.join("meeting", true);
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
+    expect(context.currentClient).toBeInstanceOf(Admin);
+    const kick = vi.fn();
+    await peer.handlers.get("kickUser")!(...[{ userId: "host" }, kick] as never[]);
+    expect(kick).toHaveBeenCalledWith({ success: true });
+  });
+
+  it("keeps super admins in the attendee role without host handlers", async () => {
+    const h = setup();
+    const { context, peer, ack } = await h.join("webinar_attendee", true);
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
+    expect(context.currentClient).not.toBeInstanceOf(Admin);
+    expect(context.currentClient?.isWebinarAttendee).toBe(true);
+    expect(peer.handlers.has("kickUser")).toBe(false);
+    expect(h.room.getAdminUserIds()).toEqual(["host"]);
+  });
+
+  it.each([true, false])("honors verified protection after leave, block, and attendee rejoin (super=%s)", async (isSuperAdmin) => {
+    const h = setup();
+    const initial = await h.join("webinar_attendee", isSuperAdmin);
+    expect(initial.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
+    h.room.removeClient(initial.context.currentClient!.id);
+    expect(h.invoke("admin:blockUsers", { userKeys: ["admin@example.com"] }))
+      .toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    const rejoin = await h.join("webinar_attendee", isSuperAdmin);
+    if (isSuperAdmin) {
+      expect(rejoin.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
+      expect(rejoin.context.currentClient?.isWebinarAttendee).toBe(true);
+      expect(rejoin.context.currentClient).not.toBeInstanceOf(Admin);
+    } else {
+      expect(rejoin.ack).toHaveBeenCalledWith({ error: "You are not allowed to join this meeting." });
+      expect(rejoin.context.currentClient).toBeNull();
+    }
   });
 });
 

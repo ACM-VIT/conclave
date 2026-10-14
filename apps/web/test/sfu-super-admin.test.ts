@@ -5,6 +5,7 @@ describe("SFU super admin email allowlist", () => {
   it.each([
     "SFU_ADMIN_ALLOWLIST_EMAILS",
     "SFU_ADMIN_ALLOWED_EMAILS",
+    "SFU_DASHBOARD_ALLOWLIST_EMAILS",
     "SFU_ALWAYS_HOST_EMAILS",
     "SFU_ALWAYS_HOST_EMAIL",
     "ALWAYS_HOST_EMAILS",
@@ -33,7 +34,16 @@ describe("SFU super admin email allowlist", () => {
     const env = {
       SFU_ADMIN_ALLOWLIST_EMAILS: "admin@example.com",
       SFU_ADMIN_ALLOWED_EMAILS: "legacy@example.com",
+      SFU_DASHBOARD_ALLOWLIST_EMAILS: "dashboard@example.com",
     };
     expect(isSfuSuperAdminEmail("legacy@example.com", env)).toBe(false);
+    expect(isSfuSuperAdminEmail("dashboard@example.com", env)).toBe(false);
+  });
+
+  it("prefers the legacy admin setting over the dashboard fallback", () => {
+    expect(isSfuSuperAdminEmail("dashboard@example.com", {
+      SFU_ADMIN_ALLOWED_EMAILS: "legacy@example.com",
+      SFU_DASHBOARD_ALLOWLIST_EMAILS: "dashboard@example.com",
+    })).toBe(false);
   });
 });

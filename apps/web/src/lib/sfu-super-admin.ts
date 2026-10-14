@@ -9,7 +9,11 @@ export const isSfuSuperAdminEmail = (
   if (!email) return false;
 
   const lists = [
-    firstNonEmpty(env.SFU_ADMIN_ALLOWLIST_EMAILS, env.SFU_ADMIN_ALLOWED_EMAILS),
+    firstNonEmpty(
+      env.SFU_ADMIN_ALLOWLIST_EMAILS,
+      env.SFU_ADMIN_ALLOWED_EMAILS,
+      env.SFU_DASHBOARD_ALLOWLIST_EMAILS,
+    ),
     firstNonEmpty(
       env.SFU_ALWAYS_HOST_EMAILS,
       env.SFU_ALWAYS_HOST_EMAIL,
