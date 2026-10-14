@@ -8,6 +8,7 @@
     "packages/*"
   ],
   "scripts": {
+    "check:mediapipe-privacy": "node scripts/check-mediapipe-privacy.mjs",
     "check:video-effect-assets": "node scripts/check-video-effect-assets.mjs",
     "check:swift-events": "node packages/meeting-core/scripts/gen-swift-events.mjs --check",
     "debug:video-effects": "node scripts/debug-video-effects-headless.mjs",

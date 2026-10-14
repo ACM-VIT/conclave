@@ -55,3 +55,5 @@ minimumReleaseAgeExclude:
   - react-dom@19.3.1
   - react@19.3.1
   - wrangler@4.151.0
+patchedDependencies:
+  '@mediapipe/tasks-vision@1.1.0': patches/@mediapipe__tasks-vision@1.1.0.patch
