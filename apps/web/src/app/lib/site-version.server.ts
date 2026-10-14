@@ -9,9 +9,10 @@ type VersionedCloudflareEnv = {
   CF_VERSION_METADATA?: unknown;
 };
 
-const readCloudflareVersionMetadata = async (): Promise<unknown> => {
+const readCloudflareVersionMetadata = (): unknown => {
   try {
-    const { env } = await getCloudflareContext({ async: true });
+    // Optional metadata must not start a local Wrangler runtime on Node.
+    const { env } = getCloudflareContext();
     return (env as VersionedCloudflareEnv).CF_VERSION_METADATA;
   } catch {
     return null;
@@ -40,7 +41,7 @@ export const getConclaveClientVersion = (): ConclaveSiteVersion =>
 export const getConclaveVersionResponse =
   async (): Promise<ConclaveSiteVersionResponse> => {
     const clientVersion = getConclaveClientVersion();
-    const metadata = await readCloudflareVersionMetadata();
+    const metadata = readCloudflareVersionMetadata();
     return {
       serviceVersion: normalizeConclaveSiteVersion(metadata, clientVersion.id),
       clientVersion,
