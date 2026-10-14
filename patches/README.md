@@ -1,5 +1,13 @@
 # Dependency patches
 
+OpenNext Cloudflare 1.20.11 omits Next.js 16.4's `server/preview-props.json`
+from its inlined manifest list. The Worker throws during Next.js server startup,
+even when the production build succeeds. The versioned adapter patch includes
+that generated manifest using the existing JSON inlining path. Unknown manifests
+still throw. Run `pnpm test:cloudflare-manifests` and preview the production
+bundle in Wrangler when upgrading either dependency. Remove the patch when the
+adapter includes preview props upstream.
+
 MediaPipe Tasks Vision 1.1.0 enables a metrics logger that sends performance and
 usage data to Google. Its published API provides no logging opt-out. Conclave
 keeps the latest package while disabling the optional logger initialization in

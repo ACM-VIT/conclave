@@ -173,6 +173,7 @@ overrides:
 
 patchedDependencies:
   '@mediapipe/tasks-vision@1.1.0': a8dd3f79c86dc24fdcc6e408f6f308d1df59717a4ed21e2e4d2150e8bffe58bb
+  '@opennextjs/cloudflare@1.20.11': 05bdafb7555a6a59bbc20518693f291d45f34e9cd7a74466a229da814da2cc73
 
 importers:
 
@@ -289,7 +290,7 @@ importers:
         version: 5.20261014.1
       '@opennextjs/cloudflare':
         specifier: ^1.20.11
-        version: 1.20.11(next@16.4.1(@babel/core@7.29.7(supports-color@11.0.0))(@types/node@22.20.5)(babel-plugin-react-compiler@1.0.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(supports-color@11.0.0)(wrangler@4.151.0(@cloudflare/workers-types@5.20261014.1)(@types/node@22.20.5))
+        version: 1.20.11(patch_hash=05bdafb7555a6a59bbc20518693f291d45f34e9cd7a74466a229da814da2cc73)(next@16.4.1(@babel/core@7.29.7(supports-color@11.0.0))(@types/node@22.20.5)(babel-plugin-react-compiler@1.0.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(supports-color@11.0.0)(wrangler@4.151.0(@cloudflare/workers-types@5.20261014.1)(@types/node@22.20.5))
       '@tailwindcss/postcss':
         specifier: ^4.3.3
         version: 4.3.3
@@ -6504,7 +6505,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@opennextjs/cloudflare@1.20.11(next@16.4.1(@babel/core@7.29.7(supports-color@11.0.0))(@types/node@22.20.5)(babel-plugin-react-compiler@1.0.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(supports-color@11.0.0)(wrangler@4.151.0(@cloudflare/workers-types@5.20261014.1)(@types/node@22.20.5))':
+  '@opennextjs/cloudflare@1.20.11(patch_hash=05bdafb7555a6a59bbc20518693f291d45f34e9cd7a74466a229da814da2cc73)(next@16.4.1(@babel/core@7.29.7(supports-color@11.0.0))(@types/node@22.20.5)(babel-plugin-react-compiler@1.0.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(supports-color@11.0.0)(wrangler@4.151.0(@cloudflare/workers-types@5.20261014.1)(@types/node@22.20.5))':
     dependencies:
       '@ast-grep/napi': 0.45.3
       '@dotenvx/dotenvx': 2.34.2
