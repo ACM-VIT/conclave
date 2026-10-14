@@ -9,7 +9,7 @@
       "must": {
         "haveType": "file",
         "exportConstants": ["${gameId}Module"],
-        "importFrom": "../types.js"
+        "importTypesFrom": "../types.js"
       }
     },
     {
@@ -28,7 +28,7 @@
         "!packages/sfu/server/games/modules/chess.ts"
       ],
       "must": {
-        "importFromExternals": false
+        "importValuesFromExternals": false
       }
     },
     {
@@ -36,7 +36,7 @@
       "description": "Every web game renderer default-exports its component",
       "paths": "apps/web/src/app/components/games/{gameName}Game.tsx",
       "must": {
-        "export": ["default"]
+        "exportValues": ["default"]
       }
     },
     {
@@ -47,7 +47,7 @@
         "apps/web/src/app/hooks/{hookName}.tsx"
       ],
       "must": {
-        "export": ["${hookName}"]
+        "exportValues": ["${hookName}"]
       }
     },
     {
@@ -59,7 +59,7 @@
         "!apps/web/src/app/components/GhostParticipantChrome.tsx"
       ],
       "must": {
-        "export": ["default"]
+        "exportValues": ["default"]
       }
     },
     {

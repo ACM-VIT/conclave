@@ -12,9 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV PYTHON=/usr/bin/python3
 
-RUN npm install --global pnpm@12.4.1
+RUN npm install --global pnpm@12.11.2
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches ./patches
 COPY packages/sfu/package.json packages/sfu/package.json
 COPY packages/shared-browser/package.json packages/shared-browser/package.json
 COPY packages/ui-tokens/package.json packages/ui-tokens/package.json
