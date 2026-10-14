@@ -1410,7 +1410,8 @@ function GridLayout({
       setPinnedId(null);
     }
   }, [pinnedId, hasPresentation]);
-  const isSolo = orderedRemoteParticipants.length === 0 && !hasPresentation;
+  // Tile visibility does not determine whether other people are in the room.
+  const isSolo = allRemoteParticipants.length === 0 && !hasPresentation;
   const visibleParticipants = useMemo(() => {
     if (maxVisibleRemoteParticipants <= 0) {
       return [];
