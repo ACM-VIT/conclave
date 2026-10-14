@@ -209,11 +209,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           );
         const forcedHostJoin =
           !isWebinarAttendeeJoin &&
-          (Boolean(user?.isForcedHost) || scheduledForcedHost);
+          (user?.isSuperAdmin === true || Boolean(user?.isForcedHost) || scheduledForcedHost);
 
         const hostRequested =
           !isWebinarAttendeeJoin &&
-          (Boolean(user?.isHost ?? user?.isAdmin ?? user?.isForcedHost) ||
+          (user?.isSuperAdmin === true ||
+            Boolean(user?.isHost ?? user?.isAdmin ?? user?.isForcedHost) ||
             scheduledForcedHost);
         const allowRoomCreation =
           !isWebinarAttendeeJoin &&
