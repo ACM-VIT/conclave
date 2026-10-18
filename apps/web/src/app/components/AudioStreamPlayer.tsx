@@ -236,9 +236,9 @@ function AudioStreamPlayer({
     if (!audio || !stream) return;
     let cancelled = false;
     const updateOutput = () => {
-      void applyAudioOutputDevice(audio, audioOutputDeviceId)
-        .then(() => {
-          if (!cancelled) attemptPlayback();
+      void applyAudioOutputDevice(audio, audioOutputDeviceId, () => !cancelled)
+        .then((applied) => {
+          if (applied && !cancelled) attemptPlayback();
         })
         .catch((err) => {
           if (!cancelled) console.error(audioOutputErrorMessage, err);

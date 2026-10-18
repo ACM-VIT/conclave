@@ -43,8 +43,8 @@ export function useEnumeratedDevices(active: boolean, refreshToken?: unknown) {
   const fetchDevices = useCallback(async () => {
     const canSelectOutput =
       typeof HTMLMediaElement.prototype.setSinkId === "function";
-    setCanSelectAudioOutput(canSelectOutput);
     if (!navigator.mediaDevices?.enumerateDevices) {
+      setCanSelectAudioOutput(false);
       setAudioInput([]);
       setAudioOutput([SYSTEM_AUDIO_OUTPUT]);
       setVideoInput([]);
@@ -58,14 +58,20 @@ export function useEnumeratedDevices(active: boolean, refreshToken?: unknown) {
           .filter((d) => d.kind === "audioinput")
           .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Microphone ${i + 1}` })),
       );
-      setAudioOutput(getAudioOutputOptions(devices, canSelectOutput));
+      const outputs = getAudioOutputOptions(devices, canSelectOutput);
+      setAudioOutput(outputs);
+      setCanSelectAudioOutput(
+        canSelectOutput && outputs.some((output) => output.deviceId !== ""),
+      );
       setVideoInput(
         devices
           .filter((d) => d.kind === "videoinput")
           .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` })),
       );
     } catch {
-      // enumeration can fail before permission — silently ignore.
+      // Enumeration can fail before permission; keep system routing available.
+      setAudioOutput([SYSTEM_AUDIO_OUTPUT]);
+      setCanSelectAudioOutput(false);
     }
   }, []);
 

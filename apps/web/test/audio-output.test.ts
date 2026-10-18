@@ -42,6 +42,57 @@ describe("audio output devices", () => {
 
   it("plays through the system output without a routing API", async () => {
     await expect(applyAudioOutputDevice({} as HTMLMediaElement, "headset"))
-      .resolves.toBeUndefined();
+      .resolves.toBe(true);
   });
+});
+
+describe("audio output changes in flight", () => {
+  it("explicitly leaves a removed current sink even when reapplying it would succeed", async () => {
+    vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices: async () => [] } });
+    let sinkId = "headset";
+    const setSinkId = vi.fn(async (nextId: string) => { sinkId = nextId; });
+    try {
+      await applyAudioOutputDevice({ setSinkId } as unknown as HTMLMediaElement, "headset");
+      expect(sinkId).toBe("");
+      expect(setSinkId).toHaveBeenCalledWith("");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not let a delayed missing-device rejection undo a newer choice", async () => {
+    let rejectOld: (error: Error) => void = () => {};
+    const oldChange = new Promise<void>((_resolve, reject) => { rejectOld = reject; });
+    let sinkId = "";
+    const setSinkId = vi.fn((nextId: string) => {
+      if (nextId === "headset") return oldChange;
+      sinkId = nextId;
+      return Promise.resolve();
+    });
+    const audio = { setSinkId } as unknown as HTMLMediaElement;
+    const first = applyAudioOutputDevice(audio, "headset");
+    await vi.waitFor(() => expect(setSinkId).toHaveBeenCalledWith("headset"));
+    const latest = applyAudioOutputDevice(audio, "speaker");
+    rejectOld(new DOMException("Disconnected", "NotFoundError"));
+    await Promise.all([first, latest]);
+    expect(sinkId).toBe("speaker");
+    expect(setSinkId).not.toHaveBeenCalledWith("");
+  });
+});
+
+it("applies the newest choice last when an older native switch succeeds late", async () => {
+  let finishOld: () => void = () => {};
+  const pending = new Promise<void>((resolve) => { finishOld = resolve; });
+  let sinkId = "";
+  const setSinkId = vi.fn(async (nextId: string) => {
+    if (nextId === "headset") await pending;
+    sinkId = nextId;
+  });
+  const audio = { setSinkId } as unknown as HTMLMediaElement;
+  const first = applyAudioOutputDevice(audio, "headset");
+  await vi.waitFor(() => expect(setSinkId).toHaveBeenCalledWith("headset"));
+  const latest = applyAudioOutputDevice(audio, "speaker");
+  finishOld();
+  await Promise.all([first, latest]);
+  expect(sinkId).toBe("speaker");
 });
