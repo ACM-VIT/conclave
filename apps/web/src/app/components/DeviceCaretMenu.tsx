@@ -16,6 +16,11 @@ import {
 } from "@conclave/ui-tokens";
 import { SwitchRow } from "@conclave/ui-tokens/web";
 import HotkeyTooltip from "./HotkeyTooltip";
+import {
+  getAudioOutputOptions,
+  SYSTEM_AUDIO_OUTPUT,
+  SYSTEM_AUDIO_OUTPUT_HINT,
+} from "../lib/audio-output";
 
 const ICON_SIZE = 20;
 const CLUSTER_W = 104;
@@ -29,13 +34,19 @@ type DeviceOption = { deviceId: string; label: string };
 
 export function useEnumeratedDevices(active: boolean, refreshToken?: unknown) {
   const [audioInput, setAudioInput] = useState<DeviceOption[]>([]);
-  const [audioOutput, setAudioOutput] = useState<DeviceOption[]>([]);
+  const [audioOutput, setAudioOutput] = useState<DeviceOption[]>([
+    SYSTEM_AUDIO_OUTPUT,
+  ]);
+  const [canSelectAudioOutput, setCanSelectAudioOutput] = useState(false);
   const [videoInput, setVideoInput] = useState<DeviceOption[]>([]);
 
   const fetchDevices = useCallback(async () => {
+    const canSelectOutput =
+      typeof HTMLMediaElement.prototype.setSinkId === "function";
+    setCanSelectAudioOutput(canSelectOutput);
     if (!navigator.mediaDevices?.enumerateDevices) {
       setAudioInput([]);
-      setAudioOutput([]);
+      setAudioOutput([SYSTEM_AUDIO_OUTPUT]);
       setVideoInput([]);
       return;
     }
@@ -47,11 +58,7 @@ export function useEnumeratedDevices(active: boolean, refreshToken?: unknown) {
           .filter((d) => d.kind === "audioinput")
           .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Microphone ${i + 1}` })),
       );
-      setAudioOutput(
-        devices
-          .filter((d) => d.kind === "audiooutput")
-          .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Speaker ${i + 1}` })),
-      );
+      setAudioOutput(getAudioOutputOptions(devices, canSelectOutput));
       setVideoInput(
         devices
           .filter((d) => d.kind === "videoinput")
@@ -78,7 +85,49 @@ export function useEnumeratedDevices(active: boolean, refreshToken?: unknown) {
       navigator.mediaDevices.removeEventListener("devicechange", onDeviceChange);
   }, [fetchDevices]);
 
-  return { audioInput, audioOutput, videoInput };
+  return { audioInput, audioOutput, videoInput, canSelectAudioOutput };
+}
+
+function SpeakerDeviceList({
+  devices,
+  canSelectOutput,
+  selectedId,
+  onSelect,
+}: {
+  devices: DeviceOption[];
+  canSelectOutput: boolean;
+  selectedId?: string;
+  onSelect?: (deviceId: string) => void;
+}) {
+  return (
+    <div>
+      {canSelectOutput && onSelect ? (
+        <DeviceList
+          heading="Speaker"
+          devices={devices}
+          selectedId={selectedId}
+          onSelect={onSelect}
+        />
+      ) : (
+        <div className="px-4 py-2">
+          <p className="text-[11.5px] font-medium" style={{ color: color.textFaint }}>
+            Speaker
+          </p>
+          <p className="mt-1 text-[13px]" style={{ color: color.text }}>
+            {SYSTEM_AUDIO_OUTPUT.label}
+          </p>
+        </div>
+      )}
+      {!canSelectOutput && (
+        <p
+          className="px-4 pb-2 text-[11.5px] leading-snug"
+          style={{ color: color.textFaint }}
+        >
+          {SYSTEM_AUDIO_OUTPUT_HINT}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function DeviceList({
@@ -170,7 +219,8 @@ export function DeviceSettingsSection({
   isNoiseCancellationEnabled,
   onToggleNoiseCancellation,
 }: DeviceSettingsProps & { active: boolean; bare?: boolean }) {
-  const { audioInput, audioOutput, videoInput } = useEnumeratedDevices(active);
+  const { audioInput, audioOutput, videoInput, canSelectAudioOutput } =
+    useEnumeratedDevices(active);
   const hasDevices =
     audioInput.length > 0 ||
     audioOutput.length > 0 ||
@@ -190,8 +240,8 @@ export function DeviceSettingsSection({
             selectedId={selectedAudioInputDeviceId}
             onSelect={onAudioInputDeviceChange}
           />
-          <DeviceList
-            heading="Speaker"
+          <SpeakerDeviceList
+            canSelectOutput={canSelectAudioOutput}
             devices={audioOutput}
             selectedId={selectedAudioOutputDeviceId}
             onSelect={onAudioOutputDeviceChange}
@@ -277,7 +327,8 @@ export function MediaControlCluster(props: MediaControlClusterProps) {
   } = props;
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const { audioInput, audioOutput, videoInput } = useEnumeratedDevices(open);
+  const { audioInput, audioOutput, videoInput, canSelectAudioOutput } =
+    useEnumeratedDevices(open);
   const colors = controlButtonColors(variant);
   const sideColors = controlButtonColors("default");
   const isDefaultVariant = variant === "default";
@@ -418,8 +469,8 @@ export function MediaControlCluster(props: MediaControlClusterProps) {
                     selectedId={selectedAudioInputDeviceId}
                     onSelect={handleSelect(onAudioInputDeviceChange)}
                   />
-                  <DeviceList
-                    heading="Speaker"
+                  <SpeakerDeviceList
+                    canSelectOutput={canSelectAudioOutput}
                     devices={audioOutput}
                     selectedId={selectedAudioOutputDeviceId}
                     onSelect={handleSelect(onAudioOutputDeviceChange)}

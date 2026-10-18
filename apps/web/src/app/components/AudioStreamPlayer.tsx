@@ -5,6 +5,7 @@ import { useMeetVolume } from "../hooks/useMeetVolume";
 import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
 import { telemetry } from "../lib/telemetry";
 import { errorName } from "../lib/utils";
+import { applyAudioOutputDevice } from "../lib/audio-output";
 
 // How often to verify that an element with a live, unmuted inbound track is
 // actually playing. Media can arrive perfectly (consumer resumed, RTP
@@ -155,8 +156,8 @@ function AudioStreamPlayer({
       scheduleReplay();
     };
     const handleUserGesture = () => {
-      if (autoplayBlockedRef.current) {
-        scheduleReplay();
+      if (autoplayBlockedRef.current || audio.paused) {
+        playbackRecovery.scheduleFromUserGesture();
       }
     };
 
@@ -170,7 +171,8 @@ function AudioStreamPlayer({
       window.addEventListener("focus", scheduleReplay);
       window.addEventListener("pageshow", scheduleReplay);
     }
-    window.addEventListener("pointerdown", handleUserGesture, true);
+    window.addEventListener("touchend", handleUserGesture, true);
+    window.addEventListener("click", handleUserGesture, true);
     window.addEventListener("keydown", handleUserGesture, true);
 
     // Watchdog: media flowing but element not playing. Retry playback and
@@ -212,7 +214,8 @@ function AudioStreamPlayer({
         window.removeEventListener("focus", scheduleReplay);
         window.removeEventListener("pageshow", scheduleReplay);
       }
-      window.removeEventListener("pointerdown", handleUserGesture, true);
+      window.removeEventListener("touchend", handleUserGesture, true);
+      window.removeEventListener("click", handleUserGesture, true);
       window.removeEventListener("keydown", handleUserGesture, true);
       playbackRecovery.clear();
       if (audio.srcObject === stream) {
@@ -229,14 +232,24 @@ function AudioStreamPlayer({
   ]);
 
   useEffect(() => {
-    const audio = audioRef.current as HTMLAudioElement & {
-      setSinkId?: (sinkId: string) => Promise<void>;
+    const audio = audioRef.current;
+    if (!audio || !stream) return;
+    let cancelled = false;
+    const updateOutput = () => {
+      void applyAudioOutputDevice(audio, audioOutputDeviceId)
+        .then(() => {
+          if (!cancelled) attemptPlayback();
+        })
+        .catch((err) => {
+          if (!cancelled) console.error(audioOutputErrorMessage, err);
+        });
     };
-    if (!audio || !stream || !audioOutputDeviceId || !audio.setSinkId) return;
-
-    audio.setSinkId(audioOutputDeviceId).catch((err) => {
-      console.error(audioOutputErrorMessage, err);
-    });
+    updateOutput();
+    navigator.mediaDevices?.addEventListener("devicechange", updateOutput);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices?.removeEventListener("devicechange", updateOutput);
+    };
   }, [
     audioOutputDeviceId,
     audioOutputErrorMessage,

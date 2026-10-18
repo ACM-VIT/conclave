@@ -34,6 +34,7 @@ import type {
   TtsSystemVoiceOption,
 } from "../hooks/useMeetTts";
 import { useEnumeratedDevices } from "./DeviceCaretMenu";
+import { SYSTEM_AUDIO_OUTPUT, SYSTEM_AUDIO_OUTPUT_HINT } from "../lib/audio-output";
 import TtsVoiceSettings from "./TtsVoiceSettings";
 import {
   CAMERA_FRAME_RATE_OPTIONS,
@@ -1398,8 +1399,14 @@ export default function DeviceSettingsPanel({
                 value={selectedAudioOutputDeviceId}
                 options={devices.audioOutput}
                 onChange={onAudioOutputDeviceChange}
-                emptyLabel="Speaker selection is not available in this browser"
+                disabled={!devices.canSelectAudioOutput}
+                emptyLabel={SYSTEM_AUDIO_OUTPUT.label}
               />
+              {!devices.canSelectAudioOutput && (
+                <p className="mt-2 text-[11.5px] leading-snug" style={{ color: color.textFaint }}>
+                  {SYSTEM_AUDIO_OUTPUT_HINT}
+                </p>
+              )}
               <button
                 type="button"
                 data-testid="device-settings-speaker-test"
