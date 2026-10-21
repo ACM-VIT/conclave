@@ -68,5 +68,12 @@ export const createPlaybackRecoveryScheduler = ({
     animationFrameId = window.requestAnimationFrame(replayOnFrame);
   };
 
-  return { clear, schedule };
+  // A browser's user-activation window is synchronous. Never let pending
+  // background retries debounce the tap that can actually unlock playback.
+  const scheduleFromUserGesture = () => {
+    clear();
+    schedule();
+  };
+
+  return { clear, schedule, scheduleFromUserGesture };
 };

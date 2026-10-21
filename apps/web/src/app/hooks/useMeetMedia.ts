@@ -28,6 +28,7 @@ import {
   hasBrowserMediaEmergencyEvidence,
 } from "../lib/connection-quality-policy";
 import { clampMeetVolume, DEFAULT_MEET_VOLUME } from "../lib/meet-volume";
+import { applyAudioOutputDevice } from "../lib/audio-output";
 import {
   getUserMediaWithTimeout,
   MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
@@ -2430,33 +2431,18 @@ export function useMeetMedia({
     async (deviceId: string) => {
       setSelectedAudioOutputDeviceId(deviceId);
 
-      const audioElements = document.querySelectorAll("audio");
-      for (const audio of audioElements) {
-        const audioElement = audio as HTMLAudioElement & {
-          setSinkId?: (sinkId: string) => Promise<void>;
-        };
-        if (audioElement.setSinkId) {
-          try {
-            await audioElement.setSinkId(deviceId);
-          } catch (err) {
-            console.error("[Meets] Failed to set audio output device:", err);
-          }
-        }
-      }
-
-      const videoElements = document.querySelectorAll("video");
-      for (const video of videoElements) {
-        const videoElement = video as HTMLVideoElement & {
-          setSinkId?: (sinkId: string) => Promise<void>;
-        };
-        if (videoElement.setSinkId) {
-          try {
-            await videoElement.setSinkId(deviceId);
-          } catch (_err) {
-            // Video elements may not have audio
-          }
-        }
-      }
+      // Register every element's request before awaiting any device operation.
+      // Players and this immediate menu handler share one queue per element.
+      await Promise.all(
+        Array.from(document.querySelectorAll<HTMLMediaElement>("audio, video"))
+          .map(async (element) => {
+            try {
+              await applyAudioOutputDevice(element, deviceId, () => element.isConnected);
+            } catch (err) {
+              console.error("[Meets] Failed to set audio output device:", err);
+            }
+          }),
+      );
     },
     [setSelectedAudioOutputDeviceId]
   );
