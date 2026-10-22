@@ -49,7 +49,7 @@ export interface ConclaveAssistantRelayPacket {
 }
 
 export class ConclaveAssistantApiKeyRequiredError extends Error {
-  constructor(message = "OpenAI API key required.") {
+  constructor(message = "AI provider API key required.") {
     super(message);
     this.name = "ConclaveAssistantApiKeyRequiredError";
   }

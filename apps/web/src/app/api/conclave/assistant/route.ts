@@ -1,19 +1,22 @@
-import OpenAI from "openai";
 import jwt from "jsonwebtoken";
 import { createHash, createHmac, randomUUID } from "node:crypto";
-import type {
-  FunctionTool,
-  ResponseCreateParamsStreaming,
-  ResponseFunctionToolCall,
-  ResponseInputItem,
-  ResponseTextConfig,
-  Tool,
-  WebSearchTool,
-} from "openai/resources/responses/responses";
-import type { Reasoning } from "openai/resources/shared";
 import {
-  getTranscriptResponseModelConfig,
-} from "@conclave/meeting-core/transcript-models";
+  createAiTextSession,
+  type AiFunctionTool,
+  type AiTool,
+  type AiWebSearchTool,
+  type AiToolCall,
+  type AiToolResult,
+} from "@conclave/ai/server";
+import {
+  readAiEnvironment,
+  getProviderApiKey,
+  getResponseProvider,
+  isProviderApiKey,
+  AI_PROVIDERS,
+  resolveConfiguredResponseModel,
+} from "@conclave/ai/models";
+import { getTranscriptResponseModelConfig } from "@conclave/meeting-core/transcript-models";
 import {
   CONCLAVE_ASSISTANT_GLOBAL_MODEL,
   isConclaveAssistantModel,
@@ -31,11 +34,11 @@ import {
 } from "./github-issues";
 import { normalizeRoutedSfuUrl, resolveSfuUrl } from "../../../../lib/sfu-url";
 
-const CONCLAVE_ASSISTANT_WEB_SEARCH_TOOL: WebSearchTool = {
+const CONCLAVE_ASSISTANT_WEB_SEARCH_TOOL: AiWebSearchTool = {
   type: "web_search",
   search_context_size: "medium",
 };
-const GET_MEETING_TRANSCRIPT_TOOL: FunctionTool = {
+const GET_MEETING_TRANSCRIPT_TOOL: AiFunctionTool = {
   type: "function",
   name: "get_meeting_transcript",
   description:
@@ -48,7 +51,7 @@ const GET_MEETING_TRANSCRIPT_TOOL: FunctionTool = {
     additionalProperties: false,
   },
 };
-const CREATE_GITHUB_ISSUE_TOOL: FunctionTool = {
+const CREATE_GITHUB_ISSUE_TOOL: AiFunctionTool = {
   type: "function",
   name: "create_github_issue",
   description:
@@ -71,7 +74,7 @@ const CREATE_GITHUB_ISSUE_TOOL: FunctionTool = {
     additionalProperties: false,
   },
 };
-const CONTROL_SHARED_BROWSER_TOOL: FunctionTool = {
+const CONTROL_SHARED_BROWSER_TOOL: AiFunctionTool = {
   type: "function",
   name: "control_shared_browser",
   description:
@@ -107,18 +110,11 @@ const CONTROL_SHARED_BROWSER_TOOL: FunctionTool = {
           "Whether a type action should submit the GET search. Always use true; staged typing is intentionally unsupported.",
       },
     },
-    required: [
-      "action",
-      "element_id",
-      "text",
-      "url",
-      "direction",
-      "submit",
-    ],
+    required: ["action", "element_id", "text", "url", "direction", "submit"],
     additionalProperties: false,
   },
 };
-const CONCLAVE_ASSISTANT_TOOLS: Tool[] = [
+const CONCLAVE_ASSISTANT_TOOLS: AiTool[] = [
   CONCLAVE_ASSISTANT_WEB_SEARCH_TOOL,
   GET_MEETING_TRANSCRIPT_TOOL,
   CREATE_GITHUB_ISSUE_TOOL,
@@ -366,7 +362,9 @@ export const verifyGithubIssueApproval = (
   };
 };
 
-const relaySigningInput = (packet: Omit<ConclaveAssistantRelayPacket, "signature">): string =>
+const relaySigningInput = (
+  packet: Omit<ConclaveAssistantRelayPacket, "signature">,
+): string =>
   JSON.stringify({
     id: packet.id,
     roomId: packet.roomId,
@@ -402,16 +400,6 @@ const signRelayPacket = (
     .digest("base64url"),
 });
 
-const toReplayableFunctionCall = (
-  call: ResponseFunctionToolCall,
-): ResponseInputItem => ({
-  type: "function_call",
-  call_id: call.call_id,
-  name: call.name,
-  arguments: call.arguments,
-  ...(call.namespace ? { namespace: call.namespace } : {}),
-});
-
 const streamEncoder = new TextEncoder();
 
 const encodeStreamEvent = (event: unknown): Uint8Array =>
@@ -419,17 +407,6 @@ const encodeStreamEvent = (event: unknown): Uint8Array =>
 
 const encodeStreamComment = (comment: string): Uint8Array =>
   streamEncoder.encode(`: ${comment}\n\n`);
-
-const createOpenAiClient = (apiKey: string): OpenAI => {
-  const baseURL =
-    process.env.CLOUDFLARE_AI_GATEWAY_OPENAI_URL?.trim() ||
-    process.env.OPENAI_BASE_URL?.trim() ||
-    undefined;
-  return new OpenAI({
-    apiKey,
-    ...(baseURL ? { baseURL: baseURL.replace(/\/+$/, "") } : {}),
-  });
-};
 
 export type BrowserAgentElement = {
   id: string;
@@ -459,7 +436,9 @@ type SharedBrowserToolArguments = {
   submit: boolean;
 };
 
-export const isSafeSharedBrowserSearchField = (element: BrowserAgentElement): boolean => {
+export const isSafeSharedBrowserSearchField = (
+  element: BrowserAgentElement,
+): boolean => {
   return (
     element.formMethod === "get" &&
     element.isSearchForm === true &&
@@ -489,7 +468,9 @@ const callRoomBrowser = async <T>(
       error?: string;
     };
     if (!response.ok) {
-      throw new Error(result.error || `Shared browser returned HTTP ${response.status}`);
+      throw new Error(
+        result.error || `Shared browser returned HTTP ${response.status}`,
+      );
     }
     return result;
   } finally {
@@ -497,7 +478,9 @@ const callRoomBrowser = async <T>(
   }
 };
 
-const parseSharedBrowserToolArguments = (raw: string): SharedBrowserToolArguments => {
+const parseSharedBrowserToolArguments = (
+  raw: string,
+): SharedBrowserToolArguments => {
   const value = JSON.parse(raw) as Partial<SharedBrowserToolArguments>;
   if (
     value.action !== "observe" &&
@@ -513,7 +496,10 @@ const parseSharedBrowserToolArguments = (raw: string): SharedBrowserToolArgument
     element_id: typeof value.element_id === "string" ? value.element_id : null,
     text: typeof value.text === "string" ? value.text : null,
     url: typeof value.url === "string" ? value.url : null,
-    direction: value.direction === "up" || value.direction === "down" ? value.direction : null,
+    direction:
+      value.direction === "up" || value.direction === "down"
+        ? value.direction
+        : null,
     submit: value.submit === true,
   };
 };
@@ -523,11 +509,9 @@ const observeSharedBrowser = async (
   requesterUserId: string,
   sfuUrl: string,
 ): Promise<BrowserAgentObservation> => {
-  const result = await callRoomBrowser<{ observation: BrowserAgentObservation }>(
-    sfuUrl,
-    "/agent/observe",
-    { roomId: channelId, userId: requesterUserId },
-  );
+  const result = await callRoomBrowser<{
+    observation: BrowserAgentObservation;
+  }>(sfuUrl, "/agent/observe", { roomId: channelId, userId: requesterUserId });
   return result.observation;
 };
 
@@ -541,31 +525,51 @@ export const executeSharedBrowserTool = async (
   if (args.action === "observe") {
     return JSON.stringify({
       success: true,
-      observation: await observeSharedBrowser(channelId, requesterUserId, sfuUrl),
+      observation: await observeSharedBrowser(
+        channelId,
+        requesterUserId,
+        sfuUrl,
+      ),
     });
   }
 
-  const current = await observeSharedBrowser(channelId, requesterUserId, sfuUrl);
+  const current = await observeSharedBrowser(
+    channelId,
+    requesterUserId,
+    sfuUrl,
+  );
   let action: Record<string, unknown>;
   if (args.action === "navigate") {
     if (!args.url) throw new Error("A URL is required to navigate.");
     action = { type: "navigate", url: args.url };
   } else if (args.action === "click") {
-    if (!args.element_id) throw new Error("An element id is required to click.");
-    const element = current.elements.find((candidate) => candidate.id === args.element_id);
-    if (!element) throw new Error("That browser element is no longer available. Observe again.");
+    if (!args.element_id)
+      throw new Error("An element id is required to click.");
+    const element = current.elements.find(
+      (candidate) => candidate.id === args.element_id,
+    );
+    if (!element)
+      throw new Error(
+        "That browser element is no longer available. Observe again.",
+      );
     action = { type: "click", elementId: args.element_id };
   } else if (args.action === "type") {
     if (!args.element_id || args.text === null) {
       throw new Error("An element id and text are required to type.");
     }
-    const element = current.elements.find((candidate) => candidate.id === args.element_id);
-    if (!element) throw new Error("That browser element is no longer available. Observe again.");
+    const element = current.elements.find(
+      (candidate) => candidate.id === args.element_id,
+    );
+    if (!element)
+      throw new Error(
+        "That browser element is no longer available. Observe again.",
+      );
     if (!args.submit) {
       return JSON.stringify({
         success: false,
         blocked: true,
-        error: "@Conclave cannot safely stage text in the page. Submit the GET search directly.",
+        error:
+          "@Conclave cannot safely stage text in the page. Submit the GET search directly.",
       });
     }
     if (
@@ -576,7 +580,8 @@ export const executeSharedBrowserTool = async (
       return JSON.stringify({
         success: false,
         blocked: true,
-        error: "@Conclave only types into non-sensitive GET search fields. The host needs to complete this input manually.",
+        error:
+          "@Conclave only types into non-sensitive GET search fields. The host needs to complete this input manually.",
       });
     }
     action = {
@@ -626,7 +631,10 @@ export async function POST(request: Request) {
 
   const answerId = asString(body.answerId).trim().slice(0, 120);
   if (!answerId) {
-    return Response.json({ error: "Missing assistant answer id." }, { status: 400 });
+    return Response.json(
+      { error: "Missing assistant answer id." },
+      { status: 400 },
+    );
   }
 
   const tokenPayload = verifyAssistantToken(
@@ -649,21 +657,27 @@ export async function POST(request: Request) {
     clientId: tokenPayload.clientId!,
     channelId: tokenPayload.channelId!,
   };
-  const routedSfuUrl = normalizeRoutedSfuUrl(tokenPayload.sfuUrl) ?? resolveSfuUrl();
+  const routedSfuUrl =
+    normalizeRoutedSfuUrl(tokenPayload.sfuUrl) ?? resolveSfuUrl();
 
-  const serverApiKey = process.env.OPENAI_API_KEY?.trim();
   const participantApiKey = asString(body.apiKey).trim();
-  const apiKey = serverApiKey || participantApiKey;
   const requestedModel = asString(body.model).trim();
   const model =
-    serverApiKey || !isConclaveAssistantModel(requestedModel)
-      ? CONCLAVE_ASSISTANT_GLOBAL_MODEL
-      : requestedModel;
-  if (!apiKey) {
+    participantApiKey && isConclaveAssistantModel(requestedModel)
+      ? requestedModel
+      : resolveConfiguredResponseModel(
+          process.env.CONCLAVE_ASSISTANT_MODEL,
+          CONCLAVE_ASSISTANT_GLOBAL_MODEL,
+        );
+  const provider = getResponseProvider(model);
+  const apiKey =
+    participantApiKey ||
+    getProviderApiKey(readAiEnvironment(process.env), provider);
+  if (!apiKey || !isProviderApiKey(provider, apiKey)) {
     return Response.json(
       {
         code: "api_key_required",
-        error: "Enter an OpenAI API key to use Conclave AI in this room.",
+        error: `Enter an ${AI_PROVIDERS[provider].label} API key or select another model to use Conclave AI.`,
       },
       { status: 428 },
     );
@@ -671,7 +685,10 @@ export async function POST(request: Request) {
 
   const question = asString(body.question).trim().slice(0, MAX_QUESTION_LENGTH);
   if (!question) {
-    return Response.json({ error: "Ask Conclave a question." }, { status: 400 });
+    return Response.json(
+      { error: "Ask Conclave a question." },
+      { status: 400 },
+    );
   }
 
   const rawApprovalDecision = body.githubIssueApproval?.decision;
@@ -710,15 +727,9 @@ export async function POST(request: Request) {
       : "Live transcript:\n(The transcript panel is off, so the transcript tool will report that no transcript is available.)",
   ];
 
-  const input: ResponseInputItem[] = [
-    {
-      role: "user",
-      content: `${contextSections.join("\n\n")}\n\nThe participant asked: ${question}`,
-    },
-  ];
+  const input = `${contextSections.join("\n\n")}\n\nThe participant asked: ${question}`;
 
   const modelConfig = getTranscriptResponseModelConfig(model);
-  const client = createOpenAiClient(apiKey);
   const approvalFilteredTools = body.supportsToolApproval
     ? CONCLAVE_ASSISTANT_TOOLS
     : CONCLAVE_ASSISTANT_TOOLS.filter(
@@ -729,37 +740,17 @@ export async function POST(request: Request) {
     : approvalFilteredTools.filter(
         (tool) => !("name" in tool) || tool.name !== SHARED_BROWSER_TOOL_NAME,
       );
-  const buildRequestParams = (
-    nextInput: ResponseInputItem[],
-  ): ResponseCreateParamsStreaming => ({
+  const aiSession = createAiTextSession({
+    env: readAiEnvironment(process.env),
+    apiKey,
     model,
-    stream: true,
     instructions: ASSISTANT_SYSTEM_PROMPT,
-    input: nextInput,
-    max_output_tokens: modelConfig.qaMaxOutputTokens,
-    store: false,
-    tool_choice: "auto",
+    maxOutputTokens: modelConfig.qaMaxOutputTokens,
+    reasoningEffort: modelConfig.qaReasoningEffort,
+    verbosity: modelConfig.qaVerbosity,
     tools,
-    ...requestOptions,
+    signal: request.signal,
   });
-
-  const requestOptions: Pick<
-    ResponseCreateParamsStreaming,
-    "reasoning" | "text"
-  > = {};
-  if (modelConfig.supportsTextVerbosity && modelConfig.qaVerbosity) {
-    const text: ResponseTextConfig = { verbosity: modelConfig.qaVerbosity };
-    requestOptions.text = text;
-  }
-  if (modelConfig.supportsReasoning && modelConfig.qaReasoningEffort) {
-    // `summary: "auto"` surfaces the model's thinking so the chat can render a
-    // collapsible reasoning trace alongside the answer.
-    const reasoning: Reasoning = {
-      effort: modelConfig.qaReasoningEffort,
-      summary: "auto",
-    };
-    requestOptions.reasoning = reasoning;
-  }
 
   // Mirrors of the process state streamed to the asker, so relay packets can
   // carry the same thinking/actions flow to everyone else in the room.
@@ -787,16 +778,15 @@ export async function POST(request: Request) {
     });
   };
 
-  const executeFunctionTool = async (
-    call: ResponseFunctionToolCall,
-  ): Promise<string> => {
+  const executeFunctionTool = async (call: AiToolCall): Promise<string> => {
     if (call.name === TRANSCRIPT_TOOL_NAME) {
       return JSON.stringify({
         transcriptActive,
         transcriptAvailable: transcriptActive && transcript.length > 0,
         format: "[HH:MM:SS] Speaker: text",
         transcript: transcriptActive
-          ? transcript || "(Transcript is on but nothing has been captured yet.)"
+          ? transcript ||
+            "(Transcript is on but nothing has been captured yet.)"
           : "",
         note: transcriptActive
           ? "Use this transcript only for meeting-specific claims."
@@ -855,7 +845,6 @@ export async function POST(request: Request) {
       const taskQueries = new Map<string, string>();
       const taskFingerprints = new Map<string, string>();
       const completedTaskIds = new Set<string>();
-      const reasoningParts = new Map<string, string>();
 
       const emitTask = (task: AssistantTask): void => {
         if (completedTaskIds.has(task.id) && task.status !== "done") {
@@ -892,7 +881,7 @@ export async function POST(request: Request) {
       };
 
       const emitFunctionTask = (
-        call: Pick<ResponseFunctionToolCall, "id" | "call_id" | "name">,
+        call: Pick<AiToolCall, "id" | "name">,
         status: AssistantTask["status"],
       ): void => {
         const kind =
@@ -902,10 +891,10 @@ export async function POST(request: Request) {
               ? "github_issue"
               : call.name === SHARED_BROWSER_TOOL_NAME
                 ? "browser"
-              : null;
+                : null;
         if (!kind) return;
         emitTask({
-          id: call.id ?? call.call_id,
+          id: call.id,
           kind,
           status,
         });
@@ -983,7 +972,7 @@ export async function POST(request: Request) {
       }
 
       try {
-        let nextInput = input;
+        let nextInput: string | AiToolResult[] = input;
         emitTask({
           id: "assistant-start",
           kind: "reasoning",
@@ -1000,201 +989,35 @@ export async function POST(request: Request) {
           });
         };
         for (let round = 0; round < FUNCTION_TOOL_MAX_ROUNDS; round += 1) {
-          const responseStream = client.responses.stream(
-            buildRequestParams(nextInput),
-          );
-          let responseError: string | null = null;
-
-          responseStream.on("response.output_text.delta", (event) => {
-            fullText = event.snapshot;
-            emitTask({
-              id: event.item_id,
-              kind: "answer",
-              status: "running",
-            });
-            writeStreamEvent({
-              type: "delta",
-              delta: event.delta,
-              relay: makeRelayPacket(fullText, false),
-            });
-          });
-
-          responseStream.on("response.output_text.done", (event) => {
-            if (event.text) {
-              fullText = event.text;
-            }
-            emitTask({
-              id: event.item_id,
-              kind: "answer",
-              status: "done",
-            });
-          });
-
-          const markWebSearchRunning = (event: { item_id: string }) => {
-            emitTask({
-              id: event.item_id,
-              kind: "web_search",
-              status: "running",
-            });
-          };
-          responseStream.on(
-            "response.web_search_call.in_progress",
-            markWebSearchRunning,
-          );
-          responseStream.on(
-            "response.web_search_call.searching",
-            markWebSearchRunning,
-          );
-          responseStream.on("response.web_search_call.completed", (event) => {
-            emitTask({
-              id: event.item_id,
-              kind: "web_search",
-              status: "done",
-            });
-          });
-
-          // Stream the model's reasoning summary so the chat can show a
-          // collapsible "thinking" trace.
-          responseStream.on("response.reasoning_summary_text.delta", (event) => {
-            if (!event.delta) return;
-            const key = `${event.item_id}:${event.summary_index}`;
-            reasoningParts.set(
-              key,
-              `${reasoningParts.get(key) ?? ""}${event.delta}`,
-            );
-            emitReasoning(event.delta);
-          });
-
-          responseStream.on("response.reasoning_summary_text.done", (event) => {
-            const key = `${event.item_id}:${event.summary_index}`;
-            const existing = reasoningParts.get(key) ?? "";
-            if (event.text && event.text !== existing) {
-              emitReasoning(
-                event.text.startsWith(existing)
-                  ? event.text.slice(existing.length)
-                  : event.text,
-              );
-              reasoningParts.set(key, event.text);
-            }
-            emitReasoning(undefined, true);
-          });
-
-          // Surface output items (reasoning, hosted tools, function tools, final
-          // answer) as agent steps in the process timeline.
-          responseStream.on("response.output_item.added", (event) => {
+          let functionCalls: AiToolCall[] = [];
+          for await (const event of aiSession.stream(nextInput)) {
             completeAssistantStart();
-            if (event.item.type === "reasoning") {
-              emitTask({
-                id: event.item.id,
-                kind: "reasoning",
-                status: "running",
+            if (event.type === "text") {
+              fullText = event.text;
+              writeStreamEvent({
+                type: "delta",
+                delta: event.delta,
+                relay: makeRelayPacket(fullText, false),
               });
-            } else if (event.item.type === "message") {
-              emitTask({
-                id: event.item.id,
-                kind: "answer",
-                status: "running",
-              });
-            } else if (event.item.type === "web_search_call") {
-              const action = event.item.action as { query?: string } | null;
-              emitTask({
-                id: event.item.id,
-                kind: "web_search",
-                status: "running",
-                ...(action?.query ? { query: action.query } : {}),
-              });
-            } else if (event.item.type === "function_call") {
-              emitFunctionTask(event.item, "running");
-            }
-          });
-
-          responseStream.on("response.output_item.done", (event) => {
-            if (event.item.type === "reasoning") {
-              emitTask({
-                id: event.item.id,
-                kind: "reasoning",
-                status: "done",
-              });
-              emitReasoning(undefined, true);
-            } else if (event.item.type === "message") {
-              emitTask({
-                id: event.item.id,
-                kind: "answer",
-                status: "done",
-              });
-            } else if (event.item.type === "web_search_call") {
-              const action = event.item.action as { query?: string } | null;
-              emitTask({
-                id: event.item.id,
-                kind: "web_search",
-                status: "done",
-                ...(action?.query ? { query: action.query } : {}),
-              });
-            } else if (event.item.type === "function_call") {
-              emitFunctionTask(event.item, "running");
-            }
-          });
-
-          responseStream.on("response.failed", (event) => {
-            responseError =
-              event.response.error?.message || "Conclave could not answer right now.";
-          });
-          responseStream.on("response.incomplete", () => {
-            responseError = "Conclave could not finish answering.";
-          });
-
-          const response = await responseStream.finalResponse();
-
-          if (responseError) {
-            throw new Error(responseError);
-          }
-
-          if (response.output_text) {
-            fullText = response.output_text;
-          }
-
-          for (const item of response.output) {
-            const itemStatus = "status" in item ? item.status : undefined;
-            const finalStatus: AssistantTask["status"] =
-              response.status === "completed" || itemStatus === "completed"
-                ? "done"
-                : "running";
-            if (item.type === "reasoning") {
-              emitTask({
-                id: item.id,
-                kind: "reasoning",
-                status: finalStatus,
-              });
-            } else if (item.type === "message") {
-              emitTask({
-                id: item.id,
-                kind: "answer",
-                status: finalStatus,
-              });
-            } else if (item.type === "web_search_call") {
-              const action = item.action as { query?: string } | null;
-              emitTask({
-                id: item.id,
-                kind: "web_search",
-                status: finalStatus,
-                ...(action?.query ? { query: action.query } : {}),
-              });
-            }
-          }
-
-          if (response.status === "failed") {
-            throw new Error(
-              response.error?.message || "Conclave could not answer right now.",
-            );
-          }
-          if (response.status === "incomplete") {
-            throw new Error("Conclave could not finish answering.");
-          }
-
-          const functionCalls: ResponseFunctionToolCall[] = [];
-          for (const item of response.output) {
-            if (item.type === "function_call") {
-              functionCalls.push(item);
+            } else if (event.type === "reasoning") {
+              emitReasoning(event.delta, event.done);
+            } else if (event.type === "activity") {
+              if (event.kind === "function") {
+                emitFunctionTask(
+                  { id: event.id, name: event.name || "" },
+                  event.status,
+                );
+              } else {
+                emitTask({
+                  id: event.id,
+                  kind: event.kind,
+                  status: event.status,
+                  query: event.query,
+                });
+              }
+            } else if (event.type === "complete") {
+              fullText = event.text;
+              functionCalls = event.calls;
             }
           }
 
@@ -1209,17 +1032,14 @@ export async function POST(request: Request) {
             return;
           }
 
-          const functionOutputs: ResponseInputItem[] = [];
+          const functionOutputs: AiToolResult[] = [];
           for (const call of functionCalls) {
             if (call.name === GITHUB_ISSUE_TOOL_NAME) {
               const draft = appendGithubIssueRequesterAttribution(
                 parseGithubIssueDraft(call.arguments),
                 requesterDisplayName,
               );
-              const approval = createGithubIssueApproval(
-                draft,
-                approvalIdentity,
-              );
+              const approval = createGithubIssueApproval(draft, approvalIdentity);
               writeStreamEvent({
                 type: "approval",
                 approval,
@@ -1230,16 +1050,11 @@ export async function POST(request: Request) {
             const output = await executeFunctionTool(call);
             emitFunctionTask(call, "done");
             functionOutputs.push({
-              type: "function_call_output",
-              call_id: call.call_id,
+              id: call.id,
               output,
             });
           }
-          nextInput = [
-            ...nextInput,
-            ...functionCalls.map(toReplayableFunctionCall),
-            ...functionOutputs,
-          ];
+          nextInput = functionOutputs;
         }
         throw new Error("Conclave used too many function tool calls.");
       } catch (error) {

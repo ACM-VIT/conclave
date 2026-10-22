@@ -1,17 +1,8 @@
-import OpenAI from "openai";
-import type {
-  ResponseCreateParamsNonStreaming,
-  ResponseCreateParamsStreaming,
-  ResponseFormatTextJSONSchemaConfig,
-  ResponseTextConfig,
-} from "openai/resources/responses/responses";
-import type { Reasoning } from "openai/resources/shared";
+import { createAiTextSession, generateAiText } from "@conclave/ai/server";
 import {
   getTranscriptResponseModelConfig,
   getTranscriptTranscriptionModelConfig,
   normalizeRealtimeTranscriptModel,
-  type TranscriptResponseModelConfig,
-  type TranscriptTextVerbosity,
 } from "@conclave/meeting-core/transcript-models";
 import type {
   TranscriptMinutesSnapshot,
@@ -122,7 +113,8 @@ const minutesSectionUpdateSchema = (maxItems: number) => ({
     upsert: {
       type: "array",
       maxItems,
-      description: "New or revised items only; reuse the current ID for revisions.",
+      description:
+        "New or revised items only; reuse the current ID for revisions.",
       items: minutesEntrySchema,
     },
     remove: {
@@ -135,7 +127,7 @@ const minutesSectionUpdateSchema = (maxItems: number) => ({
   },
 });
 
-const minutesResponseFormat: ResponseFormatTextJSONSchemaConfig = {
+const minutesResponseFormat = {
   type: "json_schema",
   name: "conclave_meeting_minutes",
   strict: true,
@@ -166,7 +158,7 @@ const minutesResponseFormat: ResponseFormatTextJSONSchemaConfig = {
   },
 };
 
-const minutesSnapshotResponseFormat: ResponseFormatTextJSONSchemaConfig = {
+const minutesSnapshotResponseFormat = {
   type: "json_schema",
   name: "conclave_compacted_meeting_minutes",
   strict: true,
@@ -217,17 +209,6 @@ const minutesSnapshotResponseFormat: ResponseFormatTextJSONSchemaConfig = {
   },
 };
 
-const createOpenAiClient = (env: Env, apiKey: string): OpenAI => {
-  const baseURL =
-    env.CLOUDFLARE_AI_GATEWAY_OPENAI_URL?.trim() ||
-    env.OPENAI_BASE_URL?.trim() ||
-    undefined;
-  return new OpenAI({
-    apiKey,
-    ...(baseURL ? { baseURL: baseURL.replace(/\/+$/, "") } : {}),
-  });
-};
-
 export const realtimeEndpoint = (env: Env): string => {
   const base = (env.OPENAI_REALTIME_URL || OPENAI_REALTIME_URL).replace(
     /\/+$/,
@@ -242,27 +223,6 @@ export const realtimeEndpoint = (env: Env): string => {
   url.searchParams.set("intent", OPENAI_REALTIME_TRANSCRIPTION_INTENT);
   return url.toString();
 };
-
-const buildTextConfig = (
-  model: TranscriptResponseModelConfig,
-  verbosity: TranscriptTextVerbosity | undefined,
-  format?: ResponseFormatTextJSONSchemaConfig,
-): ResponseTextConfig | undefined => {
-  const text: ResponseTextConfig = {};
-  if (format && model.supportsStructuredOutputs) {
-    text.format = format;
-  }
-  if (verbosity && model.supportsTextVerbosity) {
-    text.verbosity = verbosity;
-  }
-  return Object.keys(text).length > 0 ? text : undefined;
-};
-
-const buildReasoningConfig = (
-  model: TranscriptResponseModelConfig,
-  effort: TranscriptResponseModelConfig["minutesReasoningEffort"],
-): Reasoning | undefined =>
-  model.supportsReasoning && effort ? { effort } : undefined;
 
 const transcriptLine = (segment: TranscriptSegment): string => {
   const timestamp = new Date(segment.startMs).toISOString().slice(11, 19);
@@ -302,36 +262,22 @@ export const generateMinutes = async (options: {
   current: TranscriptMinutesSnapshot;
   fallback: TranscriptMinutesSnapshot;
 }): Promise<TranscriptMinutesSnapshot | null> => {
-  const client = createOpenAiClient(options.env, options.apiKey);
   const modelConfig = getTranscriptResponseModelConfig(options.model);
-  const request: ResponseCreateParamsNonStreaming = {
-    model: options.model,
+  const text = await generateAiText({
+    ...options,
     instructions: MINUTES_SYSTEM_PROMPT,
     input: buildMinutesUpdateInput({
       current: options.current,
       transcript: options.transcript,
     }),
-    max_output_tokens: modelConfig.minutesMaxOutputTokens,
-    store: false,
-  };
-  const text = buildTextConfig(
-    modelConfig,
-    modelConfig.minutesVerbosity,
-    minutesResponseFormat,
-  );
-  const reasoning = buildReasoningConfig(
-    modelConfig,
-    modelConfig.minutesReasoningEffort,
-  );
-  if (text) request.text = text;
-  if (reasoning) request.reasoning = reasoning;
-
-  const response = await client.responses.create(request);
-  return applyMinutesUpdateFromText(
-    response.output_text,
-    options.current,
-    options.fallback,
-  );
+    maxOutputTokens: modelConfig.minutesMaxOutputTokens,
+    reasoningEffort: modelConfig.minutesReasoningEffort,
+    verbosity: modelConfig.minutesVerbosity,
+    format: modelConfig.supportsStructuredOutputs
+      ? minutesResponseFormat
+      : undefined,
+  });
+  return applyMinutesUpdateFromText(text, options.current, options.fallback);
 };
 
 export const compactMinutes = async (options: {
@@ -340,32 +286,21 @@ export const compactMinutes = async (options: {
   model: string;
   current: TranscriptMinutesSnapshot;
 }): Promise<TranscriptMinutesSnapshot> => {
-  const client = createOpenAiClient(options.env, options.apiKey);
   const modelConfig = getTranscriptResponseModelConfig(options.model);
-  const request: ResponseCreateParamsNonStreaming = {
-    model: options.model,
+  const text = await generateAiText({
+    ...options,
     instructions: MINUTES_COMPACTION_SYSTEM_PROMPT,
     input: buildMinutesCompactionInput(options.current),
-    max_output_tokens: modelConfig.minutesMaxOutputTokens,
-    store: false,
-  };
-  const text = buildTextConfig(
-    modelConfig,
-    modelConfig.minutesVerbosity,
-    minutesSnapshotResponseFormat,
-  );
-  const reasoning = buildReasoningConfig(
-    modelConfig,
-    modelConfig.minutesReasoningEffort,
-  );
-  if (text) request.text = text;
-  if (reasoning) request.reasoning = reasoning;
-
-  const response = await client.responses.create(request);
-  const compacted = parseMinutesFromText(response.output_text, options.current);
-  if (compacted === options.current) {
+    maxOutputTokens: modelConfig.minutesMaxOutputTokens,
+    reasoningEffort: modelConfig.minutesReasoningEffort,
+    verbosity: modelConfig.minutesVerbosity,
+    format: modelConfig.supportsStructuredOutputs
+      ? minutesSnapshotResponseFormat
+      : undefined,
+  });
+  const compacted = parseMinutesFromText(text, options.current);
+  if (compacted === options.current)
     throw new Error("Minutes compaction returned an invalid snapshot.");
-  }
   return compacted;
 };
 
@@ -376,33 +311,19 @@ export async function* streamQuestionAnswer(options: {
   question: string;
   segments: TranscriptSegment[];
 }): AsyncGenerator<string> {
-  const client = createOpenAiClient(options.env, options.apiKey);
   const modelConfig = getTranscriptResponseModelConfig(options.model);
   const transcript = buildQaTranscriptContext(options.segments);
-  const request: ResponseCreateParamsStreaming = {
-    model: options.model,
-    stream: true,
+  const session = createAiTextSession({
+    ...options,
     instructions: QA_SYSTEM_PROMPT,
-    input: `Live transcript context:\n${
-      transcript || "(No transcript yet.)"
-    }\n\nUser question: ${options.question}`,
-    max_output_tokens: modelConfig.qaMaxOutputTokens,
-    store: false,
-  };
-  const text = buildTextConfig(modelConfig, modelConfig.qaVerbosity);
-  const reasoning = buildReasoningConfig(
-    modelConfig,
-    modelConfig.qaReasoningEffort,
-  );
-  if (text) request.text = text;
-  if (reasoning) request.reasoning = reasoning;
-
-  const stream = await client.responses.create(request);
-
-  for await (const event of stream) {
-    if (event.type === "response.output_text.delta") {
-      yield event.delta;
-    }
+    maxOutputTokens: modelConfig.qaMaxOutputTokens,
+    reasoningEffort: modelConfig.qaReasoningEffort,
+    verbosity: modelConfig.qaVerbosity,
+  });
+  for await (const event of session.stream(
+    `Live transcript context:\n${transcript || "(No transcript yet.)"}\n\nUser question: ${options.question}`,
+  )) {
+    if (event.type === "text") yield event.delta;
   }
 }
 

@@ -1,3 +1,4 @@
+import { AI_DEFAULT_MODELS, getProviderApiKey, getResponseProvider, readAiEnvironment, resolveConfiguredResponseModel } from "@conclave/ai/models";
 import dotenv from "dotenv";
 import path from "path";
 import { existsSync } from "fs";
@@ -247,6 +248,8 @@ const plainTransportAnnouncedIp =
   process.env.PLAIN_TRANSPORT_ANNOUNCED_IP?.trim() || announcedIp;
 const socketRedisUrl =
   process.env.SFU_REDIS_URL?.trim() || process.env.REDIS_URL?.trim() || "";
+const gameAiModel = resolveConfiguredResponseModel(process.env.SFU_GAME_AI_MODEL, AI_DEFAULT_MODELS.games);
+const gameAiApiKey = getProviderApiKey(readAiEnvironment(process.env), getResponseProvider(gameAiModel));
 const openAiApiKey = process.env.OPENAI_API_KEY?.trim() || "";
 const requireRedisAdapter = toBoolean(process.env.SFU_REQUIRE_REDIS_ADAPTER);
 if (requireRedisAdapter && !socketRedisUrl) {
@@ -381,8 +384,9 @@ export const config = {
     }),
   },
   gameAi: {
-    enabled: !gameAiDisabled && Boolean(openAiApiKey),
-    model: "gpt-5.6-luna",
+    enabled: !gameAiDisabled && Boolean(gameAiApiKey),
+    model: gameAiModel,
+    apiKey: gameAiApiKey,
     reasoningEffort: "low" as const,
     storeResponses: false,
     timeoutMs: toNumber(process.env.SFU_GAME_AI_TIMEOUT_MS, 25000, {

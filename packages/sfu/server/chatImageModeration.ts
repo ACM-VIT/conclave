@@ -1,9 +1,8 @@
-import type {
-  ModerationCreateParams,
-} from "openai/resources/moderations";
+import { AI_DEFAULT_MODELS } from "@conclave/ai/models";
+import type { ModerationCreateParams } from "openai/resources/moderations";
 import { getOpenAiClient } from "./openaiClient.js";
 
-export const CHAT_IMAGE_MODERATION_MODEL = "omni-moderation-latest";
+export const CHAT_IMAGE_MODERATION_MODEL = AI_DEFAULT_MODELS.moderation;
 
 type ModerationResponse = {
   results: Array<{

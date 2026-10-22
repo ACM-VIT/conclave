@@ -376,7 +376,7 @@ export function useMeetChat({
             });
             patchAssistantMessage(request.answerId, {
               content:
-                "Enter an OpenAI API key below to use Conclave AI in this room.",
+                "Enter a provider API key below to use Conclave AI in this room.",
               assistantStatus: "error",
             });
             return;
@@ -488,7 +488,7 @@ export function useMeetChat({
       if (!trimmed) {
         setAssistantApiKeyPrompt({
           visible: true,
-          error: "Enter an OpenAI API key.",
+          error: "Enter an API key for the selected model.",
           model,
         });
         return;

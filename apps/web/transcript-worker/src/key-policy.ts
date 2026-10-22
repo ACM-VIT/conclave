@@ -1,15 +1,21 @@
-import type {
-  TranscriptProviderKeyAvailability,
-  TranscriptTranscriptionProvider,
-} from "@conclave/meeting-core/transcript-models";
+import {
+  AI_PROVIDERS,
+  getProviderApiKey,
+  getResponseProvider,
+  isProviderApiKey,
+  type AiEnvironment,
+  type AiProvider,
+  type TranscriptTranscriptionProvider,
+} from "@conclave/ai/models";
+import type { TranscriptProviderKeyAvailability } from "@conclave/meeting-core/transcript-models";
 
-type TranscriptOpenAiKeySource = "controller" | "global";
+type TranscriptProviderKeySource = "controller" | "global";
 
 export type TranscriptProviderKeyResolution =
   | {
       ok: true;
       apiKey: string;
-      source: TranscriptOpenAiKeySource;
+      source: TranscriptProviderKeySource;
     }
   | {
       ok: false;
@@ -18,48 +24,38 @@ export type TranscriptProviderKeyResolution =
 
 export type TranscriptOpenAiKeyResolution = TranscriptProviderKeyResolution;
 
-type TranscriptProviderKeyEnv = {
-  OPENAI_API_KEY?: string;
-  SARVAM_API_KEY?: string;
-};
+type TranscriptProviderKeyEnv = AiEnvironment;
 
 const normalizeProviderApiKey = (value: string | undefined): string =>
   value?.trim() || "";
 
-const isPlausibleOpenAiApiKey = (value: string): boolean =>
-  value.startsWith("sk-");
-
-const providerLabel = (provider: TranscriptTranscriptionProvider): string =>
-  provider === "sarvam" ? "Sarvam" : "OpenAI";
+const providerLabel = (provider: AiProvider): string =>
+  AI_PROVIDERS[provider].label;
 
 const globalProviderKey = (
   env: TranscriptProviderKeyEnv,
-  provider: TranscriptTranscriptionProvider,
-): string | undefined =>
-  provider === "sarvam" ? env.SARVAM_API_KEY : env.OPENAI_API_KEY;
-
-const isPlausibleProviderApiKey = (
-  provider: TranscriptTranscriptionProvider,
-  value: string,
-): boolean => (provider === "openai" ? isPlausibleOpenAiApiKey(value) : true);
+  provider: AiProvider,
+): string | undefined => getProviderApiKey(env, provider);
 
 export const hasGlobalOpenAiApiKey = (env: TranscriptProviderKeyEnv): boolean =>
   Boolean(normalizeProviderApiKey(env.OPENAI_API_KEY));
 
 export const hasGlobalTranscriptProviderApiKey = (
   env: TranscriptProviderKeyEnv,
-  provider: TranscriptTranscriptionProvider,
-): boolean => Boolean(normalizeProviderApiKey(globalProviderKey(env, provider)));
+  provider: AiProvider,
+): boolean =>
+  Boolean(normalizeProviderApiKey(globalProviderKey(env, provider)));
 
 export const getGlobalTranscriptProviderKeyAvailability = (
   env: TranscriptProviderKeyEnv,
 ): TranscriptProviderKeyAvailability => ({
   openai: hasGlobalTranscriptProviderApiKey(env, "openai"),
   sarvam: hasGlobalTranscriptProviderApiKey(env, "sarvam"),
+  anthropic: hasGlobalTranscriptProviderApiKey(env, "anthropic"),
 });
 
 export const resolveTranscriptProviderApiKey = (options: {
-  provider: TranscriptTranscriptionProvider;
+  provider: AiProvider;
   providedApiKey?: string;
   globalApiKey?: string;
   missingMessage?: string;
@@ -73,7 +69,7 @@ export const resolveTranscriptProviderApiKey = (options: {
     `The shared ${label} API key is misconfigured.`;
   const providedApiKey = normalizeProviderApiKey(options.providedApiKey);
   if (providedApiKey) {
-    if (!isPlausibleProviderApiKey(options.provider, providedApiKey)) {
+    if (!isProviderApiKey(options.provider, providedApiKey)) {
       return { ok: false, message: missingMessage };
     }
     return { ok: true, apiKey: providedApiKey, source: "controller" };
@@ -81,7 +77,7 @@ export const resolveTranscriptProviderApiKey = (options: {
 
   const globalApiKey = normalizeProviderApiKey(options.globalApiKey);
   if (globalApiKey) {
-    if (!isPlausibleProviderApiKey(options.provider, globalApiKey)) {
+    if (!isProviderApiKey(options.provider, globalApiKey)) {
       return { ok: false, message: misconfiguredMessage };
     }
     return { ok: true, apiKey: globalApiKey, source: "global" };
@@ -100,5 +96,25 @@ export const resolveTranscriptOpenAiApiKey = (options: {
     globalApiKey: options.globalApiKey,
     missingMessage: "A valid OpenAI API key is required.",
     misconfiguredMessage: "The shared OpenAI API key is misconfigured.",
+  });
+};
+
+export const resolveTranscriptResponseApiKey = (options: {
+  env: AiEnvironment;
+  model: string;
+  transcriptionProvider: TranscriptTranscriptionProvider;
+  transcriptionApiKey?: string;
+  assistantApiKey?: string;
+}): TranscriptProviderKeyResolution => {
+  const provider = getResponseProvider(options.model);
+  return resolveTranscriptProviderApiKey({
+    provider,
+    providedApiKey:
+      options.assistantApiKey ||
+      (provider === options.transcriptionProvider
+        ? options.transcriptionApiKey
+        : undefined),
+    globalApiKey: getProviderApiKey(options.env, provider),
+    missingMessage: `A valid ${AI_PROVIDERS[provider].label} API key is required for Ask and Minutes.`,
   });
 };

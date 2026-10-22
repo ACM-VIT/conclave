@@ -35,9 +35,12 @@ response. Other chat, media, and meeting traffic continues while it runs.
 The in-chat `@Conclave` assistant runs through the Next.js app route in the
 main web Worker.
 
-- `OPENAI_API_KEY`: optional server-side key for room-wide assistant answers. If
-  unset, the chat dock prompts the asking participant for their own OpenAI key
-  and keeps it in browser memory for the current page session only.
+- `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`: optional shared keys for the selected
+  assistant provider. `CONCLAVE_ASSISTANT_MODEL` selects the shared model and
+  defaults to `gpt-5.6-terra`. Participants can select an OpenAI or Claude model
+  with their own matching key, kept in browser memory for the page session.
+- Provider setup, model updates, and gateway settings live in
+  [`packages/ai`](../../packages/ai/README.md).
 - `GITHUB_ISSUES_TOKEN`: optional server-side fine-grained GitHub token that lets
   `@Conclave` create issues when a participant explicitly requests one. Grant it
   Issues read/write access only for the target repository.
@@ -77,7 +80,8 @@ Required production configuration:
 - `TRANSCRIPT_TOKEN_SECRET`: shared by the SFU and transcript worker for token verification.
 - `TRANSCRIPT_WORKER_URL`: SFU-facing worker URL. Production uses `https://transcribe.conclave.acmvit.in`. `NEXT_PUBLIC_TRANSCRIPT_WORKER_URL` is accepted as a fallback for local environments.
 - `OPENAI_API_KEY`: optional transcript worker secret for OpenAI transcription plus Ask/Minutes. When set, meeting participants see the OpenAI key field as `On the house`.
-- `SARVAM_API_KEY`: optional transcript worker secret for Sarvam Saaras v3 transcription. When set, meeting participants see the Sarvam key field as covered by Conclave. Sarvam sessions still need `OPENAI_API_KEY` or a participant-supplied OpenAI assistant key for Ask/Minutes.
+- `SARVAM_API_KEY`: optional transcript worker secret for Sarvam Saaras v3 transcription. When set, meeting participants see the Sarvam key field as covered by Conclave. Ask/Minutes use the selected assistant provider and require its shared or participant-supplied key.
+- `ANTHROPIC_API_KEY`: optional transcript worker secret covering Claude Ask/Minutes models. Audio transcription still requires OpenAI or Sarvam.
 - `TRANSCRIPT_ALLOWED_ORIGIN`: optional worker CORS/origin lock for browser WebSocket upgrades.
 
 Optional worker configuration:
@@ -92,7 +96,7 @@ Optional worker configuration:
 - `CLOUDFLARE_AI_GATEWAY_OPENAI_URL`: OpenAI-compatible AI Gateway URL for responses/minutes.
 - `OPENAI_BASE_URL`: fallback OpenAI-compatible Responses API base URL.
 - `OPENAI_REALTIME_URL`: override for the OpenAI Realtime WebSocket endpoint.
-- `OPENAI_RESPONSES_URL`: override for the Responses API endpoint.
+- `CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL` / `ANTHROPIC_BASE_URL`: Anthropic API base URL for Claude Ask/Minutes.
 
 The active controller's provider keys are sent to the worker only for the live
 session. They stay in Durable Object memory, are not persisted to Durable Object
@@ -109,7 +113,7 @@ Cloudflare main-branch linking:
 - Config file: `apps/web/wrangler.transcript.jsonc`
 - Build/deploy command: `pnpm -C apps/web run transcript:deploy`
 - Required Cloudflare secret: `TRANSCRIPT_TOKEN_SECRET`
-- Optional Cloudflare secrets for free room-wide transcript starts: `OPENAI_API_KEY`, `SARVAM_API_KEY`
+- Optional Cloudflare secrets for free room-wide transcript starts: `OPENAI_API_KEY`, `SARVAM_API_KEY`, `ANTHROPIC_API_KEY`
 - Branch: `main`
 
 ## Scheduling email worker

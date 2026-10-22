@@ -1,10 +1,7 @@
-import type {
-  ResponseCreateParamsNonStreaming,
-  WebSearchTool,
-} from "openai/resources/responses/responses";
+import { readAiEnvironment } from "@conclave/ai/models";
+import { generateAiText, type AiWebSearchTool } from "@conclave/ai/server";
 import { config as sfuConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
-import { getOpenAiClient } from "../openaiClient.js";
 import { textOption } from "./config.js";
 import type { GameConfig, GameOptionSpec } from "./types.js";
 
@@ -21,7 +18,7 @@ type GeneratedContentRequest<T> = {
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/g;
 const MAX_GENERATED_TEXT_LENGTH = 240;
 const WEB_SEARCH_REQUEST_TIMEOUT_MS = 60_000;
-const GAME_AI_WEB_SEARCH_TOOL: WebSearchTool = {
+const GAME_AI_WEB_SEARCH_TOOL: AiWebSearchTool = {
   type: "web_search",
   search_context_size: sfuConfig.gameAi.webSearchContextSize,
 };
@@ -135,7 +132,7 @@ export const generateStructuredGameContent = async <T>({
     .join("\n\n");
 
   try {
-    const payload = await runOpenAiJson(
+    const payload = await runAiJson(
       systemInstructions,
       input,
       schemaName,
@@ -144,7 +141,9 @@ export const generateStructuredGameContent = async <T>({
       resolveRequestTimeoutMs(),
     );
     if (payload == null) {
-      Logger.warn(`[Games AI] ${gameName} returned an empty structured response`);
+      Logger.warn(
+        `[Games AI] ${gameName} returned an empty structured response`,
+      );
       return null;
     }
     const parsed = parse(payload);
@@ -158,7 +157,7 @@ export const generateStructuredGameContent = async <T>({
   }
 };
 
-const runOpenAiJson = async (
+const runAiJson = async (
   instructions: string,
   input: string,
   schemaName: string,
@@ -166,33 +165,24 @@ const runOpenAiJson = async (
   maxOutputTokens: number,
   timeoutMs: number,
 ): Promise<unknown | null> => {
-  const request: ResponseCreateParamsNonStreaming = {
+  const text = await generateAiText({
+    env: readAiEnvironment(process.env),
+    apiKey: sfuConfig.gameAi.apiKey,
     model: sfuConfig.gameAi.model,
     instructions,
     input,
-    max_output_tokens: Math.min(
+    maxOutputTokens: Math.min(
       maxOutputTokens,
       sfuConfig.gameAi.maxOutputTokens,
     ),
-    reasoning: { effort: sfuConfig.gameAi.reasoningEffort },
-    store: sfuConfig.gameAi.storeResponses,
-    text: {
-      format: {
-        type: "json_schema",
-        name: schemaName,
-        schema,
-        strict: true,
-      },
-    },
-  };
-  if (sfuConfig.gameAi.webSearchEnabled) {
-    request.tools = [GAME_AI_WEB_SEARCH_TOOL];
-  }
-
-  const response = await getOpenAiClient().responses.create(request, {
-    timeout: timeoutMs,
+    reasoningEffort: sfuConfig.gameAi.reasoningEffort,
+    format: { name: schemaName, schema },
+    tools: sfuConfig.gameAi.webSearchEnabled
+      ? [GAME_AI_WEB_SEARCH_TOOL]
+      : undefined,
+    timeoutMs,
   });
-  return parseStrictJson(response.output_text);
+  return parseStrictJson(text);
 };
 
 const resolveRequestTimeoutMs = (): number => {

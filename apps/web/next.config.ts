@@ -72,6 +72,7 @@ const nextConfig: NextConfig = {
     unoptimized: true,
   },
   transpilePackages: [
+    "@conclave/ai",
     "@conclave/apps-sdk",
     "@conclave/meeting-core",
     "@conclave/ui-tokens",

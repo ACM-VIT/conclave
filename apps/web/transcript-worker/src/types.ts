@@ -1,3 +1,4 @@
+import type { AiEnvironment } from "@conclave/ai/models";
 import type {
   TranscriptMinutesSnapshot,
   TranscriptSegment,
@@ -10,7 +11,7 @@ import type {
 } from "@conclave/meeting-core/transcript-types";
 import type { TranscriptRateLimitState } from "./rate-limit";
 
-export interface Env {
+export interface Env extends AiEnvironment {
   TRANSCRIPT_ROOM: DurableObjectNamespace;
   CF_VERSION_METADATA?: Partial<TranscriptServiceVersion>;
   TRANSCRIPT_TOKEN_SECRET: string;

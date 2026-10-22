@@ -4,6 +4,7 @@ import {
   hasGlobalOpenAiApiKey,
   hasGlobalTranscriptProviderApiKey,
   resolveTranscriptProviderApiKey,
+  resolveTranscriptResponseApiKey,
   resolveTranscriptOpenAiApiKey,
 } from "../transcript-worker/src/key-policy";
 
@@ -20,6 +21,7 @@ describe("transcript provider key policy", () => {
     expect(getGlobalTranscriptProviderKeyAvailability({})).toEqual({
       openai: false,
       sarvam: false,
+      anthropic: false,
     });
     expect(
       getGlobalTranscriptProviderKeyAvailability({
@@ -29,6 +31,7 @@ describe("transcript provider key policy", () => {
     ).toEqual({
       openai: true,
       sarvam: true,
+      anthropic: false,
     });
     expect(
       hasGlobalTranscriptProviderApiKey(
@@ -92,5 +95,64 @@ describe("resolveTranscriptOpenAiApiKey", () => {
       ok: false,
       message: "The shared OpenAI API key is misconfigured.",
     });
+  });
+});
+
+describe("transcript response provider credentials", () => {
+  it("never sends an OpenAI transcription key to Claude", () => {
+    const result = resolveTranscriptResponseApiKey({
+      env: { OPENAI_API_KEY: "sk-global" },
+      model: "claude-sonnet-5-5",
+      transcriptionProvider: "openai",
+      transcriptionApiKey: "sk-user",
+    });
+    expect(result).toEqual({
+      ok: false,
+      message: "A valid Anthropic API key is required for Ask and Minutes.",
+    });
+  });
+
+  it("uses the selected provider's shared key and supports separate BYOK", () => {
+    const options = {
+      env: { ANTHROPIC_API_KEY: "sk-ant-global" },
+      model: "claude-sonnet-5-5",
+      transcriptionProvider: "sarvam" as const,
+      transcriptionApiKey: "sarvam-user",
+    };
+    expect(resolveTranscriptResponseApiKey(options)).toEqual({
+      ok: true,
+      apiKey: "sk-ant-global",
+      source: "global",
+    });
+    expect(
+      resolveTranscriptResponseApiKey({
+        ...options,
+        assistantApiKey: "sk-ant-user",
+      }),
+    ).toEqual({ ok: true, apiKey: "sk-ant-user", source: "controller" });
+    expect(
+      resolveTranscriptResponseApiKey({
+        ...options,
+        assistantApiKey: "sk-openai-user",
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("reuses an OpenAI transcription key only for OpenAI responses", () => {
+    expect(
+      resolveTranscriptResponseApiKey({
+        env: {},
+        model: "gpt-5.6-terra",
+        transcriptionProvider: "openai",
+        transcriptionApiKey: "sk-user",
+      }),
+    ).toEqual({ ok: true, apiKey: "sk-user", source: "controller" });
+    expect(
+      resolveTranscriptProviderApiKey({
+        provider: "openai",
+        providedApiKey: "sk-ant-user",
+        globalApiKey: "sk-server",
+      }),
+    ).toMatchObject({ ok: false });
   });
 });

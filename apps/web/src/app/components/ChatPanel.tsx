@@ -1,5 +1,7 @@
 "use client";
 
+import { AI_DEFAULT_MODELS, AI_PROVIDERS, getResponseProvider } from "@conclave/ai/models";
+
 import {
   AudioLines,
   Check,
@@ -238,7 +240,7 @@ function ChatPanel({
   assistantApiKeyPrompt = {
     visible: false,
     error: null,
-    model: "gpt-5.6-terra",
+    model: AI_DEFAULT_MODELS.assistant,
   },
   onSubmitAssistantApiKey,
   onCancelAssistantApiKey,
@@ -1266,7 +1268,7 @@ function ChatPanel({
                       Connect Conclave AI
                     </span>
                     <span className="block text-[11px] leading-snug text-[#a1a1aa]">
-                      Your OpenAI key, used only this session.
+                      Your {AI_PROVIDERS[getResponseProvider(assistantModel)].label} key, used only this session.
                     </span>
                   </span>
                 </div>
@@ -1354,6 +1356,7 @@ function ChatPanel({
                           aria-selected={isSelected}
                           onClick={() => {
                             if (isConclaveAssistantModel(model.id)) {
+                              if (getResponseProvider(model.id) !== getResponseProvider(assistantModel)) setAssistantApiKeyInput("");
                               setAssistantModel(model.id);
                             }
                             setIsAssistantModelMenuOpen(false);
@@ -1392,7 +1395,7 @@ function ChatPanel({
                 </p>
               ) : (
                 <a
-                  href="https://platform.openai.com/api-keys"
+                  href={AI_PROVIDERS[getResponseProvider(assistantModel)].keysUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-2 inline-flex items-center gap-1 text-[11px] text-[#a1a1aa]/70 transition-colors hover:text-[#a1a1aa]"

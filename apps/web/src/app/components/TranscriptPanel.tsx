@@ -1,5 +1,7 @@
 "use client";
 
+import { AI_PROVIDERS, getResponseProvider } from "@conclave/ai/models";
+
 import {
   Check,
   CheckCircle2,
@@ -31,10 +33,7 @@ import {
   LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS,
   TRANSCRIPT_QA_MODELS,
 } from "../lib/transcript-models";
-import type {
-  TranscriptMinutesEntry,
-  TranscriptSegment,
-} from "../lib/types";
+import type { TranscriptMinutesEntry, TranscriptSegment } from "../lib/types";
 import { formatTranscriptTimestamp } from "../lib/transcript-reducer";
 import {
   Conversation,
@@ -253,10 +252,14 @@ function StartStage({
   }, []);
   const hasGlobalProviderKey =
     transcript.globalProviderKeysAvailable[provider] === true;
+  const assistantProvider = getResponseProvider(qaModel);
+  const assistantProviderLabel = AI_PROVIDERS[assistantProvider].label;
   const hasGlobalAssistantKey =
-    transcript.globalProviderKeysAvailable.openai === true;
+    transcript.globalProviderKeysAvailable[assistantProvider] === true;
   const needsProviderKey = !hasGlobalProviderKey;
-  const needsAssistantKey = provider === "sarvam" && !hasGlobalAssistantKey;
+  const needsAssistantKey =
+    !hasGlobalAssistantKey &&
+    (assistantProvider !== provider || !needsProviderKey);
   const isOnTheHouse = !needsProviderKey && !needsAssistantKey;
   const providerCoveredLabel =
     provider === "sarvam" ? "Sarvam on the house" : "On the house";
@@ -270,10 +273,7 @@ function StartStage({
   useEffect(() => {
     setTranscriptModel(transcript.session.transcriptModel);
     setQaModel(transcript.session.qaModel);
-  }, [
-    transcript.session.qaModel,
-    transcript.session.transcriptModel,
-  ]);
+  }, [transcript.session.qaModel, transcript.session.transcriptModel]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -375,7 +375,7 @@ function StartStage({
                 value={assistantApiKey}
                 onChange={(event) => setAssistantApiKey(event.target.value)}
                 type="password"
-                placeholder="OpenAI key for Ask and Minutes"
+                placeholder={`${assistantProviderLabel} key for Ask and Minutes`}
                 autoComplete="off"
                 autoFocus={!needsProviderKey}
                 disabled={isSubmitting}
@@ -395,7 +395,11 @@ function StartStage({
                         key={option.provider}
                         type="button"
                         disabled={isSubmitting}
-                        onClick={() => setTranscriptModel(option.modelId)}
+                        onClick={() => {
+                          setTranscriptModel(option.modelId);
+                          setApiKey("");
+                          setAssistantApiKey("");
+                        }}
                         className={`h-8 rounded-md text-[12px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                           active
                             ? "bg-[#F95F4A] text-white shadow-sm"
@@ -414,7 +418,10 @@ function StartStage({
                 </span>
                 <select
                   value={qaModel}
-                  onChange={(event) => setQaModel(event.target.value)}
+                  onChange={(event) => {
+                    setQaModel(event.target.value);
+                    setAssistantApiKey("");
+                  }}
                   disabled={isSubmitting}
                   className="h-9 w-full rounded-lg border border-white/10 bg-black/20 px-2 text-[12px] text-[#fafafa] outline-none focus:border-[#4F9CF9]/60 disabled:opacity-60"
                 >
@@ -453,7 +460,7 @@ function StartStage({
               {isOnTheHouse
                 ? "Covered by Conclave. No key needed."
                 : hasGlobalProviderKey && needsAssistantKey
-                  ? "Sarvam is covered. Add an OpenAI key for Ask and Minutes."
+                  ? `${providerLabel} is covered. Add an ${assistantProviderLabel} key for Ask and Minutes.`
                 : "Keys are used only for this session, never stored."}
             </p>
           </form>
@@ -499,7 +506,13 @@ function FallbackState({
 
 // Live equalizer bars reusing the room's voice-activity keyframe, tinted with
 // the transcript accent so the empty state reads as "actively listening".
-function Waveform({ bars = 7, height = 14 }: { bars?: number; height?: number }) {
+function Waveform({
+  bars = 7,
+  height = 14,
+}: {
+  bars?: number;
+  height?: number;
+}) {
   return (
     <span
       className="flex items-end gap-[3px]"

@@ -56,7 +56,8 @@
     "streamdown": "^2.7.0",
     "tailwind-merge": "^3.7.0",
     "use-stick-to-bottom": "^1.1.6",
-    "vaul": "^1.1.2"
+    "vaul": "^1.1.2",
+    "@conclave/ai": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261014.1",

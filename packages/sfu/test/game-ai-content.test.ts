@@ -26,6 +26,7 @@ vi.mock("../config/config.js", () => ({
     },
     gameAi: {
       enabled: true,
+      apiKey: "test-openai-key",
       model: "gpt-5.6-luna",
       reasoningEffort: "low",
       storeResponses: false,
@@ -81,6 +82,7 @@ describe("game AI content", () => {
     expect(openAiConstructor).toHaveBeenCalledWith({
       apiKey: "test-openai-key",
       maxRetries: 2,
+      baseURL: undefined,
     });
     expect(createResponse).toHaveBeenCalledTimes(1);
     const [request, requestOptions] = createResponse.mock.calls[0];
@@ -90,7 +92,10 @@ describe("game AI content", () => {
     const requestRecord = request as Record<string, unknown>;
     const requestInput = requestRecord.input;
     const requestInstructions = requestRecord.instructions;
-    if (typeof requestInput !== "string" || typeof requestInstructions !== "string") {
+    if (
+      typeof requestInput !== "string" ||
+      typeof requestInstructions !== "string"
+    ) {
       throw new Error("Expected string input and instructions.");
     }
     expect(requestInput).toContain("Topic: latest space news");
@@ -106,7 +111,7 @@ describe("game AI content", () => {
     expect(requestRecord).toMatchObject({
       model: "gpt-5.6-luna",
       max_output_tokens: 500,
-      reasoning: { effort: "low" },
+      reasoning: { effort: "low", summary: "auto" },
       store: false,
       text: {
         format: {
