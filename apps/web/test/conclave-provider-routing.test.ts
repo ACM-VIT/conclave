@@ -2,9 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import jwt from "jsonwebtoken";
 import { POST } from "../src/app/api/conclave/assistant/route";
 
-const { createSession, stream } = vi.hoisted(() => ({
+const { createSession, stream, roomEnvironment } = vi.hoisted(() => ({
   createSession: vi.fn(),
   stream: vi.fn(),
+  roomEnvironment: vi.fn(),
+}));
+vi.mock("@conclave/ai/room-server", () => ({
+  fetchRoomAiEnvironment: roomEnvironment,
 }));
 vi.mock("@conclave/ai/server", () => ({ createAiTextSession: createSession }));
 
@@ -46,6 +50,7 @@ beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "sk-server-openai");
   vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-server");
   vi.stubEnv("CONCLAVE_ASSISTANT_MODEL", "");
+  roomEnvironment.mockReset().mockResolvedValue({});
   createSession.mockReset().mockReturnValue({ stream });
   stream.mockReset().mockImplementation(async function* () {
     yield { type: "complete", text: "Done", calls: [] };
@@ -90,11 +95,36 @@ describe("assistant provider integration", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     response = await POST(request());
     expect(response.status).toBe(428);
-    expect(await response.json()).toHaveProperty(
-      "error",
-      expect.stringContaining("Anthropic"),
-    );
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining("Anthropic"),
+      model: "claude-haiku-5-5",
+    });
     expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it("honors a selected room provider without a personal key", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    roomEnvironment.mockResolvedValue({ ANTHROPIC_API_KEY: "sk-ant-room" });
+    const response = await POST(request({ model: "claude-sonnet-5-5" }));
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(roomEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providers: ["anthropic"],
+        identity: {
+          roomId: "room",
+          clientId: "client",
+          channelId: "channel",
+          userId: "user",
+        },
+      }),
+    );
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "claude-sonnet-5-5",
+        apiKey: "sk-ant-room",
+      }),
+    );
   });
 
   it("continues function tools using the same provider and still pauses GitHub writes for approval", async () => {

@@ -8,10 +8,18 @@ export { createOpenAiClient } from "#openai";
 
 export const generateAiText = (
   options: AiTextOptions & { input: string },
-): Promise<string> =>
-  getResponseProvider(options.model) === "anthropic"
-    ? generateAnthropicText(options)
-    : generateOpenAiText(options);
+): Promise<string> => {
+  const signal = options.timeoutMs
+    ? AbortSignal.any([
+        ...(options.signal ? [options.signal] : []),
+        AbortSignal.timeout(options.timeoutMs),
+      ])
+    : options.signal;
+  const request = { ...options, signal };
+  return getResponseProvider(options.model) === "anthropic"
+    ? generateAnthropicText(request)
+    : generateOpenAiText(request);
+};
 
 export const createAiTextSession = (options: AiTextOptions): AiTextSession =>
   getResponseProvider(options.model) === "anthropic"

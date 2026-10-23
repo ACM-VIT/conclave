@@ -38,6 +38,7 @@ export type TranscriptTokenPayload = {
   exp?: number;
   sub?: string;
   iss?: string;
+  sfuUrl?: string;
   tokenUse?: string;
   userId?: string;
   displayName?: string;
@@ -53,6 +54,7 @@ export type TranscriptTokenPayload = {
 };
 
 export type Viewer = {
+  sfuUrl?: string;
   id: string;
   socket: WebSocket;
   userId: string;

@@ -1,4 +1,9 @@
-import { readAiEnvironment } from "@conclave/ai/models";
+import {
+  getProviderApiKey,
+  getResponseProvider,
+  type AiEnvironment,
+  readAiEnvironment,
+} from "@conclave/ai/models";
 import { generateAiText, type AiWebSearchTool } from "@conclave/ai/server";
 import { config as sfuConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
@@ -6,6 +11,7 @@ import { textOption } from "./config.js";
 import type { GameConfig, GameOptionSpec } from "./types.js";
 
 type GeneratedContentRequest<T> = {
+  aiEnvironment?: AiEnvironment;
   gameName: string;
   topic: string;
   instructions: string;
@@ -17,7 +23,7 @@ type GeneratedContentRequest<T> = {
 
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/g;
 const MAX_GENERATED_TEXT_LENGTH = 240;
-const WEB_SEARCH_REQUEST_TIMEOUT_MS = 60_000;
+const GAME_AI_MAX_DURATION_MS = 35_000;
 const GAME_AI_WEB_SEARCH_TOOL: AiWebSearchTool = {
   type: "web_search",
   search_context_size: sfuConfig.gameAi.webSearchContextSize,
@@ -72,7 +78,10 @@ export const cleanGeneratedText = (
 };
 
 export const normalizeGeneratedKey = (text: string): string =>
-  text.toLocaleLowerCase("en-US").replace(/[^a-z0-9]+/g, " ").trim();
+  text
+    .toLocaleLowerCase("en-US")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 
 export const cleanGeneratedStringArray = (
   value: unknown,
@@ -94,6 +103,7 @@ export const cleanGeneratedStringArray = (
 };
 
 export const generateStructuredGameContent = async <T>({
+  aiEnvironment,
   gameName,
   topic,
   instructions,
@@ -103,7 +113,12 @@ export const generateStructuredGameContent = async <T>({
   parse,
 }: GeneratedContentRequest<T>): Promise<T | null> => {
   const cleanTopic = sanitizeTopic(topic);
-  if (!cleanTopic || !sfuConfig.gameAi.enabled) return null;
+  const env = aiEnvironment ?? readAiEnvironment(process.env);
+  const apiKey =
+    sfuConfig.gameAi.apiKey ||
+    getProviderApiKey(env, getResponseProvider(sfuConfig.gameAi.model));
+  const disabled = /^(0|false)$/i.test(process.env.SFU_GAME_AI_ENABLED || "");
+  if (!cleanTopic || disabled || !apiKey) return null;
 
   const now = new Date();
   const currentDate = now.toISOString().slice(0, 10);
@@ -133,6 +148,8 @@ export const generateStructuredGameContent = async <T>({
 
   try {
     const payload = await runAiJson(
+      env,
+      apiKey,
       systemInstructions,
       input,
       schemaName,
@@ -158,6 +175,8 @@ export const generateStructuredGameContent = async <T>({
 };
 
 const runAiJson = async (
+  env: AiEnvironment,
+  apiKey: string,
   instructions: string,
   input: string,
   schemaName: string,
@@ -166,8 +185,8 @@ const runAiJson = async (
   timeoutMs: number,
 ): Promise<unknown | null> => {
   const text = await generateAiText({
-    env: readAiEnvironment(process.env),
-    apiKey: sfuConfig.gameAi.apiKey,
+    env,
+    apiKey,
     model: sfuConfig.gameAi.model,
     instructions,
     input,
@@ -185,12 +204,8 @@ const runAiJson = async (
   return parseStrictJson(text);
 };
 
-const resolveRequestTimeoutMs = (): number => {
-  if (!sfuConfig.gameAi.webSearchEnabled) {
-    return sfuConfig.gameAi.timeoutMs;
-  }
-  return Math.max(sfuConfig.gameAi.timeoutMs, WEB_SEARCH_REQUEST_TIMEOUT_MS);
-};
+const resolveRequestTimeoutMs = (): number =>
+  Math.min(sfuConfig.gameAi.timeoutMs, GAME_AI_MAX_DURATION_MS);
 
 const parseStrictJson = (value: string): unknown | null => {
   try {

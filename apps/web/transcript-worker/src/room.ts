@@ -1,3 +1,5 @@
+import { fetchRoomAiEnvironment } from "@conclave/ai/room-server";
+import { AI_PROVIDERS, getProviderApiKey, type AiEnvironment } from "@conclave/ai/models";
 import {
   getResponseProvider,
   isResponseModel,
@@ -214,6 +216,7 @@ export class TranscriptRoom {
     const viewer: Viewer = {
       id: crypto.randomUUID(),
       socket: server,
+      sfuUrl: payload.sfuUrl,
       userId: payload.userId!,
       displayName: payload.displayName || payload.userId!,
       clientId: payload.clientId,
@@ -483,12 +486,13 @@ export class TranscriptRoom {
   private resolveTranscriptionKey(
     provider: TranscriptTranscriptionProvider,
     providedApiKey: string | undefined,
+    env: AiEnvironment = this.env,
   ) {
     return resolveTranscriptProviderApiKey({
       provider,
       providedApiKey,
       globalApiKey:
-        provider === "sarvam" ? this.env.SARVAM_API_KEY : this.env.OPENAI_API_KEY,
+        provider === "sarvam" ? env.SARVAM_API_KEY : env.OPENAI_API_KEY,
     });
   }
 
@@ -497,9 +501,10 @@ export class TranscriptRoom {
     transcriptionProvider: TranscriptTranscriptionProvider,
     transcriptionApiKey: string | undefined,
     assistantApiKey: string | undefined,
+    env: AiEnvironment = this.env,
   ) {
     return resolveTranscriptResponseApiKey({
-      env: this.env,
+      env,
       model,
       transcriptionProvider,
       transcriptionApiKey,
@@ -799,22 +804,71 @@ export class TranscriptRoom {
     );
     const transcriptionProvider =
       getTranscriptTranscriptionProvider(transcriptModel);
+    const qaModel = isResponseModel(message.qaModel || "")
+      ? message.qaModel!
+      : DEFAULT_QA_MODEL;
+    const providers = [transcriptionProvider, getResponseProvider(qaModel)];
+    const effectiveEnv: AiEnvironment = { ...this.env };
+    let usesRoomKey = false;
+    if (
+      viewer.sfuUrl &&
+      viewer.clientId &&
+      viewer.channelId &&
+      providers.some((provider) => !getProviderApiKey(this.env, provider))
+    ) {
+      try {
+        const roomEnv = await fetchRoomAiEnvironment({
+          sfuUrl: viewer.sfuUrl,
+          secret: this.env.TRANSCRIPT_TOKEN_SECRET,
+          identity: {
+            userId: viewer.userId,
+            roomId,
+            clientId: viewer.clientId,
+            channelId: viewer.channelId,
+          },
+          providers,
+        });
+        for (const provider of providers) {
+          if (
+            !getProviderApiKey(this.env, provider) &&
+            getProviderApiKey(roomEnv, provider)
+          ) {
+            effectiveEnv[AI_PROVIDERS[provider].keyEnv] = getProviderApiKey(
+              roomEnv,
+              provider,
+            );
+            usesRoomKey = true;
+          }
+        }
+      } catch {
+        /* Participant keys remain available when room setup is unavailable. */
+      }
+      if (
+        !this.viewers.has(viewer.socket) ||
+        (this.session?.status ?? "idle") !== existingStatus
+      ) {
+        this.sendError(
+          viewer,
+          "Notes changed while connecting. Please try again.",
+        );
+        return;
+      }
+    }
     const transcriptionKey = this.resolveTranscriptionKey(
       transcriptionProvider,
       message.apiKey,
+      effectiveEnv,
     );
     if (!transcriptionKey.ok) {
       this.sendError(viewer, transcriptionKey.message);
       return;
     }
-    const qaModel = isResponseModel(message.qaModel || "")
-      ? message.qaModel!
-      : DEFAULT_QA_MODEL;
     const responseKey = this.resolveResponseKey(
       qaModel,
       transcriptionProvider,
       message.apiKey,
       message.assistantApiKey,
+      effectiveEnv,
     );
     if (!responseKey.ok) {
       this.sendError(viewer, responseKey.message);
@@ -838,7 +892,7 @@ export class TranscriptRoom {
       qaModel,
       transportMode,
       keySource:
-        transcriptionKey.source === "global" && responseKey.source === "global"
+        !usesRoomKey && transcriptionKey.source === "global" && responseKey.source === "global"
           ? "global"
           : "controller",
       startedAt: wasIdle ? now : (this.session?.startedAt ?? now),

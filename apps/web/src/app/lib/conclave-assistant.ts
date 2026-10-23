@@ -49,7 +49,7 @@ export interface ConclaveAssistantRelayPacket {
 }
 
 export class ConclaveAssistantApiKeyRequiredError extends Error {
-  constructor(message = "AI provider API key required.") {
+  constructor(message = "AI provider API key required.", readonly model?: ConclaveAssistantModel) {
     super(message);
     this.name = "ConclaveAssistantApiKeyRequiredError";
   }
@@ -310,15 +310,17 @@ export const streamConclaveAssistant = async ({
   if (!response.ok || !response.body) {
     let message = "Conclave could not answer right now.";
     let code = "";
+    let resolvedModel: ConclaveAssistantModel | undefined;
     try {
-      const data = (await response.json()) as { error?: string; code?: string };
+      const data = (await response.json()) as { error?: string; code?: string; model?: string };
       if (data?.error) message = data.error;
       if (data?.code) code = data.code;
+      if (data?.model && isConclaveAssistantModel(data.model)) resolvedModel = data.model;
     } catch {
       // Non-JSON error body; keep the default message.
     }
     if (response.status === 428 || code === "api_key_required") {
-      throw new ConclaveAssistantApiKeyRequiredError(message);
+      throw new ConclaveAssistantApiKeyRequiredError(message, resolvedModel);
     }
     throw new Error(message);
   }

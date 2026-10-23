@@ -70,6 +70,38 @@ are carried in field descriptions; the existing minutes/game parsers still bound
 and validate the results. Incomplete responses and provider errors fail the
 request; games retain their existing local-content fallback.
 
+## Room keys
+
+The web chat and notes panels expose room AI settings. Active participants can add
+OpenAI, Anthropic, or Sarvam keys for everyone in that room. Only the contributor
+or a host can replace/remove a contribution. Keys live in the owning SFU room's
+private memory and are cleared on room close; socket snapshots contain only
+provider availability and ownership. A server restart requires adding them again.
+Deployment keys take precedence over room contributions; explicit personal keys
+remain scoped to the current assistant/notes session. Providers never share keys.
+
+Room OpenAI keys cover image moderation and can also power text, games, and audio.
+Moderation stays fail closed. The image button opens setup when a room lacks an
+OpenAI key. Anthropic covers text; Sarvam covers audio. Games use the configured
+`SFU_GAME_AI_MODEL`; setting `SFU_GAME_AI_ENABLED=false` still disables generation.
+
+The web server and transcript Worker retrieve selected credentials through the
+SFU's private `/internal/ai/credentials` endpoint. It requires a server shared
+secret and exact active room/client/channel/user identity. Web uses `SFU_SECRET`;
+Worker uses `TRANSCRIPT_TOKEN_SECRET` (or the shared SFU secret). Configure
+`SFU_PUBLIC_URL` (or `SFU_INSTANCE_URL`) on the SFU for signed transcript routing, and the same
+`TRANSCRIPT_TOKEN_SECRET` on SFU and Worker. No arbitrary browser URL is accepted.
+The browser-safe `@conclave/ai/room` entry contains metadata only; credential
+retrieval lives in `@conclave/ai/room-server`.
+
+Removing a room key affects new requests. Active transcript sessions retain their
+in-memory key until stopped; borrowed keys are never persisted for automatic
+Worker recovery. Stop active notes to revoke their current key immediately.
+
+All game generation stages, including Claude research plus structured output,
+share one deadline capped at 35 seconds so completion fits the client's 45-second
+start acknowledgement.
+
 ## Updating models
 
 Edit `src/models.ts`, verify IDs and capabilities against provider documentation,
@@ -85,6 +117,8 @@ they do not spend provider credits or demonstrate live model availability.
 ## UI verification
 
 Local fixture showing Claude selected in the existing notes and chat panels.
-No live provider requests were made for this screenshot.
+Desktop and narrow viewport checks used local fixtures; no live provider requests were made.
 
 ![Claude provider controls](docs/provider-controls.png)
+
+![Room AI settings](docs/room-ai-settings.png)

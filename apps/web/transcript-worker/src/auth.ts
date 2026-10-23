@@ -114,6 +114,7 @@ export const verifyTranscriptToken = async (
   if (!data.userId || !data.roomId) return null;
   return {
     aud: data.aud,
+    sfuUrl: data.iss === "conclave-sfu" && typeof data.sfuUrl === "string" ? data.sfuUrl : undefined,
     exp: data.exp,
     sub: data.sub,
     userId: data.userId,

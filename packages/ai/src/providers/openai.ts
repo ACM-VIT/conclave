@@ -135,6 +135,10 @@ export const createOpenAiTextSession = (
                     ? "reasoning"
                     : "web_search",
               status,
+              ...(item.type === "web_search_call" &&
+              item.action?.type === "search"
+                ? { query: item.action.query }
+                : {}),
             };
           }
         }

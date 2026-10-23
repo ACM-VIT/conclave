@@ -172,6 +172,107 @@ describe("provider routing", () => {
     expect(JSON.stringify(requests[1].messages)).toContain("Research notes");
   });
 
+  it("shares one absolute deadline across Claude research and structured output", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init: RequestInit) => {
+        ++calls;
+        if (calls === 1) {
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          return json(message([{ type: "text", text: "Research notes" }]));
+        }
+        return new Promise<Response>((_resolve, reject) => {
+          const timer = setTimeout(
+            () =>
+              _resolve(json(message([{ type: "text", text: '{"ok":true}' }]))),
+            120,
+          );
+          const abort = () => {
+            clearTimeout(timer);
+            reject(new Error("Aborted"));
+          };
+          if (init.signal?.aborted) abort();
+          else init.signal?.addEventListener("abort", abort, { once: true });
+        });
+      }),
+    );
+    const started = Date.now();
+    await expect(
+      generateAiText({
+        ...options,
+        timeoutMs: 200,
+        input: "Make a quiz",
+        tools: [{ type: "web_search" }],
+        format: { name: "game", schema: { type: "object", properties: {} } },
+      }),
+    ).rejects.toThrow();
+    expect(calls).toBe(2);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("preserves OpenAI web search queries in public activity events", async () => {
+    const item = {
+      type: "web_search_call",
+      id: "search_1",
+      status: "completed",
+      action: { type: "search", query: "conclave meeting tools" },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        sse([
+          {
+            type: "response.created",
+            sequence_number: 0,
+            response: {
+              id: "resp_1",
+              object: "response",
+              status: "in_progress",
+              output: [],
+            },
+          },
+          {
+            type: "response.output_item.added",
+            sequence_number: 1,
+            output_index: 0,
+            item,
+          },
+          {
+            type: "response.output_item.done",
+            sequence_number: 2,
+            output_index: 0,
+            item,
+          },
+          {
+            type: "response.completed",
+            sequence_number: 3,
+            response: {
+              id: "resp_1",
+              object: "response",
+              status: "completed",
+              output: [item],
+            },
+          },
+        ]),
+      ),
+    );
+    const events = await collect(
+      createAiTextSession({
+        ...options,
+        model: "gpt-5.6-luna",
+        apiKey: "sk-openai-fixture",
+      }).stream("Search"),
+    );
+    expect(events).toContainEqual({
+      type: "activity",
+      id: "search_1",
+      kind: "web_search",
+      status: "done",
+      query: "conclave meeting tools",
+    });
+  });
+
   it("replays Claude tool results with the original signed thinking blocks", async () => {
     const requests: Record<string, unknown>[] = [];
     const content = [

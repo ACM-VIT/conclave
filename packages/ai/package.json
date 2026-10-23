@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     "./models": "./src/models.ts",
-    "./server": "./src/server.ts"
+    "./server": "./src/server.ts",
+    "./room": "./src/room.ts",
+    "./room-server": "./src/room-server.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

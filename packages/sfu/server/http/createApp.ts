@@ -1,3 +1,5 @@
+import { AI_PROVIDERS, getProviderApiKey, readAiEnvironment, type AiEnvironment } from "@conclave/ai/models";
+import { isRoomAiProvider } from "@conclave/ai/room";
 import type { MediaKind } from "mediasoup/types";
 import { randomBytes } from "node:crypto";
 import cors from "cors";
@@ -596,6 +598,7 @@ export const createSfuApp = ({
           data: req.body,
           mimeType,
           timeoutMs: config.chatImageModeration.timeoutMs,
+          apiKey: config.openAi.apiKey || room.aiCredentials.get("openai"),
         });
         if (moderation.blocked) {
           Logger.warn(
@@ -698,6 +701,52 @@ export const createSfuApp = ({
   // Keep the chat-image authorization middleware ahead of any body parser so
   // replayed capabilities are rejected before request bytes are buffered.
   app.use(express.json());
+
+  app.post("/internal/ai/credentials", (req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "no-store");
+    const secret = req.get("x-room-ai-secret") || "";
+    if (
+      !secretsMatch(secret, config.sfuSecret) &&
+      !secretsMatch(
+        secret,
+        process.env.TRANSCRIPT_TOKEN_SECRET || config.sfuSecret,
+      )
+    ) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const body = requestBody(req);
+    const room =
+      typeof body.channelId === "string"
+        ? state.rooms.get(body.channelId)
+        : undefined;
+    const member =
+      typeof body.userId === "string"
+        ? room?.getClient(body.userId)
+        : undefined;
+    if (
+      !room ||
+      room.id !== body.roomId ||
+      room.clientId !== body.clientId ||
+      !member ||
+      member.isObserver
+    ) {
+      res.status(403).json({ error: "Room membership is no longer active." });
+      return;
+    }
+    const result: AiEnvironment = {};
+    for (const provider of Array.isArray(body.providers)
+      ? body.providers
+      : []) {
+      if (!isRoomAiProvider(provider)) continue;
+      const key =
+        getProviderApiKey(readAiEnvironment(process.env), provider) ||
+        room.aiCredentials.get(provider);
+      if (key) result[AI_PROVIDERS[provider].keyEnv] = key;
+    }
+    res.json(result);
+  });
+
 
   app.get("/rooms", (req, res) => {
     if (!hasValidSecret(req, config.sfuSecret)) {

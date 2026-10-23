@@ -1,3 +1,4 @@
+import { fetchRoomAiEnvironment } from "@conclave/ai/room-server";
 import jwt from "jsonwebtoken";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import {
@@ -663,20 +664,40 @@ export async function POST(request: Request) {
   const participantApiKey = asString(body.apiKey).trim();
   const requestedModel = asString(body.model).trim();
   const model =
-    participantApiKey && isConclaveAssistantModel(requestedModel)
+    isConclaveAssistantModel(requestedModel)
       ? requestedModel
       : resolveConfiguredResponseModel(
           process.env.CONCLAVE_ASSISTANT_MODEL,
           CONCLAVE_ASSISTANT_GLOBAL_MODEL,
         );
   const provider = getResponseProvider(model);
-  const apiKey =
+  let apiKey =
     participantApiKey ||
     getProviderApiKey(readAiEnvironment(process.env), provider);
+  if (!apiKey) {
+    try {
+      const roomEnv = await fetchRoomAiEnvironment({
+        sfuUrl: routedSfuUrl,
+        secret: resolveSfuSecret(),
+        providers: [provider],
+        identity: {
+          roomId: tokenPayload.roomId!,
+          clientId: tokenPayload.clientId!,
+          channelId: tokenPayload.channelId!,
+          userId: tokenPayload.userId!,
+        },
+        signal: request.signal,
+      });
+      apiKey = getProviderApiKey(roomEnv, provider);
+    } catch {
+      /* Missing room credentials use the same provider-specific setup flow. */
+    }
+  }
   if (!apiKey || !isProviderApiKey(provider, apiKey)) {
     return Response.json(
       {
         code: "api_key_required",
+        model,
         error: `Enter an ${AI_PROVIDERS[provider].label} API key or select another model to use Conclave AI.`,
       },
       { status: 428 },

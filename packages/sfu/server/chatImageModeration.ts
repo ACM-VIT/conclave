@@ -1,3 +1,5 @@
+import { createOpenAiClient } from "@conclave/ai/server";
+import { readAiEnvironment } from "@conclave/ai/models";
 import { AI_DEFAULT_MODELS } from "@conclave/ai/models";
 import type { ModerationCreateParams } from "openai/resources/moderations";
 import { getOpenAiClient } from "./openaiClient.js";
@@ -32,6 +34,7 @@ export type ModerateChatImageOptions = {
   mimeType: string;
   timeoutMs: number;
   client?: ChatImageModerationClient;
+  apiKey?: string;
 };
 
 export const moderateChatImage = async ({
@@ -39,8 +42,14 @@ export const moderateChatImage = async ({
   mimeType,
   timeoutMs,
   client,
+  apiKey,
 }: ModerateChatImageOptions): Promise<ChatImageModerationResult> => {
-  const response = await (client ?? getOpenAiClient()).moderations.create(
+  const response = await (
+    client ??
+    (apiKey
+      ? createOpenAiClient(readAiEnvironment(process.env), apiKey)
+      : getOpenAiClient())
+  ).moderations.create(
     {
       model: CHAT_IMAGE_MODERATION_MODEL,
       input: [

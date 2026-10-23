@@ -1,3 +1,5 @@
+import { AI_PROVIDERS, readAiEnvironment } from "@conclave/ai/models";
+import { ROOM_AI_PROVIDERS } from "@conclave/ai/room";
 import { Admin } from "../../../config/classes/Admin.js";
 import { config as sfuConfig } from "../../../config/config.js";
 import type { Room } from "../../../config/classes/Room.js";
@@ -392,6 +394,19 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
         try {
           content = await module.generateContent({
             players,
+            aiEnvironment: {
+              ...Object.fromEntries(
+                ROOM_AI_PROVIDERS.map((provider) => [
+                  AI_PROVIDERS[provider].keyEnv,
+                  room.aiCredentials.get(provider),
+                ]),
+              ),
+              ...Object.fromEntries(
+                Object.entries(readAiEnvironment(process.env)).filter(
+                  ([, value]) => Boolean(value),
+                ),
+              ),
+            },
             config: gameConfig,
             now: Date.now(),
           });

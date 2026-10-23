@@ -1,3 +1,4 @@
+import { registerRoomAiHandlers } from "./handlers/roomAiHandlers.js";
 import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../../utilities/loggers.js";
 import type { SfuState } from "../state.js";
@@ -36,6 +37,7 @@ export const registerConnectionHandlers = (
     registerMediaHandlers(context);
     registerDisplayNameHandlers(context);
     registerChatHandlers(context);
+    registerRoomAiHandlers(context);
     registerChatReactionHandlers(context);
     registerReactionHandlers(context);
     registerHandHandlers(context);

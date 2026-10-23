@@ -684,7 +684,7 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
       callback: (
         response:
           | { token: string; uploadUrl: string; maxBytes: number }
-          | { error: string },
+          | { error: string; code?: string },
       ) => void,
     ) => {
       if (!context.currentClient || !context.currentRoom) {
@@ -710,6 +710,11 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
       }
       if (!room.areImageAttachmentsEnabled) {
         respond(callback, { error: "Image attachments are disabled by the host." });
+        return;
+      }
+
+      if (!config.openAi.apiKey && !room.aiCredentials.get("openai")) {
+        respond(callback, { error: "Add an OpenAI room key in AI settings to enable image safety checks.", code: "room_ai_key_required" });
         return;
       }
 
