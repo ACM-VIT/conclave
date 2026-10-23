@@ -59,6 +59,80 @@ const transcript = (start = vi.fn().mockResolvedValue(true)) =>
   }) as unknown as MeetingTranscriptController;
 
 describe("AI setup UX", () => {
+  it("keeps key feedback in its provider row and exposes feature labels and model selection", async () => {
+    const configure = vi.fn().mockResolvedValue(null);
+    await act(async () =>
+      root.render(
+        <RoomAiSettings
+          controller={roomAi({ configure })}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    const select = container.querySelector("select")!;
+    await act(async () => {
+      select.value = "claude-haiku-5-5";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(configure).toHaveBeenCalledWith(
+      "anthropic",
+      undefined,
+      "claude-haiku-5-5",
+    );
+    const row = container.querySelector(
+      '[role="group"][aria-label="Anthropic settings"]',
+    )!;
+    await act(async () =>
+      row.querySelector<HTMLButtonElement>("button")!.click(),
+    );
+    const input = row.querySelector<HTMLInputElement>("input")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "sk-ant-fixture");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      row
+        .querySelector("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    expect(configure).toHaveBeenCalledWith("anthropic", "sk-ant-fixture");
+    expect(row.querySelector('[role="status"]')?.textContent).toBe(
+      "Key shared with room",
+    );
+    expect(
+      container
+        .querySelector('[aria-label="Sarvam settings"]')
+        ?.querySelector('[role="status"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector(
+        '[role="img"][aria-label="Image safety"] [role="tooltip"]',
+      )?.textContent,
+    ).toBe("Image safety");
+    expect(container.querySelector(".lucide-sparkles")).toBeNull();
+  });
+
+  it("uses the room assistant model for notes setup", async () => {
+    const state = emptyRoomAiState();
+    state.assistantModel = "claude-haiku-5-5";
+    state.anthropic = { source: "room", ownerId: "alice" };
+    await act(async () =>
+      root.render(
+        <TranscriptPanel
+          transcript={transcript()}
+          roomAi={roomAi({ state })}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    expect(container.querySelector("select")?.value).toBe("claude-haiku-5-5");
+  });
+
   it("separates transcription coverage from the selected assistant's missing key", async () => {
     await act(async () =>
       root.render(

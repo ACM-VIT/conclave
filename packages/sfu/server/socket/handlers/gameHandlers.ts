@@ -406,6 +406,9 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
                   ([, value]) => Boolean(value),
                 ),
               ),
+              ...(room.aiCredentials.assistantModel
+                ? { CONCLAVE_ASSISTANT_MODEL: room.aiCredentials.assistantModel }
+                : {}),
             },
             config: gameConfig,
             now: Date.now(),

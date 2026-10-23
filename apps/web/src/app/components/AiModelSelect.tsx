@@ -18,6 +18,7 @@ export default function AiModelSelect({
     label: string;
     description: string;
     provider: AiTextProvider;
+    disabled?: boolean;
   }[];
   disabled?: boolean;
   label?: string;
@@ -51,7 +52,11 @@ export default function AiModelSelect({
               {models
                 .filter((model) => model.provider === provider)
                 .map((model) => (
-                  <option key={model.id} value={model.id}>
+                  <option
+                    key={model.id}
+                    value={model.id}
+                    disabled={model.disabled}
+                  >
                     {model.label}
                   </option>
                 ))}

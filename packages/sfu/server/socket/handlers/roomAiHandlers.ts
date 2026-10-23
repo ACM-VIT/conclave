@@ -1,4 +1,8 @@
-import { readAiEnvironment } from "@conclave/ai/models";
+import {
+  getResponseProvider,
+  isResponseModel,
+  readAiEnvironment,
+} from "@conclave/ai/models";
 import { isRoomAiProvider } from "@conclave/ai/room";
 import { Admin } from "../../../config/classes/Admin.js";
 import type { ConnectionContext } from "../context.js";
@@ -55,6 +59,14 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
       }
       try {
         const host = member.client instanceof Admin;
+        if (
+          data.model !== undefined &&
+          (typeof data.model !== "string" ||
+            !isResponseModel(data.model) ||
+            getResponseProvider(data.model) !== data.provider)
+        ) {
+          throw new Error("Choose a supported model for this provider.");
+        }
         if (data.remove === true)
           member.room.aiCredentials.remove(
             data.provider,
@@ -68,7 +80,15 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
             member.client.id,
             host,
           );
-        else throw new Error("Enter an API key.");
+        else if (typeof data.model !== "string")
+          throw new Error("Enter an API key.");
+        if (typeof data.model === "string") {
+          member.room.aiCredentials.setModel(
+            data.model,
+            member.client.id,
+            host,
+          );
+        }
         const state = member.room.aiCredentials.status(
           readAiEnvironment(process.env),
         );

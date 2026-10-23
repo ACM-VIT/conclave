@@ -10,7 +10,10 @@ const { createSession, stream, roomEnvironment } = vi.hoisted(() => ({
 vi.mock("@conclave/ai/room-server", () => ({
   fetchRoomAiEnvironment: roomEnvironment,
 }));
-vi.mock("@conclave/ai/server", () => ({ createAiTextSession: createSession }));
+vi.mock("@conclave/ai/server", async (original) => ({
+  ...(await original<typeof import("@conclave/ai/server")>()),
+  createAiTextSession: createSession,
+}));
 
 const request = (body: Record<string, unknown> = {}, isAdmin = false) => {
   const token = jwt.sign(
@@ -59,6 +62,48 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("assistant provider integration", () => {
+  it("uses the room's selected Claude model without a personal selection or an OpenAI key", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    roomEnvironment.mockResolvedValue({
+      ANTHROPIC_API_KEY: "sk-ant-room",
+      CONCLAVE_ASSISTANT_MODEL: "claude-haiku-5-5",
+    });
+    const response = await POST(request());
+    await response.text();
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "claude-haiku-5-5",
+        apiKey: "sk-ant-room",
+      }),
+    );
+  });
+
+  it("reports a rejected provider key and logs redacted plain diagnostics", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    stream.mockImplementation(async function* () {
+      yield* [];
+      throw Object.assign(new Error("Rejected sk-ant-participant"), {
+        status: 401,
+        request_id: "req_fixture",
+      });
+    });
+    try {
+      const response = await POST(
+        request({ model: "claude-sonnet-5-5", apiKey: "sk-ant-participant" }),
+      );
+      const frames = await response.text();
+      expect(frames).toContain("Anthropic rejected the API key");
+      expect(log.mock.calls[0][1]).toContain('"status":401');
+      expect(log.mock.calls[0][1]).toContain("req_fixture");
+      expect(JSON.stringify(log.mock.calls)).not.toContain(
+        "sk-ant-participant",
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("honors explicit Claude BYOK even when a shared OpenAI key exists", async () => {
     const response = await POST(
       request({ model: "claude-sonnet-5-5", apiKey: "sk-ant-participant" }),
@@ -110,7 +155,7 @@ describe("assistant provider integration", () => {
     await response.text();
     expect(roomEnvironment).toHaveBeenCalledWith(
       expect.objectContaining({
-        providers: ["anthropic"],
+        providers: ["openai", "anthropic"],
         identity: {
           roomId: "room",
           clientId: "client",

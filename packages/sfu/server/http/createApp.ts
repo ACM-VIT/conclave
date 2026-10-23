@@ -744,6 +744,9 @@ export const createSfuApp = ({
         room.aiCredentials.get(provider);
       if (key) result[AI_PROVIDERS[provider].keyEnv] = key;
     }
+    if (room.aiCredentials.assistantModel) {
+      result.CONCLAVE_ASSISTANT_MODEL = room.aiCredentials.assistantModel;
+    }
     res.json(result);
   });
 

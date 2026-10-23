@@ -114,9 +114,11 @@ export const generateStructuredGameContent = async <T>({
 }: GeneratedContentRequest<T>): Promise<T | null> => {
   const cleanTopic = sanitizeTopic(topic);
   const env = aiEnvironment ?? readAiEnvironment(process.env);
+  const model = env.CONCLAVE_ASSISTANT_MODEL || sfuConfig.gameAi.model;
   const apiKey =
-    sfuConfig.gameAi.apiKey ||
-    getProviderApiKey(env, getResponseProvider(sfuConfig.gameAi.model));
+    getProviderApiKey(env, getResponseProvider(model)) ||
+    (getResponseProvider(model) === getResponseProvider(sfuConfig.gameAi.model)
+      ? sfuConfig.gameAi.apiKey : "");
   const disabled = /^(0|false)$/i.test(process.env.SFU_GAME_AI_ENABLED || "");
   if (!cleanTopic || disabled || !apiKey) return null;
 
@@ -149,6 +151,7 @@ export const generateStructuredGameContent = async <T>({
   try {
     const payload = await runAiJson(
       env,
+      model,
       apiKey,
       systemInstructions,
       input,
@@ -176,6 +179,7 @@ export const generateStructuredGameContent = async <T>({
 
 const runAiJson = async (
   env: AiEnvironment,
+  model: string,
   apiKey: string,
   instructions: string,
   input: string,
@@ -187,7 +191,7 @@ const runAiJson = async (
   const text = await generateAiText({
     env,
     apiKey,
-    model: sfuConfig.gameAi.model,
+    model,
     instructions,
     input,
     maxOutputTokens: Math.min(

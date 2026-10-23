@@ -40,6 +40,7 @@ export const fetchRoomAiEnvironment = async (options: {
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "SARVAM_API_KEY",
+    "CONCLAVE_ASSISTANT_MODEL",
   ] as const) {
     if (typeof record[name] === "string") result[name] = record[name];
   }
