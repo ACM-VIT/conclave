@@ -63,6 +63,23 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("assistant provider integration", () => {
+  it("uses single-type enum branches for Claude's nullable browser direction", async () => {
+    const response = await POST(request({ model: "claude-haiku-5-5" }, true));
+    await response.text();
+    const tool = createSession.mock.calls[0][0].tools.find(
+      (entry: { name?: string }) => entry.name === "control_shared_browser",
+    );
+    // Anthropic rejects an enum alongside type: ["string", "null"] with 400.
+    // Keep the enum on the string branch and null on its own branch.
+    expect(tool.parameters.properties.direction).toEqual({
+      anyOf: [
+        { type: "string", enum: ["up", "down"] },
+        { type: "null" },
+      ],
+      description: "Scroll direction, or null.",
+    });
+  });
+
   it("skips room lookup when an explicit model and its deployment key are known", async () => {
     roomEnvironment.mockRejectedValue(new Error("Room lookup is unavailable"));
     const response = await POST(request({ model: "claude-haiku-5-5" }));

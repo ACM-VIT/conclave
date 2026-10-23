@@ -103,8 +103,10 @@ const CONTROL_SHARED_BROWSER_TOOL: AiFunctionTool = {
         description: "HTTP(S) URL for a navigate action, or null.",
       },
       direction: {
-        type: ["string", "null"],
-        enum: ["up", "down", null],
+        anyOf: [
+          { type: "string", enum: ["up", "down"] },
+          { type: "null" },
+        ],
         description: "Scroll direction, or null.",
       },
       submit: {
