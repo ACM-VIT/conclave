@@ -10,11 +10,10 @@ let package = Package(
         .library(name: "Conclave", type: .dynamic, targets: ["Conclave"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/skiptools/skip.git", from: "1.9.8"),
-        .package(url: "https://github.com/skiptools/skip-ui.git", from: "1.59.3"),
-        .package(url: "https://github.com/skiptools/skip-fuse.git", from: "1.0.3"),
-        .package(url: "https://github.com/skiptools/skip-model.git", from: "1.7.9"),
-        .package(url: "https://github.com/skiptools/skip-kit.git", from: "1.1.3"),
+        .package(url: "https://github.com/skiptools/skip.git", from: "1.9.16"),
+        .package(url: "https://github.com/skiptools/skip-ui.git", from: "1.64.0"),
+        .package(url: "https://github.com/skiptools/skip-model.git", from: "1.8.1"),
+        .package(url: "https://github.com/skiptools/skip-kit.git", from: "1.1.6"),
         .package(url: "https://github.com/google/GoogleSignIn-iOS", from: "10.0.0"),
         .package(url: "https://github.com/socketio/socket.io-client-swift.git", from: "16.1.1"),
         .package(url: "https://github.com/VLprojects/mediasoup-client-swift", from: "0.13.2")
@@ -23,7 +22,6 @@ let package = Package(
         .target(name: "Conclave", dependencies: [
             .product(name: "SkipDrive", package: "skip"),
             .product(name: "SkipUI", package: "skip-ui"),
-            .product(name: "SkipFuse", package: "skip-fuse"),
             .product(name: "SkipModel", package: "skip-model"),
             .product(name: "SkipKit", package: "skip-kit"),
             .product(name: "GoogleSignIn", package: "GoogleSignIn-iOS", condition: .when(platforms: [.iOS])),

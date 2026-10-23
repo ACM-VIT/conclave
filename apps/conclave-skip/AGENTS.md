@@ -34,19 +34,52 @@ swift build
 swift test
 ```
 
-Android uses the system Gradle binary, not a wrapper:
+Plain `swift build` / `swift test` work on Swift 6.4's default build engine; no
+`--build-system native` flag or `swift` PATH shim is needed. The app is Skip
+Lite only (every module transpiled). Do not add `skip-fuse` back: it made the
+SwiftPM graph fail on the default engine, shipped about 100 MB per ABI of
+Swift runtime/ICU/Foundation `.so` files, and made `assembleRelease`
+cross-compile Swift with a separate Swift-for-Android toolchain.
+
+Android uses the checked-in Gradle wrapper (`Android/gradlew`, Gradle 9.7.1,
+distribution SHA-256 pinned). The gates are verified with JDK 21 (AGP 9.2
+needs JDK 17 or newer); pin `JAVA_HOME` so Gradle does not pick up whatever
+the machine default JDK happens to be:
 
 ```bash
 cd apps/conclave-skip/Android
-/opt/homebrew/bin/gradle :Conclave:compileDebugKotlin --console=plain
-ALLOW_DEBUG_RELEASE_SIGNING=true /opt/homebrew/bin/gradle :app:assembleRelease --console=plain
+export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+./gradlew :Conclave:compileDebugKotlin --console=plain
+ALLOW_DEBUG_RELEASE_SIGNING=true ./gradlew :app:assembleRelease --console=plain
 ```
+
+The Xcode "Run skip gradle" phase (default `SKIP_ACTION=build`) and
+`Android/fastlane` go through the same wrapper and default `JAVA_HOME` to the
+Homebrew JDK 21 when it is unset. `skip gradle` ignores `--gradle` and
+`--java-home` and runs the first `gradle` on `PATH` (falling back to the
+Homebrew `java` JDK), so the phase puts a `gradle` shim that execs
+`Android/gradlew` first on `PATH`; no Homebrew Gradle is needed.
+
+`Android/settings.gradle.kts` runs `skip plugin --prebuild` plus a host
+`swift build --scratch-path .build/index-build` before Gradle configures. It
+runs the skip CLI that SwiftPM resolved from `Package.resolved`
+(`.build/artifacts/skip/skip/skip.artifactbundle/macos/skip`), so the Gradle
+plugin always matches the skipstone transpiler version regardless of the
+Homebrew `skip` version. On a fresh clone run `swift build` once first; until
+then it falls back to `skip` on `PATH`. If the prebuild fails, run
+`swift build` directly to see the real error.
 
 The local release APK is written to:
 
 ```text
 apps/conclave-skip/.build/Android/app/outputs/apk/release/app-release.apk
 ```
+
+It is about 120 MB (mostly un-minified DEX) with 7 small native libs per ABI
+(mediasoup, libc++, dotLottie, CameraX, androidx graphics); the arm64 and
+x86_64 ones are all 16 KB aligned. If `libswiftCore.so`, `libFoundation*.so`, `lib_FoundationICU.so` or
+`libSkipAndroidBridge.so` ever reappear in `unzip -l`, something pulled
+SkipFuse or a native-mode Skip module back in.
 
 For iOS simulator builds, the Skip project may need plugin validation skipped
 and Skip actions disabled during Xcode build:
@@ -60,6 +93,22 @@ xcodebuild \
   -derivedDataPath /tmp/conclave-ios-dd \
   -skipPackagePluginValidation \
   -skipMacroValidation \
+  build SKIP_ZERO=1 SKIP_ACTION=none
+```
+
+The unsigned iOS device Release gate uses the same flags (`SKIP_ACTION=none`
+keeps the "Run skip gradle" phase from launching Gradle):
+
+```bash
+xcodebuild \
+  -project apps/conclave-skip/Darwin/Conclave.xcodeproj \
+  -scheme "Conclave App" \
+  -configuration Release \
+  -destination generic/platform=iOS \
+  -derivedDataPath /tmp/conclave-ios-dd-release \
+  -skipPackagePluginValidation \
+  -skipMacroValidation \
+  CODE_SIGNING_ALLOWED=NO \
   build SKIP_ZERO=1 SKIP_ACTION=none
 ```
 
@@ -354,6 +403,62 @@ branches), `refreshChatDisplayName`, `mergedConclaveAssistantMessage`,
 `decodeConclaveAssistantMessage` in SocketIOManager+Android.kt (hand-rolled
 JSON, NOT transpiled); and the test fixtures. The image field was dropped by
 `normalizedChatMessage` on every receive until 2026-07-17.
+
+## Media Threading And Lifecycle Invariants
+
+Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
+
+- Never add or remove a video sink inside a frame callback (Android
+  `VideoSink.onFrame`, iOS `RTCVideoRenderer.renderFrame`). Frames arrive on
+  the decode thread while WebRTC holds the broadcaster sink lock, so a
+  synchronous `removeSink`/`remove` deadlocks remote video (the Android ANR).
+  Post the detach to the main thread, as `FirstDecodedVideoFrameObserver` and
+  `FirstDecodedVideoFrameRenderer` do.
+- iOS: never call mediasoup `createProducer` on the MainActor. The wrapper
+  blocks on `onProduce`, which hops to the MainActor for socket signaling.
+  Use `createProducerOffMain` / `createScreenProducerOffMain`, then re-check
+  generation and ownership after the await before committing. The await lets
+  other MainActor work run: a microphone start also compares
+  `localAudioMuteIntentGeneration` and drops its producer if a mute landed
+  meanwhile, and a mute with no producer yet still reaches the client
+  (`disableLocalAudioIfNeeded` calls `suspendLocalAudioForRecovery`). Do not
+  throw `staleConfiguration` for a superseded-but-same-session start (mic or
+  camera); callers treat "session was replaced" as a reason to force a rejoin.
+- iOS: every blocking libmediasoupclient send-side call (producer create and
+  close, send transport close, send ICE restart) runs on the serial
+  `sendTransportOperationQueue` (`performSendTransportOperation`,
+  `closeSendProducer`, `closeSendTransport`), never directly and never via
+  `sync`. SendTransport/SendHandler state is unsynchronized, and the queued
+  transport close keeps the Device alive until any in-flight create is done.
+- iOS: the SFU closes a displaced producer and broadcasts `producerClosed`
+  for it to the owner before acking the replacement, so with off-main creates
+  that event reaches the view model first. Microphone replacements (bandwidth
+  refresh, route recovery) mark the predecessor in
+  `intentionalLocalAudioProducerCloseIds` before the create, and
+  `handleLocalProducerClosed` consumes it (like the video marker). Once the
+  replacement's create returns in the same session, never fall back to the
+  predecessor: commit the replacement, paused and server-muted if a mute
+  landed (`isLocalAudioMuteInEffect`). `startProducingAudio` is single-flight
+  (`audioStartTask`) so two starts never race a produce, and microphone tracks
+  are created disabled and enabled only by a live commit.
+- A failed mute fails closed on both platforms: `setAudioEnabled(false)`
+  keeps the producer paused and the track silent, and the view model stays
+  muted while showing the error.
+- Android `Main.kt` must keep `SideEffect { saveableStateHolder.removeState(...) }`
+  inside the root `SaveableStateProvider` (Skip app template). Restoring SkipUI
+  saved state after the PiP swap or activity recreation NPEs in
+  `PresentationRoot`.
+- Keep-awake (`CallScreenAwake`) and the Android POST_NOTIFICATIONS request
+  hang off `activateCallPresence()` / `deactivateCallPresence()`; the
+  notification prompt waits until the meeting-entry overlay has cleared and
+  rendered away (a short deferred re-check). Only terminal call end
+  (`deactivateCallPresence()` ->
+  `PermissionHelper.dropQueuedNotificationsPermissionRequest()`) drops a
+  queued prompt; `cancelPendingCallPermissionRequests()` also runs on
+  recovery rejoins and must keep it. A request that never reached the user
+  (dropped, no activity, or cancelled by Android behind another dialog) does
+  not use up the once-per-process ask
+  (`wasLastNotificationsPermissionRequestAnswered()`).
 
 ## Android `onChange` Crash Pattern
 

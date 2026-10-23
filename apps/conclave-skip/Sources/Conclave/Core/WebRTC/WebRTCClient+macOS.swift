@@ -111,10 +111,14 @@ final class WebRTCClient {
     ) { }
     func invalidateWebcamReceiverCapacityAuthority() { }
     func consumeIntentionalLocalVideoProducerClose(producerId: String) -> Bool { false }
+    func consumeIntentionalLocalAudioProducerClose(producerId: String) -> Bool { false }
     func hasAudioConsumer(userIdPrefix: String) -> Bool { false }
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { }
     func setAudioEnabled(_ enabled: Bool) async throws { }
-    func suspendLocalAudioForRecovery() { }
+    func suspendLocalAudioForRecovery() {
+        localAudioEnabled = false
+        onLocalAudioEnabledChanged?(false)
+    }
     func reassertLocalAudioProducerUnmuted() async throws { }
     func setVideoEnabled(_ enabled: Bool) async throws { }
     func suspendLocalVideoForRecovery() async { }

@@ -1,8 +1,5 @@
 import Foundation
 import Observation
-#if !SKIP
-import SkipFuse
-#endif
 
 @MainActor
 @Observable

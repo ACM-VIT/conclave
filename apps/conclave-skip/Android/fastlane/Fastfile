@@ -8,8 +8,12 @@ Dotenv.load '../../Skip.env'
 
 default_platform(:android)
 
-# Use the Homebrew gradle rather than expecting a local gradlew.
-gradle_bin = (ENV['HOMEBREW_PREFIX'] ? ENV['HOMEBREW_PREFIX'] : "/opt/homebrew") + "/bin/gradle"
+# Build with the checked-in Gradle wrapper (Android/gradlew, Gradle 9.7.1 with
+# a pinned distribution SHA-256) and the JDK the Android gates are verified
+# with, rather than whatever Gradle or JDK the machine happens to have.
+gradle_bin = File.expand_path("../gradlew", __dir__)
+jdk21_home = (ENV['HOMEBREW_PREFIX'] ? ENV['HOMEBREW_PREFIX'] : "/opt/homebrew") + "/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
+ENV['JAVA_HOME'] ||= jdk21_home if File.directory?(jdk21_home)
 
 desc "Build Conclave Android app"
 lane :build do |options|

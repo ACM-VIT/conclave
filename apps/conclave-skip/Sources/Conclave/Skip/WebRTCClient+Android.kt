@@ -64,6 +64,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.util.UUID
 
 private data class ConsumerGenerationIdentity(
@@ -122,29 +123,47 @@ private enum class PlannedWebcamConsumerResetOutcome(val rawValue: String) {
  * A one-shot sink on the decoded WebRTC track. It detaches after the first
  * frame, leaving steady-state rendering unchanged, while its deferred value
  * remains latched for orchestration that starts awaiting slightly later.
+ *
+ * Never call removeSink from onFrame: WebRTC delivers frames on its decode
+ * thread while the native VideoBroadcaster holds its sink lock, and removeSink
+ * needs that same lock, so a synchronous detach deadlocks the decoder and then
+ * every main-thread track call (the remote-video ANR). The first frame
+ * completes the signal immediately and posts the detach to the main looper,
+ * where the other addSink/removeSink calls on these tracks already run. The
+ * track is claimed atomically, so exactly one of that posted detach and
+ * cancel() calls removeSink.
  */
 private class FirstDecodedVideoFrameObserver(
     track: VideoTrack,
     private val signal: CompletableDeferred<Unit>,
 ) : org.webrtc.VideoSink {
     private val isFinished = AtomicBoolean(false)
-    private var track: VideoTrack? = track
+    private val attachedTrack = AtomicReference<VideoTrack?>(track)
 
     override fun onFrame(frame: org.webrtc.VideoFrame) {
         if (!isFinished.compareAndSet(false, true)) return
-        val trackToDetach = track
-        track = null
-        trackToDetach?.removeSink(this)
         signal.complete(Unit)
+        mainHandler.post { detach() }
     }
 
+    /** Main thread only (consumer removal and cleanup). */
     fun cancel() {
-        if (isFinished.compareAndSet(false, true)) {
-            val trackToDetach = track
-            track = null
-            trackToDetach?.removeSink(this)
-        }
+        isFinished.set(true)
+        detach()
         signal.cancel()
+    }
+
+    private fun detach() {
+        val trackToDetach = attachedTrack.getAndSet(null) ?: return
+        try {
+            trackToDetach.removeSink(this)
+        } catch (_: Throwable) {
+            // The consumer may already have closed and released its track.
+        }
+    }
+
+    private companion object {
+        val mainHandler = Handler(Looper.getMainLooper())
     }
 }
 
@@ -1735,6 +1754,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var isCallAudioModeActive = false
     private var hasCallAudioFocus = false
     private var localAudioTargetEnabled = false
+    // Bumped by every local microphone mute (setAudioEnabled(false),
+    // suspendLocalAudioForRecovery()). startProducingAudio compares it across
+    // its suspension points so a mute that lands while it waits for the send
+    // transport or the RECORD_AUDIO prompt is never overridden by a live mic.
+    private var localAudioMuteIntentGeneration = 0
     private var bluetoothConnectAutoRequestAttempted = false
     private var bluetoothConnectPermissionRequestToken: PermissionHelper.PermissionRequestToken? = null
     private var audioStartOrEnableInFlight = false
@@ -2037,10 +2061,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun startProducingAudio() {
-        createSendTransportIfNeeded()
-        val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
+        val muteIntentGeneration = localAudioMuteIntentGeneration
         val generation = configurationGeneration
+        createSendTransportIfNeeded()
+        ensureCurrentConfiguration(generation)
+        val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
         if (hasLocalAudioProducer) {
+            if (localAudioMuteIntentGeneration != muteIntentGeneration) return
             setAudioEnabled(true)
             return
         }
@@ -2060,6 +2087,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             throw ErrorException("Microphone permission not granted")
         }
         ensureCurrentConfiguration(generation)
+        if (localAudioMuteIntentGeneration != muteIntentGeneration) {
+            // produceMicrophoneAudio below is synchronous, so this is the last
+            // point where a mute can land before the producer commits.
+            debugLog("[WebRTC] Microphone start cancelled by a mute before producing")
+            return
+        }
         localAudioTargetEnabled = true
         audioStartOrEnableInFlight = true
         var pendingProducer: Producer? = null
@@ -2090,7 +2123,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 scheduleLocalAudioCaptureReassertion(true)
             }
             markMicrophoneProducerUnmuted(producer.id, "audio start")
-            onLocalAudioEnabledChanged?.invoke(true)
+            // markMicrophoneProducerUnmuted suspends; a mute that landed during
+            // it already reported false, so do not report a stale unmute.
+            if (localAudioMuteIntentGeneration == muteIntentGeneration && audioProducer === producer) {
+                onLocalAudioEnabledChanged?.invoke(true)
+            }
         } catch (t: Throwable) {
             pendingProducer?.close()
             if (pendingProducer != null && audioProducer?.id == pendingProducer.id) {
@@ -2788,11 +2825,22 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun setAudioEnabled(enabled: Boolean) {
+        val previous = localAudioEnabled
+        localAudioTargetEnabled = enabled
+        if (!enabled) {
+            localAudioMuteIntentGeneration += 1
+            audioCaptureReassertionGeneration += 1
+            audioStartOrEnableInFlight = false
+            audioProducer?.pause()
+            audioDeviceModule?.setMicrophoneMute(true)
+            localAudioTrack?.setEnabled(false)
+            localAudioEnabled = false
+            onLocalAudioEnabledChanged?.invoke(false)
+        }
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val producer = audioProducer ?: throw ErrorException("Audio producer not ready")
         val generation = configurationGeneration
-        val previous = localAudioEnabled
-        localAudioTargetEnabled = enabled
+        val muteIntentGeneration = localAudioMuteIntentGeneration
 
         try {
             if (enabled) {
@@ -2801,6 +2849,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     throw ErrorException("Microphone permission not granted")
                 }
                 ensureCurrentConfiguration(generation)
+                if (localAudioMuteIntentGeneration != muteIntentGeneration ||
+                    audioProducer !== producer || !hasUsableProducer(producer)) return
                 configureCallAudioMode(unmuted = true)
                 forceUnmuteMicrophoneCapture()
                 producer.resume()
@@ -2810,6 +2860,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             }
 
             socket.toggleMute(producer.id, paused = !enabled)
+            ensureCurrentConfiguration(generation)
+            if (localAudioMuteIntentGeneration != muteIntentGeneration ||
+                audioProducer !== producer || !hasUsableProducer(producer)) return
             localAudioTrack?.setEnabled(enabled)
             localAudioEnabled = enabled
             localAudioTargetEnabled = enabled
@@ -2822,6 +2875,20 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             onLocalAudioEnabledChanged?.invoke(enabled)
         } catch (error: Throwable) {
             if (generation != configurationGeneration) {
+                throw error
+            }
+            if (localAudioMuteIntentGeneration != muteIntentGeneration ||
+                audioProducer !== producer || !hasUsableProducer(producer)) return
+            if (!enabled) {
+                // A failed mute fails closed: keep the producer paused, the
+                // track and ADM silent, and report muted, so nothing audible
+                // leaves the device whatever the SFU applied.
+                localAudioTargetEnabled = false
+                audioDeviceModule?.setMicrophoneMute(true)
+                localAudioTrack?.setEnabled(false)
+                localAudioEnabled = false
+                onLocalAudioEnabledChanged?.invoke(false)
+                debugLog("[WebRTC] Failed to signal audio mute; kept the local mute: ${error}")
                 throw error
             }
             if (previous) {
@@ -2842,14 +2909,16 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             debugLog("[WebRTC] Failed to toggle audio: ${error}")
             throw error
         } finally {
-            if (enabled) {
+            if (enabled && generation == configurationGeneration) {
                 audioStartOrEnableInFlight = false
             }
         }
     }
 
     internal fun suspendLocalAudioForRecovery() {
+        localAudioMuteIntentGeneration += 1
         localAudioTargetEnabled = false
+        audioStartOrEnableInFlight = false
         audioCaptureReassertionGeneration += 1
         try {
             audioProducer?.pause()
@@ -2864,7 +2933,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal suspend fun reassertLocalAudioProducerUnmuted() {
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val producer = audioProducer ?: throw ErrorException("Audio producer not ready")
-        if (!hasLocalAudioProducer || !localAudioEnabled) return
+        if (!hasLocalAudioProducer || !localAudioEnabled || !localAudioTargetEnabled) return
 
         localAudioTargetEnabled = true
         configureCallAudioMode(unmuted = true)
@@ -3567,7 +3636,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         if (connectionQuality == ConnectionQuality.unknown) {
             return false
         }
-        if (!hasLocalAudioProducer || !localAudioEnabled || localAudioTrack?.enabled() != true) {
+        if (!hasLocalAudioProducer || !localAudioEnabled || !localAudioTargetEnabled || localAudioTrack?.enabled() != true) {
             return false
         }
         return connectionQuality != audioProducerBandwidthQuality
@@ -3965,6 +4034,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     internal fun consumeIntentionalLocalVideoProducerClose(producerId: String): Boolean {
         return intentionalLocalVideoProducerCloseIds.remove(producerId)
+    }
+
+    /// iOS marks a microphone replacement's predecessor because its create
+    /// runs off the MainActor. Android's produce is synchronous on Main, so
+    /// the SFU's predecessor close always lands after the successor commits
+    /// and no longer matches the live producer: nothing to mark.
+    internal fun consumeIntentionalLocalAudioProducerClose(@Suppress("UNUSED_PARAMETER") producerId: String): Boolean {
+        return false
     }
 
     private fun webcamTopologyMonotonicMs(): Double = SystemClock.elapsedRealtime().toDouble()

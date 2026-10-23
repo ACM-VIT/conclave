@@ -1022,6 +1022,247 @@ final class ConclaveTests: XCTestCase {
     }
 
     #if !SKIP
+    /// Source guards for the foundation correctness blockers: first-frame sinks
+    /// must never detach inside the frame callback (remote-video ANR), iOS
+    /// producers must be created off MainActor (onProduce deadlock) on one
+    /// serial send-transport queue, microphone replacements must survive the
+    /// SFU's predecessor close, a failed mute fails closed, the Android root
+    /// must drop SkipUI saved state (PresentationRoot NPE on PiP exit), calls
+    /// keep the screen awake and ask for notifications, and every Gradle entry
+    /// point uses the checked-in wrapper.
+    func testNativeCallCorrectnessBlockersStayFixed() throws {
+        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
+        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+        let macSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient+macOS.swift")
+        let activitySource = try sourceFileContents("Android/app/src/main/kotlin/Main.kt")
+        let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
+        let awakeSource = try sourceFileContents("Sources/Conclave/Core/Call/CallScreenAwake.swift")
+        let permissionSource = try sourceFileContents("Sources/Conclave/Skip/PermissionHelper.kt")
+        let fastfileSource = try sourceFileContents("Android/fastlane/Fastfile")
+        let xcodeProjectSource = try sourceFileContents("Darwin/Conclave.xcodeproj/project.pbxproj")
+
+        func body(_ source: String, from start: String, to end: String) throws -> String {
+            let startRange = try XCTUnwrap(source.range(of: start), "missing \(start)")
+            let endRange = try XCTUnwrap(
+                source.range(of: end, range: startRange.upperBound..<source.endIndex),
+                "missing \(end) after \(start)"
+            )
+            return String(source[startRange.lowerBound..<endRange.lowerBound])
+        }
+
+        let androidFrameStart = try XCTUnwrap(androidSource.range(of: "override fun onFrame(frame: org.webrtc.VideoFrame) {"))
+        let androidFrameEnd = try XCTUnwrap(androidSource.range(
+            of: "fun cancel() {",
+            range: androidFrameStart.upperBound..<androidSource.endIndex
+        ))
+        let androidOnFrame = String(androidSource[androidFrameStart.lowerBound..<androidFrameEnd.lowerBound])
+        XCTAssertFalse(androidOnFrame.contains("removeSink"))
+        XCTAssertTrue(androidOnFrame.contains("mainHandler.post { detach() }"))
+
+        let iosFrameStart = try XCTUnwrap(iosSource.range(of: "func renderFrame(_ frame: RTCVideoFrame?) {"))
+        let iosFrameEnd = try XCTUnwrap(iosSource.range(
+            of: "func cancel() {",
+            range: iosFrameStart.upperBound..<iosSource.endIndex
+        ))
+        let iosRenderFrame = String(iosSource[iosFrameStart.lowerBound..<iosFrameEnd.lowerBound])
+        let iosDispatch = try XCTUnwrap(iosRenderFrame.range(of: "DispatchQueue.main.async"))
+        let iosRemove = try XCTUnwrap(iosRenderFrame.range(of: "remove(self)"))
+        XCTAssertLessThan(iosDispatch.lowerBound, iosRemove.lowerBound)
+
+        // Every mediasoup createProducer call runs on the serial send-transport
+        // queue (never a detached task racing another Send), and every other
+        // blocking send-side call (producer/transport close, send ICE restart)
+        // goes through the same queue.
+        XCTAssertEqual(iosSource.components(separatedBy: ".createProducer(").count - 1, 2)
+        XCTAssertEqual(iosSource.components(separatedBy: "request.transport.createProducer(").count - 1, 2)
+        XCTAssertFalse(iosSource.contains("Task.detached(priority: .userInitiated) {\n            MediaProducerCreationResult"))
+        XCTAssertFalse(iosSource.contains("Task.detached(priority: .userInitiated) {\n            ScreenProducerCreationResult"))
+        XCTAssertFalse(iosSource.contains("sendTransportOperationQueue.sync"))
+        XCTAssertTrue(iosSource.contains("try handle.transport?.restartICE(with: iceParameters)"))
+        XCTAssertEqual(iosSource.components(separatedBy: "try transport.restartICE(with: iceParameters)").count - 1, 1)
+        XCTAssertTrue(iosSource.contains("withExtendedLifetime(handle.device) {"))
+        for directClose in [
+            "audioProducer?.close()",
+            "videoProducer?.close()",
+            "screenProducer?.close()",
+            "oldProducer.close()",
+            "pendingProducer?.close()",
+            "pendingProducer.close()",
+            "sendTransport?.close()",
+            "nextSendTransport.close()"
+        ] {
+            XCTAssertFalse(iosSource.contains(directClose), "send-side \(directClose) must use the send-transport queue")
+        }
+
+        // A mute that lands during the off-main microphone create wins: the
+        // start drops its producer, and a no-producer mute reaches the client.
+        XCTAssertTrue(iosSource.contains("localAudioMuteIntentGeneration != muteIntentGeneration"))
+
+        // Microphone tracks start disabled and only a live commit enables them,
+        // so a mute during the create never leaves an audible microphone.
+        let trackFactory = try body(
+            iosSource,
+            from: "private func createMicrophoneAudioTrack()",
+            to: "private func nextLocalVideoTrackId()"
+        )
+        XCTAssertTrue(trackFactory.contains("track.isEnabled = false"))
+        XCTAssertFalse(trackFactory.contains("track.isEnabled = true"))
+        XCTAssertTrue(iosSource.contains("producer.resume()\n        microphone.track.isEnabled = true"))
+
+        // startProducingAudio is single-flight: concurrent starts join the
+        // in-flight one instead of racing a second produce.
+        let iosStartWrapper = try body(
+            iosSource,
+            from: "func startProducingAudio() async throws {",
+            to: "private func performStartProducingAudio("
+        )
+        XCTAssertTrue(iosStartWrapper.contains("while let inFlight = audioStartTask {"))
+        XCTAssertTrue(iosStartWrapper.contains("audioStartTask = task"))
+        XCTAssertTrue(iosStartWrapper.contains("guard localAudioMuteIntentGeneration == muteIntentGeneration else {"))
+        XCTAssertTrue(iosSource.contains("audioStartTask = nil\n        audioCaptureReassertionTask?.cancel()"))
+
+        // The SFU closes a displaced microphone producer and tells the owner
+        // before acking its replacement: both iOS replacement paths mark the
+        // predecessor before the create, the view model consumes the marker,
+        // and a returned replacement is always committed (never fall back to
+        // the SFU-closed predecessor), paused if a mute landed meanwhile.
+        for (start, end) in [
+            ("func refreshLocalAudioProducerForBandwidthProfile(", "private func commitMicrophoneReplacement("),
+            ("private func recreateLocalAudioProducerAfterRouteChange(", "private func restoreRouteRecoveryTrackIfCurrent(")
+        ] {
+            let replacement = try body(iosSource, from: start, to: end)
+            let capture = try XCTUnwrap(replacement.range(of: "let muteIntentGeneration = localAudioMuteIntentGeneration"))
+            let mark = try XCTUnwrap(replacement.range(of: "markIntentionalLocalAudioProducerClose(oldProducer.id)"))
+            let create = try XCTUnwrap(replacement.range(of: "try await createMicrophoneProducer("))
+            XCTAssertLessThan(capture.lowerBound, create.lowerBound)
+            XCTAssertLessThan(mark.lowerBound, create.lowerBound)
+            XCTAssertTrue(replacement.contains("intentionalLocalAudioProducerCloseIds.remove(oldProducer.id)"))
+            XCTAssertTrue(replacement.contains("let muted = isLocalAudioMuteInEffect(since: muteIntentGeneration)"))
+            XCTAssertTrue(replacement.contains("commitMicrophoneReplacement("))
+            XCTAssertTrue(replacement.contains("await markMicrophoneProducerMuted(nextProducer.id"))
+            XCTAssertTrue(replacement.contains("self.sendTransport === sendTransport,\n                  audioProducer === oldProducer else {"))
+            XCTAssertFalse(replacement.contains("closeProducer(producerId: oldProducer.id)"))
+            XCTAssertFalse(replacement.contains("localAudioEnabled, audioProducer === oldProducer"))
+            XCTAssertFalse(replacement.contains("localAudioEnabled,\n                  audioProducer === oldProducer"))
+        }
+        let commitReplacement = try body(
+            iosSource,
+            from: "private func commitMicrophoneReplacement(",
+            to: "private func isLocalAudioMuteInEffect(since muteIntentGeneration: Int) -> Bool {"
+        )
+        XCTAssertTrue(commitReplacement.contains("nextProducer.pause()"))
+        XCTAssertTrue(commitReplacement.contains("closeSendProducer(oldProducer)"))
+        XCTAssertTrue(iosSource.contains("localAudioMuteIntentGeneration != muteIntentGeneration && !localAudioIntentEnabled"))
+        XCTAssertTrue(iosSource.contains("guard !isLocalAudioMuteInEffect(since: muteIntentGeneration) else { return }"))
+        XCTAssertTrue(iosSource.contains("func consumeIntentionalLocalAudioProducerClose(producerId: String) -> Bool {"))
+        XCTAssertTrue(macSource.contains("func consumeIntentionalLocalAudioProducerClose(producerId: String) -> Bool { false }"))
+        XCTAssertTrue(androidSource.contains("internal fun consumeIntentionalLocalAudioProducerClose("))
+        let localClose = try body(
+            viewModelSource,
+            from: "private func handleLocalProducerClosed(_ notification: ProducerClosedNotification) async -> Bool {",
+            to: "let wasCameraOff = state.isCameraOff"
+        )
+        let consumeAudio = try XCTUnwrap(localClose.range(of: "webRTCClient.consumeIntentionalLocalAudioProducerClose("))
+        let closeAudio = try XCTUnwrap(localClose.range(of: "webRTCClient.closeLocalMedia(\n            kind: \"audio\""))
+        XCTAssertLessThan(consumeAudio.lowerBound, closeAudio.lowerBound)
+
+        // A same-session camera start that a newer start superseded returns
+        // without "session was replaced" (which forces a rejoin).
+        let videoStart = try body(
+            iosSource,
+            from: "func startProducingVideo() async throws {",
+            to: "func startCameraCapture() throws {"
+        )
+        XCTAssertTrue(videoStart.contains("if isStale || videoCapturer == nil {"))
+        XCTAssertTrue(videoStart.contains("Dropped superseded camera producer"))
+
+        // A failed mute fails closed on both platforms and in the view model.
+        let iosSetAudio = try body(
+            iosSource,
+            from: "func setAudioEnabled(_ enabled: Bool) async throws {",
+            to: "func suspendLocalAudioForRecovery() {"
+        )
+        let iosFailClosed = try XCTUnwrap(iosSetAudio.range(of: "if !enabled {\n                // A failed mute fails closed"))
+        let iosRollback = try XCTUnwrap(iosSetAudio.range(of: "if previous {\n                producer.resume()"))
+        XCTAssertLessThan(iosFailClosed.lowerBound, iosRollback.lowerBound)
+        let androidSetAudio = try body(
+            androidSource,
+            from: "internal suspend fun setAudioEnabled(enabled: Boolean) {",
+            to: "internal fun suspendLocalAudioForRecovery() {"
+        )
+        let androidFailClosed = try XCTUnwrap(androidSetAudio.range(of: "if (!enabled) {\n                // A failed mute fails closed"))
+        let androidRollback = try XCTUnwrap(androidSetAudio.range(of: "if (previous) {\n                localAudioTargetEnabled = true"))
+        XCTAssertLessThan(androidFailClosed.lowerBound, androidRollback.lowerBound)
+        XCTAssertFalse(viewModelSource.contains("state.isMuted = !newState"))
+        XCTAssertTrue(viewModelSource.contains("state.isMuted = muted ? true : previousMuted"))
+        let disableStart = try XCTUnwrap(viewModelSource.range(of: "private func disableLocalAudioIfNeeded() async throws {"))
+        let disableEnd = try XCTUnwrap(viewModelSource.range(
+            of: "try await webRTCClient.setAudioEnabled(false)",
+            range: disableStart.upperBound..<viewModelSource.endIndex
+        ))
+        XCTAssertTrue(viewModelSource[disableStart.upperBound..<disableEnd.lowerBound]
+            .contains("webRTCClient.suspendLocalAudioForRecovery()"))
+        // The mute intent is captured before the first await on both
+        // platforms, and a restart only clears isMuted for a live, unpaused mic.
+        let iosStart = try XCTUnwrap(iosSource.range(of: "func startProducingAudio() async throws {"))
+        let iosFirstAwait = try XCTUnwrap(iosSource.range(
+            of: "_ = try? await inFlight.value",
+            range: iosStart.upperBound..<iosSource.endIndex
+        ))
+        XCTAssertTrue(iosSource[iosStart.upperBound..<iosFirstAwait.lowerBound]
+            .contains("let muteIntentGeneration = localAudioMuteIntentGeneration"))
+        let androidStart = try XCTUnwrap(androidSource.range(of: "internal suspend fun startProducingAudio() {"))
+        let androidFirstAwait = try XCTUnwrap(androidSource.range(
+            of: "createSendTransportIfNeeded()",
+            range: androidStart.upperBound..<androidSource.endIndex
+        ))
+        XCTAssertTrue(androidSource[androidStart.upperBound..<androidFirstAwait.lowerBound]
+            .contains("val muteIntentGeneration = localAudioMuteIntentGeneration"))
+        XCTAssertTrue(androidSource.contains("if (localAudioMuteIntentGeneration != muteIntentGeneration) {"))
+        XCTAssertTrue(androidSource.contains("if (localAudioMuteIntentGeneration == muteIntentGeneration && audioProducer === producer) {"))
+        XCTAssertTrue(viewModelSource.contains("if enabled, !self.webRTCClient.isLocalAudioPublishingHealthy {"))
+        XCTAssertFalse(viewModelSource.contains("guard webRTCClient.hasLocalAudioProducer else { return }\n            state.isMuted = false"))
+        XCTAssertEqual(viewModelSource.components(separatedBy: "guard webRTCClient.isLocalAudioPublishingHealthy else { return }\n            state.isMuted = false").count - 1, 2)
+
+        XCTAssertTrue(activitySource.contains("SideEffect { saveableStateHolder.removeState(FULL_ROOT_SAVEABLE_KEY) }"))
+
+        XCTAssertTrue(viewModelSource.contains("CallScreenAwake.setActive(true)"))
+        XCTAssertTrue(viewModelSource.contains("CallScreenAwake.setActive(false)"))
+        XCTAssertTrue(awakeSource.contains("UIApplication.shared.isIdleTimerDisabled = active"))
+
+        XCTAssertTrue(viewModelSource.contains("PermissionHelper.requestNotificationsPermissionIfNeeded { granted in"))
+        XCTAssertTrue(permissionSource.contains("NOTIFICATIONS_REQUEST_CODE -> notificationsPermissionWaiters"))
+        // Recovery rejoins (WebRTCClient.cleanup) keep a queued notification
+        // prompt; only terminal call end drops it, and a request that never
+        // reached the user re-arms the once-per-process ask.
+        let clearQueued = try body(
+            permissionSource,
+            from: "private fun clearQueuedCallPermissionRequests() {",
+            to: "private fun cancelActiveCallPermissionRequest(): Boolean {"
+        )
+        XCTAssertFalse(clearQueued.contains("requestCode == NOTIFICATIONS_REQUEST_CODE"))
+        XCTAssertTrue(permissionSource.contains("fun dropQueuedNotificationsPermissionRequest() {"))
+        XCTAssertTrue(permissionSource.contains("pendingPermissionRequests.removeAll { it.requestCode == NOTIFICATIONS_REQUEST_CODE }"))
+        XCTAssertTrue(permissionSource.contains("answered = permissions.isNotEmpty()"))
+        XCTAssertTrue(permissionSource.contains("finishNotificationsPermission(false, answered = false)"))
+        let deactivate = try body(
+            viewModelSource,
+            from: "func deactivateCallPresence() {",
+            to: "private func setLocalCameraOffState("
+        )
+        XCTAssertTrue(deactivate.contains("PermissionHelper.dropQueuedNotificationsPermissionRequest()"))
+        XCTAssertTrue(viewModelSource.contains("if !granted, !PermissionHelper.wasLastNotificationsPermissionRequestAnswered() {"))
+        XCTAssertTrue(viewModelSource.contains("self.hasRequestedCallNotificationPermission = false"))
+
+        // fastlane and the Xcode "Run skip gradle" phase build through the
+        // checked-in wrapper, not an unpinned Homebrew Gradle.
+        XCTAssertTrue(fastfileSource.contains("gradle_bin = File.expand_path(\"../gradlew\", __dir__)"))
+        XCTAssertFalse(fastfileSource.contains("/bin/gradle\""))
+        XCTAssertTrue(xcodeProjectSource.contains("GRADLE_WRAPPER_SHIM_DIR=\\\"${DERIVED_FILE_DIR}/skip-gradle-wrapper\\\""))
+        XCTAssertTrue(xcodeProjectSource.contains("${PWD}/../Android/gradlew"))
+        XCTAssertTrue(xcodeProjectSource.contains("PATH=\\\"${GRADLE_WRAPPER_SHIM_DIR}:${PATH}\\\""))
+    }
+
     func testPlannedWebcamConsumerResetEligibilityUsesAuthoritativeConsumeFacts() throws {
         let parameters = try JSONDecoder().decode(RtpParameters.self, from: Data("""
         {
@@ -9758,7 +9999,7 @@ final class ConclaveTests: XCTestCase {
             iosHandoff.range(of: "intentionalLocalVideoProducerCloseIds.insert(oldProducer.id)")
         )
         let iosCreate = try XCTUnwrap(
-            iosHandoff.range(of: "sendTransport.createProducer(")
+            iosHandoff.range(of: "try await createProducerOffMain(")
         )
         let iosCommit = try XCTUnwrap(
             iosHandoff.range(of: "videoProducer = producer")
@@ -9768,7 +10009,7 @@ final class ConclaveTests: XCTestCase {
         )
         XCTAssertLessThan(iosMarker.lowerBound, iosCreate.lowerBound)
         XCTAssertLessThan(iosCommit.lowerBound, iosRetire.lowerBound)
-        XCTAssertTrue(iosHandoff.contains("for: track"))
+        XCTAssertTrue(iosHandoff.contains("on: sendTransport,\n                track: track,"))
         XCTAssertTrue(iosHandoff.contains(
             "webcamTopologyControlGeneration == topologyGeneration"
         ))

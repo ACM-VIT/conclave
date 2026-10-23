@@ -1,8 +1,5 @@
 import Foundation
 import Observation
-#if !SKIP
-import SkipFuse
-#endif
 #if canImport(AVFoundation)
 import AVFoundation
 #endif
@@ -637,6 +634,7 @@ final class MeetingViewModel {
     private var lastPipVideoTargetId: String?
     private var lastPipVideoTrackToken: String?
     private var lastResolvedPipTargetId: String?
+    private var hasRequestedCallNotificationPermission = false
     #endif
     private let activeSpeakerThreshold: Double = 0.03
     private let activeSpeakerHoldSeconds: Double = 1.5
@@ -2004,6 +2002,11 @@ final class MeetingViewModel {
                    !self.state.mediaPublishingDisabled {
                     return
                 }
+                // This hop can run after a later mute. Never show unmuted for
+                // a microphone that is no longer live and unpaused.
+                if enabled, !self.webRTCClient.isLocalAudioPublishingHealthy {
+                    return
+                }
                 self.state.isMuted = !enabled
                 self.syncCallPresenceState()
             }
@@ -2397,6 +2400,9 @@ final class MeetingViewModel {
             "meeting_entry_clear",
             details: "state=\(state.connectionState) entering=\(state.isEnteringMeeting)"
         )
+        #if SKIP
+        let wasEntering = state.isEnteringMeeting
+        #endif
         meetingEntryRevealTask?.cancel()
         meetingEntryRevealTask = nil
         meetingEntrySafetyTask?.cancel()
@@ -2404,6 +2410,16 @@ final class MeetingViewModel {
         state.meetingEntryStartedAt = nil
         state.isEnteringMeeting = false
         state.meetingEntryAction = nil
+        #if SKIP
+        // The one place the notification prompt is scheduled after the
+        // overlay: every clear path (reveal, safety timeout, ContentView's
+        // hard deadline, connection-state clears) goes through here. The
+        // request defers and re-checks joined, in call, foreground, no PiP
+        // and no entry itself, so a teardown clear never prompts.
+        if wasEntering {
+            scheduleCallNotificationPermissionRequest()
+        }
+        #endif
     }
 
     private func handleJoinedRoomResponse(_ response: JoinRoomResponse, joinAttemptId: UUID) async {
@@ -5082,6 +5098,13 @@ final class MeetingViewModel {
         ) {
             return true
         }
+        // A microphone replacement (iOS bandwidth refresh or route recovery)
+        // displaced this producer on purpose; its successor commits separately.
+        if webRTCClient.consumeIntentionalLocalAudioProducerClose(
+            producerId: notification.producerId
+        ) {
+            return true
+        }
 
         let wasMuted = state.isMuted
         if await webRTCClient.closeLocalMedia(
@@ -5099,9 +5122,13 @@ final class MeetingViewModel {
                     guard isCurrentJoinedCall(actionContext) else { return false }
                     try await webRTCClient.startProducingAudio()
                     guard isCurrentJoinedCall(actionContext) else { return false }
-                    state.isMuted = false
-                    syncCallPresenceState()
-                    return true
+                    // A mute that landed mid-start leaves no producer or a
+                    // paused one: fall through and stay muted.
+                    if webRTCClient.isLocalAudioPublishingHealthy {
+                        state.isMuted = false
+                        syncCallPresenceState()
+                        return true
+                    }
                 } catch {
                     applyActionError(error, context: actionContext)
                 }
@@ -5319,7 +5346,15 @@ final class MeetingViewModel {
         state.errorMessage = adminMediaReason(notification.reason)
     }
 
-    private func closeAdminEnforcedProducer(_ producer: AdminMediaProducer) async -> Bool {
+    func closeAdminEnforcedProducer(_ producer: AdminMediaProducer) async -> Bool {
+        if producer.kind == "audio", producer.type == ProducerType.webcam.rawValue {
+            // The server can close a producer before its off-main create has
+            // installed it locally. Cancel that start (and any pending unmute)
+            // before awaiting the close, even when no producer matches yet.
+            webRTCClient.suspendLocalAudioForRecovery()
+            state.isMuted = true
+            syncCallPresenceState()
+        }
         let didClose = await webRTCClient.closeLocalMedia(
             kind: producer.kind,
             type: producer.type,
@@ -5966,6 +6001,9 @@ final class MeetingViewModel {
         do {
             try await enableOrStartLocalAudio()
             guard isCurrentJoinedCall(actionContext) else { return }
+            // A mute that landed mid-start leaves no producer or a paused
+            // one; keep it.
+            guard webRTCClient.isLocalAudioPublishingHealthy else { return }
             state.isMuted = false
             syncCallPresenceState()
             if confirmServerUnmuted {
@@ -6044,6 +6082,9 @@ final class MeetingViewModel {
         do {
             try await enableOrStartLocalAudio()
             guard isCurrentJoinedCall(actionContext) else { return }
+            // A mute that landed mid-start leaves no producer or a paused
+            // one; keep it.
+            guard webRTCClient.isLocalAudioPublishingHealthy else { return }
             state.isMuted = false
             syncCallPresenceState()
         } catch {
@@ -6691,6 +6732,7 @@ final class MeetingViewModel {
     func activateCallPresence() {
         CallSessionCoordinator.shared.register(self)
         guard CallSessionCoordinator.shared.isInCall else { return }
+        CallScreenAwake.setActive(true)
         #if os(iOS) && !SKIP
         CallAudioSession.shared.setCategoryOptionsProvider { [weak self] in
             self?.webRTCClient.currentCallAudioSessionOptions()
@@ -6720,16 +6762,62 @@ final class MeetingViewModel {
             pipEntered: { self.handlePictureInPictureEntered() },
             pipRefresh: { self.handlePictureInPictureRefresh() }
         )
-        // Do not launch the Android notification-permission Activity while
-        // SkipUI is settling the meeting-entry transition. The foreground
-        // service can still run; notification access is optional call chrome.
         CallNotificationBridge.startCall(muted: state.isMuted, cameraOff: state.isCameraOff)
         PipController.setInCall(active: true)
         PipController.setMuted(value: state.isMuted)
         PipManager.configureForActiveCall(active: true, muted: state.isMuted)
         refreshPipVideo()
+        // No-op while the entry overlay is up; clearMeetingEntry() asks instead.
+        scheduleCallNotificationPermissionRequest()
         #endif
     }
+
+    #if SKIP
+    /// Android 13+ hides the ongoing-call notification (and its Mute/Leave
+    /// actions) until POST_NOTIFICATIONS is granted; the foreground service
+    /// keeps the call alive either way, so this never blocks or fails a join.
+    /// Ask at most once per process, in the foreground, and only once the
+    /// meeting-entry overlay has cleared: launching the permission Activity
+    /// during the entry transition churns the activity lifecycle while SkipUI
+    /// is still settling the meeting. A grant mid-call re-posts the
+    /// notification so it appears immediately; a denial leaves the service
+    /// running with its notification listed only in the system Task Manager.
+    private func scheduleCallNotificationPermissionRequest() {
+        guard !hasRequestedCallNotificationPermission,
+              !PermissionHelper.hasPostNotificationsPermission() else { return }
+        // Never launch the permission Activity in the same main-thread turn
+        // that clears the entry overlay: Compose has not rendered the overlay
+        // away yet, so the prompt would pause the activity over it. The guards
+        // are re-checked after the delay.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            self?.requestCallNotificationPermissionIfNeeded()
+        }
+    }
+
+    private func requestCallNotificationPermissionIfNeeded() {
+        guard !hasRequestedCallNotificationPermission,
+              !state.isEnteringMeeting,
+              state.connectionState == ConnectionState.joined,
+              CallSessionCoordinator.shared.isInCall,
+              appForegroundAllowsRemoteVideoReceive,
+              !PipController.inPipMode,
+              !PermissionHelper.hasPostNotificationsPermission() else { return }
+        hasRequestedCallNotificationPermission = true
+        PermissionHelper.requestNotificationsPermissionIfNeeded { granted in
+            if !granted, !PermissionHelper.wasLastNotificationsPermissionRequestAnswered() {
+                // Dropped or interrupted before the user saw and answered the
+                // dialog (call ended, or another prompt was still up): the
+                // once-per-process ask is not used up, so a later
+                // activateCallPresence can ask again.
+                self.hasRequestedCallNotificationPermission = false
+                return
+            }
+            guard granted, CallSessionCoordinator.shared.isInCall else { return }
+            CallNotificationBridge.updateCallState(muted: self.state.isMuted, cameraOff: self.state.isCameraOff)
+        }
+    }
+    #endif
 
     func handleAppBecameActive() {
         #if canImport(UIKit) && !SKIP
@@ -6816,6 +6904,7 @@ final class MeetingViewModel {
     /// Tears the OS-level call presence down (left, kicked, host ended, error).
     func deactivateCallPresence() {
         CallSessionCoordinator.shared.unregister(self)
+        CallScreenAwake.setActive(false)
         #if os(iOS) && !SKIP
         CallAudioSession.shared.setCategoryOptionsProvider(nil)
         CallAudioSession.shared.setRouteReassertionHandler(nil)
@@ -6823,6 +6912,11 @@ final class MeetingViewModel {
         CallAudioSession.shared.end()
         #endif
         #if SKIP
+        // Terminal call end only: a recovery rejoin (WebRTCClient.cleanup)
+        // keeps a queued POST_NOTIFICATIONS prompt, but it must never surface
+        // after the call. The drop reports an unanswered request, which
+        // re-arms the once-per-process ask for the next call.
+        PermissionHelper.dropQueuedNotificationsPermissionRequest()
         CallActionDispatcher.clear()
         CallNotificationBridge.stopCall()
         PipManager.configureForActiveCall(active: false, muted: state.isMuted)
@@ -7216,13 +7310,17 @@ final class MeetingViewModel {
     // MARK: - Media Controls
 
     private func enableOrStartLocalAudio() async throws {
+        let context = currentCallActionContext()
+        guard !state.isMuted else { return }
         if webRTCClient.hasLocalAudioProducer {
             do {
                 try await webRTCClient.setAudioEnabled(true)
             } catch {
+                guard isCurrentJoinedCall(context), !state.isMuted else { return }
                 guard shouldRecreateLocalProducerAfterEnableFailure(error) else { throw error }
                 debugLog("[Meeting] Recreating stale local audio producer after enable failure: \(error)")
                 await webRTCClient.closeLocalAudioProducer()
+                guard isCurrentJoinedCall(context), !state.isMuted else { return }
                 try await webRTCClient.startProducingAudio()
             }
         } else {
@@ -7231,7 +7329,13 @@ final class MeetingViewModel {
     }
 
     private func disableLocalAudioIfNeeded() async throws {
-        guard webRTCClient.hasLocalAudioProducer else { return }
+        guard webRTCClient.hasLocalAudioProducer else {
+            // No producer to pause, but a microphone start may be mid-create
+            // (iOS creates producers off MainActor). Apply the mute locally so
+            // that start drops its producer instead of committing it live.
+            webRTCClient.suspendLocalAudioForRecovery()
+            return
+        }
         try await webRTCClient.setAudioEnabled(false)
     }
 
@@ -7370,7 +7474,9 @@ final class MeetingViewModel {
                 }
             } catch {
                 guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
-                state.isMuted = !newState
+                // A failed unmute reverts to muted; a failed mute fails closed
+                // (the client kept the local mute), so it stays muted too.
+                state.isMuted = true
                 syncCallPresenceState()
                 state.errorMessage = MeetingMediaErrorPresentation.message(for: error)
             }
@@ -8271,7 +8377,8 @@ final class MeetingViewModel {
             }
         } catch {
             guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
-            state.isMuted = previousMuted
+            // A failed mute fails closed (the client kept the local mute).
+            state.isMuted = muted ? true : previousMuted
             syncCallPresenceState()
             state.errorMessage = MeetingMediaErrorPresentation.message(for: error)
         }

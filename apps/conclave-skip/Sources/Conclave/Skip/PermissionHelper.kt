@@ -42,7 +42,9 @@ object PermissionHelper {
     private val recordAudioPermissionWaiters = ArrayDeque<(Boolean) -> Unit>()
     private val cameraPermissionWaiters = ArrayDeque<(Boolean) -> Unit>()
     private val bluetoothConnectPermissionWaiters = ArrayDeque<(Boolean) -> Unit>()
+    private val notificationsPermissionWaiters = ArrayDeque<(Boolean) -> Unit>()
     @Volatile private var notificationPermissionPromptActive = false
+    @Volatile private var lastNotificationsPermissionRequestAnswered = true
     @Volatile private var activePermissionRequestCode: Int? = null
     @Volatile private var activePermissionTimeoutRequestCode: Int? = null
     private var activePermissionTimeoutRunnable: Runnable? = null
@@ -157,10 +159,12 @@ object PermissionHelper {
 
     fun requestNotificationsPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < 33) {
+            finishNotificationsPermission(true)
             return
         }
 
         if (hasPostNotificationsPermission()) {
+            finishNotificationsPermission(true)
             return
         }
 
@@ -168,10 +172,47 @@ object PermissionHelper {
             requestCode = NOTIFICATIONS_REQUEST_CODE,
             permission = android.Manifest.permission.POST_NOTIFICATIONS,
             isAlreadyGranted = ::hasPostNotificationsPermission,
-            onAlreadyGranted = { notificationPermissionPromptActive = false },
-            onMissingActivity = { notificationPermissionPromptActive = false },
+            onAlreadyGranted = {
+                notificationPermissionPromptActive = false
+                finishNotificationsPermission(true)
+            },
+            onMissingActivity = {
+                notificationPermissionPromptActive = false
+                finishNotificationsPermission(false, answered = false)
+            },
             beforeRequest = { notificationPermissionPromptActive = true }
         )
+    }
+
+    /// Reports the outcome (true below API 33, where POST_NOTIFICATIONS does
+    /// not exist). Queued behind any active mic/camera prompt like the others.
+    fun requestNotificationsPermissionIfNeeded(callback: (Boolean) -> Unit): PermissionRequestToken {
+        synchronized(permissionLock) {
+            notificationsPermissionWaiters.addLast(callback)
+        }
+        requestNotificationsPermissionIfNeeded()
+        return PermissionRequestToken(NOTIFICATIONS_REQUEST_CODE, callback)
+    }
+
+    /// False while a `false` outcome comes from a request that never reached
+    /// the user (dropped from the queue, no activity, or cancelled by Android
+    /// because another permission dialog was still up). Read it inside the
+    /// callback: it describes the outcome being delivered.
+    fun wasLastNotificationsPermissionRequestAnswered(): Boolean {
+        return lastNotificationsPermissionRequestAnswered
+    }
+
+    /// Terminal call end only. Drops a queued (not yet shown) POST_NOTIFICATIONS
+    /// request so it never surfaces after the call, reporting it unanswered.
+    /// Recovery rejoins run `cancelPendingCallPermissionRequests()`, which
+    /// leaves it queued. An already visible prompt is left to finish.
+    fun dropQueuedNotificationsPermissionRequest() {
+        val dropped = synchronized(permissionLock) {
+            pendingPermissionRequests.removeAll { it.requestCode == NOTIFICATIONS_REQUEST_CODE }
+        }
+        if (dropped) {
+            finishNotificationsPermission(false, answered = false)
+        }
     }
 
     fun shouldSuppressShareFromNotificationPermissionPrompt(): Boolean {
@@ -233,6 +274,17 @@ object PermissionHelper {
                 notificationPermissionPromptActive = false
                 suppressShareUntilElapsedMs =
                     SystemClock.elapsedRealtime() + NOTIFICATION_SHARE_SUPPRESSION_MS
+                // Empty arrays mean Android cancelled the request without
+                // showing it (another permission dialog was still up).
+                finishNotificationsPermission(
+                    permissionGranted(
+                        permissions,
+                        grantResults,
+                        android.Manifest.permission.POST_NOTIFICATIONS,
+                        ::hasPostNotificationsPermission
+                    ),
+                    answered = permissions.isNotEmpty()
+                )
             }
             BLUETOOTH_CONNECT_REQUEST_CODE -> {
                 finishBluetoothConnectPermission(
@@ -329,6 +381,9 @@ object PermissionHelper {
     }
 
     private fun clearQueuedCallPermissionRequests() {
+        // A queued POST_NOTIFICATIONS request is kept: this also runs on
+        // in-call recovery rejoins. Terminal call end drops it separately via
+        // dropQueuedNotificationsPermissionRequest().
         synchronized(permissionLock) {
             pendingPermissionRequests.removeAll { request ->
                 isCallPermissionRequestCode(request.requestCode)
@@ -405,6 +460,7 @@ object PermissionHelper {
                 notificationPermissionPromptActive = false
                 suppressShareUntilElapsedMs =
                     SystemClock.elapsedRealtime() + NOTIFICATION_SHARE_SUPPRESSION_MS
+                finishNotificationsPermission(false)
             }
         }
         finishRuntimePermissionRequest(requestCode)
@@ -444,6 +500,7 @@ object PermissionHelper {
             RECORD_AUDIO_REQUEST_CODE -> recordAudioPermissionWaiters
             CAMERA_REQUEST_CODE -> cameraPermissionWaiters
             BLUETOOTH_CONNECT_REQUEST_CODE -> bluetoothConnectPermissionWaiters
+            NOTIFICATIONS_REQUEST_CODE -> notificationsPermissionWaiters
             else -> ArrayDeque()
         }
     }
@@ -470,5 +527,10 @@ object PermissionHelper {
         val callback = onBluetoothConnectPermissionResult
         onBluetoothConnectPermissionResult = null
         drainPermissionCallbacks(BLUETOOTH_CONNECT_REQUEST_CODE, callback).forEach { it(granted) }
+    }
+
+    private fun finishNotificationsPermission(granted: Boolean, answered: Boolean = true) {
+        lastNotificationsPermissionRequestAnswered = granted || answered
+        drainPermissionCallbacks(NOTIFICATIONS_REQUEST_CODE, null).forEach { it(granted) }
     }
 }

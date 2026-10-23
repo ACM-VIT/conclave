@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material 3 colour tokens = the CARBON palette (mirrors @conclave/ui-tokens +
+  Shared/Theme.swift). This is what every NATIVE Material component Skip renders
+  on Android reads from - ripples, switches, ModalBottomSheet, DropdownMenu
+  (Menu), TextField, Picker - so Android's native Material chrome is on-brand
+  Carbon, not the default purple or the old cream palette.
+-->
+<resources>
+    <color name="md_theme_primary">#F95F4A</color>
+    <color name="md_theme_onPrimary">#FFFFFF</color>
+    <color name="md_theme_primaryContainer">#F95F4A</color>
+    <color name="md_theme_onPrimaryContainer">#FFFFFF</color>
+
+    <color name="md_theme_secondary">#FF007A</color>
+    <color name="md_theme_onSecondary">#FFFFFF</color>
+    <color name="md_theme_secondaryContainer">#FF007A</color>
+    <color name="md_theme_onSecondaryContainer">#FFFFFF</color>
+
+    <color name="md_theme_tertiary">#232327</color>
+    <color name="md_theme_onTertiary">#FAFAFA</color>
+    <color name="md_theme_tertiaryContainer">#232327</color>
+    <color name="md_theme_onTertiaryContainer">#FAFAFA</color>
+
+    <color name="md_theme_background">#0A0A0B</color>
+    <color name="md_theme_onBackground">#FAFAFA</color>
+    <color name="md_theme_surface">#18181B</color>
+    <color name="md_theme_onSurface">#FAFAFA</color>
+    <color name="md_theme_surfaceVariant">#232327</color>
+    <color name="md_theme_onSurfaceVariant">#BDFAFAFA</color>
+
+    <color name="md_theme_error">#EA4335</color>
+    <color name="md_theme_onError">#FFFFFF</color>
+    <color name="md_theme_errorContainer">#EA4335</color>
+    <color name="md_theme_onErrorContainer">#FFFFFF</color>
+
+    <color name="md_theme_outline">#24FAFAFA</color>
+    <color name="md_theme_outlineVariant">#1AFAFAFA</color>
+
+    <color name="md_theme_surfaceContainerHighest">#2E2E33</color>
+    <color name="md_theme_surfaceContainerHigh">#232327</color>
+    <color name="md_theme_surfaceContainer">#18181B</color>
+    <color name="md_theme_surfaceContainerLow">#131316</color>
+    <color name="md_theme_surfaceContainerLowest">#0A0A0B</color>
+    <color name="md_theme_surfaceBright">#2E2E33</color>
+    <color name="md_theme_surfaceDim">#0A0A0B</color>
+
+    <!-- Legacy ACM names (kept so hand-written Kotlin compiles) → Carbon. -->
+    <color name="acm_primary_orange">#F95F4A</color>
+    <color name="acm_primary_pink">#FF007A</color>
+    <color name="acm_cream">#FAFAFA</color>
+    <color name="acm_cream_light">#BDFAFAFA</color>
+    <color name="acm_cream_lighter">#8FFAFAFA</color>
+    <color name="acm_cream_dim">#24FAFAFA</color>
+    <color name="acm_dark">#0A0A0B</color>
+    <color name="acm_dark_alt">#131316</color>
+    <color name="acm_surface">#18181B</color>
+    <color name="acm_surface_light">#232327</color>
+    <color name="acm_orange_light">#66F95F4A</color>
+    <color name="acm_orange_dim">#33F95F4A</color>
+    <color name="acm_pink_light">#66FF007A</color>
+    <color name="acm_pink_dim">#33FF007A</color>
+
+    <color name="status_bar_color">#0A0A0B</color>
+    <color name="navigation_bar_color">#0A0A0B</color>
+</resources>

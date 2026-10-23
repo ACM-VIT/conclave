@@ -139,6 +139,11 @@ class CallForegroundService : Service() {
         return type
     }
 
+    // startForeground stays valid without POST_NOTIFICATIONS (Android 13+):
+    // the call keeps running and the notification is listed only in the
+    // system Task Manager. MeetingViewModel asks for the permission after the
+    // meeting settles and sends ACTION_UPDATE on a grant, which re-posts it
+    // here so the Mute/Leave notification appears mid-call.
     private fun startOrUpdateForeground() {
         val notification = buildNotification()
         if (Build.VERSION.SDK_INT >= 29) {

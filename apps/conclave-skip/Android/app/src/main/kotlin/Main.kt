@@ -21,6 +21,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,12 +69,27 @@ open class MainActivity: AppCompatActivity {
         enableEdgeToEdge()
 
         setContent {
+            // Launch-only proof route. Release and ordinary launches keep the working root.
+            var showsHostingPreview by remember {
+                mutableStateOf(BuildConfig.DEBUG && intent?.getBooleanExtra("conclave.hostingPreview", false) == true)
+            }
             val saveableStateHolder = rememberSaveableStateHolder()
             if (PipController.inPipMode && PipController.isInCall) {
                 PipContent()
+            } else if (showsHostingPreview && !PipController.isInCall) {
+                NativeHostingPreviewRoot(onClose = { showsHostingPreview = false })
             } else {
                 saveableStateHolder.SaveableStateProvider(FULL_ROOT_SAVEABLE_KEY) {
                     PresentationRootView(ComposeContext())
+                    // Skip app template: never save or restore SkipUI state.
+                    // SkipUI's rememberSaveable values are Bundle keys into the
+                    // ComposeStateSaver of the ComposeContext that saved them.
+                    // The PiP swap (and activity recreation) rebuilds the root
+                    // with a fresh ComposeContext, so restored keys resolve to
+                    // null and PresentationRoot NPEs on PiP exit or resume.
+                    // Dropping the state makes the root recompose fresh; call
+                    // state lives in MeetingViewModel, not in view state.
+                    SideEffect { saveableStateHolder.removeState(FULL_ROOT_SAVEABLE_KEY) }
                 }
             }
         }

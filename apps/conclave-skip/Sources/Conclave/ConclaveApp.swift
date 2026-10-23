@@ -12,11 +12,26 @@ let logger: Logger = Logger(subsystem: "com.acmvit.conclave", category: "Conclav
 
 public struct ConclaveRootView: View {
     @State private var appState = AppState.shared
+    #if DEBUG && os(iOS) && !SKIP
+    @State private var showsHostingPreview = ProcessInfo.processInfo.environment["CONCLAVE_HOSTING_PREVIEW"] == "1"
+    #endif
 
     public init() {
     }
 
     public var body: some View {
+        #if DEBUG && os(iOS) && !SKIP
+        if showsHostingPreview {
+            NativeHostingPreview(onClose: { showsHostingPreview = false })
+        } else {
+            legacyRoot
+        }
+        #else
+        legacyRoot
+        #endif
+    }
+
+    private var legacyRoot: some View {
         ContentView(appState: appState)
             #if !SKIP
             .onOpenURL { url in
