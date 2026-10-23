@@ -1,4 +1,4 @@
-import { fetchRoomAiEnvironment } from "@conclave/ai/room-server";
+import { describeRoomAiLookupFailure, fetchRoomAiEnvironment } from "@conclave/ai/room-server";
 import { AI_PROVIDERS, getProviderApiKey, type AiEnvironment } from "@conclave/ai/models";
 import {
   getResponseProvider,
@@ -842,7 +842,8 @@ export class TranscriptRoom {
             usesRoomKey = true;
           }
         }
-      } catch {
+      } catch (error) {
+        console.warn("[Transcript] room AI lookup failed:", JSON.stringify(describeRoomAiLookupFailure(error)));
         /* Participant keys remain available when room setup is unavailable. */
       }
       if (
