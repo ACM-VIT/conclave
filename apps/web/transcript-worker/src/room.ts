@@ -797,7 +797,7 @@ export class TranscriptRoom {
       return;
     }
 
-    const revision = ++this.sessionRevision;
+    const revision = this.sessionRevision;
     const roomId = this.session?.roomId || "unknown";
     const now = Date.now();
     const transcriptModel = normalizeRealtimeTranscriptModel(
@@ -878,6 +878,7 @@ export class TranscriptRoom {
       return;
     }
 
+    const acceptedRevision = ++this.sessionRevision;
     const transportMode = normalizeTransportMode(message.transportMode);
     const wasIdle = existingStatus === "idle" || existingStatus === "error";
     this.responseApiKey = responseKey.apiKey;
@@ -915,7 +916,7 @@ export class TranscriptRoom {
     this.broadcastSession();
     await this.persist();
 
-    if (revision !== this.sessionRevision) return;
+    if (acceptedRevision !== this.sessionRevision) return;
     try {
       const language = normalizeLanguage(
         message.language ?? this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
@@ -930,7 +931,7 @@ export class TranscriptRoom {
         locale,
         localizationPrompt: this.env.TRANSCRIPT_TRANSCRIPTION_PROMPT,
       });
-      if (revision !== this.sessionRevision) return;
+      if (acceptedRevision !== this.sessionRevision) return;
       this.session = {
         ...this.session,
         status: "live",
@@ -941,7 +942,7 @@ export class TranscriptRoom {
       await this.sendSfuRelayStartToken(viewer);
       await this.persist();
     } catch (error) {
-      if (revision !== this.sessionRevision || this.session?.status !== "starting") return;
+      if (acceptedRevision !== this.sessionRevision || this.session?.status !== "starting") return;
       this.markTakeoverNeeded(
         error instanceof Error
           ? error.message
