@@ -2181,11 +2181,13 @@ export class TranscriptRoom {
         this.broadcast({ type: "minutes.updated", minutes: this.minutes });
       }
     } finally {
-      this.minutesGenerating = false;
-      if (revision === this.sessionRevision) this.setMinutesStatus(disabled ? "idle" : "live");
-      if (this.minutesRerunRequested) {
-        this.minutesRerunRequested = false;
-        this.scheduleMinutes();
+      if (revision === this.sessionRevision) {
+        this.minutesGenerating = false;
+        this.setMinutesStatus(disabled ? "idle" : "live");
+        if (this.minutesRerunRequested) {
+          this.minutesRerunRequested = false;
+          this.scheduleMinutes();
+        }
       }
     }
   }
@@ -2244,6 +2246,7 @@ export class TranscriptRoom {
           status: "streaming",
         });
       }
+      if (signal.aborted || revision !== this.sessionRevision || !this.viewers.has(viewer.socket)) return;
       this.send(viewer.socket, {
         type: "qa.final",
         id,
@@ -2252,6 +2255,7 @@ export class TranscriptRoom {
         status: "done",
       });
     } catch (error) {
+      if (signal.aborted || revision !== this.sessionRevision || !this.viewers.has(viewer.socket)) return;
       this.send(viewer.socket, {
         type: "qa.final",
         id,
