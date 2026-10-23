@@ -19,6 +19,7 @@ export async function fetchAiModelCatalog(options: {
   apiKey: string;
   env: AiEnvironment;
   signal?: AbortSignal;
+  includeSnapshots?: boolean;
 }): Promise<AiModelCatalog> {
   const { provider, apiKey, env } = options;
   const fallback: AiModelCatalog = {
@@ -117,7 +118,11 @@ export async function fetchAiModelCatalog(options: {
       .filter((row) => {
         const id = row.id as string;
         const alias = id.replace(/-(?:\d{8}|\d{4}-\d{2}-\d{2})$/, "");
-        if (seen.has(id) || (id !== alias && ids.has(alias))) return false;
+        if (
+          seen.has(id) ||
+          (!options.includeSnapshots && id !== alias && ids.has(alias))
+        )
+          return false;
         seen.add(id);
         return true;
       })

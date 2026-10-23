@@ -56,7 +56,7 @@ export default function RoomAiSettings({
     setPending(true);
     setError(null);
     setNotice(null);
-    let initialModel: string | undefined;
+    let initialModel: string | null | undefined;
     if (
       !remove &&
       provider !== "sarvam" &&
@@ -73,20 +73,17 @@ export default function RoomAiSettings({
         );
         if (discovered?.source === "live") {
           if (!discovered.models.length) {
-            setError({
-              provider,
-              message: "This key has no compatible assistant models.",
-            });
-            setPending(false);
-            return;
+            // Audio and image-only keys can still be shared without selecting text.
+            initialModel = null;
+          } else {
+            const preferred = AI_RESPONSE_MODELS.find(
+              (entry) => entry.provider === provider,
+            )?.id;
+            initialModel = (
+              discovered.models.find((entry) => entry.id === preferred) ??
+              discovered.models[0]
+            ).id;
           }
-          const preferred = AI_RESPONSE_MODELS.find(
-            (entry) => entry.provider === provider,
-          )?.id;
-          initialModel = (
-            discovered.models.find((entry) => entry.id === preferred) ??
-            discovered.models[0]
-          ).id;
         }
       } catch {
         /* Listing permissions do not determine inference permissions. */
@@ -95,7 +92,7 @@ export default function RoomAiSettings({
     const failure = await controller.configure(
       provider,
       remove ? null : apiKey.trim(),
-      ...(initialModel ? [initialModel] : []),
+      ...(initialModel !== undefined ? [initialModel] : []),
     );
     setPending(false);
     if (failure) {

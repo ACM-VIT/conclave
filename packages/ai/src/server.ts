@@ -19,6 +19,7 @@ async function resolveDiscoveredOptions(
   const catalog = await fetchAiModelCatalog({
     ...options,
     provider: getResponseProvider(options.model),
+    includeSnapshots: true,
   });
   if (catalog.source !== "live")
     throw Object.assign(

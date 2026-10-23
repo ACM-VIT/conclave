@@ -61,6 +61,95 @@ const transcript = (start = vi.fn().mockResolvedValue(true)) =>
   }) as unknown as MeetingTranscriptController;
 
 describe("AI setup UX", () => {
+  it("shares an audio-only OpenAI key without selecting an assistant model", async () => {
+    const configure = vi.fn().mockResolvedValue(null);
+    const requestModels = vi
+      .fn()
+      .mockResolvedValue([{ provider: "openai", source: "live", models: [] }]);
+    await act(async () =>
+      root.render(
+        <RoomAiSettings
+          controller={roomAi({ configure, requestModels })}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    const row = container.querySelector(
+      '[role="group"][aria-label="OpenAI settings"]',
+    )!;
+    await act(async () =>
+      row.querySelector<HTMLButtonElement>("button")!.click(),
+    );
+    const input = row.querySelector<HTMLInputElement>("input")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "sk-audio-only-fixture");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      row
+        .querySelector("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    expect(configure).toHaveBeenCalledWith(
+      "openai",
+      "sk-audio-only-fixture",
+      null,
+    );
+    expect(row.querySelector('[role="status"]')?.textContent).toBe(
+      "Key shared with room",
+    );
+  });
+
+  it("discovers notes models with the audio key when OpenAI reuses that credential", async () => {
+    const requestModels = vi
+      .fn()
+      .mockResolvedValue([
+        {
+          provider: "openai",
+          source: "live",
+          models: [getTranscriptResponseModelConfig("gpt-6.2-sol")],
+        },
+      ]);
+    const notes = transcript();
+    notes.session.qaModel = "gpt-6.1-sol";
+    notes.globalProviderKeysAvailable = {};
+    await act(async () =>
+      root.render(
+        <TranscriptPanel
+          roomAi={roomAi({ requestModels })}
+          transcript={notes}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    const input = container.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "sk-reused-audio-key-fixture");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 650));
+    });
+    expect(requestModels).toHaveBeenLastCalledWith({
+      provider: "openai",
+      apiKey: "sk-reused-audio-key-fixture",
+      refresh: false,
+    });
+    expect(
+      container.querySelector('option[value="gpt-6.2-sol"]'),
+    ).not.toBeNull();
+  });
+
   it("loads account models, selects a newly discovered model and explicitly refreshes availability", async () => {
     const requestModels = vi.fn().mockResolvedValue([
       {

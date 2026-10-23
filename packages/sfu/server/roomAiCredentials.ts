@@ -95,6 +95,7 @@ export class RoomAiCredentials {
     actorId: string,
     isHost: boolean,
     env: AiEnvironment = {},
+    options: { selectDefaultModel?: boolean } = {},
   ): void {
     const key = apiKey.trim();
     if (key.length > 512 || !isProviderApiKey(provider, key))
@@ -106,6 +107,7 @@ export class RoomAiCredentials {
     // The first text-provider contribution selects its model visibly for the room.
     if (
       !this.#assistantModel &&
+      options.selectDefaultModel !== false &&
       provider !== "sarvam" &&
       !getProviderApiKey(env, provider)
     ) {

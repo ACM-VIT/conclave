@@ -246,7 +246,6 @@ function StartStage({
   const provider = getTranscriptTranscriptionProvider(transcriptModel);
   const isSarvam = provider === "sarvam";
   const assistantProvider = getResponseProvider(qaModel);
-  const assistantCatalog = useAiModels(roomAi, { provider: assistantProvider, apiKey: assistantApiKey });
   const available = (name: typeof provider | typeof assistantProvider) =>
     transcript.globalProviderKeysAvailable[name] === true ||
     Boolean(roomAi?.ready && roomAi.state[name].source);
@@ -254,6 +253,10 @@ function StartStage({
   const needsAssistantKey =
     !available(assistantProvider) &&
     (assistantProvider !== provider || !needsProviderKey);
+  const assistantCatalog = useAiModels(roomAi, {
+    provider: assistantProvider,
+    apiKey: needsAssistantKey ? assistantApiKey : needsProviderKey && assistantProvider === provider ? apiKey : "",
+  });
   const canSubmit = needsTakeover
     ? transcript.canTakeover
     : transcript.canStart;

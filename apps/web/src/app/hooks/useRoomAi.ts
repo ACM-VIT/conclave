@@ -51,7 +51,8 @@ export type RoomAiController = {
   configure: (
     provider: RoomAiProvider,
     apiKey: string | null | undefined,
-    model?: string,
+    // null shares an audio/image-only credential without selecting text.
+    model?: string | null,
   ) => Promise<string | null>;
 };
 
@@ -130,7 +131,7 @@ export function useRoomAi(
     async (
       provider: RoomAiProvider,
       apiKey: string | null | undefined,
-      model?: string,
+      model?: string | null,
     ): Promise<string | null> => {
       if (!socket?.connected || !joined)
         return "Reconnect to the meeting to change AI settings.";
@@ -146,7 +147,7 @@ export function useRoomAi(
               : apiKey !== undefined
                 ? { apiKey }
                 : {}),
-            ...(model ? { model } : {}),
+            ...(model !== undefined ? { model } : {}),
           },
           (
             error: Error | null,

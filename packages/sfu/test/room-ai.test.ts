@@ -40,6 +40,35 @@ function fixture() {
 }
 
 describe("room AI credentials", () => {
+  it("stores audio-only room keys without an automatic text selection", () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    const { socket, room, member } = fixture();
+    registerRoomAiHandlers({
+      socket,
+      currentRoom: room,
+      currentClient: member,
+      io: { to: () => ({ emit: vi.fn() }) },
+    } as unknown as ConnectionContext);
+    const handlers = Object.fromEntries(socket.on.mock.calls) as Record<
+      string,
+      (...args: unknown[]) => void
+    >;
+    const callback = vi.fn();
+    handlers["ai:configure"](
+      {
+        roomId: "room",
+        provider: "openai",
+        apiKey: "sk-audio-only-fixture",
+        model: null,
+      },
+      callback,
+    );
+    expect(callback.mock.calls[0][0]).toMatchObject({
+      state: { openai: { source: "room" }, assistantModel: null },
+    });
+    expect(room.aiCredentials.get("openai")).toBe("sk-audio-only-fixture");
+  });
+
   it("rejects an in-flight catalog after a key changes and changes back", async () => {
     let complete!: (response: Response) => void;
     vi.stubGlobal(

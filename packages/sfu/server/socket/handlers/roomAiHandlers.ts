@@ -127,6 +127,7 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
         const env = readAiEnvironment(process.env);
         if (
           data.model !== undefined &&
+          data.model !== null &&
           (typeof data.model !== "string" ||
             !isResponseModel(data.model) ||
             getResponseProvider(data.model) !== data.provider)
@@ -137,7 +138,7 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
           throw new Error("Remove a key or change its model separately.");
         }
         if (
-          data.model !== undefined &&
+          typeof data.model === "string" &&
           !host &&
           getProviderApiKey(env, data.provider)
         ) {
@@ -156,6 +157,7 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
             member.client.id,
             host,
             env,
+            { selectDefaultModel: data.model !== null },
           );
         else if (typeof data.model !== "string")
           throw new Error("Enter an API key.");

@@ -66,6 +66,43 @@ const claudeEvents = (
 afterEach(() => vi.unstubAllGlobals());
 
 describe("provider routing", () => {
+  it("verifies a pinned snapshot even when its alias is also available", async () => {
+    const selected = "gpt-6.2-sol-2026-10-24";
+    const requests: { url: string; body?: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const body = init?.body
+          ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+          : undefined;
+        requests.push({ url: String(url), body });
+        if (String(url).includes("/models"))
+          return json({ data: [{ id: "gpt-6.2-sol" }, { id: selected }] });
+        return json({
+          id: "resp_snapshot",
+          object: "response",
+          status: "completed",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "OK", annotations: [] }],
+            },
+          ],
+        });
+      }),
+    );
+    expect(
+      await generateAiText({
+        ...options,
+        model: selected,
+        apiKey: "sk-openai-fixture",
+        input: "Reply OK",
+      }),
+    ).toBe("OK");
+    expect(requests[1].body?.model).toBe(selected);
+  });
+
   it("verifies newly discovered Claude models and honors their token limit before generation", async () => {
     const requests: { url: string; body?: Record<string, unknown> }[] = [];
     vi.stubGlobal(
