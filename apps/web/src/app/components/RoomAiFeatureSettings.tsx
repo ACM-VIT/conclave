@@ -73,14 +73,10 @@ export default function RoomAiFeatureSettings({
               type="button"
               aria-expanded={expanded === feature}
               aria-label={`${AI_FEATURES[feature].label} settings`}
+              title={status}
               onClick={() => setExpanded(expanded === feature ? null : feature)}
               className="flex w-full items-center gap-3 py-3 text-left"
             >
-              <span
-                className={`h-1.5 w-1.5 shrink-0 rounded-full ${!settings.enabled || !controller.ready || available === null ? "bg-[#71717a]" : available === false ? "bg-amber-300/80" : "bg-[#91cbb0]"}`}
-                aria-label={status}
-                title={status}
-              />
               <span className="min-w-0 flex-1">
                 <span className="block text-[12.5px] font-medium text-[#fafafa]">
                   {AI_FEATURES[feature].label}
@@ -89,6 +85,9 @@ export default function RoomAiFeatureSettings({
                   {AI_PROVIDERS[provider].label} · {modelLabel}
                 </span>
               </span>
+              {!settings.enabled ? (
+                <span className="text-[10.5px] text-[#71717a]">Off</span>
+              ) : null}
               <ChevronDown
                 size={14}
                 className={`shrink-0 text-[#a1a1aa] transition-transform ${expanded === feature ? "rotate-180" : ""}`}
@@ -169,7 +168,7 @@ function FeatureEditor({
         type="number"
         min={min / scale}
         max={max / scale}
-        step={1}
+        step={key === "timeoutMs" ? 0.5 : 1}
         value={draft[key] / scale}
         onChange={(event) => update(key, Number(event.target.value) * scale)}
         className={fieldClass}
@@ -342,7 +341,7 @@ function FeatureEditor({
           {number(
             "Timeout (seconds)",
             "timeoutMs",
-            5_000,
+            AI_GENERATION_LIMITS.minTimeoutMs,
             AI_GENERATION_LIMITS.maxTimeoutMs,
             1000,
           )}

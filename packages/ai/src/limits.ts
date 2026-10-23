@@ -2,6 +2,7 @@ export const AI_GENERATION_LIMITS = {
   outputTokens: 32_768,
   researchTokens: 16_384,
   maxOutputTokens: 128_000,
+  minTimeoutMs: 500,
   timeoutMs: 600_000,
   maxTimeoutMs: 1_800_000,
   gameAckTimeoutMs: 1_815_000,

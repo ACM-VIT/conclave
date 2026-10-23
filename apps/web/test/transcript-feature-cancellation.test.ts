@@ -30,6 +30,8 @@ type TestRoom = {
   minutes: TranscriptMinutesSnapshot;
   minutesGenerating: boolean;
   responseApiKey: string | null;
+  responseEnvironment: Env | null;
+  personalResponseKey: { provider: string; apiKey: string } | null;
   hasAiMinutes: boolean;
   minutesRerunRequested: boolean;
   regenerateMinutes: () => Promise<void>;
@@ -154,4 +156,31 @@ it("schedules automatic minutes without a transcript questions provider key", as
   schedule.call(room);
   await vi.runOnlyPendingTimersAsync();
   expect(room.regenerateMinutes).toHaveBeenCalledTimes(1);
+});
+
+it("keeps an explicit response key ahead of the matching room key without crossing providers", async () => {
+  const room = await fixture();
+  room.responseEnvironment = {
+    ANTHROPIC_API_KEY: "sk-ant-shared",
+    OPENAI_API_KEY: "sk-openai-shared",
+    CONCLAVE_AI_SETTINGS: JSON.stringify({
+      minutes: { model: "claude-haiku-5-5" },
+      questions: { model: "gpt-6.1-sol" },
+    }),
+  } as Env;
+  room.personalResponseKey = {
+    provider: "anthropic",
+    apiKey: "sk-ant-personal",
+  };
+  const resolve = (
+    TranscriptRoom.prototype as unknown as {
+      responseProfile: (
+        feature: "minutes" | "questions",
+      ) => Promise<{ apiKey: string }>;
+    }
+  ).responseProfile;
+  expect((await resolve.call(room, "minutes")).apiKey).toBe("sk-ant-personal");
+  expect((await resolve.call(room, "questions")).apiKey).toBe(
+    "sk-openai-shared",
+  );
 });

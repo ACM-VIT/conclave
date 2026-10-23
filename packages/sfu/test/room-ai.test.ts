@@ -1,3 +1,4 @@
+import { parseRoomAiFeatureSettings } from "@conclave/ai/room-settings";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { config } from "../config/config.js";
@@ -59,6 +60,17 @@ describe("room AI credentials", () => {
     keys.clear();
     expect(keys.featureSettings).toEqual({});
   });
+  it("publishes valid feature settings for legacy sub-second deployment timeouts", () => {
+    const previous = config.gameAi.timeoutMs;
+    try {
+      config.gameAi.timeoutMs = 1000;
+      const keys = new RoomAiCredentials();
+      keys.configureFeature("assistant", {enabled: false}, "host", true);
+      const metadata = keys.status({});
+      expect(parseRoomAiFeatureSettings(metadata.features)).toMatchObject({assistant: {enabled: false}, games: {timeoutMs: 1000}});
+    } finally { config.gameAi.timeoutMs = previous; }
+  });
+
   it("keeps the first saved room model when concurrent key shares suggest different initial models", () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("ANTHROPIC_API_KEY", "");

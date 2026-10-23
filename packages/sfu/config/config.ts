@@ -392,7 +392,7 @@ export const config = {
     storeResponses: false,
     timeoutMs: toNumber(process.env.SFU_GAME_AI_TIMEOUT_MS, AI_GENERATION_LIMITS.timeoutMs, {
       integer: true,
-      min: 500,
+      min: AI_GENERATION_LIMITS.minTimeoutMs,
       max: AI_GENERATION_LIMITS.maxTimeoutMs,
     }),
     maxOutputTokens: toNumber(process.env.SFU_GAME_AI_MAX_OUTPUT_TOKENS, AI_GENERATION_LIMITS.outputTokens, {

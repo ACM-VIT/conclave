@@ -135,3 +135,20 @@ it("does not let a rejected key cancel another participant's pending valid start
   expect(room.session?.status).toBe("live");
   expect(room.connectTranscriptionProvider).toHaveBeenCalledTimes(1);
 });
+
+it("starts independent notes when the disabled questions provider has no key", async () => {
+  const {room, viewer} = await fixture();
+  lookup.mockResolvedValue({SARVAM_API_KEY: "sarvam-fixture", ANTHROPIC_API_KEY: "sk-ant-room", CONCLAVE_AI_SETTINGS: JSON.stringify({questions: {enabled: false, model: "gpt-6.1-sol"}, minutes: {model: "claude-haiku-5-5"}})});
+  await room.startSession(viewer, {...message, transcriptModel: "saaras:v3"});
+  expect(room.session?.status).toBe("live");
+  expect(room.responseApiKey).toBeNull();
+  expect(room.sendError).not.toHaveBeenCalled();
+});
+it("keeps a personal questions key isolated from another provider's room minutes key", async () => {
+  const {room, viewer} = await fixture();
+  lookup.mockResolvedValue({SARVAM_API_KEY: "sarvam-fixture", OPENAI_API_KEY: "sk-openai-minutes", CONCLAVE_AI_SETTINGS: JSON.stringify({questions: {model: "claude-haiku-5-5"}, minutes: {model: "gpt-6.1-sol"}})});
+  await room.startSession(viewer, {...message, transcriptModel: "saaras:v3", qaModel: "claude-haiku-5-5", assistantApiKey: "sk-ant-personal"});
+  expect(room.session?.status).toBe("live");
+  expect(room.responseApiKey).toBe("sk-ant-personal");
+  expect(room.sendError).not.toHaveBeenCalled();
+});

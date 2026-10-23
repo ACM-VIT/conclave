@@ -149,7 +149,7 @@ const CONCLAVE_ASSISTANT_TOOLS: AiTool[] = [
             enabled: { type: "boolean" },
             maxOutputTokens: { type: "integer", minimum: 128, maximum: 128000 },
             researchTokens: { type: "integer", minimum: 128, maximum: 128000 },
-            timeoutMs: { type: "integer", minimum: 5000, maximum: 1800000 },
+            timeoutMs: { type: "integer", minimum: AI_GENERATION_LIMITS.minTimeoutMs, maximum: AI_GENERATION_LIMITS.maxTimeoutMs },
             searchEnabled: { type: "boolean" },
             maxSearchUses: { type: "integer", minimum: 1, maximum: 30 },
             reasoningEffort: {

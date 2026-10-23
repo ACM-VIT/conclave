@@ -1058,7 +1058,7 @@ export function useVoiceAgentParticipant({
       return;
     }
     const apiKey = providedApiKey?.trim() || "";
-    const useRoomKey = Boolean(roomAi?.state.openai.source && roomAi.requestAccessToken);
+    const useRoomKey = Boolean(roomAi?.requestAccessToken && (roomAi.state.openai.source || apiKey));
     if (!voiceSettings.enabled) { setSafeError("The voice assistant is disabled in Room AI settings."); setSafeStatus("error"); return; }
     if (!apiKey && !useRoomKey) {
       setSafeError("Enter your OpenAI API key before starting the voice agent.");
@@ -1111,6 +1111,7 @@ export function useVoiceAgentParticipant({
       };
 
       const roomToken = useRoomKey ? await roomAi!.requestAccessToken!("voice") : null;
+      if (runtimeRef.current !== runtime) return;
       const clientSecretResponse = await fetch(
         roomToken ? "/api/conclave/voice" : AI_ENDPOINTS.openai.realtimeClientSecrets,
         {
@@ -1129,6 +1130,7 @@ export function useVoiceAgentParticipant({
         | RealtimeClientSecretResponse
         | null;
 
+      if (runtimeRef.current !== runtime) return;
       const clientSecret =
         clientSecretBody?.client_secret?.value?.trim() ||
         clientSecretBody?.value?.trim() ||
@@ -1192,7 +1194,9 @@ export function useVoiceAgentParticipant({
       runtime.openAiPc.addTrack(micTrack, runtime.openAiMicStream);
 
       const offer = await runtime.openAiPc.createOffer();
+      if (runtimeRef.current !== runtime) return;
       await runtime.openAiPc.setLocalDescription(offer);
+      if (runtimeRef.current !== runtime) return;
 
       const sdpResponse = await fetch(AI_ENDPOINTS.openai.realtimeCalls, {
         method: "POST",
@@ -1212,6 +1216,7 @@ export function useVoiceAgentParticipant({
       }
 
       const answerSdp = await sdpResponse.text();
+      if (runtimeRef.current !== runtime) return;
       await runtime.openAiPc.setRemoteDescription({
         type: "answer",
         sdp: answerSdp,
@@ -1219,14 +1224,14 @@ export function useVoiceAgentParticipant({
 
       if (runtime.openAiDataChannel) {
         await waitForDataChannelOpen(runtime.openAiDataChannel);
+        if (runtimeRef.current !== runtime) return;
         runtime.openAiDataChannel.send(
           JSON.stringify({
             type: "session.update",
             session: {
               type: "realtime",
-              model,
-              // The room proxy already installed authoritative instructions.
-              ...(!useRoomKey ? {instructions: sessionInstructions} : {}),
+              // Preserve the authoritative model and instructions from the room proxy.
+              ...(!useRoomKey ? {model, instructions: sessionInstructions} : {}),
               audio: {
                 input: {
                   turn_detection: {
@@ -1275,6 +1280,7 @@ export function useVoiceAgentParticipant({
       if (!joinInfoResponse.ok || !token || !sfuUrl) {
         throw new Error(joinInfo?.error ?? "Failed to create SFU token for voice agent.");
       }
+      if (runtimeRef.current !== runtime) return;
 
       const connectAgentSocket = async (url: string) => {
         const socket = await createSocketConnection(url, token);

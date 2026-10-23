@@ -117,7 +117,7 @@ export function validateFeaturePatch(
     ) {
       const [min, max] =
         field === "timeoutMs"
-          ? [5_000, AI_GENERATION_LIMITS.maxTimeoutMs]
+          ? [AI_GENERATION_LIMITS.minTimeoutMs, AI_GENERATION_LIMITS.maxTimeoutMs]
           : field === "maxSearchUses"
             ? [1, 30]
             : [128, AI_GENERATION_LIMITS.maxOutputTokens];

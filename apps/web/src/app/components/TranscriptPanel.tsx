@@ -1,6 +1,7 @@
 "use client";
 
-import { AI_PROVIDERS, getResponseProvider } from "@conclave/ai/models";
+import { resolveAiFeatureSettings } from "@conclave/ai/room-settings";
+import { AI_PROVIDERS, getResponseProvider, getTranscriptResponseModelConfig, type AiTextProvider } from "@conclave/ai/models";
 
 import {
   Check,
@@ -234,7 +235,7 @@ function StartStage({
   onOpenSettings: () => void;
 }) {
   const [apiKey, setApiKey] = useState("");
-  const [assistantApiKey, setAssistantApiKey] = useState("");
+  const [textKeys, setTextKeys] = useState<Partial<Record<AiTextProvider, string>>>({});
   const [transcriptModel, setTranscriptModel] = useState(
     transcript.session.transcriptModel,
   );
@@ -251,10 +252,17 @@ function StartStage({
     transcript.globalProviderKeysAvailable[name] === true ||
     Boolean(roomAi?.ready && roomAi.state[name].source);
   const needsProviderKey = !available(provider);
-  const needsAssistantKey =
-    !available(assistantProvider) &&
-    (assistantProvider !== provider || !needsProviderKey);
+  const assistantApiKey = textKeys[assistantProvider] ?? "";
+  const setTextKey = (name: AiTextProvider, value: string) => setTextKeys(current => ({...current, [name]: value}));
+  const textProfiles = (["minutes", "questions"] as const).map(feature => ({
+    feature, settings: resolveAiFeatureSettings({CONCLAVE_ASSISTANT_MODEL: qaModel}, feature, roomAi?.state.features ?? {}),
+  }));
+  const separateTextProfiles = Boolean(roomAi && (roomAi.state.features?.minutes || roomAi.state.features?.questions));
+  const requiredTextProviders = [...new Set(textProfiles.filter(({settings}) => settings.enabled).map(({settings}) => getResponseProvider(settings.model)))];
+  const missingTextProviders = requiredTextProviders.filter(name => !available(name) && name !== provider);
+  const needsAssistantKey = missingTextProviders.includes(assistantProvider);
   const assistantCatalog = useAiModels(roomAi, {
+    enabled: !separateTextProfiles,
     provider: assistantProvider,
     apiKey: needsAssistantKey ? assistantApiKey : needsProviderKey && assistantProvider === provider ? apiKey : "",
   });
@@ -263,7 +271,7 @@ function StartStage({
     : transcript.canStart;
   const hasRequiredKeys =
     (!needsProviderKey || Boolean(apiKey.trim())) &&
-    (!needsAssistantKey || Boolean(assistantApiKey.trim()));
+    missingTextProviders.every(name => Boolean(textKeys[name]?.trim()));
   const sourceLabel = (name: typeof provider | typeof assistantProvider) =>
     transcript.globalProviderKeysAvailable[name] ||
     roomAi?.state[name].source === "deployment"
@@ -278,9 +286,6 @@ function StartStage({
   useEffect(() => {
     setApiKey("");
   }, [provider]);
-  useEffect(() => {
-    setAssistantApiKey("");
-  }, [assistantProvider]);
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!canSubmit || !hasRequiredKeys || isSubmitting) return;
@@ -292,12 +297,10 @@ function StartStage({
           roomAi,
           {
             ...(needsProviderKey ? { [provider]: apiKey } : {}),
-            ...(needsAssistantKey
-              ? { [assistantProvider]: assistantApiKey }
-              : {}),
+            ...Object.fromEntries(missingTextProviders.map(name => [name, textKeys[name] ?? ""])),
           },
           qaModel,
-          ["minutes", "questions"],
+          (["minutes", "questions"] as const).filter(feature => !roomAi.state.features?.[feature]?.model),
         );
         if (error) {
           setSetupError(error);
@@ -317,7 +320,7 @@ function StartStage({
         : await transcript.start(options);
       if (ok) {
         setApiKey("");
-        setAssistantApiKey("");
+        setTextKeys({});
       }
     } finally {
       setIsSubmitting(false);
@@ -401,7 +404,12 @@ function StartStage({
               className="space-y-2.5 border-t border-white/10 pt-4"
             >
               <legend className="sr-only">Questions and minutes</legend>
-              <AiModelSelect
+              {separateTextProfiles ? textProfiles.map(({feature, settings}) => (
+                <button key={feature} type="button" onClick={onOpenSettings} className="flex w-full items-center justify-between gap-3 py-1 text-left text-[11px]">
+                  <span className="text-[#a1a1aa]">{feature === "minutes" ? "Notes" : "Questions"}</span>
+                  <span className="min-w-0 truncate text-[#d4d4d8]">{settings.enabled ? getTranscriptResponseModelConfig(settings.model).label : "Off"}</span>
+                </button>
+              )) : <AiModelSelect
                 value={qaModel}
                 onChange={(value) => {
                   setQaModel(value);
@@ -412,14 +420,10 @@ function StartStage({
                 onRefresh={assistantCatalog.refresh}
                 disabled={isSubmitting}
                 label="Assistant"
-              />
-              {needsAssistantKey ? (
-                keyInput(assistantProvider, assistantApiKey, setAssistantApiKey)
-              ) : available(assistantProvider) ? (
-                covered(assistantProvider)
-              ) : (
-                <span className="sr-only">Uses the transcription key.</span>
-              )}
+              />}
+              {requiredTextProviders.map(name => missingTextProviders.includes(name)
+                ? <div key={name}>{keyInput(name, textKeys[name] ?? "", value => setTextKey(name, value))}</div>
+                : available(name) ? <div key={name}>{covered(name)}</div> : null)}
             </fieldset>
             <div className="space-y-2.5">
               <button
@@ -434,7 +438,7 @@ function StartStage({
                   ? "Starting…"
                   : needsTakeover
                     ? "Resume notes"
-                    : roomAi && (needsProviderKey || needsAssistantKey) ? "Share & start notes" : "Start notes"}
+                    : roomAi && (needsProviderKey || missingTextProviders.length > 0) ? "Share & start notes" : "Start notes"}
               </button>
               {setupError ? <p role="alert" className="text-[11.5px] text-red-300">{setupError}</p> : null}
               {roomAi ? (

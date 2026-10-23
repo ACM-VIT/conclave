@@ -884,7 +884,7 @@ export class TranscriptRoom {
     for (const feature of ["minutes", "questions"] as const) {
       const settings = resolveAiFeatureSettings({...effectiveEnv, CONCLAVE_ASSISTANT_MODEL: qaModel}, feature);
       if (!settings.enabled) continue;
-      const key = this.resolveResponseKey(settings.model, transcriptionProvider, message.apiKey, message.assistantApiKey, effectiveEnv);
+      const key = this.resolveResponseKey(settings.model, transcriptionProvider, message.apiKey, getResponseProvider(settings.model) === getResponseProvider(qaModel) ? message.assistantApiKey : undefined, effectiveEnv);
       if (!key.ok) { this.sendError(viewer, key.message); return; }
     }
 
@@ -896,7 +896,7 @@ export class TranscriptRoom {
     const wasIdle = existingStatus === "idle" || existingStatus === "error";
     this.responseApiKey = responseKey.ok ? responseKey.apiKey : null;
     this.responseRoute = viewer.sfuUrl && viewer.clientId && viewer.channelId ? {sfuUrl: viewer.sfuUrl, identity: {userId: viewer.userId, roomId, clientId: viewer.clientId, channelId: viewer.channelId}} : null;
-    const personalKey = message.assistantApiKey || (getResponseProvider(qaModel) === transcriptionProvider ? message.apiKey : undefined);
+    const personalKey = message.assistantApiKey?.trim() || (getResponseProvider(qaModel) === transcriptionProvider ? message.apiKey?.trim() : undefined);
     this.personalResponseKey = personalKey ? {provider: getResponseProvider(qaModel), apiKey: personalKey} : null;
     this.session = {
       roomId,
@@ -2081,7 +2081,7 @@ export class TranscriptRoom {
     }
     const settings = resolveAiFeatureSettings({...env, CONCLAVE_ASSISTANT_MODEL: requestedModel || this.session?.qaModel}, feature);
     const provider = getResponseProvider(settings.model);
-    const apiKey = getProviderApiKey(env, provider) || (this.personalResponseKey?.provider === provider ? this.personalResponseKey.apiKey : "") || (!route && provider === getResponseProvider(this.session?.qaModel || DEFAULT_QA_MODEL) ? this.responseApiKey : "");
+    const apiKey = (this.personalResponseKey?.provider === provider ? this.personalResponseKey.apiKey : "") || getProviderApiKey(env, provider) || (!route && provider === getResponseProvider(this.session?.qaModel || DEFAULT_QA_MODEL) ? this.responseApiKey : "");
     if (settings.enabled && !apiKey) throw new Error("Add a key for this feature in Room AI settings.");
     return {env, model: settings.model, apiKey: apiKey || "", enabled: settings.enabled};
   }

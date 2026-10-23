@@ -544,6 +544,40 @@ describe("AI setup UX", () => {
     expect(controller.configureFeature).toHaveBeenCalledWith("assistant", expect.objectContaining({maxOutputTokens: 64000}));
   });
 
+  it.each([false, true])("starts notes with questions disabled and enabled minutes %s", async minutesEnabled => {
+    const state = emptyRoomAiState();
+    state.sarvam = {source: "room", ownerId: "alice"};
+    state.anthropic = {source: "room", ownerId: "alice"};
+    state.features = {transcription: {model: "saaras:v3"}, questions: {enabled: false, model: "gpt-6.1-sol"}, minutes: {enabled: minutesEnabled, model: "claude-haiku-5-5"}};
+    const start = vi.fn().mockResolvedValue(true);
+    const notes = {...transcript(start), globalProviderKeysAvailable: {}};
+    await act(async () => root.render(<TranscriptPanel transcript={notes} roomAi={roomAi({state})} onClose={() => {}} />));
+    const submit = container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    expect(submit.disabled).toBe(false);
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it("requests the missing minutes provider key without changing independently configured models", async () => {
+    const state = emptyRoomAiState();
+    state.sarvam = {source: "room", ownerId: "alice"};
+    state.anthropic = {source: "room", ownerId: "alice"};
+    state.features = {transcription: {model: "saaras:v3"}, minutes: {model: "gpt-6.1-sol"}, questions: {model: "claude-haiku-5-5"}};
+    const configure = vi.fn().mockResolvedValue(null), configureFeature = vi.fn().mockResolvedValue(null), start = vi.fn().mockResolvedValue(true);
+    await act(async () => root.render(<TranscriptPanel transcript={{...transcript(start), globalProviderKeysAvailable: {}}} roomAi={roomAi({state, configure, configureFeature})} onClose={() => {}} />));
+    const key = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    expect(key.parentElement?.textContent).toContain("OpenAI");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(key, "sk-minutes-fixture");
+      key.dispatchEvent(new Event("input", {bubbles: true}));
+    });
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
+    expect(configure).toHaveBeenCalledWith("openai", "sk-minutes-fixture", null);
+    expect(configureFeature).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves the audio draft when the shared assistant changes", async () => {
     const start = vi.fn().mockResolvedValue(true);
     const notes = transcript(start);
