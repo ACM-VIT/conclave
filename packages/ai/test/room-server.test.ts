@@ -46,7 +46,7 @@ describe("room credential server boundary", () => {
 
   it("rejects redirects without following them or exposing credentials in diagnostics", async () => {
     const fetcher = vi.fn(
-      async () =>
+      async (_url: unknown, _init?: RequestInit) =>
         new Response(null, {
           status: 307,
           headers: { location: "https://untrusted.example" },
