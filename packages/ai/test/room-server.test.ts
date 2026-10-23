@@ -53,7 +53,9 @@ describe("room credential server boundary", () => {
         }),
     );
     vi.stubGlobal("fetch", fetcher);
-    const error = await fetchRoomAiEnvironment(options).catch((error) => error);
+    const error: unknown = await fetchRoomAiEnvironment(options).catch(
+      (error: unknown) => error,
+    );
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
     expect(describeRoomAiLookupFailure(error)).toEqual({
