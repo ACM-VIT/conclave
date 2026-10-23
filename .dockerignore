@@ -5,6 +5,8 @@
 !patches/
 !patches/**
 !packages/
+!packages/ai/
+!packages/ai/**
 !packages/sfu/
 !packages/sfu/**
 !packages/shared-browser/
@@ -13,6 +15,10 @@
 !packages/ui-tokens/package.json
 !packages/ui-tokens/src/
 !packages/ui-tokens/src/**
+packages/ai/node_modules
+packages/ai/dist
+packages/ai/.env
+packages/ai/.env.*
 packages/sfu/node_modules
 packages/sfu/dist
 packages/sfu/.env

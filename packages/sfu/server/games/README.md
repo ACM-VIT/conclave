@@ -133,8 +133,10 @@ SFU_GAME_AI_WEB_SEARCH_ENABLED=1
 SFU_GAME_AI_WEB_SEARCH_CONTEXT_SIZE=low
 ```
 
-The model is centrally fixed to `gpt-5.6-luna` in the SFU configuration. The
-same server-side `OPENAI_API_KEY` is shared with other OpenAI-backed SFU
+The default model is `gpt-5.6-luna`. Set `SFU_GAME_AI_MODEL` to a registered
+Claude model and provide `ANTHROPIC_API_KEY` to use Anthropic instead. Provider
+clients and model defaults live in [`@conclave/ai`](../../../ai/README.md). The
+server-side `OPENAI_API_KEY` is shared with other OpenAI-backed SFU
 capabilities and is never sent to clients.
 
 Web search is enabled by default through the Responses API `web_search` tool.

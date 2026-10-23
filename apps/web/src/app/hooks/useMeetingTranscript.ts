@@ -1,5 +1,7 @@
 "use client";
 
+import { getResponseProvider } from "@conclave/ai/models";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   Participant,
@@ -1032,11 +1034,11 @@ export function useMeetingTranscript({
     (transcriptModel: string): boolean => {
       const provider = getTranscriptTranscriptionProvider(transcriptModel);
       return (
-        globalProviderKeysAvailable.openai === true &&
+        globalProviderKeysAvailable[getResponseProvider(session.qaModel)] === true &&
         globalProviderKeysAvailable[provider] === true
       );
     },
-    [globalProviderKeysAvailable],
+    [globalProviderKeysAvailable, session.qaModel],
   );
 
   useEffect(() => {

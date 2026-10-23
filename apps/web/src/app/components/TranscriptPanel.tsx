@@ -1,5 +1,7 @@
 "use client";
 
+import { AI_PROVIDERS, getResponseProvider } from "@conclave/ai/models";
+
 import {
   Check,
   CheckCircle2,
@@ -17,6 +19,7 @@ import {
   Play,
   RefreshCw,
   Send,
+  Settings2,
   Square,
   Tag,
   X,
@@ -31,10 +34,7 @@ import {
   LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS,
   TRANSCRIPT_QA_MODELS,
 } from "../lib/transcript-models";
-import type {
-  TranscriptMinutesEntry,
-  TranscriptSegment,
-} from "../lib/types";
+import type { TranscriptMinutesEntry, TranscriptSegment } from "../lib/types";
 import { formatTranscriptTimestamp } from "../lib/transcript-reducer";
 import {
   Conversation,
@@ -66,7 +66,12 @@ import {
   TaskTrigger,
 } from "./ai-elements/task";
 
+import AiModelSelect from "./AiModelSelect";
+import RoomAiSettings from "./RoomAiSettings";
+import type { RoomAiController } from "../hooks/useRoomAi";
+
 interface TranscriptPanelProps {
+  roomAi?: RoomAiController;
   transcript: MeetingTranscriptController;
   onClose: () => void;
   /** Which tab to show when the panel mounts, e.g. "minutes" from catch up. */
@@ -221,8 +226,12 @@ const START_ACCENT = "#4F9CF9";
 
 function StartStage({
   transcript,
+  roomAi,
+  onOpenSettings,
 }: {
   transcript: MeetingTranscriptController;
+  roomAi?: RoomAiController;
+  onOpenSettings: () => void;
 }) {
   const [apiKey, setApiKey] = useState("");
   const [assistantApiKey, setAssistantApiKey] = useState("");
@@ -233,229 +242,163 @@ function StartStage({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const needsTakeover = transcript.session.status === "takeover_needed";
   const provider = getTranscriptTranscriptionProvider(transcriptModel);
-  const providerLabel = provider === "sarvam" ? "Sarvam" : "OpenAI";
-  const isSarvam = provider === "sarvam";
-  // One realtime model per provider; the toggle picks the provider's model.
-  const transcriptProviderOptions = useMemo(() => {
-    const seen = new Set<string>();
-    const opts: { provider: string; label: string; modelId: string }[] = [];
-    for (const model of LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS) {
-      if (seen.has(model.provider)) continue;
-      seen.add(model.provider);
-      opts.push({
-        provider: model.provider,
-        label: model.provider === "sarvam" ? "Sarvam" : "OpenAI",
-        modelId: model.id,
-      });
-    }
-    // Keep OpenAI first so it stays the default-looking left option.
-    return opts.sort((a) => (a.provider === "openai" ? -1 : 1));
-  }, []);
-  const hasGlobalProviderKey =
-    transcript.globalProviderKeysAvailable[provider] === true;
-  const hasGlobalAssistantKey =
-    transcript.globalProviderKeysAvailable.openai === true;
-  const needsProviderKey = !hasGlobalProviderKey;
-  const needsAssistantKey = provider === "sarvam" && !hasGlobalAssistantKey;
-  const isOnTheHouse = !needsProviderKey && !needsAssistantKey;
-  const providerCoveredLabel =
-    provider === "sarvam" ? "Sarvam on the house" : "On the house";
+  const assistantProvider = getResponseProvider(qaModel);
+  const available = (name: typeof provider | typeof assistantProvider) =>
+    transcript.globalProviderKeysAvailable[name] === true ||
+    Boolean(roomAi?.ready && roomAi.state[name].source);
+  const needsProviderKey = !available(provider);
+  const needsAssistantKey =
+    !available(assistantProvider) &&
+    (assistantProvider !== provider || !needsProviderKey);
   const canSubmit = needsTakeover
     ? transcript.canTakeover
     : transcript.canStart;
   const hasRequiredKeys =
-    (!needsProviderKey || apiKey.trim().length > 0) &&
-    (!needsAssistantKey || assistantApiKey.trim().length > 0);
-
+    (!needsProviderKey || Boolean(apiKey.trim())) &&
+    (!needsAssistantKey || Boolean(assistantApiKey.trim()));
+  const sourceLabel = (name: typeof provider | typeof assistantProvider) =>
+    transcript.globalProviderKeysAvailable[name] ||
+    roomAi?.state[name].source === "deployment"
+      ? "Conclave key"
+      : "Room key";
   useEffect(() => {
     setTranscriptModel(transcript.session.transcriptModel);
     setQaModel(transcript.session.qaModel);
-  }, [
-    transcript.session.qaModel,
-    transcript.session.transcriptModel,
-  ]);
 
+  }, [transcript.session.qaModel, transcript.session.transcriptModel]);
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!canSubmit || !hasRequiredKeys || isSubmitting) return;
     setIsSubmitting(true);
-    const startOptions = {
-      apiKey: needsProviderKey ? apiKey : undefined,
-      assistantApiKey: needsAssistantKey ? assistantApiKey : undefined,
-      transcriptModel,
-      qaModel,
-      transportMode: "sfu" as const,
-    };
-    const ok = needsTakeover
-      ? await transcript.takeover(startOptions)
-      : await transcript.start(startOptions);
-    if (ok) {
-      setApiKey("");
-      setAssistantApiKey("");
+    try {
+      const options = {
+        apiKey: needsProviderKey ? apiKey : undefined,
+        assistantApiKey: needsAssistantKey ? assistantApiKey : undefined,
+        transcriptModel,
+        qaModel,
+        transportMode: "sfu" as const,
+      };
+      const ok = needsTakeover
+        ? await transcript.takeover(options)
+        : await transcript.start(options);
+      if (ok) {
+        setApiKey("");
+        setAssistantApiKey("");
+      }
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
-
-  return (
-    <div className="relative flex h-full min-h-0 flex-col justify-center overflow-y-auto px-5 py-6">
-      <div
-        aria-hidden
-        className="pointer-events-none absolute left-1/2 top-[6%] h-72 w-72 -translate-x-1/2 rounded-full opacity-20 blur-[72px] transition-all duration-500"
-        style={{
-          background: isSarvam
-            ? "linear-gradient(90deg, #FF9933 0%, #FFFFFF 50%, #138808 100%)"
-            : START_ACCENT,
-        }}
+  const keyInput = (
+    name: typeof provider | typeof assistantProvider,
+    value: string,
+    onChange: (value: string) => void,
+  ) => (
+    <label className="block text-[11px] text-[#a1a1aa]">
+      <span className="flex items-center justify-between gap-2">{AI_PROVIDERS[name].label} key<span className="text-[10px] text-[#71717a]">Session</span></span>
+      <input
+        type="password"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        autoComplete="off"
+        spellCheck={false}
+        disabled={isSubmitting}
+        placeholder={name === "anthropic" ? "sk-ant-…" : name === "openai" ? "sk-…" : "API key"}
+        className="mt-1.5 h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-[12px] text-[#fafafa] outline-none focus:border-[#F95F4A]/60 disabled:opacity-60"
       />
-      <div className="relative z-10 flex flex-col items-center text-center">
-        <span
-          className="text-[13px] font-medium"
-          style={
-            isSarvam
-              ? {
-                  background:
-                    "linear-gradient(90deg, #FF9933 0%, #f5f5f5 50%, #138808 100%)",
-                  WebkitBackgroundClip: "text",
-                  backgroundClip: "text",
-                  WebkitTextFillColor: "transparent",
-                  color: "transparent",
-                }
-              : { color: START_ACCENT }
-          }
-        >
-          Live notes
-        </span>
-        <p className="mt-2.5 max-w-[280px] text-[26px] font-medium leading-[1.12] text-[#fafafa]">
-          {needsTakeover ? "Pick up the live notes" : "Turn on live notes"}
-        </p>
-        <p className="mt-3 max-w-[280px] text-[13.5px] leading-relaxed text-[#a1a1aa]">
-          {transcript.isViewOnly
-            ? "View-only participants can follow live transcript and minutes without controlling the room."
-            : needsTakeover
-              ? isOnTheHouse
-                ? "The last host stepped away. Resume it with Conclave's shared key."
-                : "The last host stepped away. Bring your key to keep the room transcribed."
-              : "Transcribe the room, ask it questions, and get minutes as the meeting happens."}
-        </p>
-
+    </label>
+  );
+  const covered = (name: typeof provider | typeof assistantProvider) => (
+    <p className="flex items-center gap-1.5 text-[11px] text-[#91cbb0]">
+      <CheckCircle2 size={12} className="shrink-0" />
+      {sourceLabel(name)}
+    </p>
+  );
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
+      <div className="mx-auto w-full max-w-[320px]">
+        <h3 className="text-[24px] font-medium leading-tight text-[#fafafa]">{needsTakeover ? "Resume live notes" : "Live notes"}</h3>
         {transcript.isViewOnly ? (
-          <div className="mt-7 inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-[12.5px] font-semibold text-[#d4d4d8]">
-            <Lock size={15} strokeWidth={1.8} className="text-[#F95F4A]" />
+          <p className="mt-6 flex items-center gap-2 text-[12px] text-[#d4d4d8]">
+            <Lock size={14} />
             View only
-          </div>
+          </p>
         ) : (
-          <form
-            onSubmit={submit}
-            className="mt-7 w-full max-w-[300px] space-y-2.5"
-          >
-            {hasGlobalProviderKey ? (
-              <input
-                value={providerCoveredLabel}
-                type="text"
-                autoComplete="off"
-                readOnly
-                disabled={isSubmitting}
-                className="h-11 w-full rounded-xl border border-white/10 bg-black/20 px-3.5 text-center text-[13px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#4F9CF9]/60 disabled:opacity-60"
-              />
-            ) : null}
-            {needsProviderKey ? (
-              <input
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-                type="password"
-                placeholder={`${providerLabel} API key`}
-                autoComplete="off"
-                autoFocus
-                disabled={isSubmitting}
-                className="h-11 w-full rounded-xl border border-white/10 bg-black/20 px-3.5 text-center text-[13px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#4F9CF9]/60 disabled:opacity-60"
-              />
-            ) : null}
-            {needsAssistantKey ? (
-              <input
-                value={assistantApiKey}
-                onChange={(event) => setAssistantApiKey(event.target.value)}
-                type="password"
-                placeholder="OpenAI key for Ask and Minutes"
-                autoComplete="off"
-                autoFocus={!needsProviderKey}
-                disabled={isSubmitting}
-                className="h-11 w-full rounded-xl border border-white/10 bg-black/20 px-3.5 text-center text-[13px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#4F9CF9]/60 disabled:opacity-60"
-              />
-            ) : null}
-            <div className="space-y-2.5 text-left">
-              <div className="space-y-1">
-                <span className="block px-0.5 text-[11px] text-[#a1a1aa]">
-                  Provider
-                </span>
-                <div className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-black/20 p-1">
-                  {transcriptProviderOptions.map((option) => {
-                    const active = provider === option.provider;
-                    return (
-                      <button
-                        key={option.provider}
-                        type="button"
-                        disabled={isSubmitting}
-                        onClick={() => setTranscriptModel(option.modelId)}
-                        className={`h-8 rounded-md text-[12px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                          active
-                            ? "bg-[#F95F4A] text-white shadow-sm"
-                            : "text-[#a1a1aa] hover:text-[#fafafa]"
-                        }`}
-                      >
-                        {option.label}
-                      </button>
-                    );
-                  })}
-                </div>
+          <form onSubmit={submit} className="mt-6 space-y-5">
+            <fieldset disabled={isSubmitting} className="space-y-2.5">
+              <legend className="mb-2 text-[12px] font-semibold text-[#fafafa]">
+                Audio transcription
+              </legend>
+              <div className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-black/20 p-1">
+                {LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS.map((model) => (
+                  <button
+                    key={model.id}
+                    type="button"
+                    aria-pressed={provider === model.provider}
+                    onClick={() => {
+                      setTranscriptModel(model.id);
+                      setApiKey("");
+                      setAssistantApiKey("");
+                    }}
+                    className={`h-9 rounded-md text-[12px] font-semibold transition-colors disabled:opacity-60 ${provider === model.provider ? "bg-[#F95F4A] text-white" : "text-[#a1a1aa] hover:bg-white/[0.04] hover:text-white"}`}
+                  >
+                    {AI_PROVIDERS[model.provider].label}
+                  </button>
+                ))}
               </div>
-              <label className="space-y-1">
-                <span className="block px-0.5 text-[11px] text-[#a1a1aa]">
-                  Assistant
-                </span>
-                <select
-                  value={qaModel}
-                  onChange={(event) => setQaModel(event.target.value)}
-                  disabled={isSubmitting}
-                  className="h-9 w-full rounded-lg border border-white/10 bg-black/20 px-2 text-[12px] text-[#fafafa] outline-none focus:border-[#4F9CF9]/60 disabled:opacity-60"
-                >
-                  {TRANSCRIPT_QA_MODELS.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <button
-              type="submit"
-              disabled={
-                !canSubmit ||
-                !hasRequiredKeys ||
-                isSubmitting
-              }
-              className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] px-3 text-[13.5px] font-semibold text-white transition-colors hover:bg-[#ff735f] disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-[#71717a]"
+              {needsProviderKey
+                ? keyInput(provider, apiKey, setApiKey)
+                : covered(provider)}
+            </fieldset>
+            <fieldset
+              disabled={isSubmitting}
+              className="space-y-2.5 border-t border-white/10 pt-4"
             >
-              {isSubmitting ? (
-                <Loader2 size={15} className="animate-spin" />
-              ) : null}
-              {isSubmitting
-                ? "Starting"
-                : needsTakeover
-                  ? "Resume notes"
-                  : "Start notes"}
-            </button>
-            <p className="flex items-center justify-center gap-1.5 pt-0.5 text-[11px] text-[#71717a]">
-              {isOnTheHouse ? (
-                <CheckCircle2 size={11} strokeWidth={2} />
+              <legend className="sr-only">Questions and minutes</legend>
+              <AiModelSelect
+                value={qaModel}
+                onChange={(value) => {
+                  setQaModel(value);
+                  setAssistantApiKey("");
+                }}
+                models={TRANSCRIPT_QA_MODELS}
+                disabled={isSubmitting}
+                label="Assistant"
+              />
+              {needsAssistantKey ? (
+                keyInput(assistantProvider, assistantApiKey, setAssistantApiKey)
+              ) : available(assistantProvider) ? (
+                covered(assistantProvider)
               ) : (
-                <Lock size={11} strokeWidth={2} />
+                <span className="sr-only">Uses the transcription key.</span>
               )}
-              {isOnTheHouse
-                ? "Covered by Conclave. No key needed."
-                : hasGlobalProviderKey && needsAssistantKey
-                  ? "Sarvam is covered. Add an OpenAI key for Ask and Minutes."
-                : "Keys are used only for this session, never stored."}
-            </p>
+            </fieldset>
+            <div className="space-y-2.5">
+              <button
+                type="submit"
+                disabled={!canSubmit || !hasRequiredKeys || isSubmitting}
+                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] px-3 text-[13px] font-semibold text-white transition-colors hover:bg-[#ff735f] disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-[#71717a]"
+              >
+                {isSubmitting ? (
+                  <Loader2 size={15} className="animate-spin" />
+                ) : null}
+                {isSubmitting
+                  ? "Starting…"
+                  : needsTakeover
+                    ? "Resume notes"
+                    : "Start notes"}
+              </button>
+              {roomAi ? (
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
+                  className="inline-flex items-center gap-1.5 py-1 text-[11.5px] text-[#d4d4d8] hover:text-white"
+                >
+                  <Settings2 size={13} />
+                  Room AI settings
+                </button>
+              ) : null}
+            </div>
           </form>
         )}
       </div>
@@ -499,7 +442,13 @@ function FallbackState({
 
 // Live equalizer bars reusing the room's voice-activity keyframe, tinted with
 // the transcript accent so the empty state reads as "actively listening".
-function Waveform({ bars = 7, height = 14 }: { bars?: number; height?: number }) {
+function Waveform({
+  bars = 7,
+  height = 14,
+}: {
+  bars?: number;
+  height?: number;
+}) {
   return (
     <span
       className="flex items-end gap-[3px]"
@@ -968,7 +917,9 @@ export default function TranscriptPanel({
   onClose,
   initialTab,
   onPostRecap,
+  roomAi,
 }: TranscriptPanelProps) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TranscriptTab>(
     initialTab ?? "transcript",
   );
@@ -1043,14 +994,28 @@ export default function TranscriptPanel({
               </p>
             ) : null}
           </div>
-          <button
-            onClick={onClose}
-            aria-label="Close transcript"
-            title="Close transcript"
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
-          >
-            <X size={18} strokeWidth={1.75} />
-          </button>
+          <div className="flex items-center gap-1">
+            {roomAi && !transcript.isViewOnly ? (
+              <button
+                type="button"
+                onClick={() => setSettingsOpen((open) => !open)}
+                aria-label="Room AI settings"
+                aria-expanded={settingsOpen}
+                title="Room AI settings"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#a1a1aa] hover:bg-white/[0.06] hover:text-white"
+              >
+                <Settings2 size={16} />
+              </button>
+            ) : null}
+            <button
+              onClick={onClose}
+              aria-label="Close transcript"
+              title="Close transcript"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
+            >
+              <X size={18} strokeWidth={1.75} />
+            </button>
+          </div>
         </div>
 
         {isRunning ? (
@@ -1082,6 +1047,16 @@ export default function TranscriptPanel({
         ) : null}
       </div>
 
+      {settingsOpen && roomAi ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <RoomAiSettings
+            controller={roomAi}
+            onClose={() => setSettingsOpen(false)}
+          />
+        </div>
+      ) : null}
+
+      <div className={settingsOpen ? "hidden" : "contents"}>
       {(transcript.error || session.error) && (
         <div className="shrink-0 border-b border-[#f97066]/20 bg-[#f97066]/10 px-4 py-2 text-[12px] leading-relaxed text-[#ffb4ad]">
           {transcript.error || session.error}
@@ -1215,8 +1190,13 @@ export default function TranscriptPanel({
           </div>
         </>
       ) : (
-        <StartStage transcript={transcript} />
+        <StartStage
+          transcript={transcript}
+          roomAi={roomAi}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
       )}
+      </div>
     </div>
   );
 }

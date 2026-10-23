@@ -1,15 +1,17 @@
 "use client";
 
+import { AI_DEFAULT_MODELS, AI_PROVIDERS, getResponseProvider } from "@conclave/ai/models";
+
 import {
   AudioLines,
-  Check,
-  ChevronDown,
+  CheckCircle2,
   ExternalLink,
   Image as ImageIcon,
   Lock,
   Paperclip,
   Play,
   Send,
+  Settings2,
   Square,
   X,
 } from "lucide-react";
@@ -76,6 +78,10 @@ import ChatLinkEmbedView, {
 } from "./ChatLinkEmbedView";
 import ConclaveMessage from "./ConclaveMessage";
 import GifPicker from "./GifPicker";
+import AiModelSelect from "./AiModelSelect";
+import RoomAiSettings from "./RoomAiSettings";
+import type { RoomAiController } from "../hooks/useRoomAi";
+
 
 interface MentionableParticipant {
   userId: string;
@@ -86,6 +92,7 @@ interface MentionableParticipant {
 type MentionInputMode = "at" | "dm";
 
 interface ChatPanelProps {
+  roomAi?: RoomAiController;
   messages: ChatMessage[];
   chatInput: string;
   onInputChange: (value: string) => void;
@@ -222,6 +229,7 @@ function TtsMessageBody({
 }
 
 function ChatPanel({
+  roomAi,
   messages,
   chatInput,
   onInputChange,
@@ -238,7 +246,7 @@ function ChatPanel({
   assistantApiKeyPrompt = {
     visible: false,
     error: null,
-    model: "gpt-5.6-terra",
+    model: AI_DEFAULT_MODELS.assistant,
   },
   onSubmitAssistantApiKey,
   onCancelAssistantApiKey,
@@ -284,11 +292,10 @@ function ChatPanel({
   const [imageUploadError, setImageUploadError] = useState<string | null>(null);
   const [isImageUploading, setIsImageUploading] = useState(false);
   const [assistantApiKeyInput, setAssistantApiKeyInput] = useState("");
-  const [assistantModel, setAssistantModel] =
-    useState<ConclaveAssistantModel>(assistantApiKeyPrompt.model);
-  const [isAssistantModelMenuOpen, setIsAssistantModelMenuOpen] =
-    useState(false);
-  const assistantModelMenuRef = useRef<HTMLDivElement>(null);
+  const [assistantModel, setAssistantModel] = useState<ConclaveAssistantModel>(
+    assistantApiKeyPrompt.model,
+  );
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [highlightedMessageId, setHighlightedMessageId] = useState<
     string | null
   >(null);
@@ -305,11 +312,6 @@ function ChatPanel({
   const imagePickerLabel = areImageAttachmentsEnabled
     ? "Attach or paste image"
     : "Image attachments disabled by host";
-  const selectedAssistantModel =
-    CONCLAVE_ASSISTANT_BYOK_MODELS.find(
-      (model) => model.id === assistantModel,
-    ) ?? CONCLAVE_ASSISTANT_BYOK_MODELS[0];
-
   const scrollToMessage = useCallback((id: string) => {
     const node = messageNodeRefs.current.get(id);
     if (!node) return;
@@ -435,27 +437,12 @@ function ChatPanel({
   useEffect(() => {
     if (!assistantApiKeyPrompt.visible) {
       setAssistantApiKeyInput("");
-      setIsAssistantModelMenuOpen(false);
     }
   }, [assistantApiKeyPrompt.visible]);
 
   useEffect(() => {
     setAssistantModel(assistantApiKeyPrompt.model);
   }, [assistantApiKeyPrompt.model, assistantApiKeyPrompt.visible]);
-
-  useEffect(() => {
-    if (!isAssistantModelMenuOpen) return;
-    const handlePointerDown = (event: MouseEvent) => {
-      if (
-        assistantModelMenuRef.current &&
-        !assistantModelMenuRef.current.contains(event.target as Node)
-      ) {
-        setIsAssistantModelMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handlePointerDown);
-    return () => document.removeEventListener("mousedown", handlePointerDown);
-  }, [isAssistantModelMenuOpen]);
 
   useEffect(() => {
     setActiveCommandIndex(0);
@@ -768,100 +755,113 @@ function ChatPanel({
     >
       <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3">
         <h2 className="text-[15px] font-semibold text-[#fafafa]">Chat</h2>
-        <button
-          onClick={onClose}
-          aria-label="Close chat"
-          title="Close chat (Esc)"
-          className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
-        >
-          <X size={18} strokeWidth={1.75} />
-        </button>
+        <div className="flex items-center gap-1">
+          {roomAi ? (
+            <button
+              type="button"
+              aria-label="Room AI settings"
+              aria-expanded={settingsOpen}
+              title="Room AI settings"
+              onClick={() => setSettingsOpen((open) => !open)}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#a1a1aa] hover:bg-white/[0.06] hover:text-white"
+            >
+              <Settings2 size={16} />
+            </button>
+          ) : null}
+          <button
+            onClick={onClose}
+            aria-label="Close chat"
+            title="Close chat (Esc)"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
+          >
+            <X size={18} strokeWidth={1.75} />
+          </button>
+        </div>
       </div>
 
-      {messages.length === 0 ? (
+      {settingsOpen && roomAi ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <RoomAiSettings
+            controller={roomAi}
+            onClose={() => setSettingsOpen(false)}
+          />
+        </div>
+      ) : messages.length === 0 ? (
         <div className="web-chat-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4">
           {(() => {
-                  const restricted = isChatLocked && !isAdmin
-                  ? {
-                      icon: <Lock size={20} strokeWidth={1.75} />,
-                      title: "Chat is locked",
-                      body: "The host has paused messaging. You'll be able to chat when it reopens.",
-                    }
-                  : null;
+            const restricted =
+              isChatLocked && !isAdmin
+                ? {
+                    icon: <Lock size={20} strokeWidth={1.75} />,
+                    title: "Chat is locked",
+                    body: "The host has paused messaging. You'll be able to chat when it reopens.",
+                  }
+                : null;
 
-              if (restricted) {
-                return (
-                  <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] text-[#a1a1aa]">
-                      {restricted.icon}
-                    </div>
-                    <div className="max-w-[16rem] space-y-1.5">
-                      <p className="text-[14px] font-semibold text-[#fafafa]">
-                        {restricted.title}
-                      </p>
-                      <p className="text-[12.5px] leading-relaxed text-[#a1a1aa]">
-                        {restricted.body}
-                      </p>
-                    </div>
-                  </div>
-                );
-              }
-
+            if (restricted) {
               return (
-                <div className="flex h-full flex-col items-center justify-center gap-5 px-8 text-center">
-                  {/* Faded preview of a conversation, hinting at where messages land */}
-                  <div
-                    aria-hidden="true"
-                    className="flex w-full max-w-[14rem] flex-col gap-2 [mask-image:linear-gradient(to_bottom,transparent,#000_55%)]"
-                  >
-                    <div className="flex items-end gap-2">
-                      <div className="h-6 w-6 shrink-0 rounded-full bg-white/[0.06]" />
-                      <div className="h-7 w-32 rounded-[16px] rounded-bl-md bg-white/[0.05]" />
-                    </div>
-                    <div className="flex justify-end">
-                      <div className="h-7 w-24 rounded-[16px] rounded-br-md bg-[#F95F4A]/25" />
-                    </div>
-                    <div className="flex items-end gap-2">
-                      <div className="h-6 w-6 shrink-0 rounded-full bg-white/[0.06]" />
-                      <div className="flex h-7 items-center gap-1 rounded-[16px] rounded-bl-md bg-white/[0.05] px-3">
-                        <span className="web-chat-typing-dot h-1.5 w-1.5 rounded-full bg-[#a1a1aa]/70" />
-                        <span className="web-chat-typing-dot h-1.5 w-1.5 rounded-full bg-[#a1a1aa]/70" />
-                        <span className="web-chat-typing-dot h-1.5 w-1.5 rounded-full bg-[#a1a1aa]/70" />
-                      </div>
-                    </div>
+                <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] text-[#a1a1aa]">
+                    {restricted.icon}
                   </div>
-                  <div className="max-w-[15rem] space-y-1.5">
+                  <div className="max-w-[16rem] space-y-1.5">
                     <p className="text-[14px] font-semibold text-[#fafafa]">
-                      No messages yet
+                      {restricted.title}
                     </p>
                     <p className="text-[12.5px] leading-relaxed text-[#a1a1aa]">
-                      Be the first to say something. Paste an image, drop a GIF,
-                      share a link, or just say hi.
+                      {restricted.body}
                     </p>
                   </div>
-                  {assistantEnabled && !isChatDisabled ? (
-                    <div className="flex flex-col items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={startConclavePrompt}
-                        className="inline-flex items-center gap-2 rounded-full border border-[#F95F4A]/30 bg-[#F95F4A]/[0.08] px-3 py-1.5 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:bg-[#F95F4A]/[0.14]"
-                      >
-                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#F95F4A] text-[10px] font-semibold text-white">
-                          C
-                        </span>
-                        Ask Conclave AI anything
-                      </button>
-                      <p className="text-[11px] text-[#a1a1aa]/70">
-                        Summon it with{" "}
-                        <span className="font-medium text-[#a1a1aa]">
-                          @{CONCLAVE_MENTION_TOKEN}
-                        </span>{" "}
-                        anywhere in a message.
-                      </p>
-                    </div>
-                  ) : null}
                 </div>
               );
+            }
+
+            return (
+              <div className="flex h-full flex-col items-center justify-center gap-5 px-8 text-center">
+                {/* Faded preview of a conversation, hinting at where messages land */}
+                <div
+                  aria-hidden="true"
+                  className="flex w-full max-w-[14rem] flex-col gap-2 [mask-image:linear-gradient(to_bottom,transparent,#000_55%)]"
+                >
+                  <div className="flex items-end gap-2">
+                    <div className="h-6 w-6 shrink-0 rounded-full bg-white/[0.06]" />
+                    <div className="h-7 w-32 rounded-[16px] rounded-bl-md bg-white/[0.05]" />
+                  </div>
+                  <div className="flex justify-end">
+                    <div className="h-7 w-24 rounded-[16px] rounded-br-md bg-[#F95F4A]/25" />
+                  </div>
+                  <div className="flex items-end gap-2">
+                    <div className="h-6 w-6 shrink-0 rounded-full bg-white/[0.06]" />
+                    <div className="flex h-7 items-center gap-1 rounded-[16px] rounded-bl-md bg-white/[0.05] px-3">
+                      <span className="web-chat-typing-dot h-1.5 w-1.5 rounded-full bg-[#a1a1aa]/70" />
+                      <span className="web-chat-typing-dot h-1.5 w-1.5 rounded-full bg-[#a1a1aa]/70" />
+                      <span className="web-chat-typing-dot h-1.5 w-1.5 rounded-full bg-[#a1a1aa]/70" />
+                    </div>
+                  </div>
+                </div>
+                <div className="max-w-[15rem] space-y-1.5">
+                  <p className="text-[14px] font-semibold text-[#fafafa]">
+                    No messages yet
+                  </p>
+
+                </div>
+                {assistantEnabled && !isChatDisabled ? (
+                  <div className="flex flex-col items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={startConclavePrompt}
+                      className="inline-flex items-center gap-2 rounded-full border border-[#F95F4A]/30 bg-[#F95F4A]/[0.08] px-3 py-1.5 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:bg-[#F95F4A]/[0.14]"
+                    >
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#F95F4A] text-[10px] font-semibold text-white">
+                        C
+                      </span>
+                      Ask Conclave AI anything
+                    </button>
+
+                  </div>
+                ) : null}
+              </div>
+            );
           })()}
         </div>
       ) : (
@@ -1257,16 +1257,13 @@ function ChatPanel({
               })}
             </div>
           )}
-          {assistantApiKeyPrompt.visible && !isChatDisabled && (
-            <div className="mb-2 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+          {assistantApiKeyPrompt.visible && !isChatDisabled && !settingsOpen && (
+            <div className="mb-2 max-h-[55vh] overflow-y-auto rounded-2xl border border-white/10 bg-white/[0.04] p-3">
               <div className="mb-2.5 flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-2.5">
                   <span className="min-w-0">
                     <span className="block text-[12.5px] font-semibold text-[#fafafa]">
-                      Connect Conclave AI
-                    </span>
-                    <span className="block text-[11px] leading-snug text-[#a1a1aa]">
-                      Your OpenAI key, used only this session.
+                      Connect assistant
                     </span>
                   </span>
                 </div>
@@ -1280,7 +1277,25 @@ function ChatPanel({
                 </button>
               </div>
 
+              <div className="mb-3">
+                <AiModelSelect
+                  value={assistantModel}
+                  onChange={(value) => {
+                    if (isConclaveAssistantModel(value)) {
+                      if (
+                        getResponseProvider(value) !==
+                        getResponseProvider(assistantModel)
+                      )
+                        setAssistantApiKeyInput("");
+                      setAssistantModel(value);
+                    }
+                  }}
+                  models={CONCLAVE_ASSISTANT_BYOK_MODELS}
+                  label="Model"
+                />
+              </div>
               <div className="flex gap-2">
+                {roomAi?.state[getResponseProvider(assistantModel)].source ? <span className="flex flex-1 items-center gap-1.5 text-[11px] text-[#91cbb0]"><CheckCircle2 size={13} />{roomAi.state[getResponseProvider(assistantModel)].source === "deployment" ? "Conclave key" : "Room key"}</span> : (
                 <input
                   type="password"
                   value={assistantApiKeyInput}
@@ -1297,94 +1312,44 @@ function ChatPanel({
                       cancelAssistantApiKey();
                     }
                   }}
-                  placeholder="sk-..."
+                  aria-label={`${AI_PROVIDERS[getResponseProvider(assistantModel)].label} API key for this session`}
+                  placeholder={
+                    getResponseProvider(assistantModel) === "anthropic"
+                      ? "sk-ant-…"
+                      : "sk-…"
+                  }
                   autoComplete="off"
                   autoCapitalize="none"
                   spellCheck={false}
                   className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/25 px-2.5 py-1.5 text-[12.5px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#F95F4A]/60"
                 />
+                )}
                 <button
                   type="button"
                   onClick={submitAssistantApiKey}
-                  disabled={!assistantApiKeyInput.trim()}
+                  disabled={
+                    !assistantApiKeyInput.trim() &&
+                    !roomAi?.state[getResponseProvider(assistantModel)].source
+                  }
                   className="shrink-0 rounded-lg bg-[#F95F4A] px-3 py-1.5 text-[12px] font-semibold text-white transition-[background-color,opacity] hover:bg-[#ff725f] disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  Connect
+                  {roomAi?.state[getResponseProvider(assistantModel)].source &&
+                  !assistantApiKeyInput.trim()
+                    ? "Continue"
+                    : "Connect"}
                 </button>
               </div>
 
-              {/* Custom model picker so the closed state stays on-brand rather
-                  than rendering a native browser <select>. */}
-              <div ref={assistantModelMenuRef} className="relative mt-2">
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+              {roomAi ? (
                 <button
                   type="button"
-                  onClick={() => setIsAssistantModelMenuOpen((open) => !open)}
-                  aria-haspopup="listbox"
-                  aria-expanded={isAssistantModelMenuOpen}
-                  className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/25 px-2.5 py-1.5 text-left transition-colors hover:border-white/20"
+                  onClick={() => setSettingsOpen(true)}
+                  className="mt-2 text-[11px] text-[#d4d4d8] hover:text-white"
                 >
-                  <span className="flex min-w-0 flex-col">
-                    <span className="truncate text-[12.5px] font-medium text-[#fafafa]">
-                      {selectedAssistantModel.label}
-                    </span>
-                    <span className="truncate text-[11px] text-[#a1a1aa]">
-                      {selectedAssistantModel.description}
-                    </span>
-                  </span>
-                  <ChevronDown
-                    size={15}
-                    strokeWidth={1.9}
-                    className={`shrink-0 text-[#a1a1aa] transition-transform ${
-                      isAssistantModelMenuOpen ? "rotate-180" : ""
-                    }`}
-                  />
+                  Room settings
                 </button>
-                {isAssistantModelMenuOpen && (
-                  <div
-                    role="listbox"
-                    className="absolute bottom-full left-0 right-0 z-20 mb-1.5 max-h-56 overflow-y-auto rounded-xl border border-white/10 bg-[#232327] p-1 shadow-lg shadow-black/40"
-                  >
-                    {CONCLAVE_ASSISTANT_BYOK_MODELS.map((model) => {
-                      const isSelected = model.id === assistantModel;
-                      return (
-                        <button
-                          key={model.id}
-                          type="button"
-                          role="option"
-                          aria-selected={isSelected}
-                          onClick={() => {
-                            if (isConclaveAssistantModel(model.id)) {
-                              setAssistantModel(model.id);
-                            }
-                            setIsAssistantModelMenuOpen(false);
-                          }}
-                          className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
-                            isSelected
-                              ? "bg-white/[0.08]"
-                              : "hover:bg-white/[0.04]"
-                          }`}
-                        >
-                          <span className="min-w-0 flex-1">
-                            <span className="block text-[12.5px] font-medium text-[#fafafa]">
-                              {model.label}
-                            </span>
-                            <span className="block text-[11px] leading-snug text-[#a1a1aa]">
-                              {model.description}
-                            </span>
-                          </span>
-                          {isSelected ? (
-                            <Check
-                              size={14}
-                              strokeWidth={2}
-                              className="mt-0.5 shrink-0 text-[#F95F4A]"
-                            />
-                          ) : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+              ) : null}
 
               {assistantApiKeyPrompt.error ? (
                 <p className="mt-2 text-[11.5px] text-red-300">
@@ -1392,15 +1357,16 @@ function ChatPanel({
                 </p>
               ) : (
                 <a
-                  href="https://platform.openai.com/api-keys"
+                  href={AI_PROVIDERS[getResponseProvider(assistantModel)].keysUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-2 inline-flex items-center gap-1 text-[11px] text-[#a1a1aa]/70 transition-colors hover:text-[#a1a1aa]"
                 >
-                  Get a key
+                  Get key
                   <ExternalLink size={11} strokeWidth={1.9} />
                 </a>
-              )}
+              )}              </div>
+
             </div>
           )}
           {replyTarget && !isChatDisabled && (
@@ -1503,17 +1469,17 @@ function ChatPanel({
                 className="shrink-0 text-[#F95F4A]"
               />
               <p className="min-w-0 flex-1 truncate text-[11.5px] text-[#a1a1aa]">
-                {isTtsDisabled
-                  ? "TTS is disabled by the host in this room."
-                  : (
-                    <>
-                      Spoken aloud to everyone
-                      <span className="text-[#a1a1aa]/60">
-                        {" · "}
-                        {hasClonedTtsVoice ? "your voice" : "system voice"}
-                      </span>
-                    </>
-                  )}
+                {isTtsDisabled ? (
+                  "TTS is disabled by the host in this room."
+                ) : (
+                  <>
+                    Spoken aloud to everyone
+                    <span className="text-[#a1a1aa]/60">
+                      {" · "}
+                      {hasClonedTtsVoice ? "your voice" : "system voice"}
+                    </span>
+                  </>
+                )}
               </p>
               {!isTtsDisabled ? (
                 <span
@@ -1539,7 +1505,11 @@ function ChatPanel({
             />
             <button
               type="button"
-              onClick={() => imageInputRef.current?.click()}
+              onClick={() => {
+                if (roomAi?.ready && !roomAi.state.openai.source)
+                  setSettingsOpen(true);
+                else imageInputRef.current?.click();
+              }}
               disabled={isImagePickerDisabled}
               aria-label={imagePickerLabel}
               title={imagePickerLabel}
@@ -1547,7 +1517,7 @@ function ChatPanel({
             >
               <Paperclip size={17} strokeWidth={1.8} />
             </button>
-            <GifPicker disabled={isChatDisabled} onSelect={handleSendGif} />
+            <GifPicker disabled={isChatDisabled} showHint={!assistantApiKeyPrompt.visible && !settingsOpen} onSelect={handleSendGif} />
             <textarea
               ref={textareaRef}
               value={chatInput}

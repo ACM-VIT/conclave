@@ -60,6 +60,7 @@ export default tseslint.config(
     // Packages with a tsconfig — full type-aware linting.
     files: [
       "packages/sfu/**/*.{ts,tsx}",
+      "packages/ai/**/*.ts",
       "packages/meeting-core/src/**/*.ts",
       "packages/meeting-core/test/**/*.ts",
       "packages/apps-sdk/src/**/*.{ts,tsx}",

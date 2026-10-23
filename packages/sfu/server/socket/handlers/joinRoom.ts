@@ -1,3 +1,4 @@
+import { readAiEnvironment } from "@conclave/ai/models";
 import { Admin } from "../../../config/classes/Admin.js";
 import { Client } from "../../../config/classes/Client.js";
 import { config } from "../../../config/config.js";
@@ -1011,6 +1012,15 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         if (context.currentClient instanceof Admin && !context.currentClient.isObserver) {
           registerAdminHandlers(context, { roomId });
+        }
+
+        // Publish settings only after this socket's room membership is restored.
+        // A transport reconnect can happen before joinRoom finishes.
+        if (!context.currentClient.isObserver) {
+          socket.emit(
+            "ai:changed",
+            context.currentRoom.aiCredentials.status(readAiEnvironment(process.env)),
+          );
         }
 
         respond(callback, {

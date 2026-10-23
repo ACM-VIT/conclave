@@ -1,3 +1,4 @@
+import { RoomAiCredentials } from "../../server/roomAiCredentials.js";
 import type {
   AudioLevelObserver,
   PlainTransport,
@@ -208,6 +209,7 @@ export class Room {
   public displayNamesByKey: Map<string, string> = new Map();
   public handRaisedByUserId: Set<string> = new Set();
   private recentChatMessages: ChatMessage[] = [];
+  readonly aiCredentials = new RoomAiCredentials();
   private chatImageAssets: Map<string, RoomChatImageAsset> = new Map();
   private chatImageExpiryTimers: Map<string, NodeJS.Timeout> = new Map();
   private chatImageBytes = 0;
@@ -2321,6 +2323,7 @@ export class Room {
   }
 
   close(): void {
+    this.aiCredentials.clear();
     this.stopCleanupTimer();
     this.cancelWebcamCodecPolicyUpgrade();
     this.webcamReceiverCapacityProofCoordinator.close();

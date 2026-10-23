@@ -17,6 +17,11 @@ describe("Conclave assistant tool approval streaming", () => {
     vi.unstubAllGlobals();
   });
 
+  it("preserves a missing-key response's resolved model and provider message", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ model: "claude-haiku-5-5", error: "Add an Anthropic key." }, { status: 428 })));
+    await expect(streamConclaveAssistant({ answerId: "answer", question: "Hello", relayToken: "token", history: [], transcript: "", transcriptActive: false, onDelta: vi.fn(), onReasoning: vi.fn(), onTask: vi.fn(), onRelay: vi.fn() })).rejects.toMatchObject({ model: "claude-haiku-5-5", message: "Add an Anthropic key." });
+  });
+
   it("pauses completion when the server requests inline approval", async () => {
     vi.stubGlobal(
       "fetch",

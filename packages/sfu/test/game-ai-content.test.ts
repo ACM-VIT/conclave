@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createResponse, openAiConstructor } = vi.hoisted(() => ({
   createResponse:
@@ -26,6 +26,7 @@ vi.mock("../config/config.js", () => ({
     },
     gameAi: {
       enabled: true,
+      apiKey: "test-openai-key",
       model: "gpt-5.6-luna",
       reasoningEffort: "low",
       storeResponses: false,
@@ -42,6 +43,7 @@ vi.mock("../utilities/loggers.js", () => ({
   Logger: { warn: vi.fn() },
 }));
 
+import { config } from "../config/config.js";
 import { generateStructuredGameContent } from "../server/games/aiContent.js";
 
 const schema = {
@@ -60,6 +62,24 @@ describe("game AI content", () => {
   beforeEach(() => {
     createResponse.mockReset();
     openAiConstructor.mockClear();
+    config.gameAi.apiKey = "test-openai-key";
+    config.gameAi.timeoutMs = 25_000;
+  });
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("uses a room key when deployment AI is absent and caps the entire operation below the client acknowledgement", async () => {
+    config.gameAi.apiKey = "";
+    config.gameAi.timeoutMs = 120_000;
+    createResponse.mockResolvedValue({ output_text: '{"prompts":["Moon"]}' });
+    const request = { aiEnvironment: { OPENAI_API_KEY: "sk-room-game" }, gameName: "Quick Draw", topic: "space", instructions: "Create one prompt.", schemaName: "game", schema, parse: (payload: unknown) => payload };
+    expect(await generateStructuredGameContent(request)).toEqual({ prompts: ["Moon"] });
+    expect(openAiConstructor).toHaveBeenCalledWith(expect.objectContaining({ apiKey: "sk-room-game" }));
+    expect(createResponse.mock.calls[0][1]).toHaveProperty("timeout", 35_000);
+    vi.stubEnv("SFU_GAME_AI_ENABLED", "false");
+    createResponse.mockClear();
+    expect(await generateStructuredGameContent(request)).toBeNull();
+    expect(createResponse).not.toHaveBeenCalled();
   });
 
   it("lets the model decide when to use web search", async () => {
@@ -81,6 +101,7 @@ describe("game AI content", () => {
     expect(openAiConstructor).toHaveBeenCalledWith({
       apiKey: "test-openai-key",
       maxRetries: 2,
+      baseURL: undefined,
     });
     expect(createResponse).toHaveBeenCalledTimes(1);
     const [request, requestOptions] = createResponse.mock.calls[0];
@@ -90,7 +111,10 @@ describe("game AI content", () => {
     const requestRecord = request as Record<string, unknown>;
     const requestInput = requestRecord.input;
     const requestInstructions = requestRecord.instructions;
-    if (typeof requestInput !== "string" || typeof requestInstructions !== "string") {
+    if (
+      typeof requestInput !== "string" ||
+      typeof requestInstructions !== "string"
+    ) {
       throw new Error("Expected string input and instructions.");
     }
     expect(requestInput).toContain("Topic: latest space news");
@@ -106,7 +130,7 @@ describe("game AI content", () => {
     expect(requestRecord).toMatchObject({
       model: "gpt-5.6-luna",
       max_output_tokens: 500,
-      reasoning: { effort: "low" },
+      reasoning: { effort: "low", summary: "auto" },
       store: false,
       text: {
         format: {
@@ -119,7 +143,8 @@ describe("game AI content", () => {
       tools: [{ type: "web_search", search_context_size: "low" }],
     });
     expect(request).not.toHaveProperty("tool_choice");
-    expect(requestOptions).toEqual({ timeout: 60_000 });
+    expect(requestOptions).toHaveProperty("timeout", 25_000);
+    expect((requestOptions as { signal: AbortSignal }).signal).toBeInstanceOf(AbortSignal);
   });
 
   it("offers the same optional web search for evergreen topics", async () => {
@@ -141,7 +166,8 @@ describe("game AI content", () => {
     expect(request).toHaveProperty("tools", [
       { type: "web_search", search_context_size: "low" },
     ]);
-    expect(requestOptions).toEqual({ timeout: 60_000 });
+    expect(requestOptions).toHaveProperty("timeout", 25_000);
+    expect((requestOptions as { signal: AbortSignal }).signal).toBeInstanceOf(AbortSignal);
   });
 
   it("returns null when OpenAI does not return valid structured JSON", async () => {

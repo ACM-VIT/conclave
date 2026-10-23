@@ -187,6 +187,7 @@ export const imposterModule: GameModule<ImposterState> = {
         : selectedCategory);
     const wordCount = Math.max(8, Math.min(12, ctx.players.length + 3));
     return generateStructuredGameContent({
+      aiEnvironment: ctx.aiEnvironment,
       gameName: "Imposter",
       topic,
       instructions: [
