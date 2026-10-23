@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { modelVerificationCache } from "../src/catalog-server.js";
 import {
   createAiTextSession,
   describeAiError,
@@ -64,9 +65,44 @@ const claudeEvents = (
   { type: "message_stop" },
 ];
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  modelVerificationCache.clear();
+});
 
 describe("provider routing", () => {
+  it("briefly caches successful checks per model, endpoint and credential", async () => {
+    let lists = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        if (String(url).includes("/models")) {
+          lists++;
+          return json({ data: [{ id: "claude-sonnet-5-6" }] });
+        }
+        return json(message([{ type: "text", text: "OK" }]));
+      }),
+    );
+    const request = { ...options, model: "claude-sonnet-5-6", input: "Hello" };
+    await generateAiText(request);
+    await generateAiText(request);
+    expect(lists).toBe(1);
+    await generateAiText({ ...request, apiKey: "sk-ant-another-account" });
+    expect(lists).toBe(2);
+    await generateAiText({
+      ...request,
+      env: { ANTHROPIC_BASE_URL: "https://other.example" },
+    });
+    expect(lists).toBe(3);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61_000);
+    await generateAiText(request);
+    expect(lists).toBe(4);
+    expect([...modelVerificationCache.keys()].join(" ")).not.toContain(
+      request.apiKey,
+    );
+  });
+
   it.each([401, 403, 404, 429, 503])(
     "preserves discovery HTTP status %s in redacted inference diagnostics",
     async (status) => {

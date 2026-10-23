@@ -332,10 +332,12 @@ export const AI_DEFAULT_MODELS = {
 
 export const AI_ENDPOINTS = {
   openai: {
+    apiBase: "https://api.openai.com/v1",
     realtime: "https://api.openai.com/v1/realtime",
     realtimeClientSecrets: "https://api.openai.com/v1/realtime/client_secrets",
     realtimeCalls: "https://api.openai.com/v1/realtime/calls",
   },
+  anthropic: { apiBase: "https://api.anthropic.com" },
   sarvam: { transcription: "wss://api.sarvam.ai/speech-to-text/ws" },
   elevenlabs: { apiBase: "https://api.elevenlabs.io/v1" },
 } as const;

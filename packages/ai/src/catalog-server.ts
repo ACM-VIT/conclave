@@ -1,5 +1,6 @@
 import {
   AI_PROVIDERS,
+  AI_ENDPOINTS,
   AI_RESPONSE_MODELS,
   getTranscriptResponseModelConfig,
   getResponseProvider,
@@ -7,12 +8,49 @@ import {
   type AiEnvironment,
   type AiModelCatalog,
   type AiTextProvider,
+  type TranscriptResponseModelConfig,
 } from "@conclave/ai/models";
 import { baseUrl } from "#request-options";
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 const supported = (value: unknown) => record(value).supported === true;
+
+const catalogBaseUrl = (provider: AiTextProvider, env: AiEnvironment) =>
+  provider === "openai"
+    ? (baseUrl(env.CLOUDFLARE_AI_GATEWAY_OPENAI_URL, env.OPENAI_BASE_URL) ??
+      AI_ENDPOINTS.openai.apiBase)
+    : (baseUrl(
+        env.CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL,
+        env.ANTHROPIC_BASE_URL,
+      ) ?? AI_ENDPOINTS.anthropic.apiBase);
+
+// Only successful selected-model checks are cached. New IDs and failed checks
+// always reload; the cache never retains a raw provider credential.
+export const modelVerificationCache = new Map<
+  string,
+  { expiresAt: number; model: TranscriptResponseModelConfig }
+>();
+export async function modelVerificationCacheKey(options: {
+  provider: AiTextProvider;
+  env: AiEnvironment;
+  apiKey: string;
+  model: string;
+}) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(options.apiKey),
+  );
+  const fingerprint = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return JSON.stringify([
+    options.provider,
+    catalogBaseUrl(options.provider, options.env),
+    fingerprint,
+    options.model,
+  ]);
+}
 
 export async function fetchAiModelCatalog(options: {
   provider: AiTextProvider;
@@ -28,14 +66,7 @@ export async function fetchAiModelCatalog(options: {
     models: AI_RESPONSE_MODELS.filter((model) => model.provider === provider),
   };
   if (!apiKey) return fallback;
-  const root =
-    provider === "openai"
-      ? (baseUrl(env.CLOUDFLARE_AI_GATEWAY_OPENAI_URL, env.OPENAI_BASE_URL) ??
-        "https://api.openai.com/v1")
-      : (baseUrl(
-          env.CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL,
-          env.ANTHROPIC_BASE_URL,
-        ) ?? "https://api.anthropic.com");
+  const root = catalogBaseUrl(provider, env);
   const signal = AbortSignal.any([
     AbortSignal.timeout(7000),
     ...(options.signal ? [options.signal] : []),

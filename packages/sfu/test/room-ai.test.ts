@@ -440,6 +440,17 @@ async function start() {
 }
 
 describe("server-only room credential access", () => {
+  it("returns the authoritative provider endpoint with the selected room credential", async () => {
+    const { room, member, read } = await start();
+    vi.stubEnv("ANTHROPIC_BASE_URL", "https://room-provider.example");
+    room.aiCredentials.set("anthropic", "sk-ant-room", member.id, false);
+    const response = await read("server-secret", { providers: ["anthropic"] });
+    expect(await response.json()).toMatchObject({
+      ANTHROPIC_API_KEY: "sk-ant-room",
+      ANTHROPIC_BASE_URL: "https://room-provider.example",
+    });
+  });
+
   it("requires a shared server secret and exact active room identity", async () => {
     const { room, member, read } = await start();
     room.aiCredentials.set("openai", "sk-donation", member.id, false);

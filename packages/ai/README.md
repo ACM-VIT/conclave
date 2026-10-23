@@ -36,12 +36,20 @@ otherwise they need a separate assistant key or that provider's shared key.
 Switching transcript Q&A to another provider requires restarting notes with its key.
 Keys remain in live session memory and are never persisted in transcript storage.
 
-Set secrets independently on the main web Worker, transcript Worker, and SFU that
-need them. Set `ANTHROPIC_API_KEY` and `CONCLAVE_ASSISTANT_MODEL=claude-sonnet-5-5`
-on the main web Worker to serve shared Claude chat. Transcript participants select
-their assistant model in the notes panel. To use Claude for games, set
-`ANTHROPIC_API_KEY` and `SFU_GAME_AI_MODEL=claude-haiku-5-5` on the SFU; both Compose
-services forward these settings. Image moderation still requires the OpenAI key.
+Configure shared room provider keys, gateway/base URLs and
+`CONCLAVE_ASSISTANT_MODEL` on the SFU. Routed web chat and notes retrieve this
+authenticated profile for discovery and inference, so independent Worker keys
+cannot select a different account or endpoint. Personal keys override the
+credential while retaining the room's provider endpoint. A failed profile lookup
+asks the participant to reconnect rather than using a different Worker's account.
+Worker-local credentials remain available for standalone legacy flows without
+signed SFU routing. Routed notes use room AI availability instead of the Worker's
+independent key flags.
+
+Transcript participants select their assistant model in the notes panel. To use
+Claude for games, set `ANTHROPIC_API_KEY` and
+`SFU_GAME_AI_MODEL=claude-haiku-5-5` on the SFU; both Compose services forward
+these settings. Image moderation still requires the OpenAI key.
 
 ## Claude alternatives
 
@@ -116,6 +124,8 @@ limits discovery to supported general-purpose Responses families. Anthropic's
 capability metadata additionally filters for structured outputs and web search.
 Retired models are excluded, and aliases replace duplicate dated snapshots.
 Newly discovered IDs are verified with the selected credential before inference;
+successful selected-model checks are cached for one minute, scoped to provider,
+endpoint, model and a credential fingerprint. Failed checks are not cached.
 optional tuning uses provider defaults until documented. Known model profiles
 continue to work when a key lacks model-list permissions. Discovery failures show
 an explicit error and built-in choices; an unavailable selection stays visible

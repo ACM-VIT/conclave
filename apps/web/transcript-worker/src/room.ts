@@ -1,5 +1,5 @@
-import { describeRoomAiLookupFailure, fetchRoomAiEnvironment } from "@conclave/ai/room-server";
-import { AI_PROVIDERS, getProviderApiKey, type AiEnvironment } from "@conclave/ai/models";
+import { describeRoomAiLookupFailure, fetchRoomAiEnvironment, roomAiEnvironment } from "@conclave/ai/room-server";
+import { getProviderApiKey, type AiEnvironment } from "@conclave/ai/models";
 import {
   getResponseProvider,
   isResponseModel,
@@ -145,6 +145,7 @@ export class TranscriptRoom {
   private minutes: TranscriptMinutesSnapshot = createEmptyMinutes();
   private sequence = 0;
   private responseApiKey: string | null = null;
+  private responseEnvironment: Env | null = null;
   private transcriptionSession: LiveTranscriptionSession | null = null;
   private transcriptionConnectionOptions:
     | (PersistedTranscriptionConfig & {
@@ -453,6 +454,9 @@ export class TranscriptRoom {
 
   private send(socket: WebSocket, data: unknown): void {
     try {
+      if (this.viewers.get(socket)?.sfuUrl && data && typeof data === "object" && "globalProviderKeysAvailable" in data) {
+        data = { ...data, globalOpenAiKeyAvailable: false, globalProviderKeysAvailable: { openai: false, anthropic: false, sarvam: false } };
+      }
       socket.send(JSON.stringify(data));
     } catch {
       const viewer = this.viewers.get(socket);
@@ -810,13 +814,13 @@ export class TranscriptRoom {
       ? message.qaModel!
       : DEFAULT_QA_MODEL;
     const providers = [transcriptionProvider, getResponseProvider(qaModel)];
-    const effectiveEnv: AiEnvironment = { ...this.env };
+    const routedRoom = Boolean(viewer.sfuUrl && viewer.clientId && viewer.channelId);
+    let effectiveEnv: AiEnvironment = routedRoom ? roomAiEnvironment(this.env, {}) : { ...this.env };
     let usesRoomKey = false;
     if (
       viewer.sfuUrl &&
       viewer.clientId &&
-      viewer.channelId &&
-      providers.some((provider) => !getProviderApiKey(this.env, provider))
+      viewer.channelId
     ) {
       try {
         const roomEnv = await fetchRoomAiEnvironment({
@@ -830,21 +834,12 @@ export class TranscriptRoom {
           },
           providers,
         });
-        for (const provider of providers) {
-          if (
-            !getProviderApiKey(this.env, provider) &&
-            getProviderApiKey(roomEnv, provider)
-          ) {
-            effectiveEnv[AI_PROVIDERS[provider].keyEnv] = getProviderApiKey(
-              roomEnv,
-              provider,
-            );
-            usesRoomKey = true;
-          }
-        }
+        effectiveEnv = roomAiEnvironment(this.env, roomEnv);
+        usesRoomKey = providers.some((provider) => Boolean(getProviderApiKey(roomEnv, provider)));
       } catch (error) {
         console.warn("[Transcript] room AI lookup failed:", JSON.stringify(describeRoomAiLookupFailure(error)));
-        /* Participant keys remain available when room setup is unavailable. */
+        this.sendError(viewer, "Room AI settings could not be loaded. Please reconnect and try again.");
+        return;
       }
       if (
         revision !== this.sessionRevision ||
@@ -880,6 +875,7 @@ export class TranscriptRoom {
     }
 
     const acceptedRevision = ++this.sessionRevision;
+    this.responseEnvironment = { ...this.env, ...effectiveEnv };
     const transportMode = normalizeTransportMode(message.transportMode);
     const wasIdle = existingStatus === "idle" || existingStatus === "error";
     this.responseApiKey = responseKey.apiKey;
@@ -1008,6 +1004,7 @@ export class TranscriptRoom {
     this.closeTranscriptionProvider();
     const roomId = this.session?.roomId || "unknown";
     this.responseApiKey = null;
+    this.responseEnvironment = null;
     this.session = {
       ...createIdleSession(roomId),
       transcriptModel: this.session?.transcriptModel ?? DEFAULT_TRANSCRIPT_MODEL,
@@ -1430,7 +1427,7 @@ export class TranscriptRoom {
     }, TRANSCRIPTION_CONNECT_TIMEOUT_MS);
     try {
       return await connectLiveTranscriptionProvider({
-        env: this.env,
+        env: { ...this.env, ...(this.responseEnvironment ?? {}) },
         ...options,
         signal: controller.signal,
         callbacks: {
@@ -1949,6 +1946,7 @@ export class TranscriptRoom {
     this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();
     this.responseApiKey = null;
+    this.responseEnvironment = null;
     this.resetTranscriptionAudioState();
     this.audioPaused = false;
     if (this.minutesTimer !== null) {
@@ -2076,7 +2074,7 @@ export class TranscriptRoom {
 
     try {
       const minutes = await generateMinutes({
-        env: this.env,
+        env: this.responseEnvironment ?? this.env,
         apiKey: this.responseApiKey,
         model: this.session.qaModel,
         transcript,
@@ -2091,7 +2089,7 @@ export class TranscriptRoom {
         if (compactionDue) {
           try {
             this.minutes = await compactMinutes({
-              env: this.env,
+              env: this.responseEnvironment ?? this.env,
               apiKey: this.responseApiKey,
               model: this.session.qaModel,
               current: minutes,
@@ -2176,7 +2174,7 @@ export class TranscriptRoom {
     try {
       let answer = "";
       for await (const delta of streamQuestionAnswer({
-        env: this.env,
+        env: this.responseEnvironment ?? this.env,
         apiKey: this.responseApiKey,
         model,
         question,
@@ -2291,6 +2289,7 @@ export class TranscriptRoom {
     this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();
     this.responseApiKey = null;
+    this.responseEnvironment = null;
     this.segments = [];
     this.resetTranscriptionAudioState();
     this.resetMinutesScheduler();

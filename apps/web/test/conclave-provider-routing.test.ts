@@ -8,7 +8,7 @@ const { createSession, stream, roomEnvironment } = vi.hoisted(() => ({
   roomEnvironment: vi.fn(),
 }));
 vi.mock("@conclave/ai/room-server", async (original) => ({
-  ...await original<typeof import("@conclave/ai/room-server")>(),
+  ...(await original<typeof import("@conclave/ai/room-server")>()),
   fetchRoomAiEnvironment: roomEnvironment,
 }));
 vi.mock("@conclave/ai/server", async (original) => ({
@@ -16,7 +16,11 @@ vi.mock("@conclave/ai/server", async (original) => ({
   createAiTextSession: createSession,
 }));
 
-const request = (body: Record<string, unknown> = {}, isAdmin = false) => {
+const request = (
+  body: Record<string, unknown> = {},
+  isAdmin = false,
+  sfuUrl?: string,
+) => {
   const token = jwt.sign(
     {
       tokenUse: "conclave:assistant",
@@ -27,6 +31,7 @@ const request = (body: Record<string, unknown> = {}, isAdmin = false) => {
       clientId: "client",
       channelId: "channel",
       isAdmin,
+      ...(sfuUrl ? { sfuUrl } : {}),
     },
     "fixture-secret",
     {
@@ -63,6 +68,62 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("assistant provider integration", () => {
+  it.each([undefined, "sk-ant-personal"])(
+    "uses the room profile for routed inference with personal override %s",
+    async (personalKey) => {
+      vi.stubEnv("ANTHROPIC_BASE_URL", "https://worker-account.example");
+      vi.stubEnv(
+        "CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL",
+        "https://worker-gateway.example",
+      );
+      roomEnvironment.mockResolvedValue({
+        ANTHROPIC_API_KEY: "sk-ant-room",
+        ANTHROPIC_BASE_URL: "https://room-account.example",
+      });
+      const response = await POST(
+        request(
+          {
+            model: "claude-haiku-5-5",
+            ...(personalKey ? { apiKey: personalKey } : {}),
+          },
+          false,
+          "https://sfu.example",
+        ),
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(roomEnvironment).toHaveBeenCalled();
+      expect(createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          apiKey: personalKey ?? "sk-ant-room",
+          env: expect.objectContaining({
+            ANTHROPIC_API_KEY: "sk-ant-room",
+            ANTHROPIC_BASE_URL: "https://room-account.example",
+            CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL: "",
+          }),
+        }),
+      );
+    },
+  );
+
+  it("does not fall back to a Worker account when a routed room profile cannot be loaded", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    roomEnvironment.mockRejectedValue(new Error("Unavailable"));
+    try {
+      const response = await POST(
+        request(
+          { model: "claude-haiku-5-5", apiKey: "sk-ant-personal" },
+          false,
+          "https://sfu.example",
+        ),
+      );
+      expect(response.status).toBe(503);
+      expect(createSession).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("uses single-type enum branches for Claude's nullable browser direction", async () => {
     const response = await POST(request({ model: "claude-haiku-5-5" }, true));
     await response.text();
@@ -72,10 +133,7 @@ describe("assistant provider integration", () => {
     // Anthropic rejects an enum alongside type: ["string", "null"] with 400.
     // Keep the enum on the string branch and null on its own branch.
     expect(tool.parameters.properties.direction).toEqual({
-      anyOf: [
-        { type: "string", enum: ["up", "down"] },
-        { type: "null" },
-      ],
+      anyOf: [{ type: "string", enum: ["up", "down"] }, { type: "null" }],
       description: "Scroll direction, or null.",
     });
   });
@@ -85,33 +143,63 @@ describe("assistant provider integration", () => {
     const response = await POST(request({ model: "claude-haiku-5-5" }));
     await response.text();
     expect(roomEnvironment).not.toHaveBeenCalled();
-    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ model: "claude-haiku-5-5", apiKey: "sk-ant-server" }));
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "claude-haiku-5-5",
+        apiKey: "sk-ant-server",
+      }),
+    );
   });
 
   it("reports a local tool limit after repeated successful tool responses", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     stream.mockImplementation(async function* () {
-      yield { type: "complete", text: "", calls: [{ id: "transcript-call", name: "get_meeting_transcript", arguments: "{}" }] };
+      yield {
+        type: "complete",
+        text: "",
+        calls: [
+          {
+            id: "transcript-call",
+            name: "get_meeting_transcript",
+            arguments: "{}",
+          },
+        ],
+      };
     });
     try {
-      const response = await POST(request({ model: "claude-haiku-5-5", transcriptActive: true, transcript: "Notes" }));
+      const response = await POST(
+        request({
+          model: "claude-haiku-5-5",
+          transcriptActive: true,
+          transcript: "Notes",
+        }),
+      );
       const frames = await response.text();
       expect(frames).toContain("reached its tool limit");
       expect(frames).not.toContain("could not reach Anthropic");
       expect(stream).toHaveBeenCalledTimes(12);
-    } finally { log.mockRestore(); }
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("logs safe lookup diagnostics without logging secrets or failing a deployment-backed answer", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    roomEnvironment.mockRejectedValue(new TypeError("fixture-secret in request headers"));
+    roomEnvironment.mockRejectedValue(
+      new TypeError("fixture-secret in request headers"),
+    );
     try {
       const response = await POST(request());
       await response.text();
-      expect(warn).toHaveBeenCalledWith("[Conclave] room AI lookup failed:", '{"name":"TypeError"}');
+      expect(warn).toHaveBeenCalledWith(
+        "[Conclave] room AI lookup failed:",
+        '{"name":"TypeError"}',
+      );
       expect(JSON.stringify(warn.mock.calls)).not.toContain("fixture-secret");
       expect(createSession).toHaveBeenCalled();
-    } finally { warn.mockRestore(); }
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("uses the room's selected Claude model without a personal selection or an OpenAI key", async () => {

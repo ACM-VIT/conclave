@@ -2,7 +2,11 @@ import {
   getResponseProvider,
   isBuiltInResponseModel,
 } from "@conclave/ai/models";
-import { fetchAiModelCatalog } from "#catalog-server";
+import {
+  fetchAiModelCatalog,
+  modelVerificationCache,
+  modelVerificationCacheKey,
+} from "#catalog-server";
 import { createOpenAiTextSession, generateOpenAiText } from "#openai";
 import { createAnthropicTextSession, generateAnthropicText } from "#anthropic";
 import type { AiTextOptions, AiTextSession } from "#types";
@@ -16,25 +20,43 @@ async function resolveDiscoveredOptions(
   options: AiTextOptions,
 ): Promise<AiTextOptions> {
   if (isBuiltInResponseModel(options.model)) return options;
-  const catalog = await fetchAiModelCatalog({
-    ...options,
-    provider: getResponseProvider(options.model),
-    includeSnapshots: true,
-  });
-  if (catalog.source !== "live")
-    throw Object.assign(
-      new Error(
-        catalog.error ??
-          "Could not verify the selected model. Refresh models and retry.",
-      ),
-      catalog.status ? { status: catalog.status } : {},
-    );
-  const model = catalog.models.find((entry) => entry.id === options.model);
-  if (!model)
-    throw Object.assign(
-      new Error("The selected model is unavailable for this account."),
-      { status: 404 },
-    );
+  options.signal?.throwIfAborted();
+  const provider = getResponseProvider(options.model);
+  const cacheKey = await modelVerificationCacheKey({ ...options, provider });
+  options.signal?.throwIfAborted();
+  for (const [key, entry] of modelVerificationCache) {
+    if (entry.expiresAt <= Date.now()) modelVerificationCache.delete(key);
+  }
+  let model = modelVerificationCache.get(cacheKey)?.model;
+  if (!model) {
+    const catalog = await fetchAiModelCatalog({
+      ...options,
+      provider,
+      includeSnapshots: true,
+    });
+    if (catalog.source !== "live")
+      throw Object.assign(
+        new Error(
+          catalog.error ??
+            "Could not verify the selected model. Refresh models and retry.",
+        ),
+        catalog.status ? { status: catalog.status } : {},
+      );
+    model = catalog.models.find((entry) => entry.id === options.model);
+    if (!model)
+      throw Object.assign(
+        new Error("The selected model is unavailable for this account."),
+        { status: 404 },
+      );
+    while (modelVerificationCache.size >= 128)
+      modelVerificationCache.delete(
+        modelVerificationCache.keys().next().value!,
+      );
+    modelVerificationCache.set(cacheKey, {
+      expiresAt: Date.now() + 60_000,
+      model,
+    });
+  }
   return {
     ...options,
     maxOutputTokens: Math.min(

@@ -61,6 +61,61 @@ const transcript = (start = vi.fn().mockResolvedValue(true)) =>
   }) as unknown as MeetingTranscriptController;
 
 describe("AI setup UX", () => {
+  it("clears a personal catalog and explains refresh when the draft key is invalid", async () => {
+    const requestModels = vi
+      .fn()
+      .mockResolvedValue([
+        {
+          provider: "anthropic",
+          source: "live",
+          models: [getTranscriptResponseModelConfig("claude-sonnet-5-6")],
+        },
+      ]);
+    await act(async () =>
+      root.render(
+        <TranscriptPanel
+          roomAi={roomAi({ requestModels })}
+          transcript={transcript()}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    const input = container.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    )!;
+    const fill = async (value: string) =>
+      act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )!.set!.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    await fill("sk-ant-personal-fixture");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 650));
+    });
+    expect(
+      container.querySelector('option[value="claude-sonnet-5-6"]'),
+    ).not.toBeNull();
+    requestModels.mockClear();
+    await fill("sk-ant-");
+    expect(
+      container.querySelector('option[value="claude-sonnet-5-6"]'),
+    ).toBeNull();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Refresh available models"]',
+        )!
+        .click(),
+    );
+    expect(container.textContent).toContain(
+      "Enter a valid provider key to refresh models.",
+    );
+    expect(requestModels).not.toHaveBeenCalled();
+  });
+
   it("keeps a notes key when selecting another model from the same provider", async () => {
     const start = vi.fn().mockResolvedValue(true);
     const notes = transcript(start);

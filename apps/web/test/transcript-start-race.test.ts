@@ -9,7 +9,9 @@ import type { TranscriptSessionState } from "@conclave/meeting-core/transcript-t
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
 vi.mock("@conclave/ai/room-server", async (original) => ({
-  ...await original<typeof import("@conclave/ai/room-server")>(), fetchRoomAiEnvironment: lookup }));
+  ...(await original<typeof import("@conclave/ai/room-server")>()),
+  fetchRoomAiEnvironment: lookup,
+}));
 afterEach(() => vi.resetAllMocks());
 
 type TestRoom = {
@@ -25,14 +27,16 @@ type TestRoom = {
   sendSfuRelayStartToken: ReturnType<typeof vi.fn>;
   persist: ReturnType<typeof vi.fn>;
   sendError: ReturnType<typeof vi.fn>;
+  responseApiKey: string | null;
+  responseEnvironment: Env | null;
 };
-async function fixture() {
+async function fixture(env: Partial<Env> = {}) {
   const room = new TranscriptRoom(
     {
       storage: { get: async () => undefined, delete: async () => true },
       waitUntil: () => undefined,
     } as unknown as DurableObjectState,
-    {} as Env,
+    env as Env,
   ) as unknown as TestRoom;
   await room.loaded;
   room.connectTranscriptionProvider = vi.fn().mockResolvedValue(undefined);
@@ -58,6 +62,38 @@ const message: SessionStartEnvelope = {
   qaModel: "gpt-5.6-terra",
   transportMode: "sfu",
 };
+
+it("uses the SFU account and endpoint for routed notes even when the Worker has its own keys", async () => {
+  const { room, viewer } = await fixture({
+    OPENAI_API_KEY: "sk-worker",
+    ANTHROPIC_API_KEY: "sk-ant-worker",
+    ANTHROPIC_BASE_URL: "https://worker.example",
+    CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL: "https://worker-gateway.example",
+  });
+  lookup.mockResolvedValue({
+    OPENAI_API_KEY: "sk-room",
+    ANTHROPIC_API_KEY: "sk-ant-room",
+    ANTHROPIC_BASE_URL: "https://room.example",
+  });
+  await room.startSession(viewer, { ...message, qaModel: "claude-sonnet-5-6" });
+  expect(room.session?.status).toBe("live");
+  expect(room.connectTranscriptionProvider).toHaveBeenCalledWith(
+    expect.objectContaining({ apiKey: "sk-room" }),
+  );
+  expect(room.responseApiKey).toBe("sk-ant-room");
+  expect(room.responseEnvironment).toMatchObject({
+    ANTHROPIC_API_KEY: "sk-ant-room",
+    ANTHROPIC_BASE_URL: "https://room.example",
+    CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL: "",
+  });
+  const messages = (
+    viewer.socket.send as ReturnType<typeof vi.fn>
+  ).mock.calls.map(([raw]) => JSON.parse(raw));
+  expect(
+    messages.find((message) => message.type === "session.state")
+      ?.globalProviderKeysAvailable,
+  ).toEqual({ openai: false, anthropic: false, sarvam: false });
+});
 
 it("does not restart stopped notes when an older key lookup completes after a start and stop", async () => {
   const { room, viewer } = await fixture();

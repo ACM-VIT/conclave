@@ -42,8 +42,13 @@ export function useAiModels(
       (!provider ||
         personalKey.length < 20 ||
         !isProviderApiKey(provider, personalKey))
-    )
+    ) {
+      setModels(AI_RESPONSE_MODELS);
+      if (force.current)
+        setError("Enter a valid provider key to refresh models.");
+      force.current = false;
       return;
+    }
     setLoading(true);
     const refresh = force.current;
     force.current = false;
