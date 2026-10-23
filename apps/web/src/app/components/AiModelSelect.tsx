@@ -10,6 +10,7 @@ export default function AiModelSelect({
   models,
   disabled = false,
   label = "Assistant model",
+  placeholder,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -22,6 +23,7 @@ export default function AiModelSelect({
   }[];
   disabled?: boolean;
   label?: string;
+  placeholder?: string;
 }) {
   const id = useId();
   const selected = models.find((model) => model.id === value);
@@ -47,6 +49,7 @@ export default function AiModelSelect({
           aria-describedby={`${id}-description`}
           className="h-10 w-full appearance-none rounded-lg border border-white/10 bg-[#141416] pl-3 pr-9 text-[12px] text-[#fafafa] outline-none transition-colors focus:border-[#F95F4A]/60 focus-visible:ring-2 focus-visible:ring-[#F95F4A]/20 disabled:opacity-60"
         >
+          {placeholder ? <option value="" disabled>{placeholder}</option> : null}
           {providers.map((provider) => (
             <optgroup key={provider} label={AI_PROVIDERS[provider].label}>
               {models

@@ -117,6 +117,33 @@ describe("AI setup UX", () => {
     expect(container.querySelector(".lucide-sparkles")).toBeNull();
   });
 
+  it("labels the inherited model without inventing a deployment selection", async () => {
+    await act(async () => root.render(<RoomAiSettings controller={roomAi()} onClose={() => {}} />));
+    expect(container.querySelector("select")?.value).toBe("");
+    expect(container.querySelector('option[value=""]')?.textContent).toBe("Deployment default");
+  });
+
+  it("preserves the audio draft when the shared assistant changes", async () => {
+    const start = vi.fn().mockResolvedValue(true);
+    const notes = transcript(start);
+    const state = emptyRoomAiState();
+    const render = () => root.render(<TranscriptPanel transcript={notes} roomAi={roomAi({ state: { ...state } })} onClose={() => {}} />);
+    await act(async () => render());
+    await act(async () => [...container.querySelectorAll("button")].find(b => b.textContent === "Sarvam")!.click());
+    const input = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "sarvam-draft-key");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    state.assistantModel = "claude-haiku-5-5";
+    state.anthropic = { source: "room", ownerId: "alice" };
+    await act(async () => render());
+    expect([...container.querySelectorAll("button")].find(b => b.textContent === "Sarvam")?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe("sarvam-draft-key");
+    await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({ transcriptModel: "saaras:v3", apiKey: "sarvam-draft-key", qaModel: "claude-haiku-5-5" }));
+  });
+
   it("uses the room assistant model for notes setup", async () => {
     const state = emptyRoomAiState();
     state.assistantModel = "claude-haiku-5-5";

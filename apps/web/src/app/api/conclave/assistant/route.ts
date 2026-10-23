@@ -1091,7 +1091,12 @@ export async function POST(request: Request) {
         // terminate in the same error state the asker sees.
         writeStreamEvent({
           type: "error",
-          error: failure.userMessage,
+          error: participantApiKey && failure.status === 401
+            ? `${AI_PROVIDERS[provider].label} rejected your key. Replace it to retry.`
+            : failure.userMessage,
+          ...(participantApiKey && failure.status === 401
+            ? { code: "personal_api_key_rejected", model }
+            : {}),
           relay: makeRelayPacket(
             fullText.trim()
               ? "Conclave couldn't finish answering."

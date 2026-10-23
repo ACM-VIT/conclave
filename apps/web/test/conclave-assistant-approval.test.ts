@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   streamConclaveAssistant,
+  ConclaveAssistantApiKeyRequiredError,
   type AssistantToolApproval,
 } from "../src/app/lib/conclave-assistant";
 
@@ -73,6 +74,21 @@ describe("Conclave assistant tool approval streaming", () => {
       model: "claude-haiku-5-5",
       message: "Add an Anthropic key.",
     });
+  });
+
+  it("reopens personal key setup after a provider authentication rejection", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      'data: {"type":"error","code":"personal_api_key_rejected","model":"claude-haiku-5-5","error":"Anthropic rejected your key. Replace it to retry."}\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    )));
+    const request = streamConclaveAssistant({
+      answerId: "answer", question: "Hello", relayToken: "token",
+      apiKey: "sk-ant-rejected-fixture", model: "claude-haiku-5-5",
+      history: [], transcript: "", transcriptActive: false,
+      onDelta: vi.fn(), onReasoning: vi.fn(), onTask: vi.fn(), onRelay: vi.fn(),
+    });
+    await expect(request).rejects.toBeInstanceOf(ConclaveAssistantApiKeyRequiredError);
+    await expect(request).rejects.toMatchObject({ model: "claude-haiku-5-5" });
   });
 
   it("pauses completion when the server requests inline approval", async () => {

@@ -12,7 +12,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  AI_DEFAULT_MODELS,
   AI_RESPONSE_MODELS,
   AI_PROVIDERS,
   getResponseProvider,
@@ -92,7 +91,8 @@ export default function RoomAiSettings({
       <div className="mt-3 border-b border-white/10 pb-4">
         <AiModelSelect
           label="Room assistant"
-          value={controller.state.assistantModel ?? AI_DEFAULT_MODELS.assistant}
+          value={controller.state.assistantModel ?? ""}
+          placeholder="Deployment default"
           models={AI_RESPONSE_MODELS.map((model) => ({
             ...model,
             disabled:

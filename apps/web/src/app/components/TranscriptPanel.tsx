@@ -265,13 +265,16 @@ function StartStage({
       : "Room key";
   useEffect(() => {
     setTranscriptModel(transcript.session.transcriptModel);
+  }, [transcript.session.transcriptModel]);
+  useEffect(() => {
     setQaModel(roomAi?.state.assistantModel ?? transcript.session.qaModel);
-
-  }, [
-    roomAi?.state.assistantModel,
-    transcript.session.qaModel,
-    transcript.session.transcriptModel,
-  ]);
+  }, [roomAi?.state.assistantModel, transcript.session.qaModel]);
+  useEffect(() => {
+    setApiKey("");
+  }, [provider]);
+  useEffect(() => {
+    setAssistantApiKey("");
+  }, [assistantProvider]);
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!canSubmit || !hasRequiredKeys || isSubmitting) return;

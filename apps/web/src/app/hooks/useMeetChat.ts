@@ -369,11 +369,12 @@ export function useMeetChat({
         .catch((error) => {
           if (controller.signal.aborted) return;
           if (error instanceof ConclaveAssistantApiKeyRequiredError) {
+            assistantApiKeyRef.current = "";
             if (error.model) assistantModelRef.current = error.model;
             pendingAssistantRequestRef.current = request;
             setAssistantApiKeyPrompt({
               visible: true,
-              error: null,
+              error: error.message,
               model: error.model ?? assistantModelRef.current,
             });
             patchAssistantMessage(request.answerId, {
