@@ -1,3 +1,4 @@
+import { AI_ENDPOINTS } from "@conclave/ai/models";
 import {
   DEFAULT_TRANSCRIPT_QA_MODEL,
   DEFAULT_TRANSCRIPT_TRANSCRIPTION_MODEL,
@@ -53,5 +54,5 @@ export const TRANSCRIPTION_RECOVERY_DELAYS_MS = [
   8_000,
   10_000,
 ] as const;
-export const OPENAI_REALTIME_URL = "https://api.openai.com/v1/realtime";
+export const OPENAI_REALTIME_URL = AI_ENDPOINTS.openai.realtime;
 export const OPENAI_REALTIME_TRANSCRIPTION_INTENT = "transcription";

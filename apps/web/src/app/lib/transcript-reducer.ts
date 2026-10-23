@@ -1,3 +1,4 @@
+import { AI_DEFAULT_MODELS } from "@conclave/ai/models";
 import type {
   TranscriptMinutesSnapshot,
   TranscriptSegment,
@@ -5,7 +6,7 @@ import type {
 } from "./types";
 
 export const createEmptyTranscriptMinutes = (
-  model = "gpt-5.6-terra",
+  model: string = AI_DEFAULT_MODELS.assistant,
 ): TranscriptMinutesSnapshot => ({
   summary: "",
   topics: [],

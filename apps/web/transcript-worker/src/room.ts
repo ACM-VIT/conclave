@@ -1,3 +1,9 @@
+import { fetchRoomAiEnvironment } from "@conclave/ai/room-server";
+import { AI_PROVIDERS, getProviderApiKey, type AiEnvironment } from "@conclave/ai/models";
+import {
+  getResponseProvider,
+  isResponseModel,
+} from "@conclave/ai/models";
 import type {
   TranscriptMinutesSnapshot,
   TranscriptMinutesStatus,
@@ -51,12 +57,9 @@ import {
   getGlobalTranscriptProviderKeyAvailability,
   hasGlobalOpenAiApiKey,
   resolveTranscriptProviderApiKey,
+  resolveTranscriptResponseApiKey,
 } from "./key-policy";
-import {
-  compactMinutes,
-  generateMinutes,
-  streamQuestionAnswer,
-} from "./openai";
+import { compactMinutes, generateMinutes, streamQuestionAnswer } from "./ai";
 import {
   takeTranscriptRateLimit,
   type TranscriptRateBucketName,
@@ -137,6 +140,7 @@ export class TranscriptRoom {
   private hasPendingAudio = false;
   private pendingAudioSamples = 0;
   private session: TranscriptSessionState | null = null;
+  private sessionRevision = 0;
   private segments: TranscriptSegment[] = [];
   private minutes: TranscriptMinutesSnapshot = createEmptyMinutes();
   private sequence = 0;
@@ -213,6 +217,7 @@ export class TranscriptRoom {
     const viewer: Viewer = {
       id: crypto.randomUUID(),
       socket: server,
+      sfuUrl: payload.sfuUrl,
       userId: payload.userId!,
       displayName: payload.displayName || payload.userId!,
       clientId: payload.clientId,
@@ -352,7 +357,12 @@ export class TranscriptRoom {
     );
     const provider = getTranscriptTranscriptionProvider(transcriptModel);
     const transcriptionKey = this.resolveTranscriptionKey(provider, undefined);
-    const responseKey = this.resolveResponseKey(provider, undefined, undefined);
+    const responseKey = this.resolveResponseKey(
+      snapshot.session.qaModel,
+      provider,
+      undefined,
+      undefined,
+    );
     if (!transcriptionKey.ok || !responseKey.ok) return;
 
     const wasPaused = snapshot.session.status === "paused";
@@ -477,32 +487,29 @@ export class TranscriptRoom {
   private resolveTranscriptionKey(
     provider: TranscriptTranscriptionProvider,
     providedApiKey: string | undefined,
+    env: AiEnvironment = this.env,
   ) {
     return resolveTranscriptProviderApiKey({
       provider,
       providedApiKey,
       globalApiKey:
-        provider === "sarvam" ? this.env.SARVAM_API_KEY : this.env.OPENAI_API_KEY,
+        provider === "sarvam" ? env.SARVAM_API_KEY : env.OPENAI_API_KEY,
     });
   }
 
   private resolveResponseKey(
+    model: string,
     transcriptionProvider: TranscriptTranscriptionProvider,
     transcriptionApiKey: string | undefined,
     assistantApiKey: string | undefined,
+    env: AiEnvironment = this.env,
   ) {
-    return resolveTranscriptProviderApiKey({
-      provider: "openai",
-      providedApiKey:
-        transcriptionProvider === "openai"
-          ? (transcriptionApiKey ?? assistantApiKey)
-          : assistantApiKey,
-      globalApiKey: this.env.OPENAI_API_KEY,
-      missingMessage:
-        transcriptionProvider === "sarvam"
-          ? "A valid OpenAI API key is required for Ask and Minutes when Sarvam transcription is selected."
-          : "A valid OpenAI API key is required.",
-      misconfiguredMessage: "The shared OpenAI API key is misconfigured.",
+    return resolveTranscriptResponseApiKey({
+      env,
+      model,
+      transcriptionProvider,
+      transcriptionApiKey,
+      assistantApiKey,
     });
   }
 
@@ -641,7 +648,10 @@ export class TranscriptRoom {
         closingUserId: viewer.userId,
         controllerConnectionId: this.session?.controller?.connectionId,
         controllerUserId: this.session?.controller?.userId,
-        remainingUserIds: Array.from(this.viewers.values(), (item) => item.userId),
+        remainingUserIds: Array.from(
+          this.viewers.values(),
+          (item) => item.userId,
+        ),
       })
     ) {
       const replacement = Array.from(this.viewers.values()).find(
@@ -787,6 +797,7 @@ export class TranscriptRoom {
       return;
     }
 
+    const revision = this.sessionRevision;
     const roomId = this.session?.roomId || "unknown";
     const now = Date.now();
     const transcriptModel = normalizeRealtimeTranscriptModel(
@@ -795,25 +806,79 @@ export class TranscriptRoom {
     );
     const transcriptionProvider =
       getTranscriptTranscriptionProvider(transcriptModel);
+    const qaModel = isResponseModel(message.qaModel || "")
+      ? message.qaModel!
+      : DEFAULT_QA_MODEL;
+    const providers = [transcriptionProvider, getResponseProvider(qaModel)];
+    const effectiveEnv: AiEnvironment = { ...this.env };
+    let usesRoomKey = false;
+    if (
+      viewer.sfuUrl &&
+      viewer.clientId &&
+      viewer.channelId &&
+      providers.some((provider) => !getProviderApiKey(this.env, provider))
+    ) {
+      try {
+        const roomEnv = await fetchRoomAiEnvironment({
+          sfuUrl: viewer.sfuUrl,
+          secret: this.env.TRANSCRIPT_TOKEN_SECRET,
+          identity: {
+            userId: viewer.userId,
+            roomId,
+            clientId: viewer.clientId,
+            channelId: viewer.channelId,
+          },
+          providers,
+        });
+        for (const provider of providers) {
+          if (
+            !getProviderApiKey(this.env, provider) &&
+            getProviderApiKey(roomEnv, provider)
+          ) {
+            effectiveEnv[AI_PROVIDERS[provider].keyEnv] = getProviderApiKey(
+              roomEnv,
+              provider,
+            );
+            usesRoomKey = true;
+          }
+        }
+      } catch {
+        /* Participant keys remain available when room setup is unavailable. */
+      }
+      if (
+        revision !== this.sessionRevision ||
+        !this.viewers.has(viewer.socket) ||
+        (this.session?.status ?? "idle") !== existingStatus
+      ) {
+        this.sendError(
+          viewer,
+          "Notes changed while connecting. Please try again.",
+        );
+        return;
+      }
+    }
     const transcriptionKey = this.resolveTranscriptionKey(
       transcriptionProvider,
       message.apiKey,
+      effectiveEnv,
     );
     if (!transcriptionKey.ok) {
       this.sendError(viewer, transcriptionKey.message);
       return;
     }
     const responseKey = this.resolveResponseKey(
+      qaModel,
       transcriptionProvider,
       message.apiKey,
       message.assistantApiKey,
+      effectiveEnv,
     );
     if (!responseKey.ok) {
       this.sendError(viewer, responseKey.message);
       return;
     }
 
-    const qaModel = normalizeModel(message.qaModel, DEFAULT_QA_MODEL);
+    const acceptedRevision = ++this.sessionRevision;
     const transportMode = normalizeTransportMode(message.transportMode);
     const wasIdle = existingStatus === "idle" || existingStatus === "error";
     this.responseApiKey = responseKey.apiKey;
@@ -830,7 +895,10 @@ export class TranscriptRoom {
       transcriptModel,
       qaModel,
       transportMode,
-      keySource: transcriptionKey.source,
+      keySource:
+        !usesRoomKey && transcriptionKey.source === "global" && responseKey.source === "global"
+          ? "global"
+          : "controller",
       startedAt: wasIdle ? now : (this.session?.startedAt ?? now),
       updatedAt: now,
       error: null,
@@ -848,6 +916,7 @@ export class TranscriptRoom {
     this.broadcastSession();
     await this.persist();
 
+    if (acceptedRevision !== this.sessionRevision) return;
     try {
       const language = normalizeLanguage(
         message.language ?? this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
@@ -862,6 +931,7 @@ export class TranscriptRoom {
         locale,
         localizationPrompt: this.env.TRANSCRIPT_TRANSCRIPTION_PROMPT,
       });
+      if (acceptedRevision !== this.sessionRevision) return;
       this.session = {
         ...this.session,
         status: "live",
@@ -872,7 +942,7 @@ export class TranscriptRoom {
       await this.sendSfuRelayStartToken(viewer);
       await this.persist();
     } catch (error) {
-      if (this.session?.status !== "starting") return;
+      if (acceptedRevision !== this.sessionRevision || this.session?.status !== "starting") return;
       this.markTakeoverNeeded(
         error instanceof Error
           ? error.message
@@ -928,6 +998,7 @@ export class TranscriptRoom {
       return;
     }
 
+    this.sessionRevision += 1;
     this.suppressSfuRelayDisconnectsUntil =
       Date.now() + SFU_RELAY_DISCONNECT_SUPPRESSION_MS;
     this.suppressSfuRelayDisconnectCount += 1;
@@ -1593,7 +1664,8 @@ export class TranscriptRoom {
           transportMode: this.session?.transportMode,
           attempt: attempt + 1,
           message: lastMessage,
-        });
+          },
+        );
         if (!isRetryableTranscriptionFailure(lastMessage)) {
           if (generation !== this.transcriptionRecoveryGeneration) return;
           await this.failTranscriptionPermanently(lastMessage);
@@ -1871,6 +1943,7 @@ export class TranscriptRoom {
   }
 
   private markTakeoverNeeded(error: string): void {
+    this.sessionRevision += 1;
     this.cancelControllerReconnect();
     this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();
@@ -2080,6 +2153,16 @@ export class TranscriptRoom {
 
     const id = message.id || crypto.randomUUID();
     const model = normalizeModel(message.model, this.session.qaModel);
+    if (
+      !isResponseModel(model) ||
+      getResponseProvider(model) !== getResponseProvider(this.session.qaModel)
+    ) {
+      this.sendError(
+        viewer,
+        "Choose a model from the active assistant provider or restart notes with its key.",
+      );
+      return;
+    }
     this.send(viewer.socket, {
       type: "qa.delta",
       id,
@@ -2198,7 +2281,11 @@ export class TranscriptRoom {
     await this.state.storage.setAlarm(Date.now() + ttlMs);
   }
 
-  private resetInMemorySession(roomId: string, qaModel = DEFAULT_QA_MODEL): void {
+  private resetInMemorySession(
+    roomId: string,
+    qaModel = DEFAULT_QA_MODEL,
+  ): void {
+    this.sessionRevision += 1;
     this.cancelControllerReconnect();
     this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();

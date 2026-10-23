@@ -274,6 +274,7 @@ export const bluffModule: GameModule<BluffState> = {
     const topic = gameContentTopic(ctx.config) || "fresh obscure facts";
     const rounds = numberOption(ctx.config, "rounds", TOTAL_ROUNDS);
     return generateStructuredGameContent({
+      aiEnvironment: ctx.aiEnvironment,
       gameName: "Bluff",
       topic,
       instructions: [

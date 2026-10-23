@@ -8,6 +8,7 @@ import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import ChatOverlay from "./ChatOverlay";
 import ChatPanel from "./ChatPanel";
+import { useRoomAi } from "../hooks/useRoomAi";
 import ControlsBar, { type ControlsBarProps } from "./ControlsBar";
 import CommandPalette from "./CommandPalette";
 import ShortcutsHelpDialog from "./ShortcutsHelpDialog";
@@ -598,6 +599,13 @@ export default function MeetsMainContent({
   onRotateWebinarLink,
   transcript,
 }: MeetsMainContentProps) {
+  const roomAi = useRoomAi(
+    socket,
+    isJoined && !isWebinarAttendee,
+    currentUserId,
+    isAdmin,
+    roomId,
+  );
   const {
     state: appsState,
     apps,
@@ -2474,6 +2482,8 @@ export default function MeetsMainContent({
 
       {isJoined && !isWebinarAttendee && isChatOpen && (
         <ChatPanel
+          key={`${currentUserId}:${roomId}`}
+          roomAi={roomAi}
           messages={chatMessages}
           chatInput={chatInput}
           onInputChange={setChatInput}
@@ -2507,6 +2517,8 @@ export default function MeetsMainContent({
 
       {isJoined && !isWebinarAttendee && isTranscriptOpen && (
         <TranscriptPanel
+          key={`${currentUserId}:${roomId}`}
+          roomAi={roomAi}
           transcript={transcript}
           onClose={handleCloseTranscript}
           initialTab={transcriptInitialTab}

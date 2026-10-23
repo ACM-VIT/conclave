@@ -1,5 +1,7 @@
 "use client";
 
+import { AI_DEFAULT_MODELS, AI_ENDPOINTS } from "@conclave/ai/models";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import type { Device as MediasoupDevice, Producer, Transport } from "mediasoup-client/types";
@@ -73,7 +75,7 @@ type UseVoiceAgentParticipantOptions = {
   voice?: string;
 };
 
-const DEFAULT_MODEL = "gpt-realtime-1.5";
+const DEFAULT_MODEL = AI_DEFAULT_MODELS.voice;
 const DEFAULT_VOICE = "marin";
 const DEFAULT_INSTRUCTIONS =
   "You are Conclave's in-meeting voice assistant. Answer in one or two short sentences unless asked for detail. Ground answers in the meeting: check the transcript, notes, chat, or participant tools before answering questions about what was said or decided. Never invent meeting content.";
@@ -1100,7 +1102,7 @@ export function useVoiceAgentParticipant({
       };
 
       const clientSecretResponse = await fetch(
-        "https://api.openai.com/v1/realtime/client_secrets",
+        AI_ENDPOINTS.openai.realtimeClientSecrets,
         {
           method: "POST",
           headers: {
@@ -1182,7 +1184,7 @@ export function useVoiceAgentParticipant({
       const offer = await runtime.openAiPc.createOffer();
       await runtime.openAiPc.setLocalDescription(offer);
 
-      const sdpResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
+      const sdpResponse = await fetch(AI_ENDPOINTS.openai.realtimeCalls, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${clientSecret}`,

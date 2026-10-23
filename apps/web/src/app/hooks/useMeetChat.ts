@@ -140,6 +140,7 @@ export function useMeetChat({
   const chatMessagesRef = useRef<ChatMessage[]>([]);
   const assistantControllersRef = useRef<Set<AbortController>>(new Set());
   const assistantApiKeyRef = useRef("");
+  const assistantModelChosenRef = useRef(false);
   const assistantModelRef = useRef<ConclaveAssistantModel>(
     CONCLAVE_ASSISTANT_GLOBAL_MODEL,
   );
@@ -367,16 +368,20 @@ export function useMeetChat({
         })
         .catch((error) => {
           if (controller.signal.aborted) return;
-          if (error instanceof ConclaveAssistantApiKeyRequiredError) {
+          if (
+            error instanceof ConclaveAssistantApiKeyRequiredError &&
+            assistantApiKeyRef.current === (apiKey ?? "")
+          ) {
+            assistantApiKeyRef.current = "";
+            if (error.model) assistantModelRef.current = error.model;
             pendingAssistantRequestRef.current = request;
             setAssistantApiKeyPrompt({
               visible: true,
-              error: null,
-              model: assistantModelRef.current,
+              error: error.message,
+              model: error.model ?? assistantModelRef.current,
             });
             patchAssistantMessage(request.answerId, {
-              content:
-                "Enter an OpenAI API key below to use Conclave AI in this room.",
+              content: error.message,
               assistantStatus: "error",
             });
             return;
@@ -410,7 +415,7 @@ export function useMeetChat({
       startConclaveStream(
         pending.request,
         assistantApiKeyRef.current || undefined,
-        assistantApiKeyRef.current ? assistantModelRef.current : undefined,
+        assistantApiKeyRef.current || assistantModelChosenRef.current ? assistantModelRef.current : undefined,
         { decision, approval: pending.approval },
       );
     },
@@ -470,7 +475,7 @@ export function useMeetChat({
       startConclaveStream(
         request,
         assistantApiKeyRef.current || undefined,
-        assistantApiKeyRef.current ? assistantModelRef.current : undefined,
+        assistantApiKeyRef.current || assistantModelChosenRef.current ? assistantModelRef.current : undefined,
       );
     },
     [
@@ -485,21 +490,14 @@ export function useMeetChat({
   const submitAssistantApiKey = useCallback(
     (apiKey: string, model: ConclaveAssistantModel) => {
       const trimmed = apiKey.trim();
-      if (!trimmed) {
-        setAssistantApiKeyPrompt({
-          visible: true,
-          error: "Enter an OpenAI API key.",
-          model,
-        });
-        return;
-      }
       assistantApiKeyRef.current = trimmed;
+      assistantModelChosenRef.current = true;
       assistantModelRef.current = model;
       const pendingRequest = pendingAssistantRequestRef.current;
       pendingAssistantRequestRef.current = null;
       setAssistantApiKeyPrompt({ visible: false, error: null, model });
       if (pendingRequest) {
-        startConclaveStream(pendingRequest, trimmed, model);
+        startConclaveStream(pendingRequest, trimmed || undefined, model);
       }
     },
     [startConclaveStream],

@@ -195,6 +195,7 @@ export const registerTranscriptHandlers = (
         sub: client.id,
         userId: client.id,
         displayName,
+        sfuUrl: config.instancePublicUrl || undefined,
         roomId: room.id,
         clientId: room.clientId,
         channelId: room.channelId,
