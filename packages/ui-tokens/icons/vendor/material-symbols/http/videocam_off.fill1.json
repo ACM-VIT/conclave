@@ -1,0 +1,128 @@
+{
+  "id": "videocam_off.fill1",
+  "kind": "git-pinned",
+  "request_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/videocam_off/materialsymbolsrounded/videocam_off_fill1_24px.svg",
+  "request_method": "GET",
+  "request_headers": {
+    "Accept-Encoding": "identity",
+    "User-Agent": "Conclave-selected-input-recovery/1.0"
+  },
+  "started_at_utc": "2026-10-23T16:16:48.826845Z",
+  "source_revision": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "historical_status": "fresh_network_retrieval",
+  "body_file": "assets/symbols/web/videocam_off/materialsymbolsrounded/videocam_off_fill1_24px.svg",
+  "receipt_file": "http/videocam_off.fill1.json",
+  "redirect_policy": "record and reject; no substitutions",
+  "redirects": [],
+  "http_status": 200,
+  "final_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/videocam_off/materialsymbolsrounded/videocam_off_fill1_24px.svg",
+  "response_headers": [
+    [
+      "Connection",
+      "close"
+    ],
+    [
+      "Content-Length",
+      "463"
+    ],
+    [
+      "Cache-Control",
+      "max-age=300"
+    ],
+    [
+      "Content-Security-Policy",
+      "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    ],
+    [
+      "Content-Type",
+      "image/svg+xml"
+    ],
+    [
+      "ETag",
+      "\"d2e452c7a814edb70ab2589fef86436ad339f0cc6f1794dd090c6256a328f767\""
+    ],
+    [
+      "Strict-Transport-Security",
+      "max-age=31536000"
+    ],
+    [
+      "X-Content-Type-Options",
+      "nosniff"
+    ],
+    [
+      "X-Frame-Options",
+      "deny"
+    ],
+    [
+      "X-XSS-Protection",
+      "1; mode=block"
+    ],
+    [
+      "X-GitHub-Request-Id",
+      "568C:373024:B80D8:D52CA:6ADB8889"
+    ],
+    [
+      "x-github-edge-region",
+      "centralindia"
+    ],
+    [
+      "Accept-Ranges",
+      "bytes"
+    ],
+    [
+      "Date",
+      "Fri, 23 Oct 2026 16:17:14 GMT"
+    ],
+    [
+      "Via",
+      "1.1 varnish"
+    ],
+    [
+      "X-Served-By",
+      "cache-maa10227-MAA"
+    ],
+    [
+      "X-Cache",
+      "MISS"
+    ],
+    [
+      "X-Cache-Hits",
+      "0"
+    ],
+    [
+      "X-Timer",
+      "S1792772234.940436,VS0,VE301"
+    ],
+    [
+      "Vary",
+      "Authorization,Accept-Encoding"
+    ],
+    [
+      "Access-Control-Allow-Origin",
+      "*"
+    ],
+    [
+      "Cross-Origin-Resource-Policy",
+      "cross-origin"
+    ],
+    [
+      "X-Fastly-Request-ID",
+      "5bae59da82d887c50fadae2ee95f0d58034f006b"
+    ],
+    [
+      "Expires",
+      "Fri, 23 Oct 2026 16:22:14 GMT"
+    ],
+    [
+      "Source-Age",
+      "0"
+    ]
+  ],
+  "bytes": 463,
+  "sha256": "d8e8d05fda9182de26f772592a00d6ec58d1ff055469cbc0993486e3551dac5a",
+  "body_complete_within_limit": true,
+  "max_bytes": 131072,
+  "errors": [],
+  "completed_at_utc": "2026-10-23T16:17:14.235249Z",
+  "retrieval_ok": true
+}

@@ -1,0 +1,2250 @@
+{
+  "schema_version": 2,
+  "profile": "material-rounded-24-absolute-v1",
+  "source_revision": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "vendor_files": {
+    "ATTRIBUTION.md": "78735d1a661b4b6e7ea3e19260b73aa1dbb0a32e097a91079f9396d499247544",
+    "NOTICE-evidence.json": "d6f9ccc7a01815c7cd2e33adad3bd146a49af14cd9a12e241ef20e25bf5832c0",
+    "assets/symbols/web/add_reaction/materialsymbolsrounded/add_reaction_24px.svg": "22f2f8040a258b8a34daaa0287686bf1fa67699de5cab2fd71fe32c60ef5d96e",
+    "assets/symbols/web/apps/materialsymbolsrounded/apps_24px.svg": "c11e79be76394ee701595f8978628e80d6cc11a2af408596548a706b04331cb4",
+    "assets/symbols/web/arrow_back/materialsymbolsrounded/arrow_back_24px.svg": "b9b58d54e13e0e3693a10d997c1001ec270c12eaa935f993cee1d8c916236ceb",
+    "assets/symbols/web/bluetooth/materialsymbolsrounded/bluetooth_24px.svg": "3736a6c4fb26629b36b2ca6e2f28e5a61a72a4419c1ad18bfcf66bac4490e2de",
+    "assets/symbols/web/call_end/materialsymbolsrounded/call_end_fill1_24px.svg": "5fc45d8e866d3cb0fe58846ef63cb4bf274fdba56b011ad5b58bc64710ace287",
+    "assets/symbols/web/cameraswitch/materialsymbolsrounded/cameraswitch_24px.svg": "ea11124371708ff5ec18e7ad703c1babb1843f5d6ddc3e58702d44849b9875df",
+    "assets/symbols/web/cancel_presentation/materialsymbolsrounded/cancel_presentation_fill1_24px.svg": "df6b768514ffadecf5a255b0f57084b9717d33182f251a28a30e4152b5bcecdb",
+    "assets/symbols/web/chat_bubble/materialsymbolsrounded/chat_bubble_24px.svg": "5323668b977357f7b5379fd1e8b073375b0a5d12c6351e10694308d4c2d5c9d7",
+    "assets/symbols/web/chat_bubble/materialsymbolsrounded/chat_bubble_fill1_24px.svg": "316d437277e361fa6036baccc9320136a262a06720dfd12b1868ea281e9696e0",
+    "assets/symbols/web/check/materialsymbolsrounded/check_24px.svg": "51e706757e18de60cb7ade1cf0ae272708932d36e417365f14977ee039cd85b8",
+    "assets/symbols/web/close/materialsymbolsrounded/close_24px.svg": "fabc7e16160e93ed11d6d72b87f5c67092d04abfcc1fc2410fab1abe075cd8fc",
+    "assets/symbols/web/closed_caption/materialsymbolsrounded/closed_caption_24px.svg": "da5bb300fd40d60983781c50d60f8d743af531b4b36cc2a668c371c2bdb533cf",
+    "assets/symbols/web/closed_caption/materialsymbolsrounded/closed_caption_fill1_24px.svg": "cf35c747cff2396c0e293cde092a302af8a7ed1b4935f1af7dee8eacb5dd07af",
+    "assets/symbols/web/content_copy/materialsymbolsrounded/content_copy_24px.svg": "01af7f7a06b22849cd0eb73d14953695cba54939f51afdf3e30aeb20cf90d543",
+    "assets/symbols/web/delete/materialsymbolsrounded/delete_24px.svg": "cd90ebd4c5aa36ef2332e2511ed6dcb051a32e5c99effd60494060473f27b9f9",
+    "assets/symbols/web/description/materialsymbolsrounded/description_24px.svg": "d7f08af6f115402dc19125e81da70209b53f5a830f5f14b04e16b0ddf569be7f",
+    "assets/symbols/web/draw/materialsymbolsrounded/draw_24px.svg": "0a9cc24d93e79a0823bb37d25b9b88633e161fe81937b7a4484bc746e5845da6",
+    "assets/symbols/web/error/materialsymbolsrounded/error_fill1_24px.svg": "97d15b9296173542d04e05c818702ecfd0e5ed7ccda9a062701866876c0a4236",
+    "assets/symbols/web/featured_video/materialsymbolsrounded/featured_video_24px.svg": "8ab7f713b69a6229747fc041bfcb49f0ef258d1e5b1856756db86c0cbbe608d4",
+    "assets/symbols/web/front_hand/materialsymbolsrounded/front_hand_24px.svg": "7041875ff33307929d8638615091105a32bce3c0b9815c66a1ef08d071cbf753",
+    "assets/symbols/web/front_hand/materialsymbolsrounded/front_hand_fill1_24px.svg": "0fa9c779d00e34d9f9f700beec63ad08fc16cba32288b6c2fc3b85790e6c1aba",
+    "assets/symbols/web/gif_box/materialsymbolsrounded/gif_box_24px.svg": "a1c65e4eb8049bc2e740e3f2096ecb45cd2746e10cac93c6a65a16aa6288f4d0",
+    "assets/symbols/web/graphic_eq/materialsymbolsrounded/graphic_eq_24px.svg": "0e40ad547e86077d696cfee5e3053a33bf7a95610256d8323d54a5c210261fc4",
+    "assets/symbols/web/group/materialsymbolsrounded/group_24px.svg": "911624e04d36c60f9b1a8d9266df0eeb92fe764e852142e23d3f1a47489cd325",
+    "assets/symbols/web/group/materialsymbolsrounded/group_fill1_24px.svg": "738f4d575af5326a937f7d9ff32dd02b7a8071c90bbd33eb3a1a16059abb4393",
+    "assets/symbols/web/headphones/materialsymbolsrounded/headphones_24px.svg": "896217961e052a68a4345d435e76df4b7b009d665fe2bddb4fe5fc38eaaf77eb",
+    "assets/symbols/web/image/materialsymbolsrounded/image_24px.svg": "a53eee7018c2f02e0d825f3c8acb11cd1aa80161a09ce5d34c7579eb32fd3094",
+    "assets/symbols/web/info/materialsymbolsrounded/info_24px.svg": "ab779a17ff3bc8f5a30e3231509ef9ff6fee709ffcaa46fb65217ce170f03e14",
+    "assets/symbols/web/keep/materialsymbolsrounded/keep_24px.svg": "786fe93f53274d53ca0821ae90ae3108baf991bacd84298f45249cc2c8a84c36",
+    "assets/symbols/web/keep/materialsymbolsrounded/keep_fill1_24px.svg": "3edfd08e308f57cf2c6ed981254139803e10c23fe12ece001452f776f000d891",
+    "assets/symbols/web/keep_off/materialsymbolsrounded/keep_off_24px.svg": "c1edd7d0e716fa2b337341e9588ab28e05b5c54b23a5bb2291454ed0b4cf76ec",
+    "assets/symbols/web/lock/materialsymbolsrounded/lock_fill1_24px.svg": "64fd7f36a67d03e6071fe0963d6f67d15b37fdb22dcec2f06b83ba6e8bab6ea8",
+    "assets/symbols/web/lock_open/materialsymbolsrounded/lock_open_24px.svg": "a48b483c600fd2f869036741dd3b2a4c74a66af94f7ede64c80da84a6e66fbbd",
+    "assets/symbols/web/mic/materialsymbolsrounded/mic_fill1_24px.svg": "35668638b23e0e8f673968ae1c563d9d0018cfdd1a0fbf0443bdc0ead485d857",
+    "assets/symbols/web/mic_off/materialsymbolsrounded/mic_off_fill1_24px.svg": "524dcfb7f7fcad14ec7cbe430853d9d0b24695d799a93ac272c8e8929c00e199",
+    "assets/symbols/web/mood/materialsymbolsrounded/mood_fill1_24px.svg": "e56275195f6bcdd1aa20ff5689373e78f5a3970feb6d136480323b6c5a128ce7",
+    "assets/symbols/web/more_vert/materialsymbolsrounded/more_vert_24px.svg": "f3959916d17e6ec783267c2753bdddfe4b3f4b12b835c875231dbbba792f070b",
+    "assets/symbols/web/person_remove/materialsymbolsrounded/person_remove_24px.svg": "73ed88ef95b14ecbc11b9da1eff83e68d8360704960d34dcc7b5d1a52edc14eb",
+    "assets/symbols/web/phone_in_talk/materialsymbolsrounded/phone_in_talk_24px.svg": "3695a7cc5c3c176b6641bd3ca9a0b3a9840dbb7580208e3337f6dd808fac1fc2",
+    "assets/symbols/web/present_to_all/materialsymbolsrounded/present_to_all_24px.svg": "ff9a4ea515ccc5816be6720b74c959f725017436d62ba6e31f92305e956e5e09",
+    "assets/symbols/web/present_to_all/materialsymbolsrounded/present_to_all_fill1_24px.svg": "ab5e09fb6f600b6385b27ebd1f47dc1cc24ac676b0ee2eff6036b7676db374e2",
+    "assets/symbols/web/public/materialsymbolsrounded/public_24px.svg": "5b8ad24e63e4a2f601728fe0e589df9ca943b813ad24a71635c803a677e1ecc0",
+    "assets/symbols/web/quiz/materialsymbolsrounded/quiz_24px.svg": "bceae342d33f351df90c0b2f27d488c606865fad92aeac69d9fff8757b4810bf",
+    "assets/symbols/web/search/materialsymbolsrounded/search_24px.svg": "8d12ac6ba27a23ccf0e57794c28481ce9c978efcb2f80ba6d2979ccdf238c993",
+    "assets/symbols/web/send/materialsymbolsrounded/send_fill1_24px.svg": "f4b1d6b93bc8779ab84adced70a309621d2c6f59cece503c1c90ef01b9a1fd6b",
+    "assets/symbols/web/settings/materialsymbolsrounded/settings_24px.svg": "6cd47de90647ece6b00922f497f8c4ea9c1649548cf15828d1df9d78d5bdf30d",
+    "assets/symbols/web/share/materialsymbolsrounded/share_24px.svg": "a117c58801f1690ef8bc642fa9ce135d44f36c5c36e158f05891e462ff204e24",
+    "assets/symbols/web/shield_person/materialsymbolsrounded/shield_person_24px.svg": "98c2a89d2cabbed2ade2477ad0f9e1aba4ad97c3540b95791217cf972e516fde",
+    "assets/symbols/web/signal_wifi_bad/materialsymbolsrounded/signal_wifi_bad_24px.svg": "62be2af3f215a00f6111eaa215928e1aa942ec0712f6c2384f13be298436ab94",
+    "assets/symbols/web/sports_esports/materialsymbolsrounded/sports_esports_24px.svg": "b48be0c109f5285dbaea7224f973ddf0548080ebcc04b701dfa6fb942402fb71",
+    "assets/symbols/web/videocam/materialsymbolsrounded/videocam_fill1_24px.svg": "96ba29541bcb79291cb241574252c752b8464497dab33ae9c1f3460ba437e1f9",
+    "assets/symbols/web/videocam_off/materialsymbolsrounded/videocam_off_fill1_24px.svg": "d8e8d05fda9182de26f772592a00d6ec58d1ff055469cbc0993486e3551dac5a",
+    "assets/symbols/web/volume_up/materialsymbolsrounded/volume_up_24px.svg": "0f4b215717e8153c0bd9d84f10fa3313453fd74895da8e7c474383d841079df6",
+    "assets/symbols/web/warning/materialsymbolsrounded/warning_fill1_24px.svg": "556697614d510ecce93ccbe33407ed27c5836b8de8ffbe37a8746bc0a399c3a1",
+    "axis-family-evidence.json": "1f6b61ae09f8e596692ecf38f897096d2c37be89e6f6b1f198e183b49b9b6bef",
+    "evidence/recovered/accepted-inputs-activity-43.json": "b45aa0ed256e216cacd8879ff73e83589be411c8a5651a093177ccf71d28cfab",
+    "evidence/recovered/file-hashes.json": "fd7b159f3f833cda8fa0a857371cc58a8a749ba900f8d9be6b94172bc5519f52",
+    "evidence/recovered/gate-source-baseline-copy.json": "4305a990580e2ef8355fb7d13054d04682dfc352720db2bc49539bd1d10eaf81",
+    "evidence/recovered/icon-implementation-contract.md": "faea33ed73e57538595136ec53f968a695b6aa73fe24ef63ccb1f4c8ed5d3da0",
+    "evidence/recovered/icon-selection.reconstructed.json": "53a0b78ee5473d5d519309cd238b26d78be991f107a7452ad075bc5bc790c9cb",
+    "evidence/recovered/parent-design-recovery-verification.json": "f04ee460be06baae8d03bdcebcbf3013a315a2a3b2507806685f24c2f8ca2fef",
+    "evidence/recovered/recovered-text/icon-manifest-implementation-brief.md": "bcaf4dfa88da2ed483923e238f965a384533b22c7fab0c3e1c3a56f998cb8544",
+    "evidence/recovered/recovered-text/icon-selection-disposition.md": "eba128f0fd77fe64950991621469bc2b5aad44685e9a385e33957785d49dda97",
+    "evidence/recovered/recovery-report.md": "7b18b1b3290b21aba313d721315aafb3c13954e56651def3c852c38825ec4556",
+    "http/add_reaction.fill0.json": "1393c32a44fa629fed949ba3c14ca6a211ed6f3887cb5d920dd09e24b145667e",
+    "http/apps.fill0.json": "73eaa50e69f0cc9d56c2c8f1c723f6d6a2a1948ebca548c095d3353241a94307",
+    "http/arrow_back.fill0.json": "17d0d8e000cbbc8fde82575f3c2f57ea51909c24c8cef99a7b3b61d018597c10",
+    "http/bluetooth.fill0.json": "a0613faad72f39d9f1eaa876a7dc75da46aac77997930efb1d8853e6969108fd",
+    "http/call_end.fill1.json": "bf7a199968b96514a4cf9806ecbe2276d5c1a6ef0811eef5b281507c7218be82",
+    "http/cameraswitch.fill0.json": "267f22d2cd4aed09b3e52265a842e5189f64f67e2273837a2efe32e0ab74a851",
+    "http/cancel_presentation.fill1.json": "d330e414a668f8ffa9947774b545a230287da014a09cb034a0f3ee964588eae0",
+    "http/chat_bubble.fill0.json": "06ce5fc94bb0c737fdaec4b80d5423f9999e45616c9e7ef380fedaf8b6bf841f",
+    "http/chat_bubble.fill1.json": "a7fd55b8d0375b6c63fdff801288bff6c029e1cec1b2c7d7d5cbc54c8df12c68",
+    "http/check.fill0.json": "39bbd8a2a71f0a9e7f4b3c3f02e5bb375a40c91edba5adc1313bc009806cc263",
+    "http/close.fill0.json": "13203435a308fbc6b52fa47270f015d941c0b7dcc59f3ab2aeb013c64632c801",
+    "http/closed_caption.fill0.json": "b2aef2438739386ceb7a69bf0704d3b7b6646ac2b0a2782dbc1276fe589cf00b",
+    "http/closed_caption.fill1.json": "cb3de5ad628632aba586ec358cb8a12e870dd5be612e559e9782a5314212916b",
+    "http/codepoints.json": "828679aab7b44b7f305862491ed963d96c371f02edadffb9c0a9e71137d9bb20",
+    "http/commit.json": "4ffea5e25fc031cb769802165110b7b24d7e878ed2eb1f14772de71ce21647fc",
+    "http/content_copy.fill0.json": "593b35ba27674792f3e1fc980ce70d4a48e4d281f84f2c9c74f31629af3c0820",
+    "http/delete.fill0.json": "5405e205b600c0d40a436c6f2078caa5beb63b99e6a864a902fe8318d5297ecf",
+    "http/description.fill0.json": "9d7457a1c8eb119bb3197a26f1ddb6072ea222b49db020103ee67d246bcd96a6",
+    "http/draw.fill0.json": "ab59a145227bc503cb52498e203c3aac3114ca084cd3af6b7ed44ea6f7206c0a",
+    "http/error.fill1.json": "0672b63a04bba476e41e2f2af4ddbe759e620c021fe8b4e98019cc925f3744e2",
+    "http/featured_video.fill0.json": "ea13318e867beb5d8c60f5cd7c883bb491951e752b9ddd31b5764ac27d1903e9",
+    "http/front_hand.fill0.json": "99af87f1037e5dbcce59cda116562f075ef942a2a79215bc38aa92eaafcb3b78",
+    "http/front_hand.fill1.json": "b7fe337534290972b889529527f4cbb552479e5a3e8a1cff606a9c29985da420",
+    "http/gif_box.fill0.json": "50ac181e9c86011fe7da277bba8bb3f0ab99f2a558b31c09c2e74dc232e41f2d",
+    "http/graphic_eq.fill0.json": "b5a8c43c6dc2f659520109e51c7a1ec1b84b137425de089a4ed3a013c7c54d0f",
+    "http/group.fill0.json": "640ef69b5a11bf9f43df69c17ddb8e8ac06c8ac6c49c0c14bfc6dc9b05702d9e",
+    "http/group.fill1.json": "90f2aadedf4045000264144315f3973a5fcc2c4bea3ba18306f1bf7bf473437c",
+    "http/guide.json": "00421e67621731e15139055d811b5e223891d1542124fb1200bcb4ff8638e1fd",
+    "http/headphones.fill0.json": "54cb67971fd09ef57a35123a30c8ad7ed272254fd33e04dad677c4423d732e3b",
+    "http/image.fill0.json": "c7e48101bb5df67451b0c8f8610c727d60ddf22998cd95c123454839998fc975",
+    "http/info.fill0.json": "1f1e9b55e85649b3c464e295836c247a415921899874694cb9808e781d4b9a4f",
+    "http/keep.fill0.json": "0b8dcdea6c83ba12c6abeec8fcd38ea5d9ece425a3c6f3ce6401ae9ce29fa083",
+    "http/keep.fill1.json": "ff47957873a4648dc3f433da0ffa6cea8e2556ceeb0e63701482355e52b1df9b",
+    "http/keep_off.fill0.json": "696742d47dc1c42a204e879d6fed8ce6680e4d994020c266d6c2dee2de887bb9",
+    "http/license.json": "37a8244fa58fa7321c504bbf5a46da11141faf34bc591921621e2cc1fc3f79f2",
+    "http/lock.fill1.json": "fc0988f02599fbec333fd05a95f16a719bb83227030f7375ddd2e1e82bab5427",
+    "http/lock_open.fill0.json": "67131348f62504494cf6b916e4a357a246959974e5d1778d6e9ef97854decfbf",
+    "http/metadata.json": "471fe26a7c0e77174bd227b0cce0c415af16ade7504737f0104077a91af2dbd5",
+    "http/mic.fill1.json": "e567ac228770f69940d36a66143d14dd2578509524038ac2458b2f32928fc972",
+    "http/mic_off.fill1.json": "db8630e2668065b9c22aa4a17b0aebfb97af364f2c944219712de3c553b115fa",
+    "http/mood.fill1.json": "e24700280b1c47ec000644f60cf45aff758209efeac352fff37a744ff280d92d",
+    "http/more_vert.fill0.json": "a4b4516c15450832a35fa0d442ccdf0f3d7e1c992765b5eebe09321a30c751cd",
+    "http/person_remove.fill0.json": "92b907f1c6d25c0485b59eadfb78ed7502588ce16526f3ff44abbdb70689246c",
+    "http/phone_in_talk.fill0.json": "ee9e420b7f0c34ca5bbd13440cc6b49dc9d07e45e708ffa0dc734c4ad8da2aee",
+    "http/present_to_all.fill0.json": "f46e778547c83484a092beaa20cb1af3ce9f7e1c7820a001656efa360423f32c",
+    "http/present_to_all.fill1.json": "7827ebfff71899f837f7639f0cce4c6a2e4a720f11ebe0277d5ae1a5cbfbaa2b",
+    "http/public.fill0.json": "4d70f367757e51a7bc74a7844cd21df7c882392634c2a3f4fad35eaf23ec7253",
+    "http/quiz.fill0.json": "85b9f79391082a593723227b47ba7e9e83b192d48c73a1d4738e4347338dc4e0",
+    "http/readme.json": "9941224ba59b93736d3f1056f3c971477689bfaf46c4e8d87e96e5c6acfab413",
+    "http/root-tree-html.json": "4d9ebbe47e88d74aee195a8088adc41bcaee2c785cbd5d3194495ac066dd920f",
+    "http/search.fill0.json": "be3d818796ac12e0eb9719a692b709762bc14a50cbeffdef5c91c2113ed89712",
+    "http/send.fill1.json": "2179a779dc2927a98100bf841569d134d9c1b45e83cbb3d7fa168047dcb21064",
+    "http/settings.fill0.json": "a25d3af15ffbed536472bb0fc28ab969efee2eb32a7c7d66a080df34d11861fa",
+    "http/share.fill0.json": "01ba2e4200caf58131880074e813b77aeb302448514dee83992557bf18731a82",
+    "http/shield_person.fill0.json": "720fe6ecea4462bfaac490163a3dfbd8382f7d4fcd83791be373c39d1746dfb1",
+    "http/signal_wifi_bad.fill0.json": "c3029d1071eefb5356b887456455e4740d5cde3e75e030d7b463f93aeb1a162b",
+    "http/sports_esports.fill0.json": "23754b1683102b5d3900acb3fff302468bd1d65d741ef679a93f6cf4386bab72",
+    "http/updater.json": "92e68780eb02cc9da7c83efda7499d441ee17f1d0045b59b529836bee9b6c2dd",
+    "http/videocam.fill1.json": "fed42fd42b607b000071189f7121ca5252d11acbee2e0900255ce5d1f183b440",
+    "http/videocam_off.fill1.json": "f45d5f437a498377640cb7b651cb690883f9f287eaaf778b79bc017cc47d4ca6",
+    "http/volume_up.fill0.json": "deb0764182853a3c3550b5d7882b9338a12158ec89631ebb70a64ca60d813ad2",
+    "http/warning.fill1.json": "f58c412c395844f11a6688b6ebb348a0cb275212cce647fa9c32db44f5136a4c",
+    "input-profile.json": "ef028894d84207e720afc3a40a1049a619b7991349e0e0bf03ffb166c720176c",
+    "metadata/codepoint-comparison.json": "42e107b7d3f564df80b738b34141d29094ca8752390e62744a4ee3d620b98901",
+    "metadata/material-symbols-guide.html": "52aeb1b22d6353b602cfd9b2591e0bed023eab29640d0b9961681cc0589286b0",
+    "metadata/material-symbols.raw": "1a36a710d57b32eef8f101980d87ae7dea560146157b3143ab115b791affa669",
+    "metadata/selected-rows.json": "37f9f1696a43c5eb2b21e03cde5cbb14a140f42a41661b6431feeab6a1de1f7e",
+    "provenance-manifest.json": "67b62c5faf15a2025e9d428ba4d553db4741b4527b0f60f2f31625da5c79d009",
+    "selected-input-index.json": "42a3b5bd0ae098075bd0bbb16db5fcf03d585c9ce7901f6e1bbfa24554cf17ec",
+    "upstream/LICENSE": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+    "upstream/README.md": "e1ab9d093fa612bd83a1043717ac150d636354c444792893dba2119f22a212c3",
+    "upstream/commit.json": "652247c739a084b9a03d284491854a36ee3983ba24aafacbc63eea1b4ecda55d",
+    "upstream/root-tree.extracted.json": "76e2ce83586a3eeda2f0848afb89805cd74041876c586d5c560f56731079a172",
+    "upstream/root-tree.html": "110105fdab69a4bdaea0dcad04603c7685003efee50821211a27d17a7e3e3eba",
+    "upstream/rounded.codepoints": "0c9dae3ed678a81549c3be046bc8045335e5f57f2cbe2287360fbf0c2cc1355f",
+    "upstream/update_symbols.py.txt": "7d62ec54ca9ce638104f8ed03d5c0d05ba8366459e722072cc1658e07e565e42"
+  },
+  "semantics_evidence": {
+    "manifest-activity-0-47.json": "44544714d71994e9ffc00c195a1f357748e2a16fbd246dd7626bbd4df3ef671d",
+    "manifest-activity-0-59.json": "662bca985e8832210244cda74a76ec596729f65c1195c1e08686ae6d8c4ffee2",
+    "manifest-activity-0-83.json": "d7c79d8ed07aac7f9a993cd833273cdc8edb9e8e3cfe8dc110d37c501673a719"
+  },
+  "decisions": {
+    "D01": "Default unspecified nontoggle fills to 0; finite explicit selection, no cross product.",
+    "D02": "Participants uses group FILL 0 closed/list and FILL 1 open; recommendation applying engaged treatment to a panel invoker.",
+    "D03": "Sharing uses present_to_all FILL 0 idle, cancel_presentation FILL 1 stop, present_to_all FILL 1 for presenting badge; last choice recommended.",
+    "D04": "Pin uses keep FILL 0 action, keep_off FILL 0 unpin action, keep FILL 1 pinned badge; distinct menu/status contexts justify second keep fill.",
+    "D05": "Apply F00 toggle rule to lock: lock FILL 1 on, lock_open FILL 0 off; reuse in badges/rows.",
+    "D06": "Warning/error FILL 1; info FILL 0; one per severity, decorative next to copy.",
+    "D07": "autoMirror true for arrow_back and send, false for all other selected artwork; no caller double-mirroring.",
+    "D08": "F00 common-control mappings and sentence-case accessibility labels prevail over feature snippets; retain explicit distinct badge/menu SF variants only.",
+    "D09": "Extra SF literals pin.fill, mic.slash, video.slash, rectangle.inset.filled.on.rectangle are required by contexts but not availability-verified by the preflight 46-symbol inventory.",
+    "D10": "Gallery only after feedback/panel acceptance; bind to its accepted coordinator after re-reading the final API. Adaptive inspector/stage retention is a separate next slice."
+  },
+  "accessibility": {
+    "owner": "native localized UI strings; artwork never stores labels",
+    "android_child_contentDescription": null,
+    "ios_child_accessibility_hidden": true,
+    "standalone_meaningful_image": "must supply explicit localized semantic copy at call site; no icon-key fallback",
+    "share_control": "Stable Share screen label with Sharing value for toggle. Separate Stop sharing action keeps Stop sharing label; no global label tied to cancel_presentation artwork.",
+    "status": "merge with row/tile/copy; no separate focus target or implicit control",
+    "disabled_or_busy": "preserve label, expose enabled/busy on owner; busy spinner does not become an extra artwork entry",
+    "context_labels": "More options for {name}, Close {title}, Back to call, Clear search, Admit {name}, Host controls etc belong to explicit consumers, not renamed core assets",
+    "no_raw_key_spoken": true,
+    "roles": "Roles describe use, not artwork. Host-menu Lock is Checkbox (S50:908); Switch rows keep Switch. Route rows are RadioButton with route label and selected state; route invoker is Button. Status badges never acquire an action from a reused glyph.",
+    "state_only_style": "Pressed, focused, disabled, unavailable, loading and unread/attention/count overlays reuse the same artwork; no new fill is implied. Native enabled/busy/selection/tooltip semantics belong to the owner."
+  },
+  "history": {
+    "historical_exact_matches": 5,
+    "fresh_pins_without_historical_digest": 49,
+    "metadata": "Fresh mutable snapshot; not the historical metadata and not the SVG commit. Font codepoint differences do not rename SVGs."
+  },
+  "concepts": [
+    {
+      "id": "microphone",
+      "concept": "Microphone",
+      "canonical_sf_cell": "`mic.fill` (on), `mic.slash.fill` (muted)",
+      "canonical_material_cell": "`mic` (1), `mic_off` (1)",
+      "canonical_label_cell": "\"Microphone\"",
+      "sf_symbols": [
+        {
+          "name": "mic.fill",
+          "context": "on control; reuse for unmuted status"
+        },
+        {
+          "name": "mic.slash.fill",
+          "context": "muted control and muted badge"
+        },
+        {
+          "name": "mic.slash",
+          "context": "host_mute_menu"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "on",
+          "artwork": "mic.fill1",
+          "fill_basis": "requirement",
+          "decision_id": null,
+          "references": [
+            "F00:864"
+          ],
+          "accessibility": {
+            "label": "Microphone",
+            "value": "On",
+            "role": "switch",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "muted",
+          "artwork": "mic_off.fill1",
+          "fill_basis": "requirement",
+          "decision_id": null,
+          "references": [
+            "F00:864"
+          ],
+          "accessibility": {
+            "label": "Microphone",
+            "value": "Muted",
+            "role": "switch",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "camera",
+      "concept": "Camera",
+      "canonical_sf_cell": "`video.fill`, `video.slash.fill`",
+      "canonical_material_cell": "`videocam` (1), `videocam_off` (1)",
+      "canonical_label_cell": "\"Camera\"",
+      "sf_symbols": [
+        {
+          "name": "video.fill",
+          "context": "on control"
+        },
+        {
+          "name": "video.slash.fill",
+          "context": "off control and camera-off status"
+        },
+        {
+          "name": "video.slash",
+          "context": "host_camera_off_menu"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "on",
+          "artwork": "videocam.fill1",
+          "fill_basis": "requirement",
+          "decision_id": null,
+          "references": [
+            "F00:865"
+          ],
+          "accessibility": {
+            "label": "Camera",
+            "value": "On",
+            "role": "switch",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "off",
+          "artwork": "videocam_off.fill1",
+          "fill_basis": "requirement",
+          "decision_id": null,
+          "references": [
+            "F00:865"
+          ],
+          "accessibility": {
+            "label": "Camera",
+            "value": "Off",
+            "role": "switch",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "leave",
+      "concept": "Leave",
+      "canonical_sf_cell": "`phone.down.fill`",
+      "canonical_material_cell": "`call_end` (1)",
+      "canonical_label_cell": "\"Leave call\"",
+      "sf_symbols": [
+        {
+          "name": "phone.down.fill",
+          "context": "canonical leave use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "action",
+          "artwork": "call_end.fill1",
+          "fill_basis": "requirement",
+          "decision_id": null,
+          "references": [
+            "F00:866"
+          ],
+          "accessibility": {
+            "label": "Leave call",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "more",
+      "concept": "More",
+      "canonical_sf_cell": "`ellipsis`",
+      "canonical_material_cell": "`more_vert`",
+      "canonical_label_cell": "\"More options\"",
+      "sf_symbols": [
+        {
+          "name": "ellipsis",
+          "context": "canonical more use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "closed_or_open",
+          "artwork": "more_vert.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:867"
+          ],
+          "accessibility": {
+            "label": "More options",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "chat",
+      "concept": "Chat",
+      "canonical_sf_cell": "`message.fill` (bar), `message` (lists)",
+      "canonical_material_cell": "`chat_bubble` (0 idle, 1 open)",
+      "canonical_label_cell": "\"Chat\"",
+      "sf_symbols": [
+        {
+          "name": "message.fill",
+          "context": "control bar, closed or open; container/semantics express open"
+        },
+        {
+          "name": "message",
+          "context": "lists and menus"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "closed",
+          "artwork": "chat_bubble.fill0",
+          "fill_basis": "requirement",
+          "decision_id": null,
+          "references": [
+            "F00:868"
+          ],
+          "accessibility": {
+            "label": "Chat",
+            "value": "unread count when nonzero; selected while open",
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "open",
+          "artwork": "chat_bubble.fill1",
+          "fill_basis": "requirement",
+          "decision_id": null,
+          "references": [
+            "F00:868"
+          ],
+          "accessibility": {
+            "label": "Chat",
+            "value": "unread count when nonzero; selected while open",
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "participants",
+      "concept": "Participants",
+      "canonical_sf_cell": "`person.2.fill` / `person.2`",
+      "canonical_material_cell": "`group`",
+      "canonical_label_cell": "\"Participants\"",
+      "sf_symbols": [
+        {
+          "name": "person.2.fill",
+          "context": "header and control bar"
+        },
+        {
+          "name": "person.2",
+          "context": "lists and menus"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "closed",
+          "artwork": "group.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D02",
+          "references": [
+            "F00:869"
+          ],
+          "accessibility": {
+            "label": "Participants",
+            "value": "participant and waiting counts; open selection semantics recommended with D02",
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "open",
+          "artwork": "group.fill1",
+          "fill_basis": "recommendation",
+          "decision_id": "D02",
+          "references": [
+            "F00:869"
+          ],
+          "accessibility": {
+            "label": "Participants",
+            "value": "participant and waiting counts; open selection semantics recommended with D02",
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "raise_hand",
+      "concept": "Raise hand",
+      "canonical_sf_cell": "`hand.raised` / `hand.raised.fill`",
+      "canonical_material_cell": "`front_hand` (0 / 1)",
+      "canonical_label_cell": "\"Raise hand\"",
+      "sf_symbols": [
+        {
+          "name": "hand.raised",
+          "context": "lowered control"
+        },
+        {
+          "name": "hand.raised.fill",
+          "context": "raised control and raised badge"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "lowered",
+          "artwork": "front_hand.fill0",
+          "fill_basis": "requirement",
+          "decision_id": null,
+          "references": [
+            "F00:870"
+          ],
+          "accessibility": {
+            "label": "Raise hand",
+            "value": "Not raised (Android); absent (iOS)",
+            "role": "switch",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "raised",
+          "artwork": "front_hand.fill1",
+          "fill_basis": "requirement",
+          "decision_id": null,
+          "references": [
+            "F00:870"
+          ],
+          "accessibility": {
+            "label": "Raise hand",
+            "value": "Raised",
+            "role": "switch",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "share_screen",
+      "concept": "Share screen",
+      "canonical_sf_cell": "`rectangle.on.rectangle` / `rectangle.on.rectangle.slash`",
+      "canonical_material_cell": "`present_to_all` / `cancel_presentation`",
+      "canonical_label_cell": "\"Share screen\" / \"Stop sharing\"",
+      "sf_symbols": [
+        {
+          "name": "rectangle.on.rectangle",
+          "context": "idle Share screen control"
+        },
+        {
+          "name": "rectangle.on.rectangle.slash",
+          "context": "active sharing stop control and host stop menu"
+        },
+        {
+          "name": "rectangle.inset.filled.on.rectangle",
+          "context": "presenting_badge"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "idle",
+          "artwork": "present_to_all.fill0",
+          "fill_basis": "derived_requirement",
+          "decision_id": "D03",
+          "references": [
+            "F00:871"
+          ],
+          "accessibility": {
+            "label": "Share screen",
+            "value": null,
+            "role": "switch",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "sharing_toggle",
+          "artwork": "cancel_presentation.fill1",
+          "fill_basis": "derived_requirement",
+          "decision_id": "D03",
+          "references": [
+            "F00:871"
+          ],
+          "accessibility": {
+            "label": "Share screen",
+            "value": "Sharing",
+            "role": "switch",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "presenting_badge",
+          "artwork": "present_to_all.fill1",
+          "fill_basis": "recommendation",
+          "decision_id": "D03",
+          "references": [
+            "F00:871"
+          ],
+          "accessibility": {
+            "label": null,
+            "value": "presenting",
+            "role": "status",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "stop_sharing_action",
+          "artwork": "cancel_presentation.fill1",
+          "fill_basis": "derived_requirement",
+          "decision_id": "D03",
+          "references": [
+            "F00:871"
+          ],
+          "accessibility": {
+            "label": "Stop sharing",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "reactions",
+      "concept": "Reactions",
+      "canonical_sf_cell": "`face.smiling`",
+      "canonical_material_cell": "`add_reaction` (0), `mood` (1 when open)",
+      "canonical_label_cell": "\"Reactions\"",
+      "sf_symbols": [
+        {
+          "name": "face.smiling",
+          "context": "canonical reactions use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "closed",
+          "artwork": "add_reaction.fill0",
+          "fill_basis": "requirement",
+          "decision_id": null,
+          "references": [
+            "F00:872",
+            "S30:762"
+          ],
+          "accessibility": {
+            "label": "Reactions",
+            "value": "Closed",
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "open",
+          "artwork": "mood.fill1",
+          "fill_basis": "requirement",
+          "decision_id": null,
+          "references": [
+            "F00:872",
+            "S30:762"
+          ],
+          "accessibility": {
+            "label": "Reactions",
+            "value": "Open",
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "flip_camera",
+      "concept": "Flip camera",
+      "canonical_sf_cell": "`arrow.triangle.2.circlepath.camera`",
+      "canonical_material_cell": "`cameraswitch`",
+      "canonical_label_cell": "\"Flip camera\"",
+      "sf_symbols": [
+        {
+          "name": "arrow.triangle.2.circlepath.camera",
+          "context": "canonical flip_camera use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "front_or_back",
+          "artwork": "cameraswitch.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:873"
+          ],
+          "accessibility": {
+            "label": "Flip camera",
+            "value": "Front | Back",
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "audio_output",
+      "concept": "Audio output",
+      "canonical_sf_cell": "system `AVRoutePickerView` glyphs",
+      "canonical_material_cell": "`volume_up`, `phone_in_talk`, `bluetooth`, `headphones`",
+      "canonical_label_cell": "\"Audio output\"",
+      "sf_symbols": [],
+      "ios_system": [
+        {
+          "kind": "route_picker",
+          "policy": "AVRoutePickerView owns glyph and route semantics; no SF string synthesized."
+        }
+      ],
+      "bindings": [
+        {
+          "state": "speaker_or_unknown",
+          "artwork": "volume_up.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:874"
+          ],
+          "accessibility": {
+            "label": "Audio output",
+            "value": "current route name",
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "earpiece",
+          "artwork": "phone_in_talk.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:874"
+          ],
+          "accessibility": {
+            "label": "Audio output",
+            "value": "current route name",
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "bluetooth",
+          "artwork": "bluetooth.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:874"
+          ],
+          "accessibility": {
+            "label": "Audio output",
+            "value": "current route name",
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "wired_headset",
+          "artwork": "headphones.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:874"
+          ],
+          "accessibility": {
+            "label": "Audio output",
+            "value": "current route name",
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "captions",
+      "concept": "Captions",
+      "canonical_sf_cell": "`captions.bubble` / `captions.bubble.fill`",
+      "canonical_material_cell": "`closed_caption` (0 / 1)",
+      "canonical_label_cell": "\"Captions\"",
+      "sf_symbols": [
+        {
+          "name": "captions.bubble",
+          "context": "off control or decorative transcript heading"
+        },
+        {
+          "name": "captions.bubble.fill",
+          "context": "on control"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "off",
+          "artwork": "closed_caption.fill0",
+          "fill_basis": "requirement",
+          "decision_id": null,
+          "references": [
+            "F00:875"
+          ],
+          "accessibility": {
+            "label": "Captions",
+            "value": "Off",
+            "role": "switch",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "on",
+          "artwork": "closed_caption.fill1",
+          "fill_basis": "requirement",
+          "decision_id": null,
+          "references": [
+            "F00:875"
+          ],
+          "accessibility": {
+            "label": "Captions",
+            "value": "On",
+            "role": "switch",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "transcript",
+      "concept": "Transcript",
+      "canonical_sf_cell": "`text.quote`",
+      "canonical_material_cell": "`description`",
+      "canonical_label_cell": "\"Transcript\"",
+      "sf_symbols": [
+        {
+          "name": "text.quote",
+          "context": "canonical transcript use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "open_action",
+          "artwork": "description.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:876"
+          ],
+          "accessibility": {
+            "label": "Transcript",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "settings",
+      "concept": "Settings",
+      "canonical_sf_cell": "`gearshape`",
+      "canonical_material_cell": "`settings`",
+      "canonical_label_cell": "\"Settings\"",
+      "sf_symbols": [
+        {
+          "name": "gearshape",
+          "context": "canonical settings use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "open_action",
+          "artwork": "settings.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:877"
+          ],
+          "accessibility": {
+            "label": "Settings",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "pin",
+      "concept": "Pin",
+      "canonical_sf_cell": "`pin` / `pin.slash`",
+      "canonical_material_cell": "`keep` / `keep_off`",
+      "canonical_label_cell": "\"Pin\" / \"Unpin\"",
+      "sf_symbols": [
+        {
+          "name": "pin",
+          "context": "Pin menu action"
+        },
+        {
+          "name": "pin.slash",
+          "context": "Unpin menu action"
+        },
+        {
+          "name": "pin.fill",
+          "context": "pinned_badge"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "pin_action",
+          "artwork": "keep.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D04",
+          "references": [
+            "F00:878"
+          ],
+          "accessibility": {
+            "label": "Pin",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "unpin_action",
+          "artwork": "keep_off.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D04",
+          "references": [
+            "F00:878"
+          ],
+          "accessibility": {
+            "label": "Unpin",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "pinned_badge",
+          "artwork": "keep.fill1",
+          "fill_basis": "recommendation",
+          "decision_id": "D04",
+          "references": [
+            "F00:878"
+          ],
+          "accessibility": {
+            "label": null,
+            "value": "pinned",
+            "role": "status",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "spotlight",
+      "concept": "Spotlight",
+      "canonical_sf_cell": "`rectangle.inset.filled`",
+      "canonical_material_cell": "`featured_video`",
+      "canonical_label_cell": "\"Spotlight\"",
+      "sf_symbols": [
+        {
+          "name": "rectangle.inset.filled",
+          "context": "canonical spotlight use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "action_or_layout_option",
+          "artwork": "featured_video.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:879"
+          ],
+          "accessibility": {
+            "label": "Spotlight",
+            "value": "selection supplied by separate radio control in layout picker",
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "lock_meeting",
+      "concept": "Lock meeting",
+      "canonical_sf_cell": "`lock.fill` / `lock.open`",
+      "canonical_material_cell": "`lock` / `lock_open`",
+      "canonical_label_cell": "\"Lock meeting\"",
+      "sf_symbols": [
+        {
+          "name": "lock.fill",
+          "context": "locked; host-lock or privacy badge"
+        },
+        {
+          "name": "lock.open",
+          "context": "unlocked"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "locked",
+          "artwork": "lock.fill1",
+          "fill_basis": "derived_requirement",
+          "decision_id": "D05",
+          "references": [
+            "F00:880",
+            "S50:908"
+          ],
+          "accessibility": {
+            "label": "Lock meeting",
+            "value": "On",
+            "role": "checkbox",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "unlocked",
+          "artwork": "lock_open.fill0",
+          "fill_basis": "derived_requirement",
+          "decision_id": "D05",
+          "references": [
+            "F00:880",
+            "S50:908"
+          ],
+          "accessibility": {
+            "label": "Lock meeting",
+            "value": "Off",
+            "role": "checkbox",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "host",
+      "concept": "Host",
+      "canonical_sf_cell": "`crown.fill`",
+      "canonical_material_cell": "`shield_person`",
+      "canonical_label_cell": "\"Host\"",
+      "sf_symbols": [
+        {
+          "name": "crown.fill",
+          "context": "canonical host use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "host_badge",
+          "artwork": "shield_person.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:881"
+          ],
+          "accessibility": {
+            "label": null,
+            "value": "host",
+            "role": "status",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "host_controls_action",
+          "artwork": "shield_person.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "S30:696"
+          ],
+          "accessibility": {
+            "label": "Host controls",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "admit",
+      "concept": "Admit",
+      "canonical_sf_cell": "`checkmark`",
+      "canonical_material_cell": "`check`",
+      "canonical_label_cell": "\"Admit\"",
+      "sf_symbols": [
+        {
+          "name": "checkmark",
+          "context": "canonical admit use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "action",
+          "artwork": "check.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:882"
+          ],
+          "accessibility": {
+            "label": "Admit",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "remove_person",
+      "concept": "Remove person",
+      "canonical_sf_cell": "`person.fill.xmark`",
+      "canonical_material_cell": "`person_remove`",
+      "canonical_label_cell": "\"Remove\"",
+      "sf_symbols": [
+        {
+          "name": "person.fill.xmark",
+          "context": "canonical remove_person use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "action",
+          "artwork": "person_remove.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:883"
+          ],
+          "accessibility": {
+            "label": "Remove",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "invite",
+      "concept": "Invite / share link",
+      "canonical_sf_cell": "`square.and.arrow.up`",
+      "canonical_material_cell": "`share`",
+      "canonical_label_cell": "\"Share invite\"",
+      "sf_symbols": [
+        {
+          "name": "square.and.arrow.up",
+          "context": "canonical invite use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "action",
+          "artwork": "share.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:884"
+          ],
+          "accessibility": {
+            "label": "Share invite",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "copy_link",
+      "concept": "Copy link",
+      "canonical_sf_cell": "`doc.on.doc`",
+      "canonical_material_cell": "`content_copy`",
+      "canonical_label_cell": "\"Copy link\"",
+      "sf_symbols": [
+        {
+          "name": "doc.on.doc",
+          "context": "ready Copy link action"
+        },
+        {
+          "name": "checkmark",
+          "context": "copied_confirmation"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "ready",
+          "artwork": "content_copy.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:885"
+          ],
+          "accessibility": {
+            "label": "Copy link",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "copied",
+          "artwork": "check.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "S10:493",
+            "S10:952"
+          ],
+          "accessibility": {
+            "label": "Copy link",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "send",
+      "concept": "Send",
+      "canonical_sf_cell": "`arrow.up.circle.fill`",
+      "canonical_material_cell": "`send` (1)",
+      "canonical_label_cell": "\"Send\"",
+      "sf_symbols": [
+        {
+          "name": "arrow.up.circle.fill",
+          "context": "canonical send use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "ready_or_disabled",
+          "artwork": "send.fill1",
+          "fill_basis": "requirement",
+          "decision_id": null,
+          "references": [
+            "F00:886"
+          ],
+          "accessibility": {
+            "label": "Send",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "close",
+      "concept": "Close",
+      "canonical_sf_cell": "system close role (`Button(role: .close)` on 26), `xmark`",
+      "canonical_material_cell": "`close`",
+      "canonical_label_cell": "\"Close\"",
+      "sf_symbols": [
+        {
+          "name": "xmark",
+          "context": "canonical close use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [
+        {
+          "kind": "system_close",
+          "policy": "Button(role: .close) only with iOS 26 runtime guard in native iOS file; older path uses explicitly labeled Close/Done or xmark according to host. Guard/minimum-OS validation remains open."
+        }
+      ],
+      "bindings": [
+        {
+          "state": "action",
+          "artwork": "close.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:887"
+          ],
+          "accessibility": {
+            "label": "Close",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "back",
+      "concept": "Back",
+      "canonical_sf_cell": "system",
+      "canonical_material_cell": "`arrow_back` (auto-mirrored)",
+      "canonical_label_cell": "\"Back\"",
+      "sf_symbols": [],
+      "ios_system": [
+        {
+          "kind": "system_navigation_back",
+          "policy": "System back owns its symbol, label and RTL behavior; no SF string synthesized."
+        }
+      ],
+      "bindings": [
+        {
+          "state": "navigate_back",
+          "artwork": "arrow_back.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:888"
+          ],
+          "accessibility": {
+            "label": "Back",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "activities_games",
+      "concept": "Activities, games",
+      "canonical_sf_cell": "`square.grid.2x2`, `gamecontroller.fill`",
+      "canonical_material_cell": "`apps`, `sports_esports`",
+      "canonical_label_cell": "\"Activities\"",
+      "sf_symbols": [
+        {
+          "name": "square.grid.2x2",
+          "context": "Activities launcher"
+        },
+        {
+          "name": "gamecontroller.fill",
+          "context": "games context"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "activities",
+          "artwork": "apps.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:889"
+          ],
+          "accessibility": {
+            "label": "Activities",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "games",
+          "artwork": "sports_esports.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:889"
+          ],
+          "accessibility": {
+            "label": "Activities",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "whiteboard",
+      "concept": "Whiteboard",
+      "canonical_sf_cell": "`pencil.and.scribble`",
+      "canonical_material_cell": "`draw`",
+      "canonical_label_cell": "\"Whiteboard\"",
+      "sf_symbols": [
+        {
+          "name": "pencil.and.scribble",
+          "context": "canonical whiteboard use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "open_action",
+          "artwork": "draw.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:890"
+          ],
+          "accessibility": {
+            "label": "Whiteboard",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "shared_browser",
+      "concept": "Shared browser",
+      "canonical_sf_cell": "`globe`",
+      "canonical_material_cell": "`public`",
+      "canonical_label_cell": "\"Shared browser\"",
+      "sf_symbols": [
+        {
+          "name": "globe",
+          "context": "canonical shared_browser use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "open_action",
+          "artwork": "public.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:891"
+          ],
+          "accessibility": {
+            "label": "Shared browser",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "qa",
+      "concept": "Q&A",
+      "canonical_sf_cell": "`questionmark.bubble`",
+      "canonical_material_cell": "`quiz`",
+      "canonical_label_cell": "\"Questions and answers\"",
+      "sf_symbols": [
+        {
+          "name": "questionmark.bubble",
+          "context": "canonical qa use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "open_action",
+          "artwork": "quiz.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:892"
+          ],
+          "accessibility": {
+            "label": "Questions and answers",
+            "value": "unseen question count when nonzero",
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "gif",
+      "concept": "GIF",
+      "canonical_sf_cell": "`photo.on.rectangle`",
+      "canonical_material_cell": "`gif_box`",
+      "canonical_label_cell": "\"GIF\"",
+      "sf_symbols": [
+        {
+          "name": "photo.on.rectangle",
+          "context": "canonical gif use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "open_action",
+          "artwork": "gif_box.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:893"
+          ],
+          "accessibility": {
+            "label": "GIF",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "photo",
+      "concept": "Photo",
+      "canonical_sf_cell": "`photo`",
+      "canonical_material_cell": "`image`",
+      "canonical_label_cell": "\"Photo\"",
+      "sf_symbols": [
+        {
+          "name": "photo",
+          "context": "canonical photo use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "open_action",
+          "artwork": "image.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:894"
+          ],
+          "accessibility": {
+            "label": "Photo",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "delete",
+      "concept": "Delete",
+      "canonical_sf_cell": "`trash`",
+      "canonical_material_cell": "`delete`",
+      "canonical_label_cell": "\"Delete\"",
+      "sf_symbols": [
+        {
+          "name": "trash",
+          "context": "canonical delete use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "action",
+          "artwork": "delete.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:895"
+          ],
+          "accessibility": {
+            "label": "Delete",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "search",
+      "concept": "Search",
+      "canonical_sf_cell": "`magnifyingglass`",
+      "canonical_material_cell": "`search`",
+      "canonical_label_cell": "\"Search\"",
+      "sf_symbols": [
+        {
+          "name": "magnifyingglass",
+          "context": "canonical search use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "decorative_field_leading",
+          "artwork": "search.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:896"
+          ],
+          "accessibility": {
+            "label": null,
+            "value": null,
+            "role": "decorative",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "search_action",
+          "artwork": "search.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:896"
+          ],
+          "accessibility": {
+            "label": "Search",
+            "value": null,
+            "role": "button",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "speaking",
+      "concept": "Speaking",
+      "canonical_sf_cell": "`waveform`",
+      "canonical_material_cell": "`graphic_eq`",
+      "canonical_label_cell": "(state, not a control)",
+      "sf_symbols": [
+        {
+          "name": "waveform",
+          "context": "canonical speaking use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "active_status",
+          "artwork": "graphic_eq.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:897"
+          ],
+          "accessibility": {
+            "label": null,
+            "value": "speaking",
+            "role": "status",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "weak_connection",
+      "concept": "Weak connection",
+      "canonical_sf_cell": "`wifi.exclamationmark`",
+      "canonical_material_cell": "`signal_wifi_bad`",
+      "canonical_label_cell": "(state)",
+      "sf_symbols": [
+        {
+          "name": "wifi.exclamationmark",
+          "context": "canonical weak_connection use; exact literal takes precedence over generic fill convention"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "active_status",
+          "artwork": "signal_wifi_bad.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D01",
+          "references": [
+            "F00:898"
+          ],
+          "accessibility": {
+            "label": null,
+            "value": "connection status from adjacent copy",
+            "role": "status",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    },
+    {
+      "id": "warning_error_info",
+      "concept": "Warning, error, info",
+      "canonical_sf_cell": "`exclamationmark.triangle.fill`, `exclamationmark.octagon.fill`, `info.circle`",
+      "canonical_material_cell": "`warning`, `error`, `info`",
+      "canonical_label_cell": "decorative next to text",
+      "sf_symbols": [
+        {
+          "name": "exclamationmark.triangle.fill",
+          "context": "warning next to text"
+        },
+        {
+          "name": "exclamationmark.octagon.fill",
+          "context": "error next to text"
+        },
+        {
+          "name": "info.circle",
+          "context": "information next to text"
+        }
+      ],
+      "ios_system": [],
+      "bindings": [
+        {
+          "state": "warning",
+          "artwork": "warning.fill1",
+          "fill_basis": "recommendation",
+          "decision_id": "D06",
+          "references": [
+            "F00:899"
+          ],
+          "accessibility": {
+            "label": null,
+            "value": null,
+            "role": "decorative",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "error",
+          "artwork": "error.fill1",
+          "fill_basis": "recommendation",
+          "decision_id": "D06",
+          "references": [
+            "F00:899"
+          ],
+          "accessibility": {
+            "label": null,
+            "value": null,
+            "role": "decorative",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        },
+        {
+          "state": "info",
+          "artwork": "info.fill0",
+          "fill_basis": "recommendation",
+          "decision_id": "D06",
+          "references": [
+            "F00:899"
+          ],
+          "accessibility": {
+            "label": null,
+            "value": null,
+            "role": "decorative",
+            "icon_exposure": "decorative_in_labeled_owner"
+          }
+        }
+      ]
+    }
+  ],
+  "artwork": [
+    {
+      "id": "add_reaction.fill0",
+      "name": "add_reaction",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "AddReactionFill0",
+      "local_path": "assets/symbols/web/add_reaction/materialsymbolsrounded/add_reaction_24px.svg",
+      "sha256": "22f2f8040a258b8a34daaa0287686bf1fa67699de5cab2fd71fe32c60ef5d96e"
+    },
+    {
+      "id": "apps.fill0",
+      "name": "apps",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "AppsFill0",
+      "local_path": "assets/symbols/web/apps/materialsymbolsrounded/apps_24px.svg",
+      "sha256": "c11e79be76394ee701595f8978628e80d6cc11a2af408596548a706b04331cb4"
+    },
+    {
+      "id": "arrow_back.fill0",
+      "name": "arrow_back",
+      "fill": 0,
+      "autoMirror": true,
+      "kotlin_property": "ArrowBackFill0",
+      "local_path": "assets/symbols/web/arrow_back/materialsymbolsrounded/arrow_back_24px.svg",
+      "sha256": "b9b58d54e13e0e3693a10d997c1001ec270c12eaa935f993cee1d8c916236ceb"
+    },
+    {
+      "id": "bluetooth.fill0",
+      "name": "bluetooth",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "BluetoothFill0",
+      "local_path": "assets/symbols/web/bluetooth/materialsymbolsrounded/bluetooth_24px.svg",
+      "sha256": "3736a6c4fb26629b36b2ca6e2f28e5a61a72a4419c1ad18bfcf66bac4490e2de"
+    },
+    {
+      "id": "call_end.fill1",
+      "name": "call_end",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "CallEndFill1",
+      "local_path": "assets/symbols/web/call_end/materialsymbolsrounded/call_end_fill1_24px.svg",
+      "sha256": "5fc45d8e866d3cb0fe58846ef63cb4bf274fdba56b011ad5b58bc64710ace287"
+    },
+    {
+      "id": "cameraswitch.fill0",
+      "name": "cameraswitch",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "CameraswitchFill0",
+      "local_path": "assets/symbols/web/cameraswitch/materialsymbolsrounded/cameraswitch_24px.svg",
+      "sha256": "ea11124371708ff5ec18e7ad703c1babb1843f5d6ddc3e58702d44849b9875df"
+    },
+    {
+      "id": "cancel_presentation.fill1",
+      "name": "cancel_presentation",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "CancelPresentationFill1",
+      "local_path": "assets/symbols/web/cancel_presentation/materialsymbolsrounded/cancel_presentation_fill1_24px.svg",
+      "sha256": "df6b768514ffadecf5a255b0f57084b9717d33182f251a28a30e4152b5bcecdb"
+    },
+    {
+      "id": "chat_bubble.fill0",
+      "name": "chat_bubble",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "ChatBubbleFill0",
+      "local_path": "assets/symbols/web/chat_bubble/materialsymbolsrounded/chat_bubble_24px.svg",
+      "sha256": "5323668b977357f7b5379fd1e8b073375b0a5d12c6351e10694308d4c2d5c9d7"
+    },
+    {
+      "id": "chat_bubble.fill1",
+      "name": "chat_bubble",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "ChatBubbleFill1",
+      "local_path": "assets/symbols/web/chat_bubble/materialsymbolsrounded/chat_bubble_fill1_24px.svg",
+      "sha256": "316d437277e361fa6036baccc9320136a262a06720dfd12b1868ea281e9696e0"
+    },
+    {
+      "id": "check.fill0",
+      "name": "check",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "CheckFill0",
+      "local_path": "assets/symbols/web/check/materialsymbolsrounded/check_24px.svg",
+      "sha256": "51e706757e18de60cb7ade1cf0ae272708932d36e417365f14977ee039cd85b8"
+    },
+    {
+      "id": "close.fill0",
+      "name": "close",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "CloseFill0",
+      "local_path": "assets/symbols/web/close/materialsymbolsrounded/close_24px.svg",
+      "sha256": "fabc7e16160e93ed11d6d72b87f5c67092d04abfcc1fc2410fab1abe075cd8fc"
+    },
+    {
+      "id": "closed_caption.fill0",
+      "name": "closed_caption",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "ClosedCaptionFill0",
+      "local_path": "assets/symbols/web/closed_caption/materialsymbolsrounded/closed_caption_24px.svg",
+      "sha256": "da5bb300fd40d60983781c50d60f8d743af531b4b36cc2a668c371c2bdb533cf"
+    },
+    {
+      "id": "closed_caption.fill1",
+      "name": "closed_caption",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "ClosedCaptionFill1",
+      "local_path": "assets/symbols/web/closed_caption/materialsymbolsrounded/closed_caption_fill1_24px.svg",
+      "sha256": "cf35c747cff2396c0e293cde092a302af8a7ed1b4935f1af7dee8eacb5dd07af"
+    },
+    {
+      "id": "content_copy.fill0",
+      "name": "content_copy",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "ContentCopyFill0",
+      "local_path": "assets/symbols/web/content_copy/materialsymbolsrounded/content_copy_24px.svg",
+      "sha256": "01af7f7a06b22849cd0eb73d14953695cba54939f51afdf3e30aeb20cf90d543"
+    },
+    {
+      "id": "delete.fill0",
+      "name": "delete",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "DeleteFill0",
+      "local_path": "assets/symbols/web/delete/materialsymbolsrounded/delete_24px.svg",
+      "sha256": "cd90ebd4c5aa36ef2332e2511ed6dcb051a32e5c99effd60494060473f27b9f9"
+    },
+    {
+      "id": "description.fill0",
+      "name": "description",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "DescriptionFill0",
+      "local_path": "assets/symbols/web/description/materialsymbolsrounded/description_24px.svg",
+      "sha256": "d7f08af6f115402dc19125e81da70209b53f5a830f5f14b04e16b0ddf569be7f"
+    },
+    {
+      "id": "draw.fill0",
+      "name": "draw",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "DrawFill0",
+      "local_path": "assets/symbols/web/draw/materialsymbolsrounded/draw_24px.svg",
+      "sha256": "0a9cc24d93e79a0823bb37d25b9b88633e161fe81937b7a4484bc746e5845da6"
+    },
+    {
+      "id": "error.fill1",
+      "name": "error",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "ErrorFill1",
+      "local_path": "assets/symbols/web/error/materialsymbolsrounded/error_fill1_24px.svg",
+      "sha256": "97d15b9296173542d04e05c818702ecfd0e5ed7ccda9a062701866876c0a4236"
+    },
+    {
+      "id": "featured_video.fill0",
+      "name": "featured_video",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "FeaturedVideoFill0",
+      "local_path": "assets/symbols/web/featured_video/materialsymbolsrounded/featured_video_24px.svg",
+      "sha256": "8ab7f713b69a6229747fc041bfcb49f0ef258d1e5b1856756db86c0cbbe608d4"
+    },
+    {
+      "id": "front_hand.fill0",
+      "name": "front_hand",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "FrontHandFill0",
+      "local_path": "assets/symbols/web/front_hand/materialsymbolsrounded/front_hand_24px.svg",
+      "sha256": "7041875ff33307929d8638615091105a32bce3c0b9815c66a1ef08d071cbf753"
+    },
+    {
+      "id": "front_hand.fill1",
+      "name": "front_hand",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "FrontHandFill1",
+      "local_path": "assets/symbols/web/front_hand/materialsymbolsrounded/front_hand_fill1_24px.svg",
+      "sha256": "0fa9c779d00e34d9f9f700beec63ad08fc16cba32288b6c2fc3b85790e6c1aba"
+    },
+    {
+      "id": "gif_box.fill0",
+      "name": "gif_box",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "GifBoxFill0",
+      "local_path": "assets/symbols/web/gif_box/materialsymbolsrounded/gif_box_24px.svg",
+      "sha256": "a1c65e4eb8049bc2e740e3f2096ecb45cd2746e10cac93c6a65a16aa6288f4d0"
+    },
+    {
+      "id": "graphic_eq.fill0",
+      "name": "graphic_eq",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "GraphicEqFill0",
+      "local_path": "assets/symbols/web/graphic_eq/materialsymbolsrounded/graphic_eq_24px.svg",
+      "sha256": "0e40ad547e86077d696cfee5e3053a33bf7a95610256d8323d54a5c210261fc4"
+    },
+    {
+      "id": "group.fill0",
+      "name": "group",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "GroupFill0",
+      "local_path": "assets/symbols/web/group/materialsymbolsrounded/group_24px.svg",
+      "sha256": "911624e04d36c60f9b1a8d9266df0eeb92fe764e852142e23d3f1a47489cd325"
+    },
+    {
+      "id": "group.fill1",
+      "name": "group",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "GroupFill1",
+      "local_path": "assets/symbols/web/group/materialsymbolsrounded/group_fill1_24px.svg",
+      "sha256": "738f4d575af5326a937f7d9ff32dd02b7a8071c90bbd33eb3a1a16059abb4393"
+    },
+    {
+      "id": "headphones.fill0",
+      "name": "headphones",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "HeadphonesFill0",
+      "local_path": "assets/symbols/web/headphones/materialsymbolsrounded/headphones_24px.svg",
+      "sha256": "896217961e052a68a4345d435e76df4b7b009d665fe2bddb4fe5fc38eaaf77eb"
+    },
+    {
+      "id": "image.fill0",
+      "name": "image",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "ImageFill0",
+      "local_path": "assets/symbols/web/image/materialsymbolsrounded/image_24px.svg",
+      "sha256": "a53eee7018c2f02e0d825f3c8acb11cd1aa80161a09ce5d34c7579eb32fd3094"
+    },
+    {
+      "id": "info.fill0",
+      "name": "info",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "InfoFill0",
+      "local_path": "assets/symbols/web/info/materialsymbolsrounded/info_24px.svg",
+      "sha256": "ab779a17ff3bc8f5a30e3231509ef9ff6fee709ffcaa46fb65217ce170f03e14"
+    },
+    {
+      "id": "keep.fill0",
+      "name": "keep",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "KeepFill0",
+      "local_path": "assets/symbols/web/keep/materialsymbolsrounded/keep_24px.svg",
+      "sha256": "786fe93f53274d53ca0821ae90ae3108baf991bacd84298f45249cc2c8a84c36"
+    },
+    {
+      "id": "keep.fill1",
+      "name": "keep",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "KeepFill1",
+      "local_path": "assets/symbols/web/keep/materialsymbolsrounded/keep_fill1_24px.svg",
+      "sha256": "3edfd08e308f57cf2c6ed981254139803e10c23fe12ece001452f776f000d891"
+    },
+    {
+      "id": "keep_off.fill0",
+      "name": "keep_off",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "KeepOffFill0",
+      "local_path": "assets/symbols/web/keep_off/materialsymbolsrounded/keep_off_24px.svg",
+      "sha256": "c1edd7d0e716fa2b337341e9588ab28e05b5c54b23a5bb2291454ed0b4cf76ec"
+    },
+    {
+      "id": "lock.fill1",
+      "name": "lock",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "LockFill1",
+      "local_path": "assets/symbols/web/lock/materialsymbolsrounded/lock_fill1_24px.svg",
+      "sha256": "64fd7f36a67d03e6071fe0963d6f67d15b37fdb22dcec2f06b83ba6e8bab6ea8"
+    },
+    {
+      "id": "lock_open.fill0",
+      "name": "lock_open",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "LockOpenFill0",
+      "local_path": "assets/symbols/web/lock_open/materialsymbolsrounded/lock_open_24px.svg",
+      "sha256": "a48b483c600fd2f869036741dd3b2a4c74a66af94f7ede64c80da84a6e66fbbd"
+    },
+    {
+      "id": "mic.fill1",
+      "name": "mic",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "MicFill1",
+      "local_path": "assets/symbols/web/mic/materialsymbolsrounded/mic_fill1_24px.svg",
+      "sha256": "35668638b23e0e8f673968ae1c563d9d0018cfdd1a0fbf0443bdc0ead485d857"
+    },
+    {
+      "id": "mic_off.fill1",
+      "name": "mic_off",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "MicOffFill1",
+      "local_path": "assets/symbols/web/mic_off/materialsymbolsrounded/mic_off_fill1_24px.svg",
+      "sha256": "524dcfb7f7fcad14ec7cbe430853d9d0b24695d799a93ac272c8e8929c00e199"
+    },
+    {
+      "id": "mood.fill1",
+      "name": "mood",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "MoodFill1",
+      "local_path": "assets/symbols/web/mood/materialsymbolsrounded/mood_fill1_24px.svg",
+      "sha256": "e56275195f6bcdd1aa20ff5689373e78f5a3970feb6d136480323b6c5a128ce7"
+    },
+    {
+      "id": "more_vert.fill0",
+      "name": "more_vert",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "MoreVertFill0",
+      "local_path": "assets/symbols/web/more_vert/materialsymbolsrounded/more_vert_24px.svg",
+      "sha256": "f3959916d17e6ec783267c2753bdddfe4b3f4b12b835c875231dbbba792f070b"
+    },
+    {
+      "id": "person_remove.fill0",
+      "name": "person_remove",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "PersonRemoveFill0",
+      "local_path": "assets/symbols/web/person_remove/materialsymbolsrounded/person_remove_24px.svg",
+      "sha256": "73ed88ef95b14ecbc11b9da1eff83e68d8360704960d34dcc7b5d1a52edc14eb"
+    },
+    {
+      "id": "phone_in_talk.fill0",
+      "name": "phone_in_talk",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "PhoneInTalkFill0",
+      "local_path": "assets/symbols/web/phone_in_talk/materialsymbolsrounded/phone_in_talk_24px.svg",
+      "sha256": "3695a7cc5c3c176b6641bd3ca9a0b3a9840dbb7580208e3337f6dd808fac1fc2"
+    },
+    {
+      "id": "present_to_all.fill0",
+      "name": "present_to_all",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "PresentToAllFill0",
+      "local_path": "assets/symbols/web/present_to_all/materialsymbolsrounded/present_to_all_24px.svg",
+      "sha256": "ff9a4ea515ccc5816be6720b74c959f725017436d62ba6e31f92305e956e5e09"
+    },
+    {
+      "id": "present_to_all.fill1",
+      "name": "present_to_all",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "PresentToAllFill1",
+      "local_path": "assets/symbols/web/present_to_all/materialsymbolsrounded/present_to_all_fill1_24px.svg",
+      "sha256": "ab5e09fb6f600b6385b27ebd1f47dc1cc24ac676b0ee2eff6036b7676db374e2"
+    },
+    {
+      "id": "public.fill0",
+      "name": "public",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "PublicFill0",
+      "local_path": "assets/symbols/web/public/materialsymbolsrounded/public_24px.svg",
+      "sha256": "5b8ad24e63e4a2f601728fe0e589df9ca943b813ad24a71635c803a677e1ecc0"
+    },
+    {
+      "id": "quiz.fill0",
+      "name": "quiz",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "QuizFill0",
+      "local_path": "assets/symbols/web/quiz/materialsymbolsrounded/quiz_24px.svg",
+      "sha256": "bceae342d33f351df90c0b2f27d488c606865fad92aeac69d9fff8757b4810bf"
+    },
+    {
+      "id": "search.fill0",
+      "name": "search",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "SearchFill0",
+      "local_path": "assets/symbols/web/search/materialsymbolsrounded/search_24px.svg",
+      "sha256": "8d12ac6ba27a23ccf0e57794c28481ce9c978efcb2f80ba6d2979ccdf238c993"
+    },
+    {
+      "id": "send.fill1",
+      "name": "send",
+      "fill": 1,
+      "autoMirror": true,
+      "kotlin_property": "SendFill1",
+      "local_path": "assets/symbols/web/send/materialsymbolsrounded/send_fill1_24px.svg",
+      "sha256": "f4b1d6b93bc8779ab84adced70a309621d2c6f59cece503c1c90ef01b9a1fd6b"
+    },
+    {
+      "id": "settings.fill0",
+      "name": "settings",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "SettingsFill0",
+      "local_path": "assets/symbols/web/settings/materialsymbolsrounded/settings_24px.svg",
+      "sha256": "6cd47de90647ece6b00922f497f8c4ea9c1649548cf15828d1df9d78d5bdf30d"
+    },
+    {
+      "id": "share.fill0",
+      "name": "share",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "ShareFill0",
+      "local_path": "assets/symbols/web/share/materialsymbolsrounded/share_24px.svg",
+      "sha256": "a117c58801f1690ef8bc642fa9ce135d44f36c5c36e158f05891e462ff204e24"
+    },
+    {
+      "id": "shield_person.fill0",
+      "name": "shield_person",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "ShieldPersonFill0",
+      "local_path": "assets/symbols/web/shield_person/materialsymbolsrounded/shield_person_24px.svg",
+      "sha256": "98c2a89d2cabbed2ade2477ad0f9e1aba4ad97c3540b95791217cf972e516fde"
+    },
+    {
+      "id": "signal_wifi_bad.fill0",
+      "name": "signal_wifi_bad",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "SignalWifiBadFill0",
+      "local_path": "assets/symbols/web/signal_wifi_bad/materialsymbolsrounded/signal_wifi_bad_24px.svg",
+      "sha256": "62be2af3f215a00f6111eaa215928e1aa942ec0712f6c2384f13be298436ab94"
+    },
+    {
+      "id": "sports_esports.fill0",
+      "name": "sports_esports",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "SportsEsportsFill0",
+      "local_path": "assets/symbols/web/sports_esports/materialsymbolsrounded/sports_esports_24px.svg",
+      "sha256": "b48be0c109f5285dbaea7224f973ddf0548080ebcc04b701dfa6fb942402fb71"
+    },
+    {
+      "id": "videocam.fill1",
+      "name": "videocam",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "VideocamFill1",
+      "local_path": "assets/symbols/web/videocam/materialsymbolsrounded/videocam_fill1_24px.svg",
+      "sha256": "96ba29541bcb79291cb241574252c752b8464497dab33ae9c1f3460ba437e1f9"
+    },
+    {
+      "id": "videocam_off.fill1",
+      "name": "videocam_off",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "VideocamOffFill1",
+      "local_path": "assets/symbols/web/videocam_off/materialsymbolsrounded/videocam_off_fill1_24px.svg",
+      "sha256": "d8e8d05fda9182de26f772592a00d6ec58d1ff055469cbc0993486e3551dac5a"
+    },
+    {
+      "id": "volume_up.fill0",
+      "name": "volume_up",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "VolumeUpFill0",
+      "local_path": "assets/symbols/web/volume_up/materialsymbolsrounded/volume_up_24px.svg",
+      "sha256": "0f4b215717e8153c0bd9d84f10fa3313453fd74895da8e7c474383d841079df6"
+    },
+    {
+      "id": "warning.fill1",
+      "name": "warning",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "WarningFill1",
+      "local_path": "assets/symbols/web/warning/materialsymbolsrounded/warning_fill1_24px.svg",
+      "sha256": "556697614d510ecce93ccbe33407ed27c5836b8de8ffbe37a8746bc0a399c3a1"
+    }
+  ],
+  "sf_literals": [
+    "arrow.triangle.2.circlepath.camera",
+    "arrow.up.circle.fill",
+    "captions.bubble",
+    "captions.bubble.fill",
+    "checkmark",
+    "crown.fill",
+    "doc.on.doc",
+    "ellipsis",
+    "exclamationmark.octagon.fill",
+    "exclamationmark.triangle.fill",
+    "face.smiling",
+    "gamecontroller.fill",
+    "gearshape",
+    "globe",
+    "hand.raised",
+    "hand.raised.fill",
+    "info.circle",
+    "lock.fill",
+    "lock.open",
+    "magnifyingglass",
+    "message",
+    "message.fill",
+    "mic.fill",
+    "mic.slash",
+    "mic.slash.fill",
+    "pencil.and.scribble",
+    "person.2",
+    "person.2.fill",
+    "person.fill.xmark",
+    "phone.down.fill",
+    "photo",
+    "photo.on.rectangle",
+    "pin",
+    "pin.fill",
+    "pin.slash",
+    "questionmark.bubble",
+    "rectangle.inset.filled",
+    "rectangle.inset.filled.on.rectangle",
+    "rectangle.on.rectangle",
+    "rectangle.on.rectangle.slash",
+    "square.and.arrow.up",
+    "square.grid.2x2",
+    "text.quote",
+    "trash",
+    "video.fill",
+    "video.slash",
+    "video.slash.fill",
+    "waveform",
+    "wifi.exclamationmark",
+    "xmark"
+  ]
+}

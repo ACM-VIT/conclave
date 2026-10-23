@@ -65,6 +65,9 @@ struct NativeHostingPreview: View {
                         Button("Reset Session") { presenter.resetFixtureSession() }
                             .accessibilityIdentifier("fixture.resetSession")
                     }
+                    Section("Icons") {
+                        NativeIconGalleryDisclosure()
+                    }
                     Section("People") {
                         ForEach(presenter.rowsState.rows) { row in
                             NativeHostingPersonRow(

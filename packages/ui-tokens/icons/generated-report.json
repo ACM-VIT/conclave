@@ -1,0 +1,717 @@
+{
+  "arithmetic": "exact rational decimals; finite binary32 round-to-nearest-even; nine-digit roundtrip literals",
+  "assets": [
+    {
+      "id": "add_reaction.fill0",
+      "input_sha256": "22f2f8040a258b8a34daaa0287686bf1fa67699de5cab2fd71fe32c60ef5d96e",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 9,
+        "M": 6,
+        "Q": 74,
+        "Z": 6
+      },
+      "segments": 95
+    },
+    {
+      "id": "apps.fill0",
+      "input_sha256": "c11e79be76394ee701595f8978628e80d6cc11a2af408596548a706b04331cb4",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 0,
+        "M": 9,
+        "Q": 72,
+        "Z": 9
+      },
+      "segments": 90
+    },
+    {
+      "id": "arrow_back.fill0",
+      "input_sha256": "b9b58d54e13e0e3693a10d997c1001ec270c12eaa935f993cee1d8c916236ceb",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 6,
+        "M": 1,
+        "Q": 16,
+        "Z": 1
+      },
+      "segments": 24
+    },
+    {
+      "id": "bluetooth.fill0",
+      "input_sha256": "3736a6c4fb26629b36b2ca6e2f28e5a61a72a4419c1ad18bfcf66bac4490e2de",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 16,
+        "M": 3,
+        "Q": 24,
+        "Z": 3
+      },
+      "segments": 46
+    },
+    {
+      "id": "call_end.fill1",
+      "input_sha256": "5fc45d8e866d3cb0fe58846ef63cb4bf274fdba56b011ad5b58bc64710ace287",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 6,
+        "M": 1,
+        "Q": 20,
+        "Z": 1
+      },
+      "segments": 28
+    },
+    {
+      "id": "cameraswitch.fill0",
+      "input_sha256": "ea11124371708ff5ec18e7ad703c1babb1843f5d6ddc3e58702d44849b9875df",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 16,
+        "M": 6,
+        "Q": 52,
+        "Z": 6
+      },
+      "segments": 80
+    },
+    {
+      "id": "cancel_presentation.fill1",
+      "input_sha256": "df6b768514ffadecf5a255b0f57084b9717d33182f251a28a30e4152b5bcecdb",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 12,
+        "M": 2,
+        "Q": 24,
+        "Z": 2
+      },
+      "segments": 40
+    },
+    {
+      "id": "chat_bubble.fill0",
+      "input_sha256": "5323668b977357f7b5379fd1e8b073375b0a5d12c6351e10694308d4c2d5c9d7",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 12,
+        "M": 3,
+        "Q": 8,
+        "Z": 3
+      },
+      "segments": 26
+    },
+    {
+      "id": "chat_bubble.fill1",
+      "input_sha256": "316d437277e361fa6036baccc9320136a262a06720dfd12b1868ea281e9696e0",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 5,
+        "M": 1,
+        "Q": 8,
+        "Z": 1
+      },
+      "segments": 15
+    },
+    {
+      "id": "check.fill0",
+      "input_sha256": "51e706757e18de60cb7ade1cf0ae272708932d36e417365f14977ee039cd85b8",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 4,
+        "M": 1,
+        "Q": 10,
+        "Z": 1
+      },
+      "segments": 16
+    },
+    {
+      "id": "close.fill0",
+      "input_sha256": "fabc7e16160e93ed11d6d72b87f5c67092d04abfcc1fc2410fab1abe075cd8fc",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 8,
+        "M": 1,
+        "Q": 16,
+        "Z": 1
+      },
+      "segments": 26
+    },
+    {
+      "id": "closed_caption.fill0",
+      "input_sha256": "da5bb300fd40d60983781c50d60f8d743af531b4b36cc2a668c371c2bdb533cf",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 30,
+        "M": 5,
+        "Q": 40,
+        "Z": 5
+      },
+      "segments": 80
+    },
+    {
+      "id": "closed_caption.fill1",
+      "input_sha256": "cf35c747cff2396c0e293cde092a302af8a7ed1b4935f1af7dee8eacb5dd07af",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 24,
+        "M": 3,
+        "Q": 40,
+        "Z": 3
+      },
+      "segments": 70
+    },
+    {
+      "id": "content_copy.fill0",
+      "input_sha256": "01af7f7a06b22849cd0eb73d14953695cba54939f51afdf3e30aeb20cf90d543",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 14,
+        "M": 4,
+        "Q": 18,
+        "Z": 4
+      },
+      "segments": 40
+    },
+    {
+      "id": "delete.fill0",
+      "input_sha256": "cd90ebd4c5aa36ef2332e2511ed6dcb051a32e5c99effd60494060473f27b9f9",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 16,
+        "M": 5,
+        "Q": 32,
+        "Z": 5
+      },
+      "segments": 58
+    },
+    {
+      "id": "description.fill0",
+      "input_sha256": "d7f08af6f115402dc19125e81da70209b53f5a830f5f14b04e16b0ddf569be7f",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 19,
+        "M": 5,
+        "Q": 28,
+        "Z": 5
+      },
+      "segments": 57
+    },
+    {
+      "id": "draw.fill0",
+      "input_sha256": "0a9cc24d93e79a0823bb37d25b9b88633e161fe81937b7a4484bc746e5845da6",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 16,
+        "M": 6,
+        "Q": 58,
+        "Z": 6
+      },
+      "segments": 86
+    },
+    {
+      "id": "error.fill1",
+      "input_sha256": "97d15b9296173542d04e05c818702ecfd0e5ed7ccda9a062701866876c0a4236",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 2,
+        "M": 3,
+        "Q": 32,
+        "Z": 3
+      },
+      "segments": 40
+    },
+    {
+      "id": "featured_video.fill0",
+      "input_sha256": "8ab7f713b69a6229747fc041bfcb49f0ef258d1e5b1856756db86c0cbbe608d4",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 14,
+        "M": 4,
+        "Q": 16,
+        "Z": 4
+      },
+      "segments": 38
+    },
+    {
+      "id": "front_hand.fill0",
+      "input_sha256": "7041875ff33307929d8638615091105a32bce3c0b9815c66a1ef08d071cbf753",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 16,
+        "M": 4,
+        "Q": 48,
+        "Z": 4
+      },
+      "segments": 72
+    },
+    {
+      "id": "front_hand.fill1",
+      "input_sha256": "0fa9c779d00e34d9f9f700beec63ad08fc16cba32288b6c2fc3b85790e6c1aba",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 18,
+        "M": 1,
+        "Q": 36,
+        "Z": 1
+      },
+      "segments": 56
+    },
+    {
+      "id": "gif_box.fill0",
+      "input_sha256": "a1c65e4eb8049bc2e740e3f2096ecb45cd2746e10cac93c6a65a16aa6288f4d0",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 27,
+        "M": 6,
+        "Q": 44,
+        "Z": 6
+      },
+      "segments": 83
+    },
+    {
+      "id": "graphic_eq.fill0",
+      "input_sha256": "0e40ad547e86077d696cfee5e3053a33bf7a95610256d8323d54a5c210261fc4",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 10,
+        "M": 5,
+        "Q": 40,
+        "Z": 5
+      },
+      "segments": 60
+    },
+    {
+      "id": "group.fill0",
+      "input_sha256": "911624e04d36c60f9b1a8d9266df0eeb92fe764e852142e23d3f1a47489cd325",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 9,
+        "M": 8,
+        "Q": 58,
+        "Z": 8
+      },
+      "segments": 83
+    },
+    {
+      "id": "group.fill1",
+      "input_sha256": "738f4d575af5326a937f7d9ff32dd02b7a8071c90bbd33eb3a1a16059abb4393",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 6,
+        "M": 4,
+        "Q": 42,
+        "Z": 4
+      },
+      "segments": 56
+    },
+    {
+      "id": "headphones.fill0",
+      "input_sha256": "896217961e052a68a4345d435e76df4b7b009d665fe2bddb4fe5fc38eaaf77eb",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 22,
+        "M": 5,
+        "Q": 24,
+        "Z": 5
+      },
+      "segments": 56
+    },
+    {
+      "id": "image.fill0",
+      "input_sha256": "a53eee7018c2f02e0d825f3c8acb11cd1aa80161a09ce5d34c7579eb32fd3094",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 15,
+        "M": 4,
+        "Q": 16,
+        "Z": 4
+      },
+      "segments": 39
+    },
+    {
+      "id": "info.fill0",
+      "input_sha256": "ab779a17ff3bc8f5a30e3231509ef9ff6fee709ffcaa46fb65217ce170f03e14",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 2,
+        "M": 5,
+        "Q": 40,
+        "Z": 5
+      },
+      "segments": 52
+    },
+    {
+      "id": "keep.fill0",
+      "input_sha256": "786fe93f53274d53ca0821ae90ae3108baf991bacd84298f45249cc2c8a84c36",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 19,
+        "M": 3,
+        "Q": 22,
+        "Z": 3
+      },
+      "segments": 47
+    },
+    {
+      "id": "keep.fill1",
+      "input_sha256": "3edfd08e308f57cf2c6ed981254139803e10c23fe12ece001452f776f000d891",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 13,
+        "M": 1,
+        "Q": 22,
+        "Z": 1
+      },
+      "segments": 37
+    },
+    {
+      "id": "keep_off.fill0",
+      "input_sha256": "c1edd7d0e716fa2b337341e9588ab28e05b5c54b23a5bb2291454ed0b4cf76ec",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 19,
+        "M": 5,
+        "Q": 28,
+        "Z": 5
+      },
+      "segments": 57
+    },
+    {
+      "id": "lock.fill1",
+      "input_sha256": "64fd7f36a67d03e6071fe0963d6f67d15b37fdb22dcec2f06b83ba6e8bab6ea8",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 10,
+        "M": 3,
+        "Q": 24,
+        "Z": 3
+      },
+      "segments": 40
+    },
+    {
+      "id": "lock_open.fill0",
+      "input_sha256": "a48b483c600fd2f869036741dd3b2a4c74a66af94f7ede64c80da84a6e66fbbd",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 13,
+        "M": 4,
+        "Q": 28,
+        "Z": 4
+      },
+      "segments": 49
+    },
+    {
+      "id": "mic.fill1",
+      "input_sha256": "35668638b23e0e8f673968ae1c563d9d0018cfdd1a0fbf0443bdc0ead485d857",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 4,
+        "M": 2,
+        "Q": 28,
+        "Z": 2
+      },
+      "segments": 36
+    },
+    {
+      "id": "mic_off.fill1",
+      "input_sha256": "524dcfb7f7fcad14ec7cbe430853d9d0b24695d799a93ac272c8e8929c00e199",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 8,
+        "M": 4,
+        "Q": 44,
+        "Z": 4
+      },
+      "segments": 60
+    },
+    {
+      "id": "mood.fill1",
+      "input_sha256": "e56275195f6bcdd1aa20ff5689373e78f5a3970feb6d136480323b6c5a128ce7",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 1,
+        "M": 4,
+        "Q": 40,
+        "Z": 4
+      },
+      "segments": 49
+    },
+    {
+      "id": "more_vert.fill0",
+      "input_sha256": "f3959916d17e6ec783267c2753bdddfe4b3f4b12b835c875231dbbba792f070b",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 0,
+        "M": 3,
+        "Q": 24,
+        "Z": 3
+      },
+      "segments": 30
+    },
+    {
+      "id": "person_remove.fill0",
+      "input_sha256": "73ed88ef95b14ecbc11b9da1eff83e68d8360704960d34dcc7b5d1a52edc14eb",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 8,
+        "M": 7,
+        "Q": 44,
+        "Z": 7
+      },
+      "segments": 66
+    },
+    {
+      "id": "phone_in_talk.fill0",
+      "input_sha256": "3695a7cc5c3c176b6641bd3ca9a0b3a9840dbb7580208e3337f6dd808fac1fc2",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 12,
+        "M": 7,
+        "Q": 48,
+        "Z": 7
+      },
+      "segments": 74
+    },
+    {
+      "id": "present_to_all.fill0",
+      "input_sha256": "ff9a4ea515ccc5816be6720b74c959f725017436d62ba6e31f92305e956e5e09",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 16,
+        "M": 4,
+        "Q": 22,
+        "Z": 4
+      },
+      "segments": 46
+    },
+    {
+      "id": "present_to_all.fill1",
+      "input_sha256": "ab5e09fb6f600b6385b27ebd1f47dc1cc24ac676b0ee2eff6036b7676db374e2",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 10,
+        "M": 2,
+        "Q": 22,
+        "Z": 2
+      },
+      "segments": 36
+    },
+    {
+      "id": "public.fill0",
+      "input_sha256": "5b8ad24e63e4a2f601728fe0e589df9ca943b813ad24a71635c803a677e1ecc0",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 11,
+        "M": 3,
+        "Q": 36,
+        "Z": 3
+      },
+      "segments": 53
+    },
+    {
+      "id": "quiz.fill0",
+      "input_sha256": "bceae342d33f351df90c0b2f27d488c606865fad92aeac69d9fff8757b4810bf",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 14,
+        "M": 6,
+        "Q": 50,
+        "Z": 6
+      },
+      "segments": 76
+    },
+    {
+      "id": "search.fill0",
+      "input_sha256": "8d12ac6ba27a23ccf0e57794c28481ce9c978efcb2f80ba6d2979ccdf238c993",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 2,
+        "M": 2,
+        "Q": 22,
+        "Z": 2
+      },
+      "segments": 28
+    },
+    {
+      "id": "send.fill1",
+      "input_sha256": "f4b1d6b93bc8779ab84adced70a309621d2c6f59cece503c1c90ef01b9a1fd6b",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 6,
+        "M": 1,
+        "Q": 6,
+        "Z": 1
+      },
+      "segments": 14
+    },
+    {
+      "id": "settings.fill0",
+      "input_sha256": "6cd47de90647ece6b00922f497f8c4ea9c1649548cf15828d1df9d78d5bdf30d",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 38,
+        "M": 4,
+        "Q": 60,
+        "Z": 4
+      },
+      "segments": 106
+    },
+    {
+      "id": "share.fill0",
+      "input_sha256": "a117c58801f1690ef8bc642fa9ce135d44f36c5c36e158f05891e462ff204e24",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 4,
+        "M": 7,
+        "Q": 56,
+        "Z": 7
+      },
+      "segments": 74
+    },
+    {
+      "id": "shield_person.fill0",
+      "input_sha256": "98c2a89d2cabbed2ade2477ad0f9e1aba4ad97c3540b95791217cf972e516fde",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 8,
+        "M": 6,
+        "Q": 46,
+        "Z": 6
+      },
+      "segments": 66
+    },
+    {
+      "id": "signal_wifi_bad.fill0",
+      "input_sha256": "62be2af3f215a00f6111eaa215928e1aa942ec0712f6c2384f13be298436ab94",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 14,
+        "M": 3,
+        "Q": 44,
+        "Z": 3
+      },
+      "segments": 64
+    },
+    {
+      "id": "sports_esports.fill0",
+      "input_sha256": "b48be0c109f5285dbaea7224f973ddf0548080ebcc04b701dfa6fb942402fb71",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 20,
+        "M": 6,
+        "Q": 54,
+        "Z": 6
+      },
+      "segments": 86
+    },
+    {
+      "id": "videocam.fill1",
+      "input_sha256": "96ba29541bcb79291cb241574252c752b8464497dab33ae9c1f3460ba437e1f9",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 8,
+        "M": 1,
+        "Q": 12,
+        "Z": 1
+      },
+      "segments": 22
+    },
+    {
+      "id": "videocam_off.fill1",
+      "input_sha256": "d8e8d05fda9182de26f772592a00d6ec58d1ff055469cbc0993486e3551dac5a",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 11,
+        "M": 3,
+        "Q": 26,
+        "Z": 3
+      },
+      "segments": 43
+    },
+    {
+      "id": "volume_up.fill0",
+      "input_sha256": "0f4b215717e8153c0bd9d84f10fa3313453fd74895da8e7c474383d841079df6",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 13,
+        "M": 5,
+        "Q": 32,
+        "Z": 5
+      },
+      "segments": 55
+    },
+    {
+      "id": "warning.fill1",
+      "input_sha256": "556697614d510ecce93ccbe33407ed27c5836b8de8ffbe37a8746bc0a399c3a1",
+      "maximum_float32_error": "0",
+      "maximum_float32_error_decimal": "0",
+      "operations": {
+        "L": 5,
+        "M": 3,
+        "Q": 28,
+        "Z": 3
+      },
+      "segments": 39
+    }
+  ],
+  "counts": {
+    "artwork": 54,
+    "bindings": 58,
+    "concepts": 36,
+    "material_names": 48,
+    "sf_literals": 50
+  },
+  "generator_sha256": "e9fe61501c76735342bd0321f82905ef6c5e529700781f8b902ee220bb163fb1",
+  "manifest_sha256": "679202322f42fa65993d5b284b052917e0e8cd840ec6b90201409b87f952c061",
+  "profile": "material-rounded-24-absolute-v1"
+}

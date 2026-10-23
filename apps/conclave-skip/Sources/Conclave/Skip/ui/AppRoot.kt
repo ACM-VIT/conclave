@@ -27,6 +27,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -48,7 +50,10 @@ import androidx.compose.ui.unit.dp
 /** Called only by MainActivity's explicit debug launch route, outside SkipUI PresentationRoot. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NativeHostingPreviewRoot(onClose: () -> Unit) {
+fun NativeHostingPreviewRoot(fixtureEligible: Boolean = false, onClose: () -> Unit) {
+    val iconContext = LocalContext.current.applicationContext
+    val iconScope = rememberCoroutineScope()
+    val icons = remember(iconContext, iconScope) { NativeIconRasterController(iconContext, iconScope) }
     val presenter = remember { NativeHostingPresenter() }
     // Intentionally inert: the real mapper runs, but this sink never invokes hardware.
     val delivery = remember(presenter) { NativeFeedbackDelivery(presenter, sink = {}) }
@@ -56,13 +61,14 @@ fun NativeHostingPreviewRoot(onClose: () -> Unit) {
     val stageLifetime = remember { NativeHostingStageLifetime() }
     var mount by remember { mutableIntStateOf(0) }
     val panelState = presenter.panels.snapshot
+    NativeIconRasterBinding(icons, fixtureEligible && panelState.current == null)
     key(mount) { NativeFeedbackConsumer(presenter, delivery, mount) }
     BackHandler {
-        if (presenter.panels.snapshot.current != null) presenter.panels.dismiss(cancelPending = true) else onClose()
+        if (presenter.panels.snapshot.current != null) presenter.panels.dismiss(cancelPending = true) else { icons.cancel("preview Back"); onClose() }
     }
     Box(Modifier.fillMaxSize()) {
         NativeHostingStage(presenter, delivery, stageLifetime, panelState.current != null,
-            onRemount = { mount++ }, onClose = onClose)
+            onRemount = { mount++ }, onClose = { icons.cancel("preview Close"); onClose() }, icons = icons)
         val request = panelState.current
         if (request != null && !panelState.isDismissing) {
             key(panelState.session, request.presentationID) {
@@ -80,6 +86,7 @@ fun NativeHostingPreviewRoot(onClose: () -> Unit) {
 private fun NativeHostingStage(
     presenter: NativeHostingPresenter, delivery: NativeFeedbackDelivery,
     lifetime: NativeHostingStageLifetime, covered: Boolean, onRemount: () -> Unit, onClose: () -> Unit,
+    icons: NativeIconRasterController,
 ) {
     val instance = remember { lifetime.create() }
     val cache = remember(presenter) { NativeHostingRowsCache(presenter) }
@@ -146,6 +153,7 @@ private fun NativeHostingStage(
                         TextButton(onClick = { presenter.resetFixtureSession() }, modifier = Modifier.testTag("fixture.resetSession")) { Text("Reset session") }
                     }
                 }
+                item(key = "icons") { NativeHostingIconSection(icons) }
                 item(key = "details") {
                     Row(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)

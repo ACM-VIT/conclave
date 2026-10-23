@@ -1,0 +1,31 @@
+{
+  "utc": "2026-10-23T16:09:14.078831+00:00",
+  "sealed_files_verified": 100,
+  "source_files_verified": 293,
+  "source_manifest_sha256": "4305a990580e2ef8355fb7d13054d04682dfc352720db2bc49539bd1d10eaf81",
+  "report_sha256": "7b18b1b3290b21aba313d721315aafb3c13954e56651def3c852c38825ec4556",
+  "plan_sha256": "536fec03403e717cc39ed563eab1247c3cc5bd09719c6849dd8d94dc446c4c44",
+  "selection_sha256": "53a0b78ee5473d5d519309cd238b26d78be991f107a7452ad075bc5bc790c9cb",
+  "counts": {
+    "concepts": 36,
+    "material_names": 48,
+    "android_variants": 54,
+    "android_bindings": 58,
+    "sf_literals": 50
+  },
+  "all_bindings_resolve_and_all_artwork_used": true,
+  "mirror_only": [
+    "arrow_back.fill0",
+    "send.fill1"
+  ],
+  "two_recovered_text_historical_digest_matches": {
+    "recovered-text/icon-manifest-implementation-brief.md": "bcaf4dfa88da2ed483923e238f965a384533b22c7fab0c3e1c3a56f998cb8544",
+    "recovered-text/icon-selection-disposition.md": "eba128f0fd77fe64950991621469bc2b5aad44685e9a385e33957785d49dda97"
+  },
+  "limits": [
+    "Reconstructed documents are not the complete original final files",
+    "Artwork payloads and reference images absent",
+    "Incomplete historical provenance cannot be relabeled as recovered original index"
+  ],
+  "disposition": "Proceed with fresh acquisition of exactly54 selected SVGs from the recovered immutable Google commit into a new durable artifact directory; no repository integration yet."
+}

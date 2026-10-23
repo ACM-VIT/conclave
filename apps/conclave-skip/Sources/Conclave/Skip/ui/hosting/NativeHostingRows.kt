@@ -33,3 +33,9 @@ internal class NativeHostingRowsCache(private val presenter: NativeHostingPresen
         return NativeHostingRows(state).also { cached = it }
     }
 }
+
+/** Opt-in gallery seam; row snapshots above remain independent of icon state. */
+@androidx.compose.runtime.Composable
+internal fun NativeHostingIconSection(controller: NativeIconRasterController) {
+    NativeIconGalleryControls(controller)
+}

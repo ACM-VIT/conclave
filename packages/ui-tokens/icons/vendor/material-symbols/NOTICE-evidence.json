@@ -1,0 +1,95 @@
+{
+  "scope": "Pinned repository root listing and retained source files only; not a recursive repository-wide absence proof.",
+  "source_revision": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "root_tree_response": {
+    "file": "upstream/root-tree.html",
+    "sha256": "110105fdab69a4bdaea0dcad04603c7685003efee50821211a27d17a7e3e3eba",
+    "bytes": 344215
+  },
+  "root_tree_receipt": {
+    "file": "http/root-tree-html.json",
+    "sha256": "4d9ebbe47e88d74aee195a8088adc41bcaee2c785cbd5d3194495ac066dd920f",
+    "bytes": 6930
+  },
+  "root_listing": {
+    "path": "/",
+    "currentOid": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+    "root_items": [
+      {
+        "name": ".github/workflows",
+        "path": ".github/workflows",
+        "contentType": "directory",
+        "hasSimplifiedPath": true
+      },
+      {
+        "name": "android",
+        "path": "android",
+        "contentType": "directory"
+      },
+      {
+        "name": "font",
+        "path": "font",
+        "contentType": "directory"
+      },
+      {
+        "name": "ios",
+        "path": "ios",
+        "contentType": "directory"
+      },
+      {
+        "name": "png",
+        "path": "png",
+        "contentType": "directory"
+      },
+      {
+        "name": "src",
+        "path": "src",
+        "contentType": "directory"
+      },
+      {
+        "name": "symbols",
+        "path": "symbols",
+        "contentType": "directory"
+      },
+      {
+        "name": "update",
+        "path": "update",
+        "contentType": "directory"
+      },
+      {
+        "name": "variablefont",
+        "path": "variablefont",
+        "contentType": "directory"
+      },
+      {
+        "name": ".gitignore",
+        "path": ".gitignore",
+        "contentType": "file"
+      },
+      {
+        "name": "LICENSE",
+        "path": "LICENSE",
+        "contentType": "file"
+      },
+      {
+        "name": "README.md",
+        "path": "README.md",
+        "contentType": "file"
+      }
+    ],
+    "total_count": 12,
+    "notice_candidates": [],
+    "scope": "Pinned repository root listing and retained files only; no recursive NOTICE-absence claim."
+  },
+  "root_notice_file_present": false,
+  "retained_source_file_notices": {
+    "upstream/LICENSE": "Complete unmodified Apache 2.0 including appendix placeholders; not an artwork copyright year.",
+    "upstream/update_symbols.py.txt": "Original updater copyright and Apache header preserved; data only, not executed or artwork attribution.",
+    "upstream/README.md": "Original README preserved.",
+    "metadata/material-symbols-guide.html": "Fresh documentation snapshot preserves separate page license and notices; not bundled runtime code.",
+    "assets/": "Exact selected SVG bytes contain no comments, notices or non-profile content."
+  },
+  "applicable_upstream_NOTICE_found_in_inspected_scope": false,
+  "local_attribution_is_not_upstream_NOTICE": true,
+  "future_rule": "If later scoped inputs carry an applicable upstream NOTICE, propagate its relevant readable notices. Carry complete LICENSE and applicable source notices; identify modifications in later generated files. Packaging is not verified here."
+}

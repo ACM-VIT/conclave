@@ -77,7 +77,8 @@ open class MainActivity: AppCompatActivity {
             if (PipController.inPipMode && PipController.isInCall) {
                 PipContent()
             } else if (showsHostingPreview && !PipController.isInCall) {
-                NativeHostingPreviewRoot(onClose = { showsHostingPreview = false })
+                // The library cannot see the app build type; it also checks FLAG_DEBUGGABLE at run time.
+                NativeHostingPreviewRoot(fixtureEligible = BuildConfig.DEBUG, onClose = { showsHostingPreview = false })
             } else {
                 saveableStateHolder.SaveableStateProvider(FULL_ROOT_SAVEABLE_KEY) {
                     PresentationRootView(ComposeContext())
