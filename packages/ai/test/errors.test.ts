@@ -1,21 +1,27 @@
 import { describe, expect, it } from "vitest";
+import { APIError } from "@anthropic-ai/sdk";
 import { describeAiError } from "../src/errors.js";
 
 describe("provider error diagnostics", () => {
   it("keeps actionable status and request IDs without exposing credentials", () => {
-    const detail = describeAiError(
-      {
-        status: 401,
-        request_id: "req_123",
-        error: {
-          type: "authentication_error",
-          message: "Rejected sk-ant-private-key and Bearer another-secret",
+    const error = Object.assign(
+      new APIError(
+        401,
+        {
+          type: "error",
+          error: {
+            type: "authentication_error",
+            message: "Rejected sk-ant-private-key and Bearer another-secret",
+          },
         },
+        "Unauthorized",
+        new Headers({ "request-id": "req_123" }),
+      ),
+      {
         request: { headers: { authorization: "another-secret" } },
       },
-      "anthropic",
-      "sk-ant-private-key",
     );
+    const detail = describeAiError(error, "anthropic", "sk-ant-private-key");
     expect(detail).toMatchObject({
       status: 401,
       type: "authentication_error",

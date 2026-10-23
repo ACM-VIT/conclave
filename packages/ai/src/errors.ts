@@ -27,6 +27,7 @@ export function describeAiError(
     .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
     .slice(0, 600);
   const status = typeof detail.status === "number" ? detail.status : undefined;
+  const requestId = detail.requestID ?? detail.request_id;
   const label = AI_PROVIDERS[provider].label;
   const userMessage =
     status === 401
@@ -49,9 +50,7 @@ export function describeAiError(
     status,
     type: typeof cause.type === "string" ? cause.type.slice(0, 80) : undefined,
     requestId:
-      typeof detail.request_id === "string"
-        ? detail.request_id.slice(0, 120)
-        : undefined,
+      typeof requestId === "string" ? requestId.slice(0, 120) : undefined,
     message,
     userMessage,
   };
