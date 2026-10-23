@@ -94,14 +94,17 @@ export function useRoomAi(
       setReady(false);
       setState(emptyRoomAiState());
     };
-    socket.on("connect", refresh);
+    // The SFU sends ai:changed after joinRoom restores membership. Connecting
+    // the transport alone is too early to request room settings.
+    const reconnected = () => setConnected(true);
+    socket.on("connect", reconnected);
     socket.on("disconnect", disconnected);
     socket.on("ai:changed", changed);
     if (socket.connected) refresh();
     return () => {
       active = false;
       ++epoch.current;
-      socket.off("connect", refresh);
+      socket.off("connect", reconnected);
       socket.off("disconnect", disconnected);
       socket.off("ai:changed", changed);
     };

@@ -165,68 +165,90 @@ describe("AI setup UX", () => {
     });
     expect(parseRoomAiState({ openai: { source: "room" } })).toBeNull();
   });
-  it("ignores acknowledgements from a disconnected socket and reloads on reconnect", async () => {
-    const listeners = new Map<string, () => void>();
-    const requests: { event: string; args: unknown[] }[] = [];
-    const fake = {
-      connected: true,
-      timeout: () => fake,
-      on: (event: string, handler: () => void) => {
-        listeners.set(event, handler);
-      },
-      off: (event: string) => {
-        listeners.delete(event);
-      },
-      emit: (event: string, ...args: unknown[]) => {
-        requests.push({ event, args });
-      },
-    };
-    let controller: RoomAiController;
-    function Harness() {
-      controller = useRoomAi(
-        fake as unknown as Socket,
-        true,
-        "alice",
-        false,
-        "room",
-      );
-      return null;
-    }
-    const ack = (request: (typeof requests)[number], state: unknown) =>
-      (request.args.at(-1) as (error: Error | null, result: unknown) => void)(
-        null,
-        { state },
-      );
-    await act(async () => root.render(<Harness />));
-    const state = emptyRoomAiState();
-    state.openai = { source: "room", ownerId: "alice" };
-    await act(async () => {
-      ack(requests[0], state);
-    });
-    expect(controller!.ready).toBe(true);
-    let pending: Promise<string | null>;
-    await act(async () => {
-      pending = controller!.configure("anthropic", "sk-ant-fixture");
-    });
-    expect(requests[1].args[0]).toEqual({
-      roomId: "room",
-      provider: "anthropic",
-      apiKey: "sk-ant-fixture",
-    });
-    await act(async () => {
-      fake.connected = false;
-      listeners.get("disconnect")!();
-      ack(requests[1], state);
-    });
-    expect(await pending!).toContain("connection changed");
-    expect(controller!.ready).toBe(false);
-    expect(controller!.state.openai.source).toBeNull();
-    await act(async () => {
-      fake.connected = true;
-      listeners.get("connect")!();
-      ack(requests[2], state);
-    });
-    expect(controller!.ready).toBe(true);
-    expect(controller!.state.openai.source).toBe("room");
-  });
+  it.each([false, true])(
+    "loads after room rejoin even if the initial request was rejected: %s",
+    async (rejectedBeforeJoin) => {
+      const listeners = new Map<string, (value?: unknown) => void>();
+      const requests: { event: string; args: unknown[] }[] = [];
+      const fake = {
+        connected: true,
+        timeout: () => fake,
+        on: (event: string, handler: (value?: unknown) => void) => {
+          listeners.set(event, handler);
+        },
+        off: (event: string) => {
+          listeners.delete(event);
+        },
+        emit: (event: string, ...args: unknown[]) => {
+          requests.push({ event, args });
+        },
+      };
+      let controller: RoomAiController;
+      function Harness() {
+        controller = useRoomAi(
+          fake as unknown as Socket,
+          true,
+          "alice",
+          false,
+          "room",
+        );
+        return null;
+      }
+      const ack = (request: (typeof requests)[number], state: unknown) =>
+        (request.args.at(-1) as (error: Error | null, result: unknown) => void)(
+          null,
+          { state },
+        );
+      await act(async () => root.render(<Harness />));
+      const state = emptyRoomAiState();
+      state.openai = { source: "room", ownerId: "alice" };
+      if (rejectedBeforeJoin) {
+        await act(async () => {
+          (
+            requests[0].args.at(-1) as (
+              error: Error | null,
+              result: unknown,
+            ) => void
+          )(null, { error: "Join the meeting first." });
+        });
+        expect(controller!.ready).toBe(false);
+        await act(async () => {
+          listeners.get("ai:changed")!(state);
+        });
+      } else {
+        await act(async () => {
+          ack(requests[0], state);
+        });
+      }
+      expect(controller!.ready).toBe(true);
+      let pending: Promise<string | null>;
+      await act(async () => {
+        pending = controller!.configure("anthropic", "sk-ant-fixture");
+      });
+      expect(requests[1].args[0]).toEqual({
+        roomId: "room",
+        provider: "anthropic",
+        apiKey: "sk-ant-fixture",
+      });
+      await act(async () => {
+        fake.connected = false;
+        listeners.get("disconnect")!();
+        ack(requests[1], state);
+      });
+      expect(await pending!).toContain("connection changed");
+      expect(controller!.ready).toBe(false);
+      expect(controller!.state.openai.source).toBeNull();
+      await act(async () => {
+        fake.connected = true;
+        listeners.get("connect")!();
+      });
+      expect(requests).toHaveLength(2);
+      expect(controller!.ready).toBe(false);
+      await act(async () => {
+        listeners.get("ai:changed")!(state);
+      });
+      expect(controller!.ready).toBe(true);
+      expect(controller!.state.openai.source).toBe("room");
+    },
+  );
 });
