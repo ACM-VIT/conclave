@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createAiTextSession,
+  describeAiError,
   generateAiText,
   type AiTextOptions,
 } from "../src/server.js";
@@ -66,6 +67,32 @@ const claudeEvents = (
 afterEach(() => vi.unstubAllGlobals());
 
 describe("provider routing", () => {
+  it.each([401, 403, 404, 429, 503])(
+    "preserves discovery HTTP status %s in redacted inference diagnostics",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => jsonResponse(status)),
+      );
+      function jsonResponse(status: number) {
+        return new Response("{}", {
+          status,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const error = await generateAiText({
+        ...options,
+        model: "claude-sonnet-5-6",
+        input: "Hello",
+      }).catch((error: unknown) => error);
+      const diagnostic = describeAiError(error, "anthropic", options.apiKey);
+      expect(diagnostic.status).toBe(status);
+      if (status === 429)
+        expect(diagnostic.userMessage).toContain("rate limited");
+      expect(JSON.stringify(diagnostic)).not.toContain(options.apiKey);
+    },
+  );
+
   it("verifies a pinned snapshot even when its alias is also available", async () => {
     const selected = "gpt-6.2-sol-2026-10-24";
     const requests: { url: string; body?: Record<string, unknown> }[] = [];

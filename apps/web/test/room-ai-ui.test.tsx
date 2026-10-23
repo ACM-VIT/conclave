@@ -61,6 +61,49 @@ const transcript = (start = vi.fn().mockResolvedValue(true)) =>
   }) as unknown as MeetingTranscriptController;
 
 describe("AI setup UX", () => {
+  it("keeps a notes key when selecting another model from the same provider", async () => {
+    const start = vi.fn().mockResolvedValue(true);
+    const notes = transcript(start);
+    await act(async () =>
+      root.render(
+        <TranscriptPanel
+          roomAi={roomAi()}
+          transcript={notes}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    const input = container.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "sk-ant-personal-fixture");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const select = container.querySelector("select")!;
+    await act(async () => {
+      select.value = "claude-haiku-5-5";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(input.value).toBe("sk-ant-personal-fixture");
+    await act(async () =>
+      container
+        .querySelector("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantApiKey: "sk-ant-personal-fixture",
+        qaModel: "claude-haiku-5-5",
+      }),
+    );
+  });
+
   it("shares an audio-only OpenAI key without selecting an assistant model", async () => {
     const configure = vi.fn().mockResolvedValue(null);
     const requestModels = vi
@@ -106,15 +149,13 @@ describe("AI setup UX", () => {
   });
 
   it("discovers notes models with the audio key when OpenAI reuses that credential", async () => {
-    const requestModels = vi
-      .fn()
-      .mockResolvedValue([
-        {
-          provider: "openai",
-          source: "live",
-          models: [getTranscriptResponseModelConfig("gpt-6.2-sol")],
-        },
-      ]);
+    const requestModels = vi.fn().mockResolvedValue([
+      {
+        provider: "openai",
+        source: "live",
+        models: [getTranscriptResponseModelConfig("gpt-6.2-sol")],
+      },
+    ]);
     const notes = transcript();
     notes.session.qaModel = "gpt-6.1-sol";
     notes.globalProviderKeysAvailable = {};

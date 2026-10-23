@@ -24,9 +24,10 @@ async function resolveDiscoveredOptions(
   if (catalog.source !== "live")
     throw Object.assign(
       new Error(
-        "Could not verify the selected model. Refresh models and retry.",
+        catalog.error ??
+          "Could not verify the selected model. Refresh models and retry.",
       ),
-      catalog.status === 401 ? { status: 401 } : {},
+      catalog.status ? { status: catalog.status } : {},
     );
   const model = catalog.models.find((entry) => entry.id === options.model);
   if (!model)

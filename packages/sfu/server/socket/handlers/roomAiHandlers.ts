@@ -125,6 +125,12 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
       try {
         const host = member.client instanceof Admin;
         const env = readAiEnvironment(process.env);
+        // A model supplied with a new key is an initial suggestion. Preserve a
+        // choice saved while the contributor's discovery request was in flight.
+        const selectModel =
+          typeof data.model === "string" &&
+          (typeof data.apiKey !== "string" ||
+            member.room.aiCredentials.assistantModel === null);
         if (
           data.model !== undefined &&
           data.model !== null &&
@@ -137,11 +143,7 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
         if (data.model !== undefined && data.remove === true) {
           throw new Error("Remove a key or change its model separately.");
         }
-        if (
-          typeof data.model === "string" &&
-          !host &&
-          getProviderApiKey(env, data.provider)
-        ) {
+        if (selectModel && !host && getProviderApiKey(env, data.provider)) {
           throw new Error("Only a host can change deployment-backed models.");
         }
         if (data.remove === true)
@@ -161,7 +163,7 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
           );
         else if (typeof data.model !== "string")
           throw new Error("Enter an API key.");
-        if (typeof data.model === "string") {
+        if (selectModel && typeof data.model === "string") {
           member.room.aiCredentials.setModel(
             data.model,
             member.client.id,

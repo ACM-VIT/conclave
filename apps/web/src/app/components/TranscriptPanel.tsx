@@ -365,7 +365,6 @@ function StartStage({
                     onClick={() => {
                       setTranscriptModel(model.id);
                       setApiKey("");
-                      setAssistantApiKey("");
                     }}
                     className={`h-9 rounded-md text-[12px] font-semibold transition-colors disabled:opacity-60 ${provider === model.provider ? "bg-[#F95F4A] text-white" : "text-[#a1a1aa] hover:bg-white/[0.04] hover:text-white"}`}
                   >
@@ -386,7 +385,6 @@ function StartStage({
                 value={qaModel}
                 onChange={(value) => {
                   setQaModel(value);
-                  setAssistantApiKey("");
                 }}
                 models={assistantCatalog.models}
                 loading={assistantCatalog.loading}

@@ -40,6 +40,56 @@ function fixture() {
 }
 
 describe("room AI credentials", () => {
+  it("keeps the first saved room model when concurrent key shares suggest different initial models", () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    const { socket, room, member } = fixture();
+    const peerSocket = { id: "peer-socket", on: vi.fn() };
+    const peer = { id: "peer", isObserver: false, socket: peerSocket };
+    room.getClient.mockImplementation((id: string) =>
+      id === member.id ? member : id === peer.id ? peer : undefined,
+    );
+    for (const [connection, client] of [
+      [socket, member],
+      [peerSocket, peer],
+    ] as const) {
+      registerRoomAiHandlers({
+        socket: connection,
+        currentRoom: room,
+        currentClient: client,
+        io: { to: () => ({ emit: vi.fn() }) },
+      } as unknown as ConnectionContext);
+    }
+    const configure = (
+      connection: typeof socket,
+      data: Record<string, unknown>,
+    ) => {
+      const handlers = Object.fromEntries(connection.on.mock.calls) as Record<
+        string,
+        (...args: unknown[]) => void
+      >;
+      const callback = vi.fn();
+      handlers["ai:configure"]({ roomId: "room", ...data }, callback);
+      expect(callback.mock.calls[0][0]).not.toHaveProperty("error");
+    };
+    configure(socket, {
+      provider: "openai",
+      apiKey: "sk-first-fixture",
+      model: "gpt-6.2-sol",
+    });
+    configure(peerSocket, {
+      provider: "anthropic",
+      apiKey: "sk-ant-second-fixture",
+      model: "claude-sonnet-5-6",
+    });
+    expect(room.aiCredentials.assistantModel).toBe("gpt-6.2-sol");
+    configure(peerSocket, {
+      provider: "anthropic",
+      model: "claude-sonnet-5-6",
+    });
+    expect(room.aiCredentials.assistantModel).toBe("claude-sonnet-5-6");
+  });
+
   it("stores audio-only room keys without an automatic text selection", () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     const { socket, room, member } = fixture();
