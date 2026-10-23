@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { APIError } from "@anthropic-ai/sdk";
-import { describeAiError } from "../src/errors.js";
+import { AiTaskLimitError, describeAiError } from "../src/errors.js";
 
 describe("provider error diagnostics", () => {
   it("keeps actionable status and request IDs without exposing credentials", () => {
@@ -31,6 +31,11 @@ describe("provider error diagnostics", () => {
     expect(JSON.stringify(detail)).not.toContain("sk-ant-private-key");
     expect(JSON.stringify(detail)).not.toContain("another-secret");
     expect(detail).not.toHaveProperty("request");
+  });
+
+  it("explains a local tool limit without calling it a provider outage", () => {
+    const failure = describeAiError(new AiTaskLimitError(), "anthropic", "");
+    expect(failure.userMessage).toBe("Conclave reached its tool limit. Try a narrower request.");
   });
 
   it("explains billing and rate limits without showing raw provider responses", () => {
