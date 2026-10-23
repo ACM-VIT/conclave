@@ -66,15 +66,79 @@ describe("game AI content", () => {
     config.gameAi.timeoutMs = 25_000;
   });
 
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the room's Claude model and key even when deployment games use OpenAI", async () => {
+    let count = 0;
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        id: "msg_game",
+        type: "message",
+        role: "assistant",
+        model: "claude-haiku-5-5",
+        content: [
+          {
+            type: "text",
+            text:
+              count++ === 0
+                ? "Moon is a suitable prompt."
+                : '{"prompts":["Moon"]}',
+          },
+        ],
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        usage: { input_tokens: 10, output_tokens: 10 },
+      }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const result = await generateStructuredGameContent({
+      aiEnvironment: {
+        ANTHROPIC_API_KEY: "sk-ant-room-game",
+        CONCLAVE_ASSISTANT_MODEL: "claude-haiku-5-5",
+      },
+      gameName: "Quick Draw",
+      topic: "space",
+      instructions: "Create one prompt.",
+      schemaName: "game",
+      schema,
+      parse: (payload) => payload,
+    });
+    expect(result).toEqual({ prompts: ["Moon"] });
+    expect(createResponse).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    for (const args of fetcher.mock.calls as unknown as [
+      RequestInfo | URL,
+      RequestInit,
+    ][]) {
+      const request = new Request(args[0], args[1]);
+      expect(request.headers.get("authorization")).toBe("Bearer sk-ant-room-game");
+      const body = await request.json() as { model: string };
+      expect(body.model).toBe("claude-haiku-5-5");
+    }
+  });
 
   it("uses a room key when deployment AI is absent and caps the entire operation below the client acknowledgement", async () => {
     config.gameAi.apiKey = "";
     config.gameAi.timeoutMs = 120_000;
     createResponse.mockResolvedValue({ output_text: '{"prompts":["Moon"]}' });
-    const request = { aiEnvironment: { OPENAI_API_KEY: "sk-room-game" }, gameName: "Quick Draw", topic: "space", instructions: "Create one prompt.", schemaName: "game", schema, parse: (payload: unknown) => payload };
-    expect(await generateStructuredGameContent(request)).toEqual({ prompts: ["Moon"] });
-    expect(openAiConstructor).toHaveBeenCalledWith(expect.objectContaining({ apiKey: "sk-room-game" }));
+    const request = {
+      aiEnvironment: { OPENAI_API_KEY: "sk-room-game" },
+      gameName: "Quick Draw",
+      topic: "space",
+      instructions: "Create one prompt.",
+      schemaName: "game",
+      schema,
+      parse: (payload: unknown) => payload,
+    };
+    expect(await generateStructuredGameContent(request)).toEqual({
+      prompts: ["Moon"],
+    });
+    expect(openAiConstructor).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "sk-room-game" }),
+    );
     expect(createResponse.mock.calls[0][1]).toHaveProperty("timeout", 35_000);
     vi.stubEnv("SFU_GAME_AI_ENABLED", "false");
     createResponse.mockClear();
@@ -144,7 +208,9 @@ describe("game AI content", () => {
     });
     expect(request).not.toHaveProperty("tool_choice");
     expect(requestOptions).toHaveProperty("timeout", 25_000);
-    expect((requestOptions as { signal: AbortSignal }).signal).toBeInstanceOf(AbortSignal);
+    expect((requestOptions as { signal: AbortSignal }).signal).toBeInstanceOf(
+      AbortSignal,
+    );
   });
 
   it("offers the same optional web search for evergreen topics", async () => {
@@ -167,7 +233,9 @@ describe("game AI content", () => {
       { type: "web_search", search_context_size: "low" },
     ]);
     expect(requestOptions).toHaveProperty("timeout", 25_000);
-    expect((requestOptions as { signal: AbortSignal }).signal).toBeInstanceOf(AbortSignal);
+    expect((requestOptions as { signal: AbortSignal }).signal).toBeInstanceOf(
+      AbortSignal,
+    );
   });
 
   it("returns null when OpenAI does not return valid structured JSON", async () => {

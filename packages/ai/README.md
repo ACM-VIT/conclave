@@ -122,3 +122,9 @@ Desktop and narrow viewport checks used local fixtures; no live provider request
 ![Claude provider controls](docs/provider-controls.png)
 
 ![Room AI settings](docs/room-ai-settings.png)
+
+## Room models and provider diagnostics
+
+Room AI settings expose one shared assistant model. The first OpenAI or Anthropic room contribution selects that provider's default model; Sarvam does not change the assistant. Contributors or hosts can change models for their shared provider. Chat, idle notes setup and new game content use this selection; a participant's explicit chat-model choice still takes precedence. Removing a key leaves the selected model visible and prompts for credentials rather than switching providers. Room model metadata is broadcast without keys and cleared with the room.
+
+Assistant failures emit plain, redacted provider status, error type and request ID in Worker logs. The UI distinguishes rejected keys, model access, billing/credits and rate limits. This lets operators diagnose failed inference without recording API keys or request bodies.

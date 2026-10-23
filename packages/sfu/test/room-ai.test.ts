@@ -39,6 +39,41 @@ function fixture() {
 }
 
 describe("room AI credentials", () => {
+  it("requires a host for unconfigured or deployment-backed model choices", () => {
+    const keys = new RoomAiCredentials();
+    expect(() => keys.setModel("gpt-5.6-sol", "attendee", false)).toThrow(
+      "Only a host",
+    );
+    const env = { OPENAI_API_KEY: "sk-deployment" };
+    keys.set("openai", "sk-contribution", "attendee", false, env);
+    expect(keys.assistantModel).toBeNull();
+    expect(() => keys.setModel("gpt-5.6-sol", "attendee", false, env)).toThrow(
+      "Only a host",
+    );
+    keys.setModel("gpt-5.6-sol", "host", true, env);
+    expect(keys.assistantModel).toBe("gpt-5.6-sol");
+  });
+  it("selects the first contributed provider, shares model changes, and keeps contributor permissions", () => {
+    const keys = new RoomAiCredentials();
+    keys.set("sarvam", "speech-fixture", "alice", false);
+    expect(keys.assistantModel).toBeNull();
+    keys.set("anthropic", "sk-ant-fixture", "alice", false);
+    expect(keys.status({}).assistantModel).toBe("claude-sonnet-5-5");
+    keys.setModel("claude-haiku-5-5", "alice", false);
+    expect(keys.status({}).assistantModel).toBe("claude-haiku-5-5");
+    expect(() => keys.setModel("claude-opus-5-5", "bob", false)).toThrow(
+      "contributor",
+    );
+    expect(() => keys.setModel("unregistered-model", "alice", false)).toThrow(
+      "supported",
+    );
+    keys.setModel("claude-opus-5-5", "host", true);
+    keys.remove("anthropic", "alice", false);
+    expect(keys.assistantModel).toBe("claude-opus-5-5"); // Missing keys prompt setup; never silently switch providers.
+    keys.clear();
+    expect(keys.assistantModel).toBeNull();
+  });
+
   it("isolates providers and rooms, limits management to contributors/hosts, and hides keys from snapshots", () => {
     const a = new RoomAiCredentials();
     const b = new RoomAiCredentials();
@@ -95,6 +130,24 @@ describe("room AI credentials", () => {
     });
     expect(JSON.stringify(emit.mock.calls)).not.toContain("sk-donation");
     expect(room.aiCredentials.get("openai")).toBe("sk-donation");
+    handlers["ai:configure"](
+      {
+        roomId: "room",
+        provider: "anthropic",
+        apiKey: "sk-ant-new",
+        model: "gpt-5.6-terra",
+      },
+      ack,
+    );
+    expect(ack.mock.calls.at(-1)?.[0]).toHaveProperty("error");
+    expect(room.aiCredentials.get("anthropic")).toBeUndefined();
+    handlers["ai:configure"](
+      { roomId: "room", provider: "openai", model: "gpt-5.6-luna" },
+      ack,
+    );
+    expect(ack.mock.calls.at(-1)?.[0]).toMatchObject({
+      state: { assistantModel: "gpt-5.6-luna" },
+    });
     member.isObserver = true;
     handlers["ai:configure"](
       { roomId: "room", provider: "openai", remove: true },
@@ -184,11 +237,15 @@ describe("server-only room credential access", () => {
     for (const secret of ["server-secret", "worker-secret"]) {
       const response = await read(secret);
       expect(response.headers.get("cache-control")).toBe("no-store");
-      expect(await response.json()).toEqual({ OPENAI_API_KEY: "sk-donation" });
+      expect(await response.json()).toEqual({
+        OPENAI_API_KEY: "sk-donation",
+        CONCLAVE_ASSISTANT_MODEL: "gpt-5.6-terra",
+      });
     }
     vi.stubEnv("OPENAI_API_KEY", "sk-deployment");
     expect(await (await read("server-secret")).json()).toEqual({
       OPENAI_API_KEY: "sk-deployment",
+      CONCLAVE_ASSISTANT_MODEL: "gpt-5.6-terra",
     });
   });
 

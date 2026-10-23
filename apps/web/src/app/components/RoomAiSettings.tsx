@@ -5,24 +5,29 @@ import {
   CheckCircle2,
   AudioLines,
   Image as ImageIcon,
-  Sparkles,
+  MessageSquare,
   ChevronDown,
   ExternalLink,
   Loader2,
   X,
 } from "lucide-react";
-import { AI_PROVIDERS } from "@conclave/ai/models";
+import {
+  AI_RESPONSE_MODELS,
+  AI_PROVIDERS,
+  getResponseProvider,
+} from "@conclave/ai/models";
 import { ROOM_AI_PROVIDERS, type RoomAiProvider } from "@conclave/ai/room";
 import type { RoomAiController } from "../hooks/useRoomAi";
+import AiModelSelect from "./AiModelSelect";
 
 const uses = {
   openai: [
     { Icon: ImageIcon, label: "Image safety" },
     { Icon: AudioLines, label: "Transcription" },
-    { Icon: Sparkles, label: "Assistant & games" },
+    { Icon: MessageSquare, label: "Assistant & games" },
   ],
   anthropic: [
-    { Icon: Sparkles, label: "Assistant, questions, minutes & games" },
+    { Icon: MessageSquare, label: "Assistant, questions, minutes & games" },
   ],
   sarvam: [{ Icon: AudioLines, label: "Transcription" }],
 };
@@ -34,16 +39,17 @@ export default function RoomAiSettings({
   controller: RoomAiController;
   onClose: () => void;
 }) {
-  const [expanded, setExpanded] = useState<RoomAiProvider | null>(
-    () =>
-      ROOM_AI_PROVIDERS.find(
-        (provider) => !controller.state[provider].source,
-      ) ?? null,
-  );
+  const [expanded, setExpanded] = useState<RoomAiProvider | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<{
+    provider?: RoomAiProvider;
+    message: string;
+  } | null>(null);
+  const [notice, setNotice] = useState<{
+    provider: RoomAiProvider;
+    message: string;
+  } | null>(null);
   const save = async (provider: RoomAiProvider, remove: boolean) => {
     setPending(true);
     setError(null);
@@ -54,14 +60,15 @@ export default function RoomAiSettings({
     );
     setPending(false);
     if (failure) {
-      setError(failure);
+      setError({ provider, message: failure });
       return;
     }
     setApiKey("");
     setExpanded(null);
-    setNotice(
-      `${AI_PROVIDERS[provider].label} key ${remove ? "removed" : "shared"}`,
-    );
+    setNotice({
+      provider,
+      message: `Key ${remove ? "removed" : "shared with room"}`,
+    });
   };
   return (
     <section
@@ -81,7 +88,41 @@ export default function RoomAiSettings({
           <X size={16} />
         </button>
       </div>
-      <div className="mt-3 divide-y divide-white/10">
+      <div className="mt-3 border-b border-white/10 pb-4">
+        <AiModelSelect
+          label="Room assistant"
+          value={controller.state.assistantModel ?? ""}
+          placeholder="Deployment default"
+          models={AI_RESPONSE_MODELS.map((model) => ({
+            ...model,
+            disabled:
+              !controller.isAdmin &&
+              !(
+                controller.state[model.provider].source === "room" &&
+                controller.state[model.provider].ownerId ===
+                  controller.currentUserId
+              ),
+          }))}
+          disabled={pending || !controller.connected || !controller.ready}
+          onChange={async (model) => {
+            setPending(true);
+            setError(null);
+            const failure = await controller.configure(
+              getResponseProvider(model),
+              undefined,
+              model,
+            );
+            setPending(false);
+            if (failure) setError({ message: failure });
+          }}
+        />
+        {error && !error.provider ? (
+          <p role="alert" className="mt-2 text-[11px] text-red-300">
+            {error.message}
+          </p>
+        ) : null}
+      </div>
+      <div className="mt-4 divide-y divide-white/10">
         {ROOM_AI_PROVIDERS.map((provider) => {
           const status = controller.state[provider];
           const canEdit =
@@ -91,72 +132,98 @@ export default function RoomAiSettings({
               status.ownerId === controller.currentUserId);
           const open = expanded === provider;
           return (
-            <div key={provider} className="py-3 first:pt-0 last:pb-0">
-              <button
-                type="button"
-                disabled={
-                  pending ||
-                  !canEdit ||
-                  !controller.connected ||
-                  !controller.ready
-                }
-                onClick={() => {
-                  setExpanded(open ? null : provider);
-                  setApiKey("");
-                  setError(null);
-                  setNotice(null);
-                }}
-                title={
-                  !canEdit && status.source === "room"
-                    ? "Managed by the contributor or a host"
-                    : undefined
-                }
-                aria-expanded={open}
-                className="flex w-full items-center gap-2 text-left disabled:cursor-default"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[12px] font-medium text-[#fafafa]">
-                    {AI_PROVIDERS[provider].label}
+            <div
+              key={provider}
+              role="group"
+              aria-label={`${AI_PROVIDERS[provider].label} settings`}
+              className="py-3 first:pt-0 last:pb-0"
+            >
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={
+                    pending ||
+                    !canEdit ||
+                    !controller.connected ||
+                    !controller.ready
+                  }
+                  onClick={() => {
+                    setExpanded(open ? null : provider);
+                    setApiKey("");
+                    setError(null);
+                    setNotice(null);
+                  }}
+                  title={
+                    !canEdit && status.source === "room"
+                      ? "Managed by the contributor or a host"
+                      : undefined
+                  }
+                  aria-expanded={open}
+                  className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-[#F95F4A]/60 disabled:cursor-default"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[12px] font-medium text-[#fafafa]">
+                      {AI_PROVIDERS[provider].label}
+                    </span>
+                    <span
+                      className={`mt-1 block text-[10.5px] ${status.source ? "text-[#91cbb0]" : "text-[#a1a1aa]"}`}
+                    >
+                      {!controller.connected
+                        ? "Reconnecting…"
+                        : !controller.ready
+                          ? "Loading…"
+                          : status.source === "deployment"
+                            ? "Conclave key"
+                            : status.source === "room"
+                              ? "Room key"
+                              : "Not set"}
+                    </span>
                   </span>
-
-                  <span
-                    className={`mt-1 block text-[10.5px] ${status.source ? "text-[#91cbb0]" : "text-[#a1a1aa]"}`}
-                  >
-                    {!controller.connected
-                      ? "Reconnecting…"
-                      : !controller.ready
-                        ? "Loading…"
-                        : status.source === "deployment"
-                          ? "Conclave key"
-                          : status.source === "room"
-                            ? "Room key"
-                            : "Not set"}
-                  </span>
-                </span>
-                <span className="flex shrink-0 gap-1.5 text-[#71717a]">
+                  {canEdit ? (
+                    <span className="flex shrink-0 items-center gap-1 text-[11px] text-[#d4d4d8]">
+                      {status.source === "room" ? "Manage" : "Add key"}
+                      <ChevronDown
+                        size={13}
+                        className={open ? "rotate-180" : ""}
+                      />
+                    </span>
+                  ) : status.source ? (
+                    <CheckCircle2
+                      size={15}
+                      className="shrink-0 text-[#91cbb0]"
+                    />
+                  ) : null}
+                </button>
+                <span className="flex shrink-0 gap-2 text-[#71717a]">
                   {uses[provider].map(({ Icon, label }) => (
                     <span
                       key={label}
-                      title={label}
+                      tabIndex={0}
                       role="img"
                       aria-label={label}
+                      className="group/feature relative rounded-sm outline-none hover:text-[#d4d4d8] focus-visible:text-[#d4d4d8] focus-visible:ring-2 focus-visible:ring-[#F95F4A]/60"
                     >
-                      <Icon size={13} />
+                      <Icon size={14} aria-hidden="true" />
+                      <span
+                        role="tooltip"
+                        className="pointer-events-none absolute right-0 top-full z-10 mt-2 w-max max-w-52 rounded-md border border-white/10 bg-[#101012] px-2 py-1.5 text-[10px] leading-relaxed text-[#fafafa] opacity-0 shadow-lg transition-opacity group-hover/feature:opacity-100 group-focus-visible/feature:opacity-100"
+                      >
+                        {label}
+                      </span>
                     </span>
                   ))}
                 </span>
-                {canEdit ? (
-                  <span className="flex shrink-0 items-center gap-1 text-[11px] text-[#d4d4d8]">
-                    {status.source === "room" ? "Manage" : "Add key"}
-                    <ChevronDown
-                      size={13}
-                      className={open ? "rotate-180" : ""}
-                    />
-                  </span>
-                ) : status.source ? (
-                  <CheckCircle2 size={15} className="shrink-0 text-[#91cbb0]" />
-                ) : null}
-              </button>
+              </div>
+              {notice?.provider === provider ? (
+                <p role="status" className="mt-2 text-[11px] text-[#91cbb0]">
+                  {notice.message}
+                </p>
+              ) : null}
+              {error?.provider === provider ? (
+                <p role="alert" className="mt-2 text-[11px] text-red-300">
+                  {error.message}
+                </p>
+              ) : null}
               {open && canEdit && controller.ready && controller.connected ? (
                 <form
                   className="mt-3 space-y-2.5"
@@ -231,22 +298,6 @@ export default function RoomAiSettings({
           );
         })}
       </div>
-      {error ? (
-        <p
-          role="alert"
-          className="mt-3 text-[11.5px] leading-relaxed text-red-300"
-        >
-          {error}
-        </p>
-      ) : null}
-      {notice ? (
-        <p
-          role="status"
-          className="mt-3 text-[11.5px] leading-relaxed text-[#91cbb0]"
-        >
-          {notice}
-        </p>
-      ) : null}
     </section>
   );
 }

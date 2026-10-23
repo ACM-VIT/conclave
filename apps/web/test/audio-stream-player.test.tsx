@@ -2,6 +2,10 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import ParticipantAudio from "../src/app/components/ParticipantAudio";
+import ScreenShareAudioPlayers from "../src/app/components/ScreenShareAudioPlayers";
+import { MeetVolumeProvider, useMeetVolume } from "../src/app/hooks/useMeetVolume";
+import type { Participant } from "../src/app/lib/types";
 import AudioStreamPlayer from "../src/app/components/AudioStreamPlayer";
 import { DeviceSettingsSection } from "../src/app/components/DeviceCaretMenu";
 
@@ -149,4 +153,21 @@ describe("AudioStreamPlayer output lifecycle", () => {
     await act(async () => { rejectOld(new DOMException("Disconnected", "NotFoundError")); });
     expect(setSinkId).not.toHaveBeenCalledWith("");
   });
+});
+
+it("applies a participant's local mute and volume to both microphone and shared audio", async () => {
+  const participant = { userId: "remote", audioStream: stream(), screenShareAudioStream: stream(), screenShareProducerId: "screen" } as Participant;
+  function Controls() {
+    const { setParticipantVolume } = useMeetVolume();
+    return <><button onClick={() => setParticipantVolume("remote", 0)}>Mute</button><button onClick={() => setParticipantVolume("remote", 0.25)}>Restore</button></>;
+  }
+  await act(async () => root.render(<MeetVolumeProvider meetVolume={0.5} setMeetVolume={() => {}}>
+    <Controls /><ParticipantAudio participant={participant} />
+    <ScreenShareAudioPlayers participants={new Map([["remote", participant]])} currentUserId="local" activeScreenShareId="screen" />
+  </MeetVolumeProvider>));
+  expect([...container.querySelectorAll("audio")].map(audio => audio.volume)).toEqual([0.5, 0.5]);
+  await act(async () => container.querySelectorAll("button")[0].click());
+  expect([...container.querySelectorAll("audio")].map(audio => audio.volume)).toEqual([0, 0]);
+  await act(async () => container.querySelectorAll("button")[1].click());
+  expect([...container.querySelectorAll("audio")].map(audio => audio.volume)).toEqual([0.125, 0.125]);
 });

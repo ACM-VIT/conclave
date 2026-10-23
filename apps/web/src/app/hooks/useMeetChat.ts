@@ -51,6 +51,7 @@ export interface ConclaveAssistantContext {
 
 export interface ConclaveAssistantApiKeyPromptState {
   visible: boolean;
+  replacePersonalKey?: boolean;
   error: string | null;
   model: ConclaveAssistantModel;
 }
@@ -368,12 +369,17 @@ export function useMeetChat({
         })
         .catch((error) => {
           if (controller.signal.aborted) return;
-          if (error instanceof ConclaveAssistantApiKeyRequiredError) {
+          if (
+            error instanceof ConclaveAssistantApiKeyRequiredError &&
+            assistantApiKeyRef.current === (apiKey ?? "")
+          ) {
+            assistantApiKeyRef.current = "";
             if (error.model) assistantModelRef.current = error.model;
             pendingAssistantRequestRef.current = request;
             setAssistantApiKeyPrompt({
               visible: true,
-              error: null,
+              replacePersonalKey: Boolean(apiKey),
+              error: error.message,
               model: error.model ?? assistantModelRef.current,
             });
             patchAssistantMessage(request.answerId, {

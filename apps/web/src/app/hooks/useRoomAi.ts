@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
+import { isResponseModel } from "@conclave/ai/models";
 import {
   ROOM_AI_PROVIDERS,
   emptyRoomAiState,
@@ -13,6 +14,11 @@ import {
 export function parseRoomAiState(value: unknown): RoomAiState | null {
   if (!value || typeof value !== "object") return null;
   const state = emptyRoomAiState();
+  const model = (value as Record<string, unknown>).assistantModel;
+  if (model !== undefined && model !== null) {
+    if (typeof model !== "string" || !isResponseModel(model)) return null;
+    state.assistantModel = model;
+  }
   for (const provider of ROOM_AI_PROVIDERS) {
     const entry = (value as Record<string, unknown>)[provider];
     if (!entry || typeof entry !== "object") return null;
@@ -35,7 +41,8 @@ export type RoomAiController = {
   isAdmin: boolean;
   configure: (
     provider: RoomAiProvider,
-    apiKey: string | null,
+    apiKey: string | null | undefined,
+    model?: string,
   ) => Promise<string | null>;
 };
 
@@ -113,7 +120,8 @@ export function useRoomAi(
   const configure = useCallback(
     async (
       provider: RoomAiProvider,
-      apiKey: string | null,
+      apiKey: string | null | undefined,
+      model?: string,
     ): Promise<string | null> => {
       if (!socket?.connected || !joined)
         return "Reconnect to the meeting to change AI settings.";
@@ -124,7 +132,12 @@ export function useRoomAi(
           {
             provider,
             roomId,
-            ...(apiKey === null ? { remove: true } : { apiKey }),
+            ...(apiKey === null
+              ? { remove: true }
+              : apiKey !== undefined
+                ? { apiKey }
+                : {}),
+            ...(model ? { model } : {}),
           },
           (
             error: Error | null,

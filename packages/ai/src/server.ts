@@ -5,6 +5,7 @@ import type { AiTextOptions, AiTextSession } from "#types";
 
 export type * from "#types";
 export { createOpenAiClient } from "#openai";
+export { AiTaskLimitError, describeAiError } from "#errors";
 
 export const generateAiText = (
   options: AiTextOptions & { input: string },

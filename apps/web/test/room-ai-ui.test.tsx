@@ -3,6 +3,7 @@ import { act } from "react";
 import type { Socket } from "socket.io-client";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import ChatPanel from "../src/app/components/ChatPanel";
 import TranscriptPanel from "../src/app/components/TranscriptPanel";
 import RoomAiSettings from "../src/app/components/RoomAiSettings";
 import { emptyRoomAiState } from "@conclave/ai/room";
@@ -59,6 +60,127 @@ const transcript = (start = vi.fn().mockResolvedValue(true)) =>
   }) as unknown as MeetingTranscriptController;
 
 describe("AI setup UX", () => {
+  it("keeps key feedback in its provider row and exposes feature labels and model selection", async () => {
+    const configure = vi.fn().mockResolvedValue(null);
+    await act(async () =>
+      root.render(
+        <RoomAiSettings
+          controller={roomAi({ configure, isAdmin: true })}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    const select = container.querySelector("select")!;
+    await act(async () => {
+      select.value = "claude-haiku-5-5";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(configure).toHaveBeenCalledWith(
+      "anthropic",
+      undefined,
+      "claude-haiku-5-5",
+    );
+    const row = container.querySelector(
+      '[role="group"][aria-label="Anthropic settings"]',
+    )!;
+    await act(async () =>
+      row.querySelector<HTMLButtonElement>("button")!.click(),
+    );
+    const input = row.querySelector<HTMLInputElement>("input")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "sk-ant-fixture");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      row
+        .querySelector("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    expect(configure).toHaveBeenCalledWith("anthropic", "sk-ant-fixture");
+    expect(row.querySelector('[role="status"]')?.textContent).toBe(
+      "Key shared with room",
+    );
+    expect(
+      container
+        .querySelector('[aria-label="Sarvam settings"]')
+        ?.querySelector('[role="status"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector(
+        '[role="img"][aria-label="Image safety"] [role="tooltip"]',
+      )?.textContent,
+    ).toBe("Image safety");
+    expect(container.querySelector(".lucide-sparkles")).toBeNull();
+  });
+
+  it("labels the inherited model without inventing a deployment selection", async () => {
+    await act(async () => root.render(<RoomAiSettings controller={roomAi()} onClose={() => {}} />));
+    expect(container.querySelector("select")?.value).toBe("");
+    expect(container.querySelector('option[value=""]')?.textContent).toBe("Deployment default");
+  });
+
+  it("preserves the audio draft when the shared assistant changes", async () => {
+    const start = vi.fn().mockResolvedValue(true);
+    const notes = transcript(start);
+    const state = emptyRoomAiState();
+    const render = () => root.render(<TranscriptPanel transcript={notes} roomAi={roomAi({ state: { ...state } })} onClose={() => {}} />);
+    await act(async () => render());
+    await act(async () => [...container.querySelectorAll("button")].find(b => b.textContent === "Sarvam")!.click());
+    const input = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "sarvam-draft-key");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    state.assistantModel = "claude-haiku-5-5";
+    state.anthropic = { source: "room", ownerId: "alice" };
+    await act(async () => render());
+    expect([...container.querySelectorAll("button")].find(b => b.textContent === "Sarvam")?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe("sarvam-draft-key");
+    await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({ transcriptModel: "saaras:v3", apiKey: "sarvam-draft-key", qaModel: "claude-haiku-5-5" }));
+  });
+
+  it("keeps a rejected personal key replaceable when a room key is also available", async () => {
+    const state = emptyRoomAiState();
+    state.anthropic = { source: "room", ownerId: "bob" };
+    const submit = vi.fn();
+    await act(async () => root.render(<ChatPanel
+      roomAi={roomAi({ state })} messages={[]} chatInput="" currentUserId="alice"
+      onInputChange={() => {}} onSend={() => {}} onSendGif={() => {}} onSendImage={async () => false} onClose={() => {}}
+      assistantApiKeyPrompt={{ visible: true, error: "Replace your rejected key.", model: "claude-haiku-5-5", replacePersonalKey: true }}
+      onSubmitAssistantApiKey={submit}
+    />));
+    const input = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    expect(input).not.toBeNull();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "sk-ant-replacement");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Connect")!.click());
+    expect(submit).toHaveBeenCalledWith("sk-ant-replacement", "claude-haiku-5-5");
+  });
+
+  it("uses the room assistant model for notes setup", async () => {
+    const state = emptyRoomAiState();
+    state.assistantModel = "claude-haiku-5-5";
+    state.anthropic = { source: "room", ownerId: "alice" };
+    await act(async () =>
+      root.render(
+        <TranscriptPanel
+          transcript={transcript()}
+          roomAi={roomAi({ state })}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    expect(container.querySelector("select")?.value).toBe("claude-haiku-5-5");
+  });
+
   it("separates transcription coverage from the selected assistant's missing key", async () => {
     await act(async () =>
       root.render(
@@ -135,6 +257,8 @@ describe("AI setup UX", () => {
       button.textContent?.includes("OpenAI"),
     )!;
     expect(openai.disabled).toBe(true);
+    expect(container.querySelector<HTMLOptionElement>('option[value="gpt-5.6-sol"]')?.disabled).toBe(true);
+    expect(container.querySelector<HTMLOptionElement>('option[value="claude-sonnet-5-5"]')?.disabled).toBe(true);
     await act(async () =>
       root.render(
         <RoomAiSettings
@@ -144,6 +268,7 @@ describe("AI setup UX", () => {
       ),
     );
     await act(async () => openai.click());
+    expect(container.querySelector<HTMLOptionElement>('option[value="gpt-5.6-sol"]')?.disabled).toBe(false);
     expect(container.textContent).toContain("Your account is billed");
     expect(container.textContent).toContain("when the room ends");
     expect(

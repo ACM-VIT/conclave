@@ -140,6 +140,7 @@ export class TranscriptRoom {
   private hasPendingAudio = false;
   private pendingAudioSamples = 0;
   private session: TranscriptSessionState | null = null;
+  private sessionRevision = 0;
   private segments: TranscriptSegment[] = [];
   private minutes: TranscriptMinutesSnapshot = createEmptyMinutes();
   private sequence = 0;
@@ -796,6 +797,7 @@ export class TranscriptRoom {
       return;
     }
 
+    const revision = this.sessionRevision;
     const roomId = this.session?.roomId || "unknown";
     const now = Date.now();
     const transcriptModel = normalizeRealtimeTranscriptModel(
@@ -844,6 +846,7 @@ export class TranscriptRoom {
         /* Participant keys remain available when room setup is unavailable. */
       }
       if (
+        revision !== this.sessionRevision ||
         !this.viewers.has(viewer.socket) ||
         (this.session?.status ?? "idle") !== existingStatus
       ) {
@@ -875,6 +878,7 @@ export class TranscriptRoom {
       return;
     }
 
+    const acceptedRevision = ++this.sessionRevision;
     const transportMode = normalizeTransportMode(message.transportMode);
     const wasIdle = existingStatus === "idle" || existingStatus === "error";
     this.responseApiKey = responseKey.apiKey;
@@ -912,6 +916,7 @@ export class TranscriptRoom {
     this.broadcastSession();
     await this.persist();
 
+    if (acceptedRevision !== this.sessionRevision) return;
     try {
       const language = normalizeLanguage(
         message.language ?? this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
@@ -926,6 +931,7 @@ export class TranscriptRoom {
         locale,
         localizationPrompt: this.env.TRANSCRIPT_TRANSCRIPTION_PROMPT,
       });
+      if (acceptedRevision !== this.sessionRevision) return;
       this.session = {
         ...this.session,
         status: "live",
@@ -936,7 +942,7 @@ export class TranscriptRoom {
       await this.sendSfuRelayStartToken(viewer);
       await this.persist();
     } catch (error) {
-      if (this.session?.status !== "starting") return;
+      if (acceptedRevision !== this.sessionRevision || this.session?.status !== "starting") return;
       this.markTakeoverNeeded(
         error instanceof Error
           ? error.message
@@ -992,6 +998,7 @@ export class TranscriptRoom {
       return;
     }
 
+    this.sessionRevision += 1;
     this.suppressSfuRelayDisconnectsUntil =
       Date.now() + SFU_RELAY_DISCONNECT_SUPPRESSION_MS;
     this.suppressSfuRelayDisconnectCount += 1;
@@ -1936,6 +1943,7 @@ export class TranscriptRoom {
   }
 
   private markTakeoverNeeded(error: string): void {
+    this.sessionRevision += 1;
     this.cancelControllerReconnect();
     this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();
@@ -2277,6 +2285,7 @@ export class TranscriptRoom {
     roomId: string,
     qaModel = DEFAULT_QA_MODEL,
   ): void {
+    this.sessionRevision += 1;
     this.cancelControllerReconnect();
     this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();

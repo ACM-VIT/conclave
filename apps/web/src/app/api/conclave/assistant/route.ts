@@ -3,6 +3,8 @@ import jwt from "jsonwebtoken";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import {
   createAiTextSession,
+  describeAiError,
+  AiTaskLimitError,
   type AiFunctionTool,
   type AiTool,
   type AiWebSearchTool,
@@ -663,23 +665,17 @@ export async function POST(request: Request) {
 
   const participantApiKey = asString(body.apiKey).trim();
   const requestedModel = asString(body.model).trim();
-  const model =
-    isConclaveAssistantModel(requestedModel)
-      ? requestedModel
-      : resolveConfiguredResponseModel(
-          process.env.CONCLAVE_ASSISTANT_MODEL,
-          CONCLAVE_ASSISTANT_GLOBAL_MODEL,
-        );
-  const provider = getResponseProvider(model);
-  let apiKey =
-    participantApiKey ||
-    getProviderApiKey(readAiEnvironment(process.env), provider);
-  if (!apiKey) {
+  let roomEnvironment: ReturnType<typeof readAiEnvironment> = {};
+  const deploymentEnvironment = readAiEnvironment(process.env);
+  const hasExplicitDeploymentChoice =
+    isConclaveAssistantModel(requestedModel) &&
+    Boolean(getProviderApiKey(deploymentEnvironment, getResponseProvider(requestedModel)));
+  if (!participantApiKey && !hasExplicitDeploymentChoice) {
     try {
-      const roomEnv = await fetchRoomAiEnvironment({
+      roomEnvironment = await fetchRoomAiEnvironment({
         sfuUrl: routedSfuUrl,
         secret: resolveSfuSecret(),
-        providers: [provider],
+        providers: ["openai", "anthropic"],
         identity: {
           roomId: tokenPayload.roomId!,
           clientId: tokenPayload.clientId!,
@@ -688,11 +684,22 @@ export async function POST(request: Request) {
         },
         signal: request.signal,
       });
-      apiKey = getProviderApiKey(roomEnv, provider);
     } catch {
       /* Missing room credentials use the same provider-specific setup flow. */
     }
   }
+  const model = isConclaveAssistantModel(requestedModel)
+    ? requestedModel
+    : resolveConfiguredResponseModel(
+        roomEnvironment.CONCLAVE_ASSISTANT_MODEL ||
+          process.env.CONCLAVE_ASSISTANT_MODEL,
+        CONCLAVE_ASSISTANT_GLOBAL_MODEL,
+      );
+  const provider = getResponseProvider(model);
+  const apiKey =
+    participantApiKey ||
+    getProviderApiKey(deploymentEnvironment, provider) ||
+    getProviderApiKey(roomEnvironment, provider);
   if (!apiKey || !isProviderApiKey(provider, apiKey)) {
     return Response.json(
       {
@@ -1077,19 +1084,28 @@ export async function POST(request: Request) {
           }
           nextInput = functionOutputs;
         }
-        throw new Error("Conclave used too many function tool calls.");
+        throw new AiTaskLimitError();
       } catch (error) {
-        console.error("[Conclave] assistant stream failed:", error);
+        const failure = describeAiError(error, provider, apiKey);
+        console.error(
+          "[Conclave] assistant stream failed:",
+          JSON.stringify({ model, ...failure }),
+        );
         // Always relay the failure: earlier task/reasoning packets may have
         // already opened a live bubble for the rest of the room, and it must
         // terminate in the same error state the asker sees.
         writeStreamEvent({
           type: "error",
-          error: "Conclave could not answer right now.",
+          error: participantApiKey && failure.status === 401
+            ? `${AI_PROVIDERS[provider].label} rejected your key. Replace it to retry.`
+            : failure.userMessage,
+          ...(participantApiKey && failure.status === 401
+            ? { code: "personal_api_key_rejected", model }
+            : {}),
           relay: makeRelayPacket(
             fullText.trim()
               ? "Conclave couldn't finish answering."
-              : "Conclave could not answer right now.",
+              : failure.userMessage,
             true,
             true,
           ),

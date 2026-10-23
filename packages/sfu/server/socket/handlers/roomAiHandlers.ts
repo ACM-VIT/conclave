@@ -1,4 +1,9 @@
-import { readAiEnvironment } from "@conclave/ai/models";
+import {
+  getProviderApiKey,
+  getResponseProvider,
+  isResponseModel,
+  readAiEnvironment,
+} from "@conclave/ai/models";
 import { isRoomAiProvider } from "@conclave/ai/room";
 import { Admin } from "../../../config/classes/Admin.js";
 import type { ConnectionContext } from "../context.js";
@@ -55,6 +60,25 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
       }
       try {
         const host = member.client instanceof Admin;
+        const env = readAiEnvironment(process.env);
+        if (
+          data.model !== undefined &&
+          (typeof data.model !== "string" ||
+            !isResponseModel(data.model) ||
+            getResponseProvider(data.model) !== data.provider)
+        ) {
+          throw new Error("Choose a supported model for this provider.");
+        }
+        if (data.model !== undefined && data.remove === true) {
+          throw new Error("Remove a key or change its model separately.");
+        }
+        if (
+          data.model !== undefined &&
+          !host &&
+          getProviderApiKey(env, data.provider)
+        ) {
+          throw new Error("Only a host can change deployment-backed models.");
+        }
         if (data.remove === true)
           member.room.aiCredentials.remove(
             data.provider,
@@ -67,8 +91,18 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
             data.apiKey,
             member.client.id,
             host,
+            env,
           );
-        else throw new Error("Enter an API key.");
+        else if (typeof data.model !== "string")
+          throw new Error("Enter an API key.");
+        if (typeof data.model === "string") {
+          member.room.aiCredentials.setModel(
+            data.model,
+            member.client.id,
+            host,
+            env,
+          );
+        }
         const state = member.room.aiCredentials.status(
           readAiEnvironment(process.env),
         );

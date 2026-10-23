@@ -238,7 +238,9 @@ function StartStage({
   const [transcriptModel, setTranscriptModel] = useState(
     transcript.session.transcriptModel,
   );
-  const [qaModel, setQaModel] = useState(transcript.session.qaModel);
+  const [qaModel, setQaModel] = useState(
+    roomAi?.state.assistantModel ?? transcript.session.qaModel,
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const needsTakeover = transcript.session.status === "takeover_needed";
   const provider = getTranscriptTranscriptionProvider(transcriptModel);
@@ -263,9 +265,16 @@ function StartStage({
       : "Room key";
   useEffect(() => {
     setTranscriptModel(transcript.session.transcriptModel);
-    setQaModel(transcript.session.qaModel);
-
-  }, [transcript.session.qaModel, transcript.session.transcriptModel]);
+  }, [transcript.session.transcriptModel]);
+  useEffect(() => {
+    setQaModel(roomAi?.state.assistantModel ?? transcript.session.qaModel);
+  }, [roomAi?.state.assistantModel, transcript.session.qaModel]);
+  useEffect(() => {
+    setApiKey("");
+  }, [provider]);
+  useEffect(() => {
+    setAssistantApiKey("");
+  }, [assistantProvider]);
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!canSubmit || !hasRequiredKeys || isSubmitting) return;
