@@ -67,6 +67,21 @@ const openFeature = async (name = "Chat assistant") => act(async () => container
 const saveFeature = async () => act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})));
 
 describe("AI setup UX", () => {
+  it("lets a Sarvam contributor switch transcription from an unowned OpenAI model", async () => {
+    const state = emptyRoomAiState();
+    state.openai = {source: "room", ownerId: "bob"};
+    state.sarvam = {source: "room", ownerId: "alice"};
+    const controller = roomAi({state});
+    await act(async () => root.render(<RoomAiSettings controller={controller} onClose={() => {}} />));
+    await openFeature("Transcription");
+    const select = container.querySelector<HTMLSelectElement>('[aria-label="Model"]')!;
+    expect(select.disabled).toBe(false);
+    expect([...select.options].find(option => option.value === "gpt-live-transcribe")?.disabled).toBe(true);
+    expect([...select.options].find(option => option.value === "saaras:v3")?.disabled).toBe(false);
+    await act(async () => {select.value = "saaras:v3"; select.dispatchEvent(new Event("change", {bubbles: true}));});
+    await saveFeature();
+    expect(controller.configureFeature).toHaveBeenCalledWith("transcription", expect.objectContaining({model: "saaras:v3"}));
+  });
   it("reflects compact Chat setup in room settings and keeps failed shares retryable", async () => {
     const state = emptyRoomAiState();
     let rejectShare = true;
@@ -183,6 +198,14 @@ describe("AI setup UX", () => {
       null,
     );
   });
+  it("shares Notes credentials without selecting or replacing the Chat model", async () => {
+    const controller = roomAi();
+    await configureRoomAiForFeature(controller, {anthropic: "sk-ant-notes"}, "claude-haiku-5-5", ["minutes", "questions"]);
+    expect(controller.configure).toHaveBeenCalledExactlyOnceWith("anthropic", "sk-ant-notes", null);
+    expect(controller.configureFeature).toHaveBeenCalledWith("minutes", {model: "claude-haiku-5-5"});
+    expect(controller.configureFeature).toHaveBeenCalledWith("questions", {model: "claude-haiku-5-5"});
+    expect(controller.configureFeature).not.toHaveBeenCalledWith("assistant", expect.anything());
+  });
   it("clears a personal catalog and explains refresh when the draft key is invalid", async () => {
     const requestModels = vi.fn().mockResolvedValue([
       {
@@ -281,7 +304,7 @@ describe("AI setup UX", () => {
     expect(configure).toHaveBeenCalledWith(
       "anthropic",
       "sk-ant-personal-fixture",
-      "claude-haiku-5-5",
+      null,
     );
   });
 

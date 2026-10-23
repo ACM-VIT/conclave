@@ -20,6 +20,7 @@ vi.mock("openai", () => ({
 
 vi.mock("../config/config.js", () => ({
   config: {
+    chatImageModeration: {timeoutMs: 8000},
     openAi: {
       apiKey: "test-openai-key",
       maxRetries: 2,

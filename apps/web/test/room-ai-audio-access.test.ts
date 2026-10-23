@@ -49,6 +49,15 @@ afterEach(() => {
 });
 
 describe("room audio settings authorization", () => {
+  it("preserves the deployment speech model when the room has no explicit model override", async () => {
+    vi.stubEnv("ELEVENLABS_TTS_MODEL", "eleven_turbo_v2_5");
+    const voiceToken = await createVoiceToken({voiceId: "deployment-voice", voiceName: "Fixture", ownerId: "user"});
+    const fetcher = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => String(url).includes("/internal/ai/credentials") ? Response.json({CONCLAVE_AI_SETTINGS: JSON.stringify({speech: {enabled: true}})}) : new Response(new Uint8Array([1,2,3])));
+    vi.stubGlobal("fetch", fetcher);
+    const response = await speech(request({token: voiceToken, text: "Deployment model fixture", roomAiToken: access("speech")}));
+    expect(response.status).toBe(200);
+    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body)).model_id).toBe("eleven_turbo_v2_5");
+  });
   it("uses the live room model and key after a current-host check, returning only an ephemeral token", async () => {
     const calls: { url: string; init?: RequestInit }[] = [];
     vi.stubGlobal(

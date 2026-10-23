@@ -595,8 +595,11 @@ export const createSfuApp = ({
         return;
       }
 
+      const abort = new AbortController();
+      const onClose = () => { if (!res.writableEnded) abort.abort(); };
+      res.on("close", onClose);
       try {
-        const imageSettings = resolveAiFeatureSettings({}, "images", room.aiCredentials.featureSettings);
+        const imageSettings = resolveAiFeatureSettings({}, "images", room.aiCredentials.effectiveFeatureSettings());
         if (!imageSettings.enabled) {
           res.status(403).json({error: "Image safety is disabled in Room AI settings."});
           return;
@@ -607,7 +610,9 @@ export const createSfuApp = ({
           timeoutMs: imageSettings.timeoutMs,
           model: imageSettings.model,
           apiKey: config.openAi.apiKey || room.aiCredentials.get("openai"),
+          signal: abort.signal,
         });
+        if (abort.signal.aborted) return;
         if (moderation.blocked) {
           Logger.warn(
             `Blocked chat image in room ${room.id} (categories=${
@@ -625,6 +630,7 @@ export const createSfuApp = ({
           return;
         }
       } catch (error) {
+        if (abort.signal.aborted) return;
         Logger.warn(
           `Chat image moderation unavailable in room ${room.id}; upload rejected`,
           error,
@@ -633,6 +639,8 @@ export const createSfuApp = ({
           error: "Image safety check is temporarily unavailable. Try again.",
         });
         return;
+      } finally {
+        res.off("close", onClose);
       }
 
       const id = randomBytes(24).toString("base64url");

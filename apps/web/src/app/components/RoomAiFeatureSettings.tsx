@@ -6,6 +6,7 @@ import {
   AI_PROVIDERS,
   AI_RESPONSE_MODELS,
   LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS,
+  type AiProvider,
 } from "@conclave/ai/models";
 import {
   AI_FEATURES,
@@ -128,7 +129,8 @@ function FeatureEditor({
   const [saved, setSaved] = useState(false);
   const text = AI_FEATURES[feature].kind === "text";
   const provider = featureProvider(feature, draft.model);
-  const owns = (name: keyof RoomAiController["state"]): boolean => {
+  const owns = (name: AiProvider): boolean => {
+    if (name === "elevenlabs") return false;
     const status = controller.state[name];
     return (
       typeof status === "object" &&
@@ -144,6 +146,7 @@ function FeatureEditor({
   const canSelect =
     controller.isAdmin ||
     (text && (owns("openai") || owns("anthropic"))) ||
+    (feature === "transcription" && (owns("openai") || owns("sarvam"))) ||
     canEdit;
   const disabled = pending || !controller.ready || !controller.connected;
   const update = <K extends keyof AiFeatureSettings>(
@@ -237,7 +240,7 @@ function FeatureEditor({
                 <option value={draft.model}>{draft.model}</option>
               ) : null}
               {staticModels.map((model) => (
-                <option key={model.id} value={model.id}>
+                <option key={model.id} value={model.id} disabled={!controller.isAdmin && !owns(featureProvider(feature, model.id))}>
                   {model.label}
                 </option>
               ))}

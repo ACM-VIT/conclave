@@ -959,6 +959,7 @@ export function useMeetChat({
           token: string;
           uploadUrl: string;
           maxBytes: number;
+          timeoutMs?: number;
         }>((resolve, reject) => {
           const timeoutId = window.setTimeout(() => {
             reject(new Error("Image upload authorization timed out."));
@@ -968,7 +969,7 @@ export function useMeetChat({
             {},
             (
               response:
-                | { token: string; uploadUrl: string; maxBytes: number }
+                | { token: string; uploadUrl: string; maxBytes: number; timeoutMs?: number }
                 | { error: string },
             ) => {
               window.clearTimeout(timeoutId);
@@ -992,7 +993,7 @@ export function useMeetChat({
           request.responseType = "json";
           // Bound the upload so a stalled connection can't leave the composer
           // stuck in its uploading state (which blocks sending and removal).
-          request.timeout = CHAT_IMAGE_UPLOAD_TIMEOUT_MS;
+          request.timeout = authorization.timeoutMs ?? CHAT_IMAGE_UPLOAD_TIMEOUT_MS;
           request.setRequestHeader(
             "Authorization",
             `Bearer ${authorization.token}`,

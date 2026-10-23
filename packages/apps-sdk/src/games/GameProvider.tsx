@@ -40,19 +40,31 @@ const emitWithAck = <T,>(
   payload: unknown,
   fallback: T,
   timeoutMs = ACK_TIMEOUT_MS,
+  options: {signal?: AbortSignal; interrupted?: T} = {},
 ): Promise<T> =>
   new Promise((resolve) => {
+    const {signal} = options;
     let settled = false;
     const done = (value: T) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
+      socket.off("disconnect", interrupted);
+      signal?.removeEventListener("abort", interrupted);
       resolve(value);
     };
+    const interrupted = () => done(options.interrupted ?? fallback);
     const timer = setTimeout(() => done(fallback), timeoutMs);
     const ack = (response: T) => {
       clearTimeout(timer);
       done(response);
     };
+    socket.on("disconnect", interrupted);
+    signal?.addEventListener("abort", interrupted, { once: true });
+    if (!socket.connected || signal?.aborted) {
+      interrupted();
+      return;
+    }
     if (payload === undefined) {
       socket.emit(event, ack);
     } else {
@@ -81,6 +93,11 @@ export function GameProvider({
   const [vote, setVote] = useState<GameVote | null>(null);
   const [selfId, setSelfId] = useState<string | null>(null);
   const activeGameIdRef = useRef<string | null>(null);
+  const pendingStart = useRef<AbortController | null>(null);
+  useEffect(() => () => {
+    pendingStart.current?.abort();
+    pendingStart.current = null;
+  }, [socket]);
 
   // Prefer the server's canonical id for this socket over the host-provided
   // user id. The server may normalize identity (lowercased email, token
@@ -184,14 +201,22 @@ export function GameProvider({
       if (isReadOnly) {
         return { success: false, error: "Observer mode is read-only" };
       }
-      if (!socket) return { success: false, error: "Not connected" };
-      return emitWithAck<GameMoveResult>(
-        socket,
-        "game:start",
-        { gameId, options },
-        { success: false, error: "Timed out" },
-        START_GAME_ACK_TIMEOUT_MS,
-      );
+      if (!socket?.connected) return { success: false, error: "Not connected" };
+      if (pendingStart.current) return { success: false, error: "A game is already starting" };
+      const attempt = new AbortController();
+      pendingStart.current = attempt;
+      try {
+        return await emitWithAck<GameMoveResult>(
+          socket,
+          "game:start",
+          { gameId, options },
+          { success: false, error: "Timed out" },
+          START_GAME_ACK_TIMEOUT_MS,
+          {signal: attempt.signal, interrupted: {success: false, error: "Game start interrupted. Try again."}},
+        );
+      } finally {
+        if (pendingStart.current === attempt) pendingStart.current = null;
+      }
     },
     [socket, isReadOnly],
   );
@@ -201,12 +226,14 @@ export function GameProvider({
       return { success: false, error: "Observer mode is read-only" };
     }
     if (!socket) return { success: false, error: "Not connected" };
-    return emitWithAck<GameMoveResult>(
+    const result = await emitWithAck<GameMoveResult>(
       socket,
       "game:end",
       undefined,
       { success: false, error: "Timed out" },
     );
+    if (result.success) pendingStart.current?.abort();
+    return result;
   }, [socket, isReadOnly]);
 
   const joinGame = useCallback(async (): Promise<GameMoveResult> => {

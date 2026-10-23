@@ -31,7 +31,7 @@ type TestRoom = {
   minutesGenerating: boolean;
   responseApiKey: string | null;
   responseEnvironment: Env | null;
-  personalResponseKey: { provider: string; apiKey: string } | null;
+  personalResponseKeys: Partial<Record<"openai" | "anthropic", string>>;
   hasAiMinutes: boolean;
   minutesRerunRequested: boolean;
   regenerateMinutes: () => Promise<void>;
@@ -168,10 +168,7 @@ it("keeps an explicit response key ahead of the matching room key without crossi
       questions: { model: "gpt-6.1-sol" },
     }),
   } as Env;
-  room.personalResponseKey = {
-    provider: "anthropic",
-    apiKey: "sk-ant-personal",
-  };
+  room.personalResponseKeys = {anthropic: "sk-ant-personal"};
   const resolve = (
     TranscriptRoom.prototype as unknown as {
       responseProfile: (

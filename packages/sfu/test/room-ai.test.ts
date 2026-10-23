@@ -10,6 +10,7 @@ import { createSfuState } from "../server/state.js";
 import { registerRoomAiHandlers } from "../server/socket/handlers/roomAiHandlers.js";
 import type { ConnectionContext } from "../server/socket/context.js";
 import { createChatImageUploadToken } from "../server/chatImages.js";
+import type { ModerateChatImageOptions } from "../server/chatImageModeration.js";
 
 const servers: Server[] = [];
 afterEach(async () => {
@@ -42,6 +43,18 @@ function fixture() {
 }
 
 describe("room AI credentials", () => {
+  it("preserves a Chat model saved before the first Notes key contribution", () => {
+    const {socket, room, member} = fixture();
+    room.aiCredentials.configureFeature("assistant", {model: "gpt-6.1-sol"}, "host", true);
+    registerRoomAiHandlers({socket, currentRoom: room, currentClient: member, io: {to: () => ({emit: vi.fn()})}} as unknown as ConnectionContext);
+    const handlers = Object.fromEntries(socket.on.mock.calls) as Record<string, (...args: unknown[]) => void>;
+    const configure = handlers["ai:configure"];
+    const callback = vi.fn();
+    configure({roomId: "room", provider: "anthropic", apiKey: "sk-ant-notes", model: "claude-haiku-5-5"}, callback);
+    expect(callback.mock.calls[0][0]).not.toHaveProperty("error");
+    expect(room.aiCredentials.featureSettings.assistant?.model).toBe("gpt-6.1-sol");
+    expect(room.aiCredentials.assistantModel).toBeNull();
+  });
   it("authorizes each feature against its effective provider and keeps models independent", () => {
     const keys = new RoomAiCredentials();
     keys.set("anthropic", "sk-ant-owner", "owner", false);
@@ -432,7 +445,7 @@ async function start() {
   const { room, member } = fixture();
   const state = createSfuState();
   state.rooms.set(room.channelId, room as unknown as Room);
-  const moderateImage = vi.fn(async () => ({
+  const moderateImage = vi.fn(async (_options: ModerateChatImageOptions) => ({
     blocked: false,
     categories: [] as string[],
   }));
@@ -557,8 +570,9 @@ describe("server-only room credential access", () => {
     const response = await upload();
     expect(response.status).toBe(201);
     expect(moderateImage).toHaveBeenCalledWith(
-      expect.objectContaining({ apiKey: "sk-image-safety" }),
+      expect.objectContaining({ apiKey: "sk-image-safety", timeoutMs: config.chatImageModeration.timeoutMs }),
     );
+    expect(moderateImage.mock.calls[0][0].signal).toBeInstanceOf(AbortSignal);
     expect(await response.text()).not.toContain("sk-image-safety");
     moderateImage.mockResolvedValueOnce({
       blocked: true,
@@ -566,5 +580,25 @@ describe("server-only room credential access", () => {
     });
     expect((await upload()).status).toBe(422);
     expect(room.addChatImageAsset).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts abandoned image safety checks without storing an orphan attachment", async () => {
+    const {room, member, url, moderateImage} = await start();
+    room.aiCredentials.set("openai", "sk-image-safety", member.id, false);
+    let signal!: AbortSignal;
+    let finish!: () => void;
+    moderateImage.mockImplementationOnce((options: ModerateChatImageOptions) => {
+      signal = options.signal!;
+      return new Promise(resolve => { finish = () => resolve({blocked: false, categories: []}); });
+    });
+    const controller = new AbortController();
+    const upload = fetch(`${url}/chat-images`, {method: "POST", signal: controller.signal, headers: {authorization: `Bearer ${createChatImageUploadToken("server-secret", room.channelId, member.id)}`, "content-type": "image/png"}, body: Buffer.from([137,80,78,71,13,10,26,10,0])}).catch(() => null);
+    await vi.waitFor(() => expect(moderateImage).toHaveBeenCalledTimes(1));
+    controller.abort();
+    await upload;
+    await vi.waitFor(() => expect(signal.aborted).toBe(true));
+    finish();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(room.addChatImageAsset).not.toHaveBeenCalled();
   });
 });

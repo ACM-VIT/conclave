@@ -18,7 +18,7 @@ export type ChatImageModerationClient = {
   moderations: {
     create(
       body: ModerationCreateParams,
-      options?: { timeout?: number },
+      options?: { timeout?: number; signal?: AbortSignal; maxRetries?: number },
     ): Promise<ModerationResponse>;
   };
 };
@@ -36,6 +36,7 @@ export type ModerateChatImageOptions = {
   client?: ChatImageModerationClient;
   apiKey?: string;
   model?: string;
+  signal?: AbortSignal;
 };
 
 export const moderateChatImage = async ({
@@ -45,6 +46,7 @@ export const moderateChatImage = async ({
   client,
   apiKey,
   model = CHAT_IMAGE_MODERATION_MODEL,
+  signal,
 }: ModerateChatImageOptions): Promise<ChatImageModerationResult> => {
   const response = await (
     client ??
@@ -63,7 +65,7 @@ export const moderateChatImage = async ({
         },
       ],
     },
-    { timeout: timeoutMs },
+    { timeout: timeoutMs, ...(signal ? {signal} : {}), maxRetries: 0 },
   );
   const result = response.results[0];
   if (!result) {

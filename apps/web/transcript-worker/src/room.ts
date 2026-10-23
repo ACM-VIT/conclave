@@ -149,7 +149,7 @@ export class TranscriptRoom {
   private responseEnvironment: Env | null = null;
   private responseAbort = new AbortController();
   private responseRoute: {sfuUrl: string; identity: {userId: string; roomId: string; clientId: string; channelId: string}} | null = null;
-  private personalResponseKey: {provider: string; apiKey: string} | null = null;
+  private personalResponseKeys: Partial<Record<"openai" | "anthropic", string>> = {};
   private transcriptionSession: LiveTranscriptionSession | null = null;
   private transcriptionConnectionOptions:
     | (PersistedTranscriptionConfig & {
@@ -817,6 +817,7 @@ export class TranscriptRoom {
     let qaModel = isResponseModel(message.qaModel || "")
       ? message.qaModel!
       : DEFAULT_QA_MODEL;
+    const assistantKeyProvider = getResponseProvider(qaModel);
     const providers = ["openai", "anthropic", "sarvam"] as const;
     const routedRoom = Boolean(viewer.sfuUrl && viewer.clientId && viewer.channelId);
     let effectiveEnv: AiEnvironment = routedRoom ? roomAiEnvironment(this.env, {}) : { ...this.env };
@@ -874,17 +875,24 @@ export class TranscriptRoom {
       this.sendError(viewer, transcriptionKey.message);
       return;
     }
+    const personalResponseKeys: typeof this.personalResponseKeys = {};
+    if (transcriptionProvider === "openai" && message.apiKey?.trim()) {
+      personalResponseKeys.openai = message.apiKey.trim();
+    }
+    if (message.assistantApiKey?.trim()) {
+      personalResponseKeys[assistantKeyProvider] = message.assistantApiKey.trim();
+    }
     const responseKey = this.resolveResponseKey(
       qaModel,
       transcriptionProvider,
       message.apiKey,
-      message.assistantApiKey,
+      personalResponseKeys[getResponseProvider(qaModel)],
       effectiveEnv,
     );
     for (const feature of ["minutes", "questions"] as const) {
       const settings = resolveAiFeatureSettings({...effectiveEnv, CONCLAVE_ASSISTANT_MODEL: qaModel}, feature);
       if (!settings.enabled) continue;
-      const key = this.resolveResponseKey(settings.model, transcriptionProvider, message.apiKey, getResponseProvider(settings.model) === getResponseProvider(qaModel) ? message.assistantApiKey : undefined, effectiveEnv);
+      const key = this.resolveResponseKey(settings.model, transcriptionProvider, message.apiKey, personalResponseKeys[getResponseProvider(settings.model)], effectiveEnv);
       if (!key.ok) { this.sendError(viewer, key.message); return; }
     }
 
@@ -896,8 +904,7 @@ export class TranscriptRoom {
     const wasIdle = existingStatus === "idle" || existingStatus === "error";
     this.responseApiKey = responseKey.ok ? responseKey.apiKey : null;
     this.responseRoute = viewer.sfuUrl && viewer.clientId && viewer.channelId ? {sfuUrl: viewer.sfuUrl, identity: {userId: viewer.userId, roomId, clientId: viewer.clientId, channelId: viewer.channelId}} : null;
-    const personalKey = message.assistantApiKey?.trim() || (getResponseProvider(qaModel) === transcriptionProvider ? message.apiKey?.trim() : undefined);
-    this.personalResponseKey = personalKey ? {provider: getResponseProvider(qaModel), apiKey: personalKey} : null;
+    this.personalResponseKeys = personalResponseKeys;
     this.session = {
       roomId,
       status: "starting",
@@ -921,13 +928,13 @@ export class TranscriptRoom {
     };
     this.resetTranscriptionAudioState();
     this.audioPaused = false;
+    this.resetMinutesScheduler(!wasIdle);
     if (wasIdle) {
       this.segments = [];
       this.sequence = 0;
       this.minutes = createEmptyMinutes(qaModel);
       this.lastMinutesRefreshAt = 0;
       this.lastMinutesCompactionAt = now;
-      this.resetMinutesScheduler();
     }
     this.broadcastSession();
     await this.persist();
@@ -955,6 +962,7 @@ export class TranscriptRoom {
         error: null,
       };
       this.broadcastSession();
+      if (!wasIdle) this.scheduleMinutes();
       await this.sendSfuRelayStartToken(viewer);
       await this.persist();
     } catch (error) {
@@ -1027,7 +1035,7 @@ export class TranscriptRoom {
     this.responseAbort = new AbortController();
     this.responseEnvironment = null;
     this.responseRoute = null;
-    this.personalResponseKey = null;
+    this.personalResponseKeys = {};
     this.session = {
       ...createIdleSession(roomId),
       transcriptModel: this.session?.transcriptModel ?? DEFAULT_TRANSCRIPT_MODEL,
@@ -1973,7 +1981,7 @@ export class TranscriptRoom {
     this.responseAbort = new AbortController();
     this.responseEnvironment = null;
     this.responseRoute = null;
-    this.personalResponseKey = null;
+    this.personalResponseKeys = {};
     this.resetTranscriptionAudioState();
     this.audioPaused = false;
     if (this.minutesTimer !== null) {
@@ -2026,7 +2034,7 @@ export class TranscriptRoom {
     });
   }
 
-  private resetMinutesScheduler(): void {
+  private resetMinutesScheduler(preserveMinutes = false): void {
     if (this.minutesTimer !== null) {
       clearTimeout(this.minutesTimer);
       this.minutesTimer = null;
@@ -2034,7 +2042,7 @@ export class TranscriptRoom {
     this.minutesDirtySince = 0;
     this.minutesGenerating = false;
     this.minutesRerunRequested = false;
-    this.hasAiMinutes = false;
+    if (!preserveMinutes) this.hasAiMinutes = false;
     this.minutesStatus = "idle";
   }
 
@@ -2081,7 +2089,7 @@ export class TranscriptRoom {
     }
     const settings = resolveAiFeatureSettings({...env, CONCLAVE_ASSISTANT_MODEL: requestedModel || this.session?.qaModel}, feature);
     const provider = getResponseProvider(settings.model);
-    const apiKey = (this.personalResponseKey?.provider === provider ? this.personalResponseKey.apiKey : "") || getProviderApiKey(env, provider) || (!route && provider === getResponseProvider(this.session?.qaModel || DEFAULT_QA_MODEL) ? this.responseApiKey : "");
+    const apiKey = this.personalResponseKeys[provider] || getProviderApiKey(env, provider) || (!route && provider === getResponseProvider(this.session?.qaModel || DEFAULT_QA_MODEL) ? this.responseApiKey : "");
     if (settings.enabled && !apiKey) throw new Error("Add a key for this feature in Room AI settings.");
     return {env, model: settings.model, apiKey: apiKey || "", enabled: settings.enabled};
   }
@@ -2348,7 +2356,7 @@ export class TranscriptRoom {
     this.responseAbort = new AbortController();
     this.responseEnvironment = null;
     this.responseRoute = null;
-    this.personalResponseKey = null;
+    this.personalResponseKeys = {};
     this.segments = [];
     this.resetTranscriptionAudioState();
     this.resetMinutesScheduler();

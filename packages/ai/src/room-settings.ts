@@ -181,7 +181,7 @@ export function resolveAiFeatureSettings(
     maxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
     researchTokens: AI_GENERATION_LIMITS.researchTokens,
     timeoutMs:
-      feature === "transcription" ? 30_000 : AI_GENERATION_LIMITS.timeoutMs,
+      feature === "transcription" ? 30_000 : feature === "images" ? 8_000 : AI_GENERATION_LIMITS.timeoutMs,
     searchEnabled: feature === "assistant" || feature === "games",
     maxSearchUses: 10,
     reasoningEffort: "default",

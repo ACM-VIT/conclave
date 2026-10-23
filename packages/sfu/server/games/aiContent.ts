@@ -11,7 +11,7 @@ import {
   type AiWebSearchTool,
 } from "@conclave/ai/server";
 import { config as sfuConfig } from "../../config/config.js";
-import { gameAiFeatureSettings } from "../gameAiSettings.js";
+import { roomAiFeatureDefaults } from "../roomAiSettings.js";
 import { Logger } from "../../utilities/loggers.js";
 import { textOption } from "./config.js";
 import type { GameConfig, GameOptionSpec } from "./types.js";
@@ -123,7 +123,7 @@ export const generateStructuredGameContent = async <T>({
 }: GeneratedContentRequest<T>): Promise<T | null> => {
   const cleanTopic = sanitizeTopic(topic);
   const base = aiEnvironment ?? readAiEnvironment(process.env);
-  const env = {...base, CONCLAVE_AI_SETTINGS: JSON.stringify(gameAiFeatureSettings(base))};
+  const env = {...base, CONCLAVE_AI_SETTINGS: JSON.stringify(roomAiFeatureDefaults(base))};
   const settings = resolveAiFeatureSettings({ ...env, CONCLAVE_ASSISTANT_MODEL: env.CONCLAVE_ASSISTANT_MODEL || sfuConfig.gameAi.model }, "games");
   const model = settings.model;
   const apiKey =

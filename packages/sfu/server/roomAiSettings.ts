@@ -7,12 +7,16 @@ import { config } from "../config/config.js";
 
 // Deployment values establish defaults; explicit room choices override them.
 // Discovery, the settings UI and inference must see the same effective profile.
-export function gameAiFeatureSettings(
+export function roomAiFeatureDefaults(
   env: AiEnvironment,
   features = roomAiFeatureSettingsFromEnvironment(env),
 ): RoomAiFeatureSettings {
   return {
     ...features,
+    images: {
+      timeoutMs: config.chatImageModeration.timeoutMs,
+      ...features.images,
+    },
     games: {
       model:
         env.CONCLAVE_ASSISTANT_MODEL ||

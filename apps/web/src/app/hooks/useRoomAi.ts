@@ -59,7 +59,7 @@ export type RoomAiController = {
   configure: (
     provider: RoomAiProvider,
     apiKey: string | null | undefined,
-    // null shares an audio/image-only credential without selecting text.
+    // null shares a credential without changing the legacy Chat model.
     model?: string | null,
   ) => Promise<string | null>;
 };
@@ -79,7 +79,7 @@ export async function configureRoomAiForFeature(
     const error = await controller.configure(
       provider,
       key,
-      provider === modelProvider ? model : null,
+      provider === modelProvider && features.includes("assistant") ? model : null,
     );
     if (error) return error;
   }
@@ -89,7 +89,7 @@ export async function configureRoomAiForFeature(
         const error = await controller.configureFeature(feature, {model});
         if (error) return error;
       }
-    } else if (controller.state.assistantModel !== model)
+    } else if (features.includes("assistant") && controller.state.assistantModel !== model)
       return controller.configure(modelProvider, undefined, model);
   }
   return null;

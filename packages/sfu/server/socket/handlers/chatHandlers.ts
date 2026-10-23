@@ -1,5 +1,6 @@
 import { AI_GENERATION_LIMITS } from "@conclave/ai/limits";
 import jwt from "jsonwebtoken";
+import { resolveAiFeatureSettings } from "@conclave/ai/room-settings";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type {
   ChatGifAttachment,
@@ -684,7 +685,7 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
       _data: unknown,
       callback: (
         response:
-          | { token: string; uploadUrl: string; maxBytes: number }
+          | { token: string; uploadUrl: string; maxBytes: number; timeoutMs: number }
           | { error: string; code?: string },
       ) => void,
     ) => {
@@ -740,6 +741,7 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
         ),
         uploadUrl: `${origin}/chat-images`,
         maxBytes: MAX_CHAT_IMAGE_BYTES,
+        timeoutMs: Math.max(30_000, resolveAiFeatureSettings({}, "images", room.aiCredentials.effectiveFeatureSettings()).timeoutMs + 15_000),
       });
     },
   );

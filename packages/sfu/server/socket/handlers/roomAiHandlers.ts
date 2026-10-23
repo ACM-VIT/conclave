@@ -154,7 +154,7 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
         const selectModel =
           typeof data.model === "string" &&
           (typeof data.apiKey !== "string" ||
-            member.room.aiCredentials.assistantModel === null);
+            !member.room.aiCredentials.hasAssistantModelSelection);
         if (
           data.model !== undefined &&
           data.model !== null &&

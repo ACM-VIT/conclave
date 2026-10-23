@@ -1,4 +1,4 @@
-import { gameAiFeatureSettings } from "./gameAiSettings.js";
+import { roomAiFeatureDefaults } from "./roomAiSettings.js";
 import {
   AI_PROVIDERS,
   getProviderApiKey,
@@ -68,12 +68,16 @@ export class RoomAiCredentials {
     return this.#assistantModel;
   }
 
+  get hasAssistantModelSelection(): boolean {
+    return this.#assistantModel !== null || this.#features.assistant?.model !== undefined;
+  }
+
   get featureSettings(): RoomAiFeatureSettings {
     return structuredClone(this.#features);
   }
 
   effectiveFeatureSettings(env: AiEnvironment = {}): RoomAiFeatureSettings {
-    return gameAiFeatureSettings({...env, ...(this.#assistantModel ? {CONCLAVE_ASSISTANT_MODEL: this.#assistantModel} : {})}, this.featureSettings);
+    return roomAiFeatureDefaults({...env, ...(this.#assistantModel ? {CONCLAVE_ASSISTANT_MODEL: this.#assistantModel} : {})}, this.featureSettings);
   }
 
   configureFeature(feature: AiFeature, input: unknown, actorId: string, isHost: boolean, env: AiEnvironment = {}): void {
@@ -127,7 +131,7 @@ export class RoomAiCredentials {
     if (provider !== "sarvam") this.#catalogs.delete(provider);
     // The first text-provider contribution selects its model visibly for the room.
     if (
-      !this.#assistantModel &&
+      !this.hasAssistantModelSelection &&
       options.selectDefaultModel !== false &&
       provider !== "sarvam" &&
       !getProviderApiKey(env, provider)

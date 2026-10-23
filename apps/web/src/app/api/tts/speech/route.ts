@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { roomAiAccess } from "@/lib/room-ai-access";
+import { roomAiFeatureSettingsFromEnvironment } from "@conclave/ai/room-settings";
+import { AI_DEFAULT_MODELS } from "@conclave/ai/models";
 import {
   MAX_TTS_TEXT_LENGTH,
   synthesizeClonedSpeech,
@@ -79,7 +81,10 @@ export async function POST(request: Request): Promise<Response> {
 
     const voice = await verifyVoiceToken(token);
     const profile = body.roomAiToken ? await roomAiAccess(body.roomAiToken, "speech") : null;
-    const options = {model: profile?.settings.model, timeoutMs: profile?.settings.timeoutMs};
+    const options = {
+      model: (profile ? roomAiFeatureSettingsFromEnvironment(profile.env).speech?.model : undefined) || process.env.ELEVENLABS_TTS_MODEL?.trim() || AI_DEFAULT_MODELS.tts,
+      timeoutMs: profile?.settings.timeoutMs,
+    };
     const speech = await getSpeech(`${token}\u0000${options.model || "deployment"}\u0000${text}`, voice.voiceId, text, options);
     return new Response(speech.audio.slice(0), {
       status: 200,
