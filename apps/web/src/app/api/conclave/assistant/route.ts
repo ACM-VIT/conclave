@@ -4,6 +4,7 @@ import { createHash, createHmac, randomUUID } from "node:crypto";
 import {
   createAiTextSession,
   describeAiError,
+  AiTaskLimitError,
   type AiFunctionTool,
   type AiTool,
   type AiWebSearchTool,
@@ -665,7 +666,11 @@ export async function POST(request: Request) {
   const participantApiKey = asString(body.apiKey).trim();
   const requestedModel = asString(body.model).trim();
   let roomEnvironment: ReturnType<typeof readAiEnvironment> = {};
-  if (!participantApiKey) {
+  const deploymentEnvironment = readAiEnvironment(process.env);
+  const hasExplicitDeploymentChoice =
+    isConclaveAssistantModel(requestedModel) &&
+    Boolean(getProviderApiKey(deploymentEnvironment, getResponseProvider(requestedModel)));
+  if (!participantApiKey && !hasExplicitDeploymentChoice) {
     try {
       roomEnvironment = await fetchRoomAiEnvironment({
         sfuUrl: routedSfuUrl,
@@ -693,7 +698,7 @@ export async function POST(request: Request) {
   const provider = getResponseProvider(model);
   const apiKey =
     participantApiKey ||
-    getProviderApiKey(readAiEnvironment(process.env), provider) ||
+    getProviderApiKey(deploymentEnvironment, provider) ||
     getProviderApiKey(roomEnvironment, provider);
   if (!apiKey || !isProviderApiKey(provider, apiKey)) {
     return Response.json(
@@ -1079,7 +1084,7 @@ export async function POST(request: Request) {
           }
           nextInput = functionOutputs;
         }
-        throw new Error("Conclave used too many function tool calls.");
+        throw new AiTaskLimitError();
       } catch (error) {
         const failure = describeAiError(error, provider, apiKey);
         console.error(

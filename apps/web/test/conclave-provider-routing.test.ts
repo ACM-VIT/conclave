@@ -62,6 +62,28 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("assistant provider integration", () => {
+  it("skips room lookup when an explicit model and its deployment key are known", async () => {
+    roomEnvironment.mockRejectedValue(new Error("Room lookup is unavailable"));
+    const response = await POST(request({ model: "claude-haiku-5-5" }));
+    await response.text();
+    expect(roomEnvironment).not.toHaveBeenCalled();
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ model: "claude-haiku-5-5", apiKey: "sk-ant-server" }));
+  });
+
+  it("reports a local tool limit after repeated successful tool responses", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    stream.mockImplementation(async function* () {
+      yield { type: "complete", text: "", calls: [{ id: "transcript-call", name: "get_meeting_transcript", arguments: "{}" }] };
+    });
+    try {
+      const response = await POST(request({ model: "claude-haiku-5-5", transcriptActive: true, transcript: "Notes" }));
+      const frames = await response.text();
+      expect(frames).toContain("reached its tool limit");
+      expect(frames).not.toContain("could not reach Anthropic");
+      expect(stream).toHaveBeenCalledTimes(12);
+    } finally { log.mockRestore(); }
+  });
+
   it("uses the room's selected Claude model without a personal selection or an OpenAI key", async () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("ANTHROPIC_API_KEY", "");

@@ -3,6 +3,7 @@ import { act } from "react";
 import type { Socket } from "socket.io-client";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import ChatPanel from "../src/app/components/ChatPanel";
 import TranscriptPanel from "../src/app/components/TranscriptPanel";
 import RoomAiSettings from "../src/app/components/RoomAiSettings";
 import { emptyRoomAiState } from "@conclave/ai/room";
@@ -142,6 +143,26 @@ describe("AI setup UX", () => {
     expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe("sarvam-draft-key");
     await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
     expect(start).toHaveBeenCalledWith(expect.objectContaining({ transcriptModel: "saaras:v3", apiKey: "sarvam-draft-key", qaModel: "claude-haiku-5-5" }));
+  });
+
+  it("keeps a rejected personal key replaceable when a room key is also available", async () => {
+    const state = emptyRoomAiState();
+    state.anthropic = { source: "room", ownerId: "bob" };
+    const submit = vi.fn();
+    await act(async () => root.render(<ChatPanel
+      roomAi={roomAi({ state })} messages={[]} chatInput="" currentUserId="alice"
+      onInputChange={() => {}} onSend={() => {}} onSendGif={() => {}} onSendImage={async () => false} onClose={() => {}}
+      assistantApiKeyPrompt={{ visible: true, error: "Replace your rejected key.", model: "claude-haiku-5-5", replacePersonalKey: true }}
+      onSubmitAssistantApiKey={submit}
+    />));
+    const input = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    expect(input).not.toBeNull();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "sk-ant-replacement");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Connect")!.click());
+    expect(submit).toHaveBeenCalledWith("sk-ant-replacement", "claude-haiku-5-5");
   });
 
   it("uses the room assistant model for notes setup", async () => {

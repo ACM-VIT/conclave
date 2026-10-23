@@ -1295,7 +1295,7 @@ function ChatPanel({
                 />
               </div>
               <div className="flex gap-2">
-                {roomAi?.state[getResponseProvider(assistantModel)].source ? <span className="flex flex-1 items-center gap-1.5 text-[11px] text-[#91cbb0]"><CheckCircle2 size={13} />{roomAi.state[getResponseProvider(assistantModel)].source === "deployment" ? "Conclave key" : "Room key"}</span> : (
+                {roomAi?.state[getResponseProvider(assistantModel)].source && !assistantApiKeyPrompt.replacePersonalKey ? <span className="flex flex-1 items-center gap-1.5 text-[11px] text-[#91cbb0]"><CheckCircle2 size={13} />{roomAi.state[getResponseProvider(assistantModel)].source === "deployment" ? "Conclave key" : "Room key"}</span> : (
                 <input
                   type="password"
                   value={assistantApiKeyInput}

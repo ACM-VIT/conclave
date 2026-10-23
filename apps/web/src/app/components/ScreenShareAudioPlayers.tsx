@@ -1,6 +1,7 @@
 "use client";
 
 import { memo } from "react";
+import { useMeetVolume } from "../hooks/useMeetVolume";
 import type { Participant } from "../lib/types";
 import AudioStreamPlayer from "./AudioStreamPlayer";
 
@@ -28,6 +29,7 @@ function ScreenShareAudioPlayers({
   onPlaybackStarted,
   playbackAttemptToken,
 }: ScreenShareAudioPlayersProps) {
+  const { getParticipantVolume } = useMeetVolume();
   const screenShareAudioParticipants = Array.from(participants.values()).filter(
     (participant) =>
       participant.userId !== currentUserId &&
@@ -46,6 +48,7 @@ function ScreenShareAudioPlayers({
           }
           kind="screenShare"
           stream={participant.screenShareAudioStream}
+          volumeMultiplier={getParticipantVolume(participant.userId)}
           audioOutputDeviceId={audioOutputDeviceId}
           onAutoplayBlocked={onAutoplayBlocked}
           onPlaybackStarted={onPlaybackStarted}

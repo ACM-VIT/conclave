@@ -1,6 +1,13 @@
 import type { AiTextProvider } from "@conclave/ai/models";
 import { AI_PROVIDERS } from "@conclave/ai/models";
 
+export class AiTaskLimitError extends Error {
+  constructor() {
+    super("Conclave reached its tool limit. Try a narrower request.");
+    this.name = "AiTaskLimitError";
+  }
+}
+
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 
@@ -30,21 +37,23 @@ export function describeAiError(
   const requestId = detail.requestID ?? detail.request_id;
   const label = AI_PROVIDERS[provider].label;
   const userMessage =
-    status === 401
-      ? `${label} rejected the API key. Update it in AI settings.`
-      : status === 403
-        ? `This ${label} key cannot access the selected model.`
-        : status === 404
-          ? `The selected ${label} model is unavailable for this account.`
-          : /credit balance|insufficient.{0,20}(credit|quota)|billing/i.test(
-                message,
-              )
-            ? `Check the credits and billing on your ${label} account.`
-            : status === 429
-              ? `${label} is rate limited. Try again shortly.`
-              : status === 400
-                ? `${label} rejected the request. Check the selected model and account settings.`
-                : `Conclave could not reach ${label}. Try again shortly.`;
+    error instanceof AiTaskLimitError
+      ? error.message
+      : status === 401
+        ? `${label} rejected the API key. Update it in AI settings.`
+        : status === 403
+          ? `This ${label} key cannot access the selected model.`
+          : status === 404
+            ? `The selected ${label} model is unavailable for this account.`
+            : /credit balance|insufficient.{0,20}(credit|quota)|billing/i.test(
+                  message,
+                )
+              ? `Check the credits and billing on your ${label} account.`
+              : status === 429
+                ? `${label} is rate limited. Try again shortly.`
+                : status === 400
+                  ? `${label} rejected the request. Check the selected model and account settings.`
+                  : `Conclave could not reach ${label}. Try again shortly.`;
   return {
     provider,
     status,

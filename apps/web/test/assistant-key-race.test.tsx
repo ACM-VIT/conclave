@@ -72,6 +72,7 @@ it("keeps the replacement key when another old request rejects", async () => {
       ),
     );
     expect(chat.assistantApiKeyPrompt.visible).toBe(true);
+    expect(chat.assistantApiKeyPrompt.replacePersonalKey).toBe(true);
     await act(async () =>
       chat.submitAssistantApiKey("sk-ant-new", "claude-haiku-5-5"),
     );
