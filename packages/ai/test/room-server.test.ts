@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchRoomAiEnvironment } from "../src/room-server.js";
+import {
+  describeRoomAiLookupFailure,
+  fetchRoomAiEnvironment,
+} from "../src/room-server.js";
 
 const options = {
   sfuUrl: "https://sfu.example",
@@ -30,7 +33,7 @@ describe("room credential server boundary", () => {
     const [url, init] = fetcher.mock.calls[0];
     expect(String(url)).toBe("https://sfu.example/internal/ai/credentials");
     expect(init).toMatchObject({
-      redirect: "error",
+      redirect: "manual",
       cache: "no-store",
       headers: { "x-room-ai-secret": "server-secret" },
     });
@@ -39,6 +42,33 @@ describe("room credential server boundary", () => {
       providers: ["anthropic"],
     });
     expect(init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("rejects redirects without following them or exposing credentials in diagnostics", async () => {
+    const fetcher = vi.fn(
+      async (_url: unknown, _init?: RequestInit) =>
+        new Response(null, {
+          status: 307,
+          headers: { location: "https://untrusted.example" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const error: unknown = await fetchRoomAiEnvironment(options).catch(
+      (error: unknown) => error,
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
+    expect(describeRoomAiLookupFailure(error)).toEqual({
+      name: "Error",
+      status: 307,
+    });
+    expect(
+      describeRoomAiLookupFailure(
+        Object.assign(new TypeError("server-secret"), {
+          headers: { authorization: "secret" },
+        }),
+      ),
+    ).toEqual({ name: "TypeError" });
   });
 
   it("does not follow failed authorization or malformed service responses", async () => {

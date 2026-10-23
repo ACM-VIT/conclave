@@ -1,4 +1,4 @@
-import { fetchRoomAiEnvironment } from "@conclave/ai/room-server";
+import { describeRoomAiLookupFailure, fetchRoomAiEnvironment } from "@conclave/ai/room-server";
 import jwt from "jsonwebtoken";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import {
@@ -684,7 +684,8 @@ export async function POST(request: Request) {
         },
         signal: request.signal,
       });
-    } catch {
+    } catch (error) {
+      console.warn("[Conclave] room AI lookup failed:", JSON.stringify(describeRoomAiLookupFailure(error)));
       /* Missing room credentials use the same provider-specific setup flow. */
     }
   }
