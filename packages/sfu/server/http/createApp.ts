@@ -1,5 +1,6 @@
 import { AI_PROVIDERS, getProviderApiKey, readAiEnvironment, type AiEnvironment } from "@conclave/ai/models";
 import { isRoomAiProvider } from "@conclave/ai/room";
+import { ROOM_AI_ENV_FIELDS } from "@conclave/ai/room-server";
 import type { MediaKind } from "mediasoup/types";
 import { randomBytes } from "node:crypto";
 import cors from "cors";
@@ -735,12 +736,16 @@ export const createSfuApp = ({
       return;
     }
     const result: AiEnvironment = {};
+    const environment = readAiEnvironment(process.env);
+    for (const field of ROOM_AI_ENV_FIELDS) {
+      if (!field.endsWith("_API_KEY") && environment[field]) result[field] = environment[field];
+    }
     for (const provider of Array.isArray(body.providers)
       ? body.providers
       : []) {
       if (!isRoomAiProvider(provider)) continue;
       const key =
-        getProviderApiKey(readAiEnvironment(process.env), provider) ||
+        getProviderApiKey(environment, provider) ||
         room.aiCredentials.get(provider);
       if (key) result[AI_PROVIDERS[provider].keyEnv] = key;
     }

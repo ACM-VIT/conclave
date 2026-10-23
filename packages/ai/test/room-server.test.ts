@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   describeRoomAiLookupFailure,
   fetchRoomAiEnvironment,
+  roomAiEnvironment,
 } from "../src/room-server.js";
 
 const options = {
@@ -18,17 +19,18 @@ const options = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("room credential server boundary", () => {
-  it("authenticates to the trusted SFU, scopes membership, rejects redirects, and reads only credential fields", async () => {
+  it("authenticates to the trusted SFU, scopes membership, rejects redirects, and reads only AI profile fields", async () => {
     const fetcher = vi.fn(async (_url: unknown, _init?: RequestInit) =>
       Response.json({
         ANTHROPIC_API_KEY: "sk-ant-room",
-        OPENAI_BASE_URL: "https://untrusted.example",
+        ANTHROPIC_BASE_URL: "https://room-provider.example",
         privateField: "discard",
       }),
     );
     vi.stubGlobal("fetch", fetcher);
     expect(await fetchRoomAiEnvironment(options)).toEqual({
       ANTHROPIC_API_KEY: "sk-ant-room",
+      ANTHROPIC_BASE_URL: "https://room-provider.example",
     });
     const [url, init] = fetcher.mock.calls[0];
     expect(String(url)).toBe("https://sfu.example/internal/ai/credentials");
@@ -42,6 +44,31 @@ describe("room credential server boundary", () => {
       providers: ["anthropic"],
     });
     expect(init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("uses the room account and endpoint without falling back to independent Worker settings", () => {
+    const env = roomAiEnvironment(
+      {
+        OPENAI_API_KEY: "sk-worker",
+        ANTHROPIC_API_KEY: "sk-ant-worker",
+        OPENAI_BASE_URL: "https://worker.example/v1",
+        ANTHROPIC_BASE_URL: "https://worker.example",
+        CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL: "https://worker-gateway.example",
+        CONCLAVE_ASSISTANT_MODEL: "claude-opus-5-5",
+      },
+      {
+        ANTHROPIC_API_KEY: "sk-ant-room",
+        ANTHROPIC_BASE_URL: "https://room.example",
+      },
+    );
+    expect(env).toMatchObject({
+      ANTHROPIC_API_KEY: "sk-ant-room",
+      ANTHROPIC_BASE_URL: "https://room.example",
+      OPENAI_API_KEY: "",
+      OPENAI_BASE_URL: "https://api.openai.com/v1",
+      CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL: "",
+      CONCLAVE_ASSISTANT_MODEL: "",
+    });
   });
 
   it("rejects redirects without following them or exposing credentials in diagnostics", async () => {

@@ -9,12 +9,12 @@ import {
 } from "@conclave/meeting-core/transcript-models";
 
 describe("transcript model registry", () => {
-  it("keeps OpenAI defaults and exposes current Claude alternatives", () => {
-    expect(DEFAULT_TRANSCRIPT_QA_MODEL).toBe("gpt-5.6-terra");
+  it("uses current OpenAI defaults and exposes Claude alternatives", () => {
+    expect(DEFAULT_TRANSCRIPT_QA_MODEL).toBe("gpt-6.1-sol");
     expect(TRANSCRIPT_QA_MODELS.map((model) => model.id)).toEqual([
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.6-sol",
+      "gpt-6.1-sol",
+      "gpt-6-luna",
+      "gpt-6-astra",
       "claude-sonnet-5-5",
       "claude-haiku-5-5",
       "claude-opus-5-5",
@@ -38,12 +38,10 @@ describe("transcript model registry", () => {
     expect(realtimeWhisper.supportsPrompt).toBe(false);
     expect(realtimeWhisper.supportsDelay).toBe(true);
     expect(
-      getTranscriptTranscriptionModelConfig("gpt-4o-transcribe")
-        .supportsPrompt,
+      getTranscriptTranscriptionModelConfig("gpt-4o-transcribe").supportsPrompt,
     ).toBe(true);
     expect(
-      getTranscriptTranscriptionModelConfig("gpt-4o-transcribe")
-        .supportsDelay,
+      getTranscriptTranscriptionModelConfig("gpt-4o-transcribe").supportsDelay,
     ).toBe(false);
   });
 

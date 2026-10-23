@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
-import { isResponseModel } from "@conclave/ai/models";
+import {
+  isResponseModel,
+  type AiModelCatalog,
+  type AiTextProvider,
+} from "@conclave/ai/models";
 import {
   ROOM_AI_PROVIDERS,
   emptyRoomAiState,
@@ -39,10 +43,16 @@ export type RoomAiController = {
   connected: boolean;
   currentUserId: string;
   isAdmin: boolean;
+  requestModels?: (options?: {
+    provider?: AiTextProvider;
+    apiKey?: string;
+    refresh?: boolean;
+  }) => Promise<AiModelCatalog[]>;
   configure: (
     provider: RoomAiProvider,
     apiKey: string | null | undefined,
-    model?: string,
+    // null shares an audio/image-only credential without selecting text.
+    model?: string | null,
   ) => Promise<string | null>;
 };
 
@@ -121,7 +131,7 @@ export function useRoomAi(
     async (
       provider: RoomAiProvider,
       apiKey: string | null | undefined,
-      model?: string,
+      model?: string | null,
     ): Promise<string | null> => {
       if (!socket?.connected || !joined)
         return "Reconnect to the meeting to change AI settings.";
@@ -137,7 +147,7 @@ export function useRoomAi(
               : apiKey !== undefined
                 ? { apiKey }
                 : {}),
-            ...(model ? { model } : {}),
+            ...(model !== undefined ? { model } : {}),
           },
           (
             error: Error | null,
@@ -165,5 +175,55 @@ export function useRoomAi(
     },
     [socket, joined, roomId],
   );
-  return { state, ready, connected, currentUserId, isAdmin, configure };
+  const requestModels = useCallback(
+    async (
+      options: {
+        provider?: AiTextProvider;
+        apiKey?: string;
+        refresh?: boolean;
+      } = {},
+    ): Promise<AiModelCatalog[]> => {
+      if (!socket?.connected || !joined)
+        throw new Error("Reconnect to load models.");
+      const generation = epoch.current;
+      return new Promise((resolve, reject) => {
+        socket
+          .timeout(10_000)
+          .emit(
+            "ai:models",
+            { roomId, ...options },
+            (
+              error: Error | null,
+              result:
+                { catalogs?: AiModelCatalog[]; error?: string } | undefined,
+            ) => {
+              if (
+                error ||
+                !socket.connected ||
+                generation !== epoch.current ||
+                !Array.isArray(result?.catalogs)
+              ) {
+                reject(
+                  new Error(
+                    result?.error || "Could not refresh models. Try again.",
+                  ),
+                );
+                return;
+              }
+              resolve(result.catalogs);
+            },
+          );
+      });
+    },
+    [socket, joined, roomId],
+  );
+  return {
+    state,
+    ready,
+    connected,
+    currentUserId,
+    isAdmin,
+    configure,
+    requestModels,
+  };
 }

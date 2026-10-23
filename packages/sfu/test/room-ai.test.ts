@@ -12,6 +12,7 @@ import { createChatImageUploadToken } from "../server/chatImages.js";
 const servers: Server[] = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   await Promise.all(
     servers
       .splice(0)
@@ -39,6 +40,229 @@ function fixture() {
 }
 
 describe("room AI credentials", () => {
+  it("keeps the first saved room model when concurrent key shares suggest different initial models", () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    const { socket, room, member } = fixture();
+    const peerSocket = { id: "peer-socket", on: vi.fn() };
+    const peer = { id: "peer", isObserver: false, socket: peerSocket };
+    room.getClient.mockImplementation((id: string) =>
+      id === member.id ? member : id === peer.id ? peer : undefined,
+    );
+    for (const [connection, client] of [
+      [socket, member],
+      [peerSocket, peer],
+    ] as const) {
+      registerRoomAiHandlers({
+        socket: connection,
+        currentRoom: room,
+        currentClient: client,
+        io: { to: () => ({ emit: vi.fn() }) },
+      } as unknown as ConnectionContext);
+    }
+    const configure = (
+      connection: typeof socket,
+      data: Record<string, unknown>,
+    ) => {
+      const handlers = Object.fromEntries(connection.on.mock.calls) as Record<
+        string,
+        (...args: unknown[]) => void
+      >;
+      const callback = vi.fn();
+      handlers["ai:configure"]({ roomId: "room", ...data }, callback);
+      expect(callback.mock.calls[0][0]).not.toHaveProperty("error");
+    };
+    configure(socket, {
+      provider: "openai",
+      apiKey: "sk-first-fixture",
+      model: "gpt-6.2-sol",
+    });
+    configure(peerSocket, {
+      provider: "anthropic",
+      apiKey: "sk-ant-second-fixture",
+      model: "claude-sonnet-5-6",
+    });
+    expect(room.aiCredentials.assistantModel).toBe("gpt-6.2-sol");
+    configure(peerSocket, {
+      provider: "anthropic",
+      model: "claude-sonnet-5-6",
+    });
+    expect(room.aiCredentials.assistantModel).toBe("claude-sonnet-5-6");
+  });
+
+  it("stores audio-only room keys without an automatic text selection", () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    const { socket, room, member } = fixture();
+    registerRoomAiHandlers({
+      socket,
+      currentRoom: room,
+      currentClient: member,
+      io: { to: () => ({ emit: vi.fn() }) },
+    } as unknown as ConnectionContext);
+    const handlers = Object.fromEntries(socket.on.mock.calls) as Record<
+      string,
+      (...args: unknown[]) => void
+    >;
+    const callback = vi.fn();
+    handlers["ai:configure"](
+      {
+        roomId: "room",
+        provider: "openai",
+        apiKey: "sk-audio-only-fixture",
+        model: null,
+      },
+      callback,
+    );
+    expect(callback.mock.calls[0][0]).toMatchObject({
+      state: { openai: { source: "room" }, assistantModel: null },
+    });
+    expect(room.aiCredentials.get("openai")).toBe("sk-audio-only-fixture");
+  });
+
+  it("rejects an in-flight catalog after a key changes and changes back", async () => {
+    let complete!: (response: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            complete = resolve;
+          }),
+      ),
+    );
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    const { socket, room, member } = fixture();
+    room.aiCredentials.set("openai", "sk-original", "member", false);
+    registerRoomAiHandlers({
+      socket,
+      currentRoom: room,
+      currentClient: member,
+    } as unknown as ConnectionContext);
+    const handlers = Object.fromEntries(socket.on.mock.calls) as Record<
+      string,
+      (...args: unknown[]) => Promise<void>
+    >;
+    const ack = vi.fn();
+    const pending = handlers["ai:models"]({ roomId: "room" }, ack);
+    room.aiCredentials.set("openai", "sk-replacement", "member", false);
+    room.aiCredentials.set("openai", "sk-original", "member", false);
+    complete(Response.json({ data: [{ id: "gpt-6.1-sol" }] }));
+    await pending;
+    expect(ack).toHaveBeenLastCalledWith({
+      error: "AI keys changed. Refresh models again.",
+    });
+  });
+
+  it("refreshes the shared catalog for the room but keeps personal-key refreshes private", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ data: [{ id: "gpt-6.1-sol" }] })),
+    );
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    const { socket, room, member } = fixture();
+    room.aiCredentials.set("openai", "sk-shared", "member", false);
+    const emit = vi.fn();
+    registerRoomAiHandlers({
+      socket,
+      io: { to: () => ({ emit }) },
+      currentRoom: room,
+      currentClient: member,
+    } as unknown as ConnectionContext);
+    const handlers = Object.fromEntries(socket.on.mock.calls) as Record<
+      string,
+      (...args: unknown[]) => Promise<void>
+    >;
+    const ack = vi.fn();
+    await handlers["ai:models"]({ roomId: "room", refresh: true }, ack);
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit.mock.calls[0][0]).toBe("ai:changed");
+    await handlers["ai:models"](
+      {
+        roomId: "room",
+        provider: "openai",
+        apiKey: "sk-personal",
+        refresh: true,
+      },
+      ack,
+    );
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(room.aiCredentials.get("openai")).toBe("sk-shared");
+    expect(
+      JSON.stringify([...ack.mock.calls, ...emit.mock.calls]),
+    ).not.toContain("sk-");
+  });
+
+  it("scopes cached catalogs to effective room credentials and never retains personal overrides", async () => {
+    const fetcher = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      Response.json({ data: [{ id: "gpt-6.1-sol" }] }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const keys = new RoomAiCredentials();
+    keys.set("openai", "sk-room", "alice", false);
+    await keys.models("openai", {});
+    await keys.models("openai", {});
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await keys.models("openai", {}, { apiKey: "sk-personal" });
+    expect(fetcher.mock.calls.at(-1)?.[1]).toMatchObject({
+      headers: { authorization: "Bearer sk-personal" },
+    });
+    expect(keys.get("openai")).toBe("sk-room");
+    await keys.models("openai", {});
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    keys.set("openai", "sk-replacement", "alice", false);
+    await keys.models("openai", {});
+    expect(fetcher.mock.calls.at(-1)?.[1]).toMatchObject({
+      headers: { authorization: "Bearer sk-replacement" },
+    });
+    await keys.models("openai", {}, { refresh: true });
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    keys.remove("openai", "alice", false);
+    expect((await keys.models("openai", {})).source).toBe("built-in");
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(JSON.stringify(keys)).not.toContain("sk-");
+    keys.clear();
+  });
+
+  it("only returns model metadata to current room members, including after an asynchronous lookup", async () => {
+    let complete!: (response: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            complete = resolve;
+          }),
+      ),
+    );
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    const { socket, room, member } = fixture();
+    room.aiCredentials.set("openai", "sk-room", "member", false);
+    registerRoomAiHandlers({
+      socket,
+      currentRoom: room,
+      currentClient: member,
+    } as unknown as ConnectionContext);
+    const handlers = Object.fromEntries(socket.on.mock.calls) as Record<
+      string,
+      (...args: unknown[]) => Promise<void>
+    >;
+    const ack = vi.fn();
+    await handlers["ai:models"]({ roomId: "different-room" }, ack);
+    expect(ack).toHaveBeenLastCalledWith({
+      error: expect.stringContaining("meeting changed") as unknown,
+    });
+    const pending = handlers["ai:models"]({ roomId: "room" }, ack);
+    member.isObserver = true;
+    complete(Response.json({ data: [{ id: "gpt-6.1-sol" }] }));
+    await pending;
+    expect(ack).toHaveBeenLastCalledWith({
+      error: expect.stringContaining("connection changed") as unknown,
+    });
+    expect(JSON.stringify(ack.mock.calls)).not.toContain("sk-room");
+  });
   it("requires a host for unconfigured or deployment-backed model choices", () => {
     const keys = new RoomAiCredentials();
     expect(() => keys.setModel("gpt-5.6-sol", "attendee", false)).toThrow(
@@ -216,6 +440,17 @@ async function start() {
 }
 
 describe("server-only room credential access", () => {
+  it("returns the authoritative provider endpoint with the selected room credential", async () => {
+    const { room, member, read } = await start();
+    vi.stubEnv("ANTHROPIC_BASE_URL", "https://room-provider.example");
+    room.aiCredentials.set("anthropic", "sk-ant-room", member.id, false);
+    const response = await read("server-secret", { providers: ["anthropic"] });
+    expect(await response.json()).toMatchObject({
+      ANTHROPIC_API_KEY: "sk-ant-room",
+      ANTHROPIC_BASE_URL: "https://room-provider.example",
+    });
+  });
+
   it("requires a shared server secret and exact active room identity", async () => {
     const { room, member, read } = await start();
     room.aiCredentials.set("openai", "sk-donation", member.id, false);
@@ -239,13 +474,13 @@ describe("server-only room credential access", () => {
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(await response.json()).toEqual({
         OPENAI_API_KEY: "sk-donation",
-        CONCLAVE_ASSISTANT_MODEL: "gpt-5.6-terra",
+        CONCLAVE_ASSISTANT_MODEL: "gpt-6.1-sol",
       });
     }
     vi.stubEnv("OPENAI_API_KEY", "sk-deployment");
     expect(await (await read("server-secret")).json()).toEqual({
       OPENAI_API_KEY: "sk-deployment",
-      CONCLAVE_ASSISTANT_MODEL: "gpt-5.6-terra",
+      CONCLAVE_ASSISTANT_MODEL: "gpt-6.1-sol",
     });
   });
 

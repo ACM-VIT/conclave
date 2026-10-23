@@ -22,7 +22,7 @@ OpenAI or Sarvam: Claude is a text alternative, not a realtime audio provider.
 | `ANTHROPIC_API_KEY` | Claude text credentials |
 | `SARVAM_API_KEY` | Sarvam transcription credentials |
 | `ELEVENLABS_API_KEY` | ElevenLabs voice cloning and synthesis credentials |
-| `CONCLAVE_ASSISTANT_MODEL` | Shared web chat model; defaults to `gpt-5.6-terra` |
+| `CONCLAVE_ASSISTANT_MODEL` | Shared web chat model; defaults to `gpt-6.1-sol` |
 | `SFU_GAME_AI_MODEL` | Game model; defaults to `gpt-5.6-luna` |
 | `CLOUDFLARE_AI_GATEWAY_OPENAI_URL` / `OPENAI_BASE_URL` | OpenAI API base URL, gateway takes precedence |
 | `CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL` / `ANTHROPIC_BASE_URL` | Anthropic API base URL, gateway takes precedence |
@@ -36,12 +36,20 @@ otherwise they need a separate assistant key or that provider's shared key.
 Switching transcript Q&A to another provider requires restarting notes with its key.
 Keys remain in live session memory and are never persisted in transcript storage.
 
-Set secrets independently on the main web Worker, transcript Worker, and SFU that
-need them. Set `ANTHROPIC_API_KEY` and `CONCLAVE_ASSISTANT_MODEL=claude-sonnet-5-5`
-on the main web Worker to serve shared Claude chat. Transcript participants select
-their assistant model in the notes panel. To use Claude for games, set
-`ANTHROPIC_API_KEY` and `SFU_GAME_AI_MODEL=claude-haiku-5-5` on the SFU; both Compose
-services forward these settings. Image moderation still requires the OpenAI key.
+Configure shared room provider keys, gateway/base URLs and
+`CONCLAVE_ASSISTANT_MODEL` on the SFU. Routed web chat and notes retrieve this
+authenticated profile for discovery and inference, so independent Worker keys
+cannot select a different account or endpoint. Personal keys override the
+credential while retaining the room's provider endpoint. A failed profile lookup
+asks the participant to reconnect rather than using a different Worker's account.
+Worker-local credentials remain available for standalone legacy flows without
+signed SFU routing. Routed notes use room AI availability instead of the Worker's
+independent key flags.
+
+Transcript participants select their assistant model in the notes panel. To use
+Claude for games, set `ANTHROPIC_API_KEY` and
+`SFU_GAME_AI_MODEL=claude-haiku-5-5` on the SFU; both Compose services forward
+these settings. Image moderation still requires the OpenAI key.
 
 ## Claude alternatives
 
@@ -104,9 +112,27 @@ start acknowledgement.
 
 ## Updating models
 
-Edit `src/models.ts`, verify IDs and capabilities against provider documentation,
-and update feature budgets/defaults there. Transcript and chat pickers consume the
-same list. Keep the `meeting-core/transcript-models` re-export for existing clients.
+Room settings, personal assistant setup and notes load account-specific models
+from the OpenAI and Anthropic Models APIs through the owning SFU. Refresh reloads
+the list; shared refreshes update the other room pickers too. Shared catalogs are
+cached for five minutes per effective key and invalidated when keys change.
+Personal-key discovery is not retained in room state. Socket replies contain model
+metadata only, and membership is checked again after discovery completes.
+
+OpenAI lists model IDs without endpoint/tool capabilities, so `src/models.ts`
+limits discovery to supported general-purpose Responses families. Anthropic's
+capability metadata additionally filters for structured outputs and web search.
+Retired models are excluded, and aliases replace duplicate dated snapshots.
+Newly discovered IDs are verified with the selected credential before inference;
+successful selected-model checks are cached for one minute, scoped to provider,
+endpoint, model and a credential fingerprint. Failed checks are not cached.
+optional tuning uses provider defaults until documented. Known model profiles
+continue to work when a key lacks model-list permissions. Discovery failures show
+an explicit error and built-in choices; an unavailable selection stays visible
+instead of silently switching models or providers.
+
+Update supported families, feature budgets and defaults in `src/models.ts` when
+provider APIs change. Keep the `meeting-core/transcript-models` re-export for existing clients.
 Add a provider adapter behind `createAiTextSession` and `generateAiText` when
 introducing a new text provider; product surfaces should not construct SDKs.
 
@@ -123,8 +149,16 @@ Desktop and narrow viewport checks used local fixtures; no live provider request
 
 ![Room AI settings](docs/room-ai-settings.png)
 
+The notes setup retains its original blue spotlight and Sarvam tricolor treatment,
+with separate audio and assistant controls. These captures use a local room and
+fixture provider endpoints, without paid inference.
+
+![Restored blue notes setup](docs/transcript-blue-restored.png)
+
+![Restored Sarvam notes setup](docs/transcript-sarvam-restored.png)
+
 ## Room models and provider diagnostics
 
-Room AI settings expose one shared assistant model. The first OpenAI or Anthropic room contribution selects that provider's default model; Sarvam does not change the assistant. Contributors or hosts can change models for their shared provider. Chat, idle notes setup and new game content use this selection; a participant's explicit chat-model choice still takes precedence. Removing a key leaves the selected model visible and prompts for credentials rather than switching providers. Room model metadata is broadcast without keys and cleared with the room.
+Room AI settings expose one shared assistant model. The first OpenAI or Anthropic room contribution selects an available model when the key has compatible text models; audio/image-only keys are still shared without selecting an assistant. Sarvam does not change the assistant. Contributors or hosts can change models for their shared provider. Chat, idle notes setup and new game content use this selection; a participant's explicit chat-model choice still takes precedence. Removing a key leaves the selected model visible and prompts for credentials rather than switching providers. Room model metadata is broadcast without keys and cleared with the room.
 
 Assistant failures emit plain, redacted provider status, error type and request ID in Worker logs. The UI distinguishes rejected keys, model access, billing/credits and rate limits. This lets operators diagnose failed inference without recording API keys or request bodies.

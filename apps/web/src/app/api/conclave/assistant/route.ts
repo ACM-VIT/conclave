@@ -1,4 +1,4 @@
-import { describeRoomAiLookupFailure, fetchRoomAiEnvironment } from "@conclave/ai/room-server";
+import { describeRoomAiLookupFailure, fetchRoomAiEnvironment, roomAiEnvironment } from "@conclave/ai/room-server";
 import jwt from "jsonwebtoken";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import {
@@ -669,10 +669,11 @@ export async function POST(request: Request) {
   const requestedModel = asString(body.model).trim();
   let roomEnvironment: ReturnType<typeof readAiEnvironment> = {};
   const deploymentEnvironment = readAiEnvironment(process.env);
+  const routedRoom = Boolean(tokenPayload.sfuUrl);
   const hasExplicitDeploymentChoice =
     isConclaveAssistantModel(requestedModel) &&
     Boolean(getProviderApiKey(deploymentEnvironment, getResponseProvider(requestedModel)));
-  if (!participantApiKey && !hasExplicitDeploymentChoice) {
+  if (routedRoom || (!participantApiKey && !hasExplicitDeploymentChoice)) {
     try {
       roomEnvironment = await fetchRoomAiEnvironment({
         sfuUrl: routedSfuUrl,
@@ -688,21 +689,28 @@ export async function POST(request: Request) {
       });
     } catch (error) {
       console.warn("[Conclave] room AI lookup failed:", JSON.stringify(describeRoomAiLookupFailure(error)));
+      if (routedRoom) return Response.json({ error: "Room AI settings could not be loaded. Reconnect and try again." }, { status: 503 });
       /* Missing room credentials use the same provider-specific setup flow. */
     }
   }
+  const inferenceEnvironment = routedRoom
+    ? roomAiEnvironment(deploymentEnvironment, roomEnvironment)
+    : {
+        ...deploymentEnvironment,
+        OPENAI_API_KEY: getProviderApiKey(deploymentEnvironment, "openai") || getProviderApiKey(roomEnvironment, "openai"),
+        ANTHROPIC_API_KEY: getProviderApiKey(deploymentEnvironment, "anthropic") || getProviderApiKey(roomEnvironment, "anthropic"),
+        CONCLAVE_ASSISTANT_MODEL: roomEnvironment.CONCLAVE_ASSISTANT_MODEL || deploymentEnvironment.CONCLAVE_ASSISTANT_MODEL,
+      };
   const model = isConclaveAssistantModel(requestedModel)
     ? requestedModel
     : resolveConfiguredResponseModel(
-        roomEnvironment.CONCLAVE_ASSISTANT_MODEL ||
-          process.env.CONCLAVE_ASSISTANT_MODEL,
+        inferenceEnvironment.CONCLAVE_ASSISTANT_MODEL,
         CONCLAVE_ASSISTANT_GLOBAL_MODEL,
       );
   const provider = getResponseProvider(model);
   const apiKey =
     participantApiKey ||
-    getProviderApiKey(deploymentEnvironment, provider) ||
-    getProviderApiKey(roomEnvironment, provider);
+    getProviderApiKey(inferenceEnvironment, provider);
   if (!apiKey || !isProviderApiKey(provider, apiKey)) {
     return Response.json(
       {
@@ -772,7 +780,7 @@ export async function POST(request: Request) {
         (tool) => !("name" in tool) || tool.name !== SHARED_BROWSER_TOOL_NAME,
       );
   const aiSession = createAiTextSession({
-    env: readAiEnvironment(process.env),
+    env: inferenceEnvironment,
     apiKey,
     model,
     instructions: ASSISTANT_SYSTEM_PROMPT,

@@ -88,7 +88,52 @@ export const TRANSCRIPT_TRANSCRIPTION_MODELS = [
 export const LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS =
   TRANSCRIPT_TRANSCRIPTION_MODELS.filter((model) => model.supportsRealtime);
 
-export const TRANSCRIPT_QA_MODELS = [
+const RESPONSE_MODEL_CONFIGS = [
+  {
+    id: "gpt-6.1-sol",
+    provider: "openai",
+    label: "GPT-6.1 Sol",
+    description: "Balanced speed, cost and intelligence.",
+    supportsReasoning: true,
+    supportsTextVerbosity: true,
+    supportsStructuredOutputs: true,
+    minutesReasoningEffort: "medium",
+    qaReasoningEffort: "low",
+    minutesVerbosity: "medium",
+    qaVerbosity: "low",
+    minutesMaxOutputTokens: 8192,
+    qaMaxOutputTokens: 4096,
+  },
+  {
+    id: "gpt-6-luna",
+    provider: "openai",
+    label: "GPT-6 Luna",
+    description: "Fast, efficient everyday assistance.",
+    supportsReasoning: true,
+    supportsTextVerbosity: true,
+    supportsStructuredOutputs: true,
+    minutesReasoningEffort: "medium",
+    qaReasoningEffort: "low",
+    minutesVerbosity: "medium",
+    qaVerbosity: "low",
+    minutesMaxOutputTokens: 8192,
+    qaMaxOutputTokens: 4096,
+  },
+  {
+    id: "gpt-6-astra",
+    provider: "openai",
+    label: "GPT-6 Astra",
+    description: "Most demanding reasoning and synthesis.",
+    supportsReasoning: true,
+    supportsTextVerbosity: true,
+    supportsStructuredOutputs: true,
+    minutesReasoningEffort: "medium",
+    qaReasoningEffort: "low",
+    minutesVerbosity: "medium",
+    qaVerbosity: "low",
+    minutesMaxOutputTokens: 8192,
+    qaMaxOutputTokens: 4096,
+  },
   {
     id: "gpt-5.6-terra",
     provider: "openai",
@@ -180,6 +225,10 @@ export const TRANSCRIPT_QA_MODELS = [
   },
 ] as const satisfies readonly TranscriptResponseModelConfig[];
 
+export const TRANSCRIPT_QA_MODELS = RESPONSE_MODEL_CONFIGS.filter(
+  (model) => !model.id.startsWith("gpt-5.6-"),
+);
+
 export const DEFAULT_TRANSCRIPT_TRANSCRIPTION_MODEL =
   TRANSCRIPT_TRANSCRIPTION_MODELS[0].id;
 export const DEFAULT_TRANSCRIPT_QA_MODEL = TRANSCRIPT_QA_MODELS[0].id;
@@ -214,7 +263,8 @@ export const normalizeRealtimeTranscriptModel = (
 export const getTranscriptResponseModelConfig = (
   modelId: string,
 ): TranscriptResponseModelConfig =>
-  TRANSCRIPT_QA_MODELS.find((model) => model.id === modelId) ?? {
+  RESPONSE_MODEL_CONFIGS.find((model) => model.id === modelId) ??
+  responseModelProfile(modelId) ?? {
     id: modelId,
     label: modelId,
     provider: "openai",
@@ -226,7 +276,51 @@ export const getTranscriptResponseModelConfig = (
     qaMaxOutputTokens: 900,
   };
 
+// Older selections remain valid, but the built-in picker starts with current models.
 export const AI_RESPONSE_MODELS = TRANSCRIPT_QA_MODELS;
+
+// The OpenAI Models API lists IDs, not endpoint/tool capabilities. Limit discovery
+// to the general-purpose Responses families we support; never infer image/audio
+// compatibility from an arbitrary model ID. Claude lists additionally supply
+// capability metadata, which is checked by the server catalog adapter.
+const responseModelProfile = (
+  id: string,
+): TranscriptResponseModelConfig | null => {
+  if (id.length > 128) return null;
+  const openai =
+    /^gpt-((?:[6-9]|[1-9]\d+)(?:\.\d+)?)-(sol|luna|astra)(?:-(\d{4}-\d{2}-\d{2}))?$/.exec(
+      id,
+    );
+  const claude =
+    /^claude-(sonnet|haiku|opus|fable|mythos)-\d+(?:-\d+)*(?:-latest)?$/.exec(
+      id,
+    );
+  if (!openai && !claude) return null;
+  const provider: AiTextProvider = claude ? "anthropic" : "openai";
+  const family = claude?.[1] ?? openai![2];
+  return {
+    id,
+    provider,
+    label: openai
+      ? `GPT-${openai[1]} ${family[0].toUpperCase()}${family.slice(1)}${openai[3] ? ` (${openai[3]})` : ""}`
+      : id,
+    description: "Available from your provider account.",
+    // New IDs use provider defaults until their optional tuning is documented.
+    supportsReasoning: false,
+    supportsTextVerbosity: false,
+    supportsStructuredOutputs: true,
+    minutesMaxOutputTokens: 8192,
+    qaMaxOutputTokens: 4096,
+  };
+};
+
+export type AiModelCatalog = {
+  provider: AiTextProvider;
+  models: TranscriptResponseModelConfig[];
+  source: "live" | "built-in";
+  error?: string;
+  status?: number;
+};
 export const AI_DEFAULT_MODELS = {
   assistant: DEFAULT_TRANSCRIPT_QA_MODEL,
   transcript: DEFAULT_TRANSCRIPT_TRANSCRIPTION_MODEL,
@@ -238,10 +332,12 @@ export const AI_DEFAULT_MODELS = {
 
 export const AI_ENDPOINTS = {
   openai: {
+    apiBase: "https://api.openai.com/v1",
     realtime: "https://api.openai.com/v1/realtime",
     realtimeClientSecrets: "https://api.openai.com/v1/realtime/client_secrets",
     realtimeCalls: "https://api.openai.com/v1/realtime/calls",
   },
+  anthropic: { apiBase: "https://api.anthropic.com" },
   sarvam: { transcription: "wss://api.sarvam.ai/speech-to-text/ws" },
   elevenlabs: { apiBase: "https://api.elevenlabs.io/v1" },
 } as const;
@@ -294,7 +390,11 @@ export const getResponseProvider = (model: string): AiTextProvider =>
   getTranscriptResponseModelConfig(model).provider;
 
 export const isResponseModel = (model: string): boolean =>
-  AI_RESPONSE_MODELS.some((entry) => entry.id === model);
+  RESPONSE_MODEL_CONFIGS.some((entry) => entry.id === model) ||
+  responseModelProfile(model) !== null;
+
+export const isBuiltInResponseModel = (model: string): boolean =>
+  RESPONSE_MODEL_CONFIGS.some((entry) => entry.id === model);
 
 export const resolveConfiguredResponseModel = (
   value: string | undefined,

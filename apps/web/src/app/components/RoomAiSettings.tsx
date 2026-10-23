@@ -19,6 +19,7 @@ import {
 import { ROOM_AI_PROVIDERS, type RoomAiProvider } from "@conclave/ai/room";
 import type { RoomAiController } from "../hooks/useRoomAi";
 import AiModelSelect from "./AiModelSelect";
+import { useAiModels } from "../hooks/useAiModels";
 
 const uses = {
   openai: [
@@ -39,6 +40,7 @@ export default function RoomAiSettings({
   controller: RoomAiController;
   onClose: () => void;
 }) {
+  const catalog = useAiModels(controller);
   const [expanded, setExpanded] = useState<RoomAiProvider | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [pending, setPending] = useState(false);
@@ -54,9 +56,43 @@ export default function RoomAiSettings({
     setPending(true);
     setError(null);
     setNotice(null);
+    let initialModel: string | null | undefined;
+    if (
+      !remove &&
+      provider !== "sarvam" &&
+      !controller.state.assistantModel &&
+      controller.requestModels
+    ) {
+      try {
+        const catalogs = await controller.requestModels({
+          provider,
+          apiKey: apiKey.trim(),
+        });
+        const discovered = catalogs.find(
+          (entry) => entry.provider === provider,
+        );
+        if (discovered?.source === "live") {
+          if (!discovered.models.length) {
+            // Audio and image-only keys can still be shared without selecting text.
+            initialModel = null;
+          } else {
+            const preferred = AI_RESPONSE_MODELS.find(
+              (entry) => entry.provider === provider,
+            )?.id;
+            initialModel = (
+              discovered.models.find((entry) => entry.id === preferred) ??
+              discovered.models[0]
+            ).id;
+          }
+        }
+      } catch {
+        /* Listing permissions do not determine inference permissions. */
+      }
+    }
     const failure = await controller.configure(
       provider,
       remove ? null : apiKey.trim(),
+      ...(initialModel !== undefined ? [initialModel] : []),
     );
     setPending(false);
     if (failure) {
@@ -93,7 +129,10 @@ export default function RoomAiSettings({
           label="Room assistant"
           value={controller.state.assistantModel ?? ""}
           placeholder="Deployment default"
-          models={AI_RESPONSE_MODELS.map((model) => ({
+          loading={catalog.loading}
+          error={catalog.error}
+          onRefresh={catalog.refresh}
+          models={catalog.models.map((model) => ({
             ...model,
             disabled:
               !controller.isAdmin &&

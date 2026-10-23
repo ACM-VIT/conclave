@@ -4,6 +4,8 @@ import {
   TRANSCRIPT_QA_MODELS,
 } from "@conclave/meeting-core/transcript-models";
 
+import { isResponseModel } from "@conclave/ai/models";
+
 // Identity of the in-meeting "@Conclave" AI assistant. The SFU validates signed
 // assistant packets before broadcasting them with this stable bot identity.
 export const CONCLAVE_ASSISTANT_USER_ID = "conclave-assistant";
@@ -20,13 +22,12 @@ type ConclaveAssistantPartStatus = "streaming" | "done";
 export const CONCLAVE_ASSISTANT_GLOBAL_MODEL = DEFAULT_TRANSCRIPT_QA_MODEL;
 export const CONCLAVE_ASSISTANT_BYOK_MODELS = TRANSCRIPT_QA_MODELS;
 
-export type ConclaveAssistantModel =
-  (typeof TRANSCRIPT_QA_MODELS)[number]["id"];
+export type ConclaveAssistantModel = string;
 
 export const isConclaveAssistantModel = (
   value: string,
 ): value is ConclaveAssistantModel =>
-  CONCLAVE_ASSISTANT_BYOK_MODELS.some((model) => model.id === value);
+  isResponseModel(value);
 
 export interface ConclaveAssistantRelayPacket {
   id: string;

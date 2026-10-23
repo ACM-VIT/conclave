@@ -1,5 +1,36 @@
-import type { AiEnvironment } from "@conclave/ai/models";
+import {
+  AI_ENDPOINTS,
+  readAiEnvironment,
+  type AiEnvironment,
+} from "@conclave/ai/models";
 import type { RoomAiIdentity, RoomAiProvider } from "@conclave/ai/room";
+
+export const ROOM_AI_ENV_FIELDS = [
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "SARVAM_API_KEY",
+  "OPENAI_BASE_URL",
+  "CLOUDFLARE_AI_GATEWAY_OPENAI_URL",
+  "ANTHROPIC_BASE_URL",
+  "CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL",
+  "CONCLAVE_ASSISTANT_MODEL",
+] as const;
+
+// Routed rooms share one account and endpoint for discovery and execution.
+// Missing room settings must never fall back to a different Worker's account.
+export function roomAiEnvironment(
+  local: AiEnvironment,
+  room: AiEnvironment,
+): AiEnvironment {
+  const result = readAiEnvironment(local);
+  for (const field of ROOM_AI_ENV_FIELDS) result[field] = "";
+  return {
+    ...result,
+    OPENAI_BASE_URL: AI_ENDPOINTS.openai.apiBase,
+    ANTHROPIC_BASE_URL: AI_ENDPOINTS.anthropic.apiBase,
+    ...room,
+  };
+}
 
 // Called only by trusted servers. The shared secret never comes from a client.
 export const fetchRoomAiEnvironment = async (options: {
@@ -40,12 +71,7 @@ export const fetchRoomAiEnvironment = async (options: {
     throw new Error("Invalid room AI settings.");
   const result: AiEnvironment = {};
   const record = data as Record<string, unknown>;
-  for (const name of [
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "SARVAM_API_KEY",
-    "CONCLAVE_ASSISTANT_MODEL",
-  ] as const) {
+  for (const name of ROOM_AI_ENV_FIELDS) {
     if (typeof record[name] === "string") result[name] = record[name];
   }
   return result;
