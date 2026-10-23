@@ -1,3 +1,4 @@
+import type { RoomAiFeatureSettings } from "@conclave/ai/room-settings";
 export const ROOM_AI_PROVIDERS = ["openai", "anthropic", "sarvam"] as const;
 export type RoomAiProvider = (typeof ROOM_AI_PROVIDERS)[number];
 export type RoomAiState = Record<
@@ -6,7 +7,7 @@ export type RoomAiState = Record<
     source: "deployment" | "room" | null;
     ownerId?: string;
   }
-> & { assistantModel: string | null };
+> & { assistantModel: string | null; features?: RoomAiFeatureSettings };
 export type RoomAiIdentity = {
   roomId: string;
   channelId: string;

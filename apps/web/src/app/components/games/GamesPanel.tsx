@@ -117,6 +117,7 @@ export function GamesPanel({
     isReadOnly,
     userId,
     startGame,
+    endGame,
     openVote,
     castVote,
     cancelVote,
@@ -188,6 +189,7 @@ export function GamesPanel({
             entry={configuring}
             busy={busy}
             readOnly={isReadOnly}
+            onCancel={() => void endGame()}
             onStart={async (cfg) => {
               const ok = await run(() => startGame(configuring.id, cfg));
               if (ok) setConfiguring(null);
@@ -345,11 +347,13 @@ function GameConfigView({
   busy,
   readOnly,
   onStart,
+  onCancel,
 }: {
   entry: CatalogEntry;
   busy: boolean;
   readOnly: boolean;
   onStart: (config: GameConfig) => void;
+  onCancel: () => void;
 }) {
   const [config, setConfig] = useState<GameConfig>(() => {
     const initial: GameConfig = {};
@@ -457,6 +461,7 @@ function GameConfigView({
           startLabel
         )}
       </PrimaryButton>
+      {busy ? <GhostButton onClick={onCancel}>Cancel</GhostButton> : null}
     </div>
   );
 }

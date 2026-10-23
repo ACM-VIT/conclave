@@ -208,7 +208,7 @@ export default function VoiceAgentDialog({
               className="rounded-xl px-4 py-2 text-[12.5px] font-semibold text-white transition-opacity hover:opacity-90"
               style={{ backgroundColor: color.accent }}
             >
-              Start
+              Share & start
             </button>
           ) : null}
         </div>

@@ -1,5 +1,8 @@
 "use client";
 
+import type { RoomAiController } from "./useRoomAi";
+import { resolveAiFeatureSettings } from "@conclave/ai/room-settings";
+
 import { AI_DEFAULT_MODELS, AI_ENDPOINTS } from "@conclave/ai/models";
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -55,6 +58,7 @@ type RuntimeState = {
 };
 
 type UseVoiceAgentParticipantOptions = {
+  roomAi?: RoomAiController;
   roomId: string;
   isJoined: boolean;
   isAdmin: boolean;
@@ -637,6 +641,7 @@ const waitForDataChannelOpen = (channel: RTCDataChannel) => {
 };
 
 export function useVoiceAgentParticipant({
+  roomAi,
   roomId,
   isJoined,
   isAdmin,
@@ -654,6 +659,8 @@ export function useVoiceAgentParticipant({
   model = DEFAULT_MODEL,
   voice = DEFAULT_VOICE,
 }: UseVoiceAgentParticipantOptions) {
+  const voiceSettings = resolveAiFeatureSettings({}, "voice", roomAi?.state.features ?? {});
+  model = roomAi?.state.features?.voice?.model ?? model;
   const runtimeRef = useRef<RuntimeState>(createRuntimeState());
   const pendingRemoteTrackRef = useRef<MediaStreamTrack | null>(null);
   const mountedRef = useRef(true);
@@ -1051,7 +1058,9 @@ export function useVoiceAgentParticipant({
       return;
     }
     const apiKey = providedApiKey?.trim() || "";
-    if (!apiKey) {
+    const useRoomKey = Boolean(roomAi?.state.openai.source && roomAi.requestAccessToken);
+    if (!voiceSettings.enabled) { setSafeError("The voice assistant is disabled in Room AI settings."); setSafeStatus("error"); return; }
+    if (!apiKey && !useRoomKey) {
       setSafeError("Enter your OpenAI API key before starting the voice agent.");
       setSafeStatus("error");
       return;
@@ -1066,7 +1075,7 @@ export function useVoiceAgentParticipant({
     pendingRemoteTrackRef.current = null;
 
     try {
-      const sessionInstructions = buildSessionInstructions();
+      const sessionInstructions = [buildSessionInstructions(), !useRoomKey ? voiceSettings.instructions : ""].filter(Boolean).join("\n\n");
       const AudioContextImpl = getAudioContextCtor();
       if (!AudioContextImpl) {
         throw new Error(
@@ -1101,12 +1110,13 @@ export function useVoiceAgentParticipant({
         },
       };
 
+      const roomToken = useRoomKey ? await roomAi!.requestAccessToken!("voice") : null;
       const clientSecretResponse = await fetch(
-        AI_ENDPOINTS.openai.realtimeClientSecrets,
+        roomToken ? "/api/conclave/voice" : AI_ENDPOINTS.openai.realtimeClientSecrets,
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${apiKey}`,
+            Authorization: `Bearer ${roomToken ?? apiKey}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify(sessionPayload),
@@ -1371,6 +1381,9 @@ export function useVoiceAgentParticipant({
     isAdmin,
     isJoined,
     model,
+    roomAi,
+    voiceSettings.enabled,
+    voiceSettings.instructions,
     producePendingTrack,
     rebuildOpenAiMix,
     roomId,

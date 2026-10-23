@@ -6,6 +6,9 @@ import {
   isProviderApiKey,
 } from "@conclave/ai/models";
 import { isRoomAiProvider } from "@conclave/ai/room";
+import { isAiFeature } from "@conclave/ai/room-settings";
+import jwt from "jsonwebtoken";
+import { config } from "../../../config/config.js";
 import { Admin } from "../../../config/classes/Admin.js";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
@@ -33,6 +36,17 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
     callback({
       state: member.room.aiCredentials.status(readAiEnvironment(process.env)),
     });
+  });
+  socket.on("ai:access", (input: unknown, callback: (result: unknown) => void) => {
+    if (typeof callback !== "function") return;
+    const member = active();
+    const purpose = input && typeof input === "object" ? (input as Record<string, unknown>).purpose : undefined;
+    if (!member || (purpose !== "voice" && purpose !== "speech")) { callback({error: "Join the meeting to use this AI feature."}); return; }
+    if (purpose === "voice" && !(member.client instanceof Admin)) { callback({error: "Only a host can start the voice assistant."}); return; }
+    if (!takeToken(socket, "ai:access", RATE_LIMITS.aiModels)) { callback({error: "Please wait before connecting again."}); return; }
+    const expiresAt = Date.now() + 120_000;
+    const token = jwt.sign({tokenUse: "room-ai:access", purpose, userId: member.client.id, roomId: member.room.id, clientId: member.room.clientId, channelId: member.room.channelId, sfuUrl: config.instancePublicUrl}, config.sfuSecret, {algorithm: "HS256", issuer: "conclave-sfu", audience: "conclave-web", expiresIn: "2m"});
+    callback({token, expiresAt});
   });
   socket.on(
     "ai:models",
@@ -116,6 +130,16 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
           : {};
       if (data.roomId !== member.room.id) {
         callback({ error: "The meeting changed. Reopen room AI settings." });
+        return;
+      }
+      if (data.feature !== undefined) {
+        try {
+          if (!isAiFeature(data.feature)) throw new Error("Choose an AI feature.");
+          member.room.aiCredentials.configureFeature(data.feature, data.settings, member.client.id, member.client instanceof Admin, readAiEnvironment(process.env));
+          const state = member.room.aiCredentials.status(readAiEnvironment(process.env));
+          io.to(member.room.channelId).emit("ai:changed", state);
+          callback({ state });
+        } catch (error) { callback({ error: error instanceof Error ? error.message : "Could not save AI settings." }); }
         return;
       }
       if (!isRoomAiProvider(data.provider)) {

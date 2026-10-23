@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { roomAiAccess } from "@/lib/room-ai-access";
 import {
   MAX_TTS_TEXT_LENGTH,
   synthesizeClonedSpeech,
@@ -32,6 +33,7 @@ const getSpeech = async (
   cacheKey: string,
   voiceId: string,
   text: string,
+  options: {model?: string; timeoutMs?: number},
 ): Promise<CachedSpeech> => {
   const cached = speechCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached;
@@ -39,7 +41,7 @@ const getSpeech = async (
   if (active) return active;
 
   const request = (async () => {
-    const providerResponse = await synthesizeClonedSpeech({ voiceId, text });
+    const providerResponse = await synthesizeClonedSpeech({ voiceId, text, ...options });
     const result: CachedSpeech = {
       audio: await providerResponse.arrayBuffer(),
       contentType: providerResponse.headers.get("content-type") || "audio/mpeg",
@@ -59,7 +61,7 @@ const getSpeech = async (
 
 export async function POST(request: Request): Promise<Response> {
   try {
-    const body = (await request.json()) as { token?: string; text?: string };
+    const body = (await request.json()) as { token?: string; text?: string; roomAiToken?: string };
     const token = body.token?.trim();
     const text = body.text?.trim();
     if (!token || !text) {
@@ -76,7 +78,9 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const voice = await verifyVoiceToken(token);
-    const speech = await getSpeech(`${token}\u0000${text}`, voice.voiceId, text);
+    const profile = body.roomAiToken ? await roomAiAccess(body.roomAiToken, "speech") : null;
+    const options = {model: profile?.settings.model, timeoutMs: profile?.settings.timeoutMs};
+    const speech = await getSpeech(`${token}\u0000${options.model || "deployment"}\u0000${text}`, voice.voiceId, text, options);
     return new Response(speech.audio.slice(0), {
       status: 200,
       headers: {

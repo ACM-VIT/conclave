@@ -65,7 +65,7 @@ beforeEach(() => {
     yield { type: "complete", text: "Done", calls: [] };
   });
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 describe("assistant provider integration", () => {
   it.each([undefined, "sk-ant-personal"])(
@@ -310,6 +310,29 @@ describe("assistant provider integration", () => {
         apiKey: "sk-ant-room",
       }),
     );
+  });
+
+  it.each([200, 403])("runs room settings tools as the signed requester and propagates permission status %s", async status => {
+    roomEnvironment.mockResolvedValue({ANTHROPIC_API_KEY: "sk-ant-room"});
+    const fetcher = vi.fn(async () => status === 200
+      ? Response.json({state: {features: {games: {model: "claude-sonnet-5-5", researchTokens: 24000}}}})
+      : Response.json({error: "Only a host or this provider's key contributor can change these settings."}, {status}));
+    vi.stubGlobal("fetch", fetcher);
+    stream.mockImplementationOnce(async function* () {
+      yield {type: "complete", text: "", calls: [{id: "settings", name: "configure_room_ai", arguments: JSON.stringify({feature: "games", settings: {model: "claude-sonnet-5-5", researchTokens: 24000}, userId: "spoofed-host", isAdmin: true})}]};
+    });
+    const response = await POST(request({model: "claude-haiku-5-5"}, false, "https://sfu.example"));
+    await response.text();
+    expect(fetcher.mock.calls).toHaveLength(1);
+    const [url, init] = fetcher.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(String(url)).toBe("https://sfu.example/internal/ai/settings");
+    expect(JSON.parse(String(init.body))).toMatchObject({userId: "user", roomId: "room", clientId: "client", channelId: "channel", feature: "games"});
+    expect(String(init.body)).not.toContain("spoofed-host");
+    const result = JSON.parse(stream.mock.calls[1][0][0].output);
+    expect(result.success).toBe(status === 200);
+    if (status === 200) expect(result.features.games.researchTokens).toBe(24000);
+    else expect(result.error).toContain("Only a host");
+    expect(JSON.stringify(result)).not.toContain("sk-ant-room");
   });
 
   it("continues function tools using the same provider and still pauses GitHub writes for approval", async () => {

@@ -1,3 +1,4 @@
+import { AI_GENERATION_LIMITS } from "@conclave/ai/limits";
 import { AI_DEFAULT_MODELS, getProviderApiKey, getResponseProvider, readAiEnvironment, resolveConfiguredResponseModel } from "@conclave/ai/models";
 import dotenv from "dotenv";
 import path from "path";
@@ -389,15 +390,15 @@ export const config = {
     apiKey: gameAiApiKey,
     reasoningEffort: "low" as const,
     storeResponses: false,
-    timeoutMs: toNumber(process.env.SFU_GAME_AI_TIMEOUT_MS, 25000, {
+    timeoutMs: toNumber(process.env.SFU_GAME_AI_TIMEOUT_MS, AI_GENERATION_LIMITS.timeoutMs, {
       integer: true,
       min: 500,
-      max: 120000,
+      max: AI_GENERATION_LIMITS.maxTimeoutMs,
     }),
-    maxOutputTokens: toNumber(process.env.SFU_GAME_AI_MAX_OUTPUT_TOKENS, 4096, {
+    maxOutputTokens: toNumber(process.env.SFU_GAME_AI_MAX_OUTPUT_TOKENS, AI_GENERATION_LIMITS.outputTokens, {
       integer: true,
       min: 128,
-      max: 4096,
+      max: AI_GENERATION_LIMITS.maxOutputTokens,
     }),
     topicMaxLength: toNumber(process.env.SFU_GAME_AI_TOPIC_MAX_LENGTH, 120, {
       integer: true,

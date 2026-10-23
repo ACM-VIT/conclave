@@ -23,17 +23,17 @@ OpenAI or Sarvam: Claude is a text alternative, not a realtime audio provider.
 | `SARVAM_API_KEY` | Sarvam transcription credentials |
 | `ELEVENLABS_API_KEY` | ElevenLabs voice cloning and synthesis credentials |
 | `CONCLAVE_ASSISTANT_MODEL` | Shared web chat model; defaults to `gpt-6.1-sol` |
-| `SFU_GAME_AI_MODEL` | Game model; defaults to `gpt-5.6-luna` |
+| `SFU_GAME_AI_MODEL` | Initial game model; defaults to `gpt-6-luna` |
 | `CLOUDFLARE_AI_GATEWAY_OPENAI_URL` / `OPENAI_BASE_URL` | OpenAI API base URL, gateway takes precedence |
 | `CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL` / `ANTHROPIC_BASE_URL` | Anthropic API base URL, gateway takes precedence |
 
-Model overrides must be registered response models; invalid deployment settings
+Model overrides must belong to supported response families; invalid deployment settings
 fail instead of silently choosing another provider. The provider follows the model.
 No request automatically fails over to another provider or credential. Explicit
 participant credentials take precedence over shared credentials for chat. Transcript
 sessions reuse their transcription key only when the response provider matches;
 otherwise they need a separate assistant key or that provider's shared key.
-Switching transcript Q&A to another provider requires restarting notes with its key.
+Transcript Q&A and minutes reload room settings and provider credentials for each new request. Audio model changes apply after restarting notes.
 Keys remain in live session memory and are never persisted in transcript storage.
 
 Configure shared room provider keys, gateway/base URLs and
@@ -63,11 +63,10 @@ on October 22, 2026:
 | `claude-opus-5-5` | More demanding synthesis and multi-step work |
 | `claude-fable-5-1` | The most demanding reasoning workloads |
 
-Claude keeps its native thinking defaults; OpenAI reasoning and verbosity settings
-are not sent to Anthropic. The adapter emits activity events for Claude thinking
+Claude keeps its native thinking defaults unless a room effort is selected. Explicit effort uses Anthropic output configuration; answer length uses an instruction instead of OpenAI verbosity fields. The adapter emits activity events for Claude thinking
 and preserves signed thinking internally for tool continuation. Raw thinking is
 not displayed. Web search uses Anthropic's basic server search tool, with up to
-five searches per request. Model availability and web search also depend on the
+ten searches per request by default, configurable from one to thirty. Model availability and web search also depend on the
 account's permissions.
 
 Claude's [structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)
@@ -76,7 +75,7 @@ enabled, the adapter first gathers research, then makes a separate structured
 request without search tools. This adds one request. Unsupported schema bounds
 are carried in field descriptions; the existing minutes/game parsers still bound
 and validate the results. Incomplete responses and provider errors fail the
-request; games retain their existing local-content fallback.
+request. Failed game generation shows an error without starting unrelated built-in content; a blank topic intentionally uses built-ins.
 
 ## Room keys
 
@@ -85,13 +84,11 @@ OpenAI, Anthropic, or Sarvam keys for everyone in that room. Only the contributo
 or a host can replace/remove a contribution. Keys live in the owning SFU room's
 private memory and are cleared on room close; socket snapshots contain only
 provider availability and ownership. A server restart requires adding them again.
-Deployment keys take precedence over room contributions; explicit personal keys
-remain scoped to the current assistant/notes session. Providers never share keys.
+Deployment keys take precedence over room contributions. Compact Chat and Notes setup share keys with the room before starting; legacy explicit personal API credentials remain request/session scoped. Providers never share keys.
 
 Room OpenAI keys cover image moderation and can also power text, games, and audio.
 Moderation stays fail closed. The image button opens setup when a room lacks an
-OpenAI key. Anthropic covers text; Sarvam covers audio. Games use the configured
-`SFU_GAME_AI_MODEL`; setting `SFU_GAME_AI_ENABLED=false` still disables generation.
+OpenAI key. Anthropic covers text; Sarvam covers audio. Games use their room feature model, initially inherited from the room choice or `SFU_GAME_AI_MODEL`; setting `SFU_GAME_AI_ENABLED=false` still disables generation.
 
 The web server and transcript Worker retrieve selected credentials through the
 SFU's private `/internal/ai/credentials` endpoint. It requires a server shared
@@ -102,13 +99,9 @@ Worker uses `TRANSCRIPT_TOKEN_SECRET` (or the shared SFU secret). Configure
 The browser-safe `@conclave/ai/room` entry contains metadata only; credential
 retrieval lives in `@conclave/ai/room-server`.
 
-Removing a room key affects new requests. Active transcript sessions retain their
-in-memory key until stopped; borrowed keys are never persisted for automatic
-Worker recovery. Stop active notes to revoke their current key immediately.
+Removing a room key affects new chat, game, minutes and Q&A requests. Active audio sessions retain their in-memory credential until stopped; borrowed keys are never persisted for automatic Worker recovery. Stop active notes or voice to revoke their current audio key immediately.
 
-All game generation stages, including Claude research plus structured output,
-share one deadline capped at 35 seconds so completion fits the client's 45-second
-start acknowledgement.
+All game generation stages, including Claude research plus structured output, share the room feature deadline (ten minutes by default, up to thirty). The client acknowledgement allows that deadline. Hosts can cancel pending generation; duplicate starts are rejected and room closure or the requesting host leaving aborts the request.
 
 ## Updating models
 
@@ -159,6 +152,16 @@ fixture provider endpoints, without paid inference.
 
 ## Room models and provider diagnostics
 
-Room AI settings expose one shared assistant model. The first OpenAI or Anthropic room contribution selects an available model when the key has compatible text models; audio/image-only keys are still shared without selecting an assistant. Sarvam does not change the assistant. Contributors or hosts can change models for their shared provider. Chat, idle notes setup and new game content use this selection; a participant's explicit chat-model choice still takes precedence. Removing a key leaves the selected model visible and prompts for credentials rather than switching providers. Room model metadata is broadcast without keys and cleared with the room.
+Room AI settings have separate Features and Keys tabs. Each feature has an independent model and enabled state: chat, games, notes, transcript questions, transcription, image safety, realtime voice, and cloned speech. Text features additionally support output/research budgets, reasoning effort, answer length, web search and search count, custom instructions, and timeout. Audio APIs expose their applicable model and timeout options. Disabling image safety blocks uploads rather than accepting unreviewed images.
+
+Text defaults are 32,768 output tokens and 16,384 research tokens. Budgets can be set from 128 to 128,000; discovered provider caps still apply. OpenAI reasoning consumes its response output budget; Claude's separate structured-output research pass uses the research budget. Choosing a budget does not guarantee that many tokens will be generated.
+
+Only hosts or contributors of the effective provider key can change feature settings. Deployment-backed providers require a host. Chat tools `get_room_ai_settings` and `configure_room_ai` use the signed requester's exact live identity and the same SFU permission checks as socket settings. Tool results contain resolved configuration, never credentials. Changes affect new requests; active audio sessions need a restart. ElevenLabs speech configuration uses the existing web deployment credential; its key is not contributed through room settings.
+
+The first compatible OpenAI or Anthropic contribution establishes initial text defaults. Per-feature changes remain independent. Removing a key leaves model selections visible. Explicit room feature models take precedence over older personal model selections. Room metadata is broadcast without keys and cleared with the room.
+
+![Room AI features](docs/room-ai-features.png)
+
+![Per-feature generation controls](docs/room-ai-generation-options.png)
 
 Assistant failures emit plain, redacted provider status, error type and request ID in Worker logs. The UI distinguishes rejected keys, model access, billing/credits and rate limits. This lets operators diagnose failed inference without recording API keys or request bodies.

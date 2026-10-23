@@ -239,7 +239,7 @@ function StartStage({
     transcript.session.transcriptModel,
   );
   const [qaModel, setQaModel] = useState(
-    roomAi?.state.assistantModel ?? transcript.session.qaModel,
+    roomAi?.state.features?.questions?.model ?? roomAi?.state.assistantModel ?? transcript.session.qaModel,
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
@@ -270,11 +270,11 @@ function StartStage({
       ? "Conclave key"
       : "Room key";
   useEffect(() => {
-    setTranscriptModel(transcript.session.transcriptModel);
-  }, [transcript.session.transcriptModel]);
+    setTranscriptModel(roomAi?.state.features?.transcription?.model ?? transcript.session.transcriptModel);
+  }, [roomAi?.state.features?.transcription?.model, transcript.session.transcriptModel]);
   useEffect(() => {
-    setQaModel(roomAi?.state.assistantModel ?? transcript.session.qaModel);
-  }, [roomAi?.state.assistantModel, transcript.session.qaModel]);
+    setQaModel(roomAi?.state.features?.questions?.model ?? roomAi?.state.assistantModel ?? transcript.session.qaModel);
+  }, [roomAi?.state.features?.questions?.model, roomAi?.state.assistantModel, transcript.session.qaModel]);
   useEffect(() => {
     setApiKey("");
   }, [provider]);
@@ -297,6 +297,7 @@ function StartStage({
               : {}),
           },
           qaModel,
+          ["minutes", "questions"],
         );
         if (error) {
           setSetupError(error);

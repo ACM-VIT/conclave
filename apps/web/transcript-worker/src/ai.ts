@@ -255,6 +255,7 @@ export const buildMinutesCompactionInput = (
   ].join("\n");
 
 export const generateMinutes = async (options: {
+  signal?: AbortSignal;
   env: Env;
   apiKey: string;
   model: string;
@@ -265,6 +266,7 @@ export const generateMinutes = async (options: {
   const modelConfig = getTranscriptResponseModelConfig(options.model);
   const text = await generateAiText({
     ...options,
+    feature: "minutes",
     instructions: MINUTES_SYSTEM_PROMPT,
     input: buildMinutesUpdateInput({
       current: options.current,
@@ -281,6 +283,7 @@ export const generateMinutes = async (options: {
 };
 
 export const compactMinutes = async (options: {
+  signal?: AbortSignal;
   env: Env;
   apiKey: string;
   model: string;
@@ -289,6 +292,7 @@ export const compactMinutes = async (options: {
   const modelConfig = getTranscriptResponseModelConfig(options.model);
   const text = await generateAiText({
     ...options,
+    feature: "minutes",
     instructions: MINUTES_COMPACTION_SYSTEM_PROMPT,
     input: buildMinutesCompactionInput(options.current),
     maxOutputTokens: modelConfig.minutesMaxOutputTokens,
@@ -305,6 +309,7 @@ export const compactMinutes = async (options: {
 };
 
 export async function* streamQuestionAnswer(options: {
+  signal?: AbortSignal;
   env: Env;
   apiKey: string;
   model: string;
@@ -315,6 +320,7 @@ export async function* streamQuestionAnswer(options: {
   const transcript = buildQaTranscriptContext(options.segments);
   const session = createAiTextSession({
     ...options,
+    feature: "questions",
     instructions: QA_SYSTEM_PROMPT,
     maxOutputTokens: modelConfig.qaMaxOutputTokens,
     reasoningEffort: modelConfig.qaReasoningEffort,

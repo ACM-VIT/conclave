@@ -1,5 +1,6 @@
 "use client";
 
+import type { RoomAiController } from "../hooks/useRoomAi";
 import {
   AudioLines,
   Check,
@@ -179,6 +180,7 @@ interface RecordingReview {
 }
 
 interface TtsVoiceSettingsProps {
+  roomAi?: RoomAiController;
   systemVoices: TtsSystemVoiceOption[];
   selectedSystemVoiceUri?: string | null;
   onSystemVoiceChange?: (voiceUri: string | null) => void;
@@ -192,6 +194,7 @@ interface TtsVoiceSettingsProps {
 }
 
 export default function TtsVoiceSettings({
+  roomAi,
   systemVoices,
   selectedSystemVoiceUri,
   onSystemVoiceChange,
@@ -527,11 +530,13 @@ export default function TtsVoiceSettings({
     const controller = new AbortController();
     previewAbortRef.current = controller;
     try {
+      const roomAiToken = roomAi?.connected ? await roomAi.requestAccessToken?.("speech") : undefined;
       const response = await fetch("/api/tts/speech", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           token: clonedVoice.token,
+          roomAiToken,
           text: CLONE_PREVIEW_TEXT,
         }),
         signal: controller.signal,
@@ -571,7 +576,7 @@ export default function TtsVoiceSettings({
           : "The preview is unavailable.",
       );
     }
-  }, [
+  }, [roomAi,
     audioOutputDeviceId,
     clonePreviewPhase,
     clonedVoice,

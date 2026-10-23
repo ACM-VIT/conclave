@@ -195,7 +195,7 @@ describe("game AI content", () => {
         if (provider === "openai" && game.id === "trivia")
           expect(createResponse.mock.calls.at(-1)?.[0]).toHaveProperty(
             "max_output_tokens",
-            3700,
+            32768,
           );
       }
     },
@@ -271,7 +271,7 @@ describe("game AI content", () => {
     expect(openAiConstructor).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: "sk-room-game" }),
     );
-    expect(createResponse.mock.calls[0][1]).toHaveProperty("timeout", 35_000);
+    expect(createResponse.mock.calls[0][1]).toHaveProperty("timeout", 600_000);
     vi.stubEnv("SFU_GAME_AI_ENABLED", "false");
     createResponse.mockClear();
     expect(await generateStructuredGameContent(request)).toBeNull();
@@ -325,7 +325,7 @@ describe("game AI content", () => {
     );
     expect(requestRecord).toMatchObject({
       model: "gpt-5.6-luna",
-      max_output_tokens: 1024,
+      max_output_tokens: 32768,
       reasoning: { effort: "low", summary: "auto" },
       store: false,
       text: {
@@ -339,7 +339,7 @@ describe("game AI content", () => {
       tools: [{ type: "web_search", search_context_size: "low" }],
     });
     expect(request).not.toHaveProperty("tool_choice");
-    expect(requestOptions).toHaveProperty("timeout", 25_000);
+    expect(requestOptions).toHaveProperty("timeout", 600_000);
     expect((requestOptions as { signal: AbortSignal }).signal).toBeInstanceOf(
       AbortSignal,
     );
@@ -364,7 +364,7 @@ describe("game AI content", () => {
     expect(request).toHaveProperty("tools", [
       { type: "web_search", search_context_size: "low" },
     ]);
-    expect(requestOptions).toHaveProperty("timeout", 25_000);
+    expect(requestOptions).toHaveProperty("timeout", 600_000);
     expect((requestOptions as { signal: AbortSignal }).signal).toBeInstanceOf(
       AbortSignal,
     );

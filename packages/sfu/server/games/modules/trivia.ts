@@ -217,6 +217,7 @@ export const triviaModule: GameModule<TriviaState> = {
     const topic = gameContentTopic(ctx.config) || "fresh general knowledge trivia";
     const questionCount = numberOption(ctx.config, "questions", QUESTIONS_PER_GAME);
     return generateStructuredGameContent({
+      signal: ctx.signal,
       aiEnvironment: ctx.aiEnvironment,
       gameName: "Trivia",
       topic,

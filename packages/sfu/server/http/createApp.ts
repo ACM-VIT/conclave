@@ -1,5 +1,6 @@
 import { AI_PROVIDERS, getProviderApiKey, readAiEnvironment, type AiEnvironment } from "@conclave/ai/models";
 import { isRoomAiProvider } from "@conclave/ai/room";
+import { isAiFeature, resolveAiFeatureSettings } from "@conclave/ai/room-settings";
 import { ROOM_AI_ENV_FIELDS } from "@conclave/ai/room-server";
 import type { MediaKind } from "mediasoup/types";
 import { randomBytes } from "node:crypto";
@@ -595,10 +596,16 @@ export const createSfuApp = ({
       }
 
       try {
+        const imageSettings = resolveAiFeatureSettings({}, "images", room.aiCredentials.featureSettings);
+        if (!imageSettings.enabled) {
+          res.status(403).json({error: "Image safety is disabled in Room AI settings."});
+          return;
+        }
         const moderation = await moderateImage({
           data: req.body,
           mimeType,
-          timeoutMs: config.chatImageModeration.timeoutMs,
+          timeoutMs: imageSettings.timeoutMs,
+          model: imageSettings.model,
           apiKey: config.openAi.apiKey || room.aiCredentials.get("openai"),
         });
         if (moderation.blocked) {
@@ -703,7 +710,7 @@ export const createSfuApp = ({
   // replayed capabilities are rejected before request bytes are buffered.
   app.use(express.json());
 
-  app.post("/internal/ai/credentials", (req: Request, res: Response) => {
+  const roomAiMember = (req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store");
     const secret = req.get("x-room-ai-secret") || "";
     if (
@@ -714,7 +721,7 @@ export const createSfuApp = ({
       )
     ) {
       res.status(401).json({ error: "Unauthorized" });
-      return;
+      return null;
     }
     const body = requestBody(req);
     const room =
@@ -730,11 +737,37 @@ export const createSfuApp = ({
       room.id !== body.roomId ||
       room.clientId !== body.clientId ||
       !member ||
-      member.isObserver
+      member.isObserver ||
+      (body.requireHost === true && !(member instanceof Admin))
     ) {
       res.status(403).json({ error: "Room membership is no longer active." });
-      return;
+      return null;
     }
+    return {room, member, body};
+  };
+
+  app.post("/internal/ai/settings", (req: Request, res: Response) => {
+    const lookup = roomAiMember(req, res);
+    if (!lookup) return;
+    const { room, member, body } = lookup;
+    const environment = readAiEnvironment(process.env);
+    if (body.feature !== undefined) {
+      try {
+        if (!isAiFeature(body.feature)) throw new Error("Choose an AI feature.");
+        room.aiCredentials.configureFeature(body.feature, body.settings, member.id, member instanceof Admin, environment);
+        getIo?.()?.to(room.channelId).emit("ai:changed", room.aiCredentials.status(environment));
+      } catch (error) {
+        res.status(403).json({error: error instanceof Error ? error.message : "Could not save AI settings."});
+        return;
+      }
+    }
+    res.json({state: room.aiCredentials.status(environment)});
+  });
+
+  app.post("/internal/ai/credentials", (req: Request, res: Response) => {
+    const lookup = roomAiMember(req, res);
+    if (!lookup) return;
+    const { room, body } = lookup;
     const result: AiEnvironment = {};
     const environment = readAiEnvironment(process.env);
     for (const field of ROOM_AI_ENV_FIELDS) {
@@ -752,6 +785,7 @@ export const createSfuApp = ({
     if (room.aiCredentials.assistantModel) {
       result.CONCLAVE_ASSISTANT_MODEL = room.aiCredentials.assistantModel;
     }
+    result.CONCLAVE_AI_SETTINGS = JSON.stringify(room.aiCredentials.featureSettings);
     res.json(result);
   });
 

@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { config } from "../config/config.js";
+import { Admin } from "../config/classes/Admin.js";
 import type { Room } from "../config/classes/Room.js";
 import { RoomAiCredentials } from "../server/roomAiCredentials.js";
 import { createSfuApp } from "../server/http/createApp.js";
@@ -40,6 +41,24 @@ function fixture() {
 }
 
 describe("room AI credentials", () => {
+  it("authorizes each feature against its effective provider and keeps models independent", () => {
+    const keys = new RoomAiCredentials();
+    keys.set("anthropic", "sk-ant-owner", "owner", false);
+    keys.configureFeature("minutes", {model: "claude-opus-5-5", maxOutputTokens: 64000}, "owner", false);
+    expect(keys.featureSettings.minutes).toEqual({model: "claude-opus-5-5", maxOutputTokens: 64000});
+    expect(keys.featureSettings.games).toBeUndefined();
+    const initial = keys.assistantModel;
+    keys.configureFeature("assistant", {model: "claude-haiku-5-5"}, "owner", false);
+    expect(keys.assistantModel).toBe(initial);
+    expect(() => keys.configureFeature("games", {model: "gpt-6-luna"}, "owner", false)).toThrow("Only a host");
+    expect(() => keys.configureFeature("minutes", {maxOutputTokens: 32000}, "peer", false)).toThrow("Only a host");
+    expect(() => keys.configureFeature("minutes", {maxOutputTokens: 32000}, "owner", false, {ANTHROPIC_API_KEY: "deployment"})).toThrow("Only a host");
+    keys.configureFeature("games", {model: "gpt-6-luna", researchTokens: 20000}, "host", true);
+    expect(keys.featureSettings.games?.researchTokens).toBe(20000);
+    expect(JSON.stringify(keys.status({}))).not.toContain("sk-ant-owner");
+    keys.clear();
+    expect(keys.featureSettings).toEqual({});
+  });
   it("keeps the first saved room model when concurrent key shares suggest different initial models", () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("ANTHROPIC_API_KEY", "");
@@ -440,6 +459,25 @@ async function start() {
 }
 
 describe("server-only room credential access", () => {
+  it("uses live membership and permission checks for assistant settings tools and voice access", async () => {
+    const {room, member, url, read} = await start();
+    room.aiCredentials.set("anthropic", "sk-ant-tool-private", member.id, false);
+    const configure = (secret: string, extra: Record<string, unknown> = {}) => fetch(`${url}/internal/ai/settings`, {method: "POST", headers: {"content-type": "application/json", "x-room-ai-secret": secret}, body: JSON.stringify({roomId: room.id, clientId: room.clientId, channelId: room.channelId, userId: member.id, feature: "minutes", settings: {model: "claude-opus-5-5", researchTokens: 24000}, ...extra})});
+    expect((await configure("")).status).toBe(401);
+    expect((await configure("server-secret", {userId: "departed"})).status).toBe(403);
+    expect((await configure("server-secret", {feature: "games", settings: {model: "gpt-6-luna"}, isAdmin: true})).status).toBe(403);
+    const response = await configure("server-secret");
+    expect(response.status).toBe(200);
+    const metadata = await response.text();
+    expect(metadata).toContain("claude-opus-5-5");
+    expect(metadata).not.toContain("sk-ant-tool-private");
+    expect((await read("server-secret", {requireHost: true})).status).toBe(403);
+    Object.setPrototypeOf(member, Admin.prototype);
+    expect((await configure("server-secret", {feature: "games", settings: {model: "gpt-6-luna"}})).status).toBe(200);
+    expect((await read("server-secret", {requireHost: true})).status).toBe(200);
+    member.isObserver = true;
+    expect((await configure("server-secret")).status).toBe(403);
+  });
   it("returns the authoritative provider endpoint with the selected room credential", async () => {
     const { room, member, read } = await start();
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://room-provider.example");
@@ -474,12 +512,14 @@ describe("server-only room credential access", () => {
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(await response.json()).toEqual({
         OPENAI_API_KEY: "sk-donation",
+        CONCLAVE_AI_SETTINGS: "{}",
         CONCLAVE_ASSISTANT_MODEL: "gpt-6.1-sol",
       });
     }
     vi.stubEnv("OPENAI_API_KEY", "sk-deployment");
     expect(await (await read("server-secret")).json()).toEqual({
       OPENAI_API_KEY: "sk-deployment",
+      CONCLAVE_AI_SETTINGS: "{}",
       CONCLAVE_ASSISTANT_MODEL: "gpt-6.1-sol",
     });
   });

@@ -35,6 +35,7 @@ export type ModerateChatImageOptions = {
   timeoutMs: number;
   client?: ChatImageModerationClient;
   apiKey?: string;
+  model?: string;
 };
 
 export const moderateChatImage = async ({
@@ -43,6 +44,7 @@ export const moderateChatImage = async ({
   timeoutMs,
   client,
   apiKey,
+  model = CHAT_IMAGE_MODERATION_MODEL,
 }: ModerateChatImageOptions): Promise<ChatImageModerationResult> => {
   const response = await (
     client ??
@@ -51,7 +53,7 @@ export const moderateChatImage = async ({
       : getOpenAiClient())
   ).moderations.create(
     {
-      model: CHAT_IMAGE_MODERATION_MODEL,
+      model,
       input: [
         {
           type: "image_url",

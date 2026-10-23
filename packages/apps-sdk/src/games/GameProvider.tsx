@@ -1,3 +1,4 @@
+import { AI_GENERATION_LIMITS } from "@conclave/ai/limits";
 import React, {
   createContext,
   useCallback,
@@ -19,7 +20,7 @@ import type {
 } from "./types";
 
 const ACK_TIMEOUT_MS = 8_000;
-const START_GAME_ACK_TIMEOUT_MS = 45_000;
+const START_GAME_ACK_TIMEOUT_MS = AI_GENERATION_LIMITS.gameAckTimeoutMs;
 
 const GameContext = createContext<GameContextValue | null>(null);
 

@@ -50,6 +50,7 @@ import { useMeetRefs } from "./hooks/useMeetRefs";
 import { useMeetRooms } from "./hooks/useMeetRooms";
 import { useMeetSocket } from "./hooks/useMeetSocket";
 import { useMeetState } from "./hooks/useMeetState";
+import { useRoomAi, type RoomAiController } from "./hooks/useRoomAi";
 import { useMeetTts } from "./hooks/useMeetTts";
 import { useWebcamReceiverCapacityProof } from "./hooks/useWebcamReceiverCapacityProof";
 import { selectActiveWebcamReceiverCapacityProof } from "./lib/webcam-receiver-capacity-proof";
@@ -81,7 +82,6 @@ import { useVoiceAgentParticipant } from "./hooks/useVoiceAgentParticipant";
 import VoiceAgentDialog from "./components/VoiceAgentDialog";
 import {
   clearStoredVoiceAgentKey,
-  getStoredVoiceAgentKey,
   storeVoiceAgentKey,
 } from "./lib/voice-agent-key";
 import type { ChatMessage, JoinMode, PrejoinMediaHandoff } from "./lib/types";
@@ -1074,6 +1074,8 @@ export default function MeetsClient({
     reactionAssets,
   });
 
+  const roomAiRef = useRef<RoomAiController | null>(null);
+  const getRoomAi = useCallback(() => roomAiRef.current, []);
   const {
     ttsSpeakerId,
     activeTtsMessageId,
@@ -1088,6 +1090,7 @@ export default function MeetsClient({
     clearClonedVoice,
     outgoingTtsVoiceToken,
   } = useMeetTts({
+    getRoomAi,
     meetVolume,
     audioOutputDeviceId: selectedAudioOutputDeviceId,
   });
@@ -2505,7 +2508,12 @@ export default function MeetsClient({
     browserState?.active || isBrowserServiceAvailable,
   );
 
+  const roomAi = useRoomAi(appsSocket, connectionState === "joined" && !isWebinarAttendee, userId, canModerateMeeting, roomId);
+  useEffect(() => { roomAiRef.current = roomAi; }, [roomAi]);
+  const [voiceKeyShareError, setVoiceKeyShareError] = useState<string | null>(null);
+  const [isVoiceKeySharing, setIsVoiceKeySharing] = useState(false);
   const voiceAgent = useVoiceAgentParticipant({
+    roomAi,
     roomId,
     isJoined: connectionState === "joined",
     isAdmin: canModerateMeeting,
@@ -2538,16 +2546,21 @@ export default function MeetsClient({
     // while the agent joins. It closes itself once the agent is live.
     clearVoiceAgentError();
     setIsVoiceAgentDialogOpen(true);
-    const storedKey = getStoredVoiceAgentKey();
-    if (storedKey) void startVoiceAgent(storedKey);
-  }, [clearVoiceAgentError, startVoiceAgent]);
+    setVoiceKeyShareError(null);
+    if (roomAi.state.openai.source) void startVoiceAgent("");
+  }, [clearVoiceAgentError, startVoiceAgent, roomAi.state.openai.source]);
 
   const handleVoiceAgentDialogStart = useCallback(
-    (apiKey: string, remember: boolean) => {
+    async (apiKey: string, remember: boolean) => {
+      setVoiceKeyShareError(null);
+      setIsVoiceKeySharing(true);
+      const error = await roomAi.configure("openai", apiKey, null);
+      setIsVoiceKeySharing(false);
+      if (error) { setVoiceKeyShareError(error); return; }
       storeVoiceAgentKey(apiKey, remember);
       void startVoiceAgent(apiKey);
     },
-    [startVoiceAgent],
+    [startVoiceAgent, roomAi],
   );
 
   const handleCloseVoiceAgentDialog = useCallback(() => {
@@ -3276,8 +3289,8 @@ export default function MeetsClient({
   const voiceAgentKeyPrompt = (
     <VoiceAgentDialog
       open={isVoiceAgentDialogOpen}
-      isStarting={isVoiceAgentStarting}
-      error={voiceAgent.error}
+      isStarting={isVoiceAgentStarting || isVoiceKeySharing}
+      error={voiceKeyShareError ?? voiceAgent.error}
       onStart={handleVoiceAgentDialogStart}
       onClose={handleCloseVoiceAgentDialog}
     />
@@ -3324,6 +3337,7 @@ export default function MeetsClient({
         />
       )}
       <MeetsMainContent
+        roomAi={roomAi}
         isJoined={isJoined}
         isMobile={isMobile}
         viewSettings={viewSettings}

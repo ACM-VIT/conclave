@@ -133,18 +133,20 @@ SFU_GAME_AI_WEB_SEARCH_ENABLED=1
 SFU_GAME_AI_WEB_SEARCH_CONTEXT_SIZE=low
 ```
 
-The default model is `gpt-5.6-luna`. Set `SFU_GAME_AI_MODEL` to a registered
+The default model is `gpt-6-luna`. Set `SFU_GAME_AI_MODEL` to a registered
 Claude model and provide `ANTHROPIC_API_KEY` to use Anthropic instead. Provider
 clients and model defaults live in [`@conclave/ai`](../../../ai/README.md). The
 room's selected model and shared key take part in the same resolution. Keys
 shared from Chat, Notes, or Room AI settings are available to games; public
 room state contains availability and contributor metadata only.
 
-Game output has a 1,024-token minimum and a configurable 4,096-token default
-ceiling (`SFU_GAME_AI_MAX_OUTPUT_TOKENS`). Claude gathers short research notes
-before its final structured pass. Research truncation does not discard usable
-notes; final output must complete and pass the game's parser. Both passes share
-the request deadline.
+Game output defaults to 32,768 tokens and Claude research defaults to 16,384.
+Room AI settings controls the model, output/research budgets, timeout, search,
+reasoning and custom instructions independently for each feature. Provider model
+limits still apply. A truncated research scratchpad can feed the final pass;
+final output must complete and pass the game's parser. Both passes share the
+configured deadline (10 minutes by default, up to 30 minutes). The client game
+acknowledgement allows that maximum plus a short transport grace period.
 
 Web search is enabled by default through the Responses API `web_search` tool.
 The default context size is `low` to keep game startup responsive. Responses
