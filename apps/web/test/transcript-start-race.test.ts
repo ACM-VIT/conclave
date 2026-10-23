@@ -8,7 +8,8 @@ import type {
 import type { TranscriptSessionState } from "@conclave/meeting-core/transcript-types";
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
-vi.mock("@conclave/ai/room-server", () => ({ fetchRoomAiEnvironment: lookup }));
+vi.mock("@conclave/ai/room-server", async (original) => ({
+  ...await original<typeof import("@conclave/ai/room-server")>(), fetchRoomAiEnvironment: lookup }));
 afterEach(() => vi.resetAllMocks());
 
 type TestRoom = {

@@ -7,7 +7,8 @@ const { createSession, stream, roomEnvironment } = vi.hoisted(() => ({
   stream: vi.fn(),
   roomEnvironment: vi.fn(),
 }));
-vi.mock("@conclave/ai/room-server", () => ({
+vi.mock("@conclave/ai/room-server", async (original) => ({
+  ...await original<typeof import("@conclave/ai/room-server")>(),
   fetchRoomAiEnvironment: roomEnvironment,
 }));
 vi.mock("@conclave/ai/server", async (original) => ({
@@ -82,6 +83,18 @@ describe("assistant provider integration", () => {
       expect(frames).not.toContain("could not reach Anthropic");
       expect(stream).toHaveBeenCalledTimes(12);
     } finally { log.mockRestore(); }
+  });
+
+  it("logs safe lookup diagnostics without logging secrets or failing a deployment-backed answer", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    roomEnvironment.mockRejectedValue(new TypeError("fixture-secret in request headers"));
+    try {
+      const response = await POST(request());
+      await response.text();
+      expect(warn).toHaveBeenCalledWith("[Conclave] room AI lookup failed:", '{"name":"TypeError"}');
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("fixture-secret");
+      expect(createSession).toHaveBeenCalled();
+    } finally { warn.mockRestore(); }
   });
 
   it("uses the room's selected Claude model without a personal selection or an OpenAI key", async () => {

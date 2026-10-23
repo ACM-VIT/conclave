@@ -28,9 +28,13 @@ export const fetchRoomAiEnvironment = async (options: {
       AbortSignal.timeout(5000),
     ]),
     cache: "no-store",
-    redirect: "error",
+    // Workers supports manual redirects; never forward this secret to Location.
+    redirect: "manual",
   });
-  if (!response.ok) throw new Error("Room AI settings could not be loaded.");
+  if (!response.ok)
+    throw Object.assign(new Error("Room AI settings could not be loaded."), {
+      status: response.status,
+    });
   const data: unknown = await response.json();
   if (!data || typeof data !== "object")
     throw new Error("Invalid room AI settings.");
@@ -45,4 +49,19 @@ export const fetchRoomAiEnvironment = async (options: {
     if (typeof record[name] === "string") result[name] = record[name];
   }
   return result;
+};
+
+// Log only stable diagnostics, never request headers, identities or response bodies.
+export const describeRoomAiLookupFailure = (error: unknown) => {
+  const detail =
+    error && typeof error === "object"
+      ? (error as Record<string, unknown>)
+      : {};
+  const name = error instanceof Error ? error.name : "Error";
+  return {
+    name: ["TypeError", "AbortError", "TimeoutError", "Error"].includes(name)
+      ? name
+      : "Error",
+    ...(typeof detail.status === "number" ? { status: detail.status } : {}),
+  };
 };
