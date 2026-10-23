@@ -7,6 +7,7 @@ import ChatPanel from "../src/app/components/ChatPanel";
 import TranscriptPanel from "../src/app/components/TranscriptPanel";
 import RoomAiSettings from "../src/app/components/RoomAiSettings";
 import { emptyRoomAiState } from "@conclave/ai/room";
+import { getTranscriptResponseModelConfig } from "@conclave/ai/models";
 import {
   useRoomAi,
   parseRoomAiState,
@@ -60,6 +61,229 @@ const transcript = (start = vi.fn().mockResolvedValue(true)) =>
   }) as unknown as MeetingTranscriptController;
 
 describe("AI setup UX", () => {
+  it("keeps a notes key when selecting another model from the same provider", async () => {
+    const start = vi.fn().mockResolvedValue(true);
+    const notes = transcript(start);
+    await act(async () =>
+      root.render(
+        <TranscriptPanel
+          roomAi={roomAi()}
+          transcript={notes}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    const input = container.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "sk-ant-personal-fixture");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const select = container.querySelector("select")!;
+    await act(async () => {
+      select.value = "claude-haiku-5-5";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(input.value).toBe("sk-ant-personal-fixture");
+    await act(async () =>
+      container
+        .querySelector("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantApiKey: "sk-ant-personal-fixture",
+        qaModel: "claude-haiku-5-5",
+      }),
+    );
+  });
+
+  it("shares an audio-only OpenAI key without selecting an assistant model", async () => {
+    const configure = vi.fn().mockResolvedValue(null);
+    const requestModels = vi
+      .fn()
+      .mockResolvedValue([{ provider: "openai", source: "live", models: [] }]);
+    await act(async () =>
+      root.render(
+        <RoomAiSettings
+          controller={roomAi({ configure, requestModels })}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    const row = container.querySelector(
+      '[role="group"][aria-label="OpenAI settings"]',
+    )!;
+    await act(async () =>
+      row.querySelector<HTMLButtonElement>("button")!.click(),
+    );
+    const input = row.querySelector<HTMLInputElement>("input")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "sk-audio-only-fixture");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      row
+        .querySelector("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    expect(configure).toHaveBeenCalledWith(
+      "openai",
+      "sk-audio-only-fixture",
+      null,
+    );
+    expect(row.querySelector('[role="status"]')?.textContent).toBe(
+      "Key shared with room",
+    );
+  });
+
+  it("discovers notes models with the audio key when OpenAI reuses that credential", async () => {
+    const requestModels = vi.fn().mockResolvedValue([
+      {
+        provider: "openai",
+        source: "live",
+        models: [getTranscriptResponseModelConfig("gpt-6.2-sol")],
+      },
+    ]);
+    const notes = transcript();
+    notes.session.qaModel = "gpt-6.1-sol";
+    notes.globalProviderKeysAvailable = {};
+    await act(async () =>
+      root.render(
+        <TranscriptPanel
+          roomAi={roomAi({ requestModels })}
+          transcript={notes}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    const input = container.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "sk-reused-audio-key-fixture");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 650));
+    });
+    expect(requestModels).toHaveBeenLastCalledWith({
+      provider: "openai",
+      apiKey: "sk-reused-audio-key-fixture",
+      refresh: false,
+    });
+    expect(
+      container.querySelector('option[value="gpt-6.2-sol"]'),
+    ).not.toBeNull();
+  });
+
+  it("loads account models, selects a newly discovered model and explicitly refreshes availability", async () => {
+    const requestModels = vi.fn().mockResolvedValue([
+      {
+        provider: "openai",
+        source: "live",
+        models: [getTranscriptResponseModelConfig("gpt-6.2-sol")],
+      },
+      { provider: "anthropic", source: "live", models: [] },
+    ]);
+    const configure = vi.fn().mockResolvedValue(null);
+    await act(async () =>
+      root.render(
+        <RoomAiSettings
+          controller={roomAi({ isAdmin: true, requestModels, configure })}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    const select = container.querySelector("select")!;
+    expect([...select.options].map((option) => option.value)).toEqual([
+      "",
+      "gpt-6.2-sol",
+    ]);
+    await act(async () => {
+      select.value = "gpt-6.2-sol";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(configure).toHaveBeenCalledWith("openai", undefined, "gpt-6.2-sol");
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Refresh available models"]',
+        )!
+        .click(),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(requestModels).toHaveBeenLastCalledWith({ refresh: true });
+  });
+
+  it("discards an old model response after room credentials change", async () => {
+    let resolveOld!: (value: unknown) => void;
+    const requestModels = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve;
+          }),
+      )
+      .mockResolvedValue([
+        {
+          provider: "anthropic",
+          source: "live",
+          models: [getTranscriptResponseModelConfig("claude-sonnet-5-6")],
+        },
+      ]);
+    const first = roomAi({ requestModels, isAdmin: true });
+    await act(async () =>
+      root.render(<RoomAiSettings controller={first} onClose={() => {}} />),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await act(async () =>
+      root.render(
+        <RoomAiSettings
+          controller={{ ...first, state: { ...first.state } }}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await act(async () =>
+      resolveOld([
+        {
+          provider: "openai",
+          source: "live",
+          models: [getTranscriptResponseModelConfig("gpt-6.2-sol")],
+        },
+      ]),
+    );
+    expect(
+      container.querySelector('option[value="claude-sonnet-5-6"]'),
+    ).not.toBeNull();
+    expect(container.querySelector('option[value="gpt-6.2-sol"]')).toBeNull();
+  });
   it("keeps key feedback in its provider row and exposes feature labels and model selection", async () => {
     const configure = vi.fn().mockResolvedValue(null);
     await act(async () =>
@@ -119,50 +343,117 @@ describe("AI setup UX", () => {
   });
 
   it("labels the inherited model without inventing a deployment selection", async () => {
-    await act(async () => root.render(<RoomAiSettings controller={roomAi()} onClose={() => {}} />));
+    await act(async () =>
+      root.render(<RoomAiSettings controller={roomAi()} onClose={() => {}} />),
+    );
     expect(container.querySelector("select")?.value).toBe("");
-    expect(container.querySelector('option[value=""]')?.textContent).toBe("Deployment default");
+    expect(container.querySelector('option[value=""]')?.textContent).toBe(
+      "Deployment default",
+    );
   });
 
   it("preserves the audio draft when the shared assistant changes", async () => {
     const start = vi.fn().mockResolvedValue(true);
     const notes = transcript(start);
     const state = emptyRoomAiState();
-    const render = () => root.render(<TranscriptPanel transcript={notes} roomAi={roomAi({ state: { ...state } })} onClose={() => {}} />);
+    const render = () =>
+      root.render(
+        <TranscriptPanel
+          transcript={notes}
+          roomAi={roomAi({ state: { ...state } })}
+          onClose={() => {}}
+        />,
+      );
     await act(async () => render());
-    await act(async () => [...container.querySelectorAll("button")].find(b => b.textContent === "Sarvam")!.click());
-    const input = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((b) => b.textContent === "Sarvam")!
+        .click(),
+    );
+    const input = container.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    )!;
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "sarvam-draft-key");
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "sarvam-draft-key");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     state.assistantModel = "claude-haiku-5-5";
     state.anthropic = { source: "room", ownerId: "alice" };
     await act(async () => render());
-    expect([...container.querySelectorAll("button")].find(b => b.textContent === "Sarvam")?.getAttribute("aria-pressed")).toBe("true");
-    expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe("sarvam-draft-key");
-    await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({ transcriptModel: "saaras:v3", apiKey: "sarvam-draft-key", qaModel: "claude-haiku-5-5" }));
+    expect(
+      [...container.querySelectorAll("button")]
+        .find((b) => b.textContent === "Sarvam")
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      container.querySelector<HTMLInputElement>('input[type="password"]')
+        ?.value,
+    ).toBe("sarvam-draft-key");
+    await act(async () =>
+      container
+        .querySelector("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transcriptModel: "saaras:v3",
+        apiKey: "sarvam-draft-key",
+        qaModel: "claude-haiku-5-5",
+      }),
+    );
   });
 
   it("keeps a rejected personal key replaceable when a room key is also available", async () => {
     const state = emptyRoomAiState();
     state.anthropic = { source: "room", ownerId: "bob" };
     const submit = vi.fn();
-    await act(async () => root.render(<ChatPanel
-      roomAi={roomAi({ state })} messages={[]} chatInput="" currentUserId="alice"
-      onInputChange={() => {}} onSend={() => {}} onSendGif={() => {}} onSendImage={async () => false} onClose={() => {}}
-      assistantApiKeyPrompt={{ visible: true, error: "Replace your rejected key.", model: "claude-haiku-5-5", replacePersonalKey: true }}
-      onSubmitAssistantApiKey={submit}
-    />));
-    const input = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    await act(async () =>
+      root.render(
+        <ChatPanel
+          roomAi={roomAi({ state })}
+          messages={[]}
+          chatInput=""
+          currentUserId="alice"
+          onInputChange={() => {}}
+          onSend={() => {}}
+          onSendGif={() => {}}
+          onSendImage={async () => false}
+          onClose={() => {}}
+          assistantApiKeyPrompt={{
+            visible: true,
+            error: "Replace your rejected key.",
+            model: "claude-haiku-5-5",
+            replacePersonalKey: true,
+          }}
+          onSubmitAssistantApiKey={submit}
+        />,
+      ),
+    );
+    const input = container.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    )!;
     expect(input).not.toBeNull();
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "sk-ant-replacement");
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "sk-ant-replacement");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Connect")!.click());
-    expect(submit).toHaveBeenCalledWith("sk-ant-replacement", "claude-haiku-5-5");
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent === "Connect")!
+        .click(),
+    );
+    expect(submit).toHaveBeenCalledWith(
+      "sk-ant-replacement",
+      "claude-haiku-5-5",
+    );
   });
 
   it("uses the room assistant model for notes setup", async () => {
@@ -204,7 +495,7 @@ describe("AI setup UX", () => {
     expect(start.disabled).toBe(true);
     const select = container.querySelector("select")!;
     await act(async () => {
-      select.value = "gpt-5.6-terra";
+      select.value = "gpt-6.1-sol";
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
     expect(container.querySelector('input[type="password"]')).toBeNull();
@@ -257,8 +548,15 @@ describe("AI setup UX", () => {
       button.textContent?.includes("OpenAI"),
     )!;
     expect(openai.disabled).toBe(true);
-    expect(container.querySelector<HTMLOptionElement>('option[value="gpt-5.6-sol"]')?.disabled).toBe(true);
-    expect(container.querySelector<HTMLOptionElement>('option[value="claude-sonnet-5-5"]')?.disabled).toBe(true);
+    expect(
+      container.querySelector<HTMLOptionElement>('option[value="gpt-6-astra"]')
+        ?.disabled,
+    ).toBe(true);
+    expect(
+      container.querySelector<HTMLOptionElement>(
+        'option[value="claude-sonnet-5-5"]',
+      )?.disabled,
+    ).toBe(true);
     await act(async () =>
       root.render(
         <RoomAiSettings
@@ -268,7 +566,10 @@ describe("AI setup UX", () => {
       ),
     );
     await act(async () => openai.click());
-    expect(container.querySelector<HTMLOptionElement>('option[value="gpt-5.6-sol"]')?.disabled).toBe(false);
+    expect(
+      container.querySelector<HTMLOptionElement>('option[value="gpt-6-astra"]')
+        ?.disabled,
+    ).toBe(false);
     expect(container.textContent).toContain("Your account is billed");
     expect(container.textContent).toContain("when the room ends");
     expect(

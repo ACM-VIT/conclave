@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createAiTextSession,
+  describeAiError,
   generateAiText,
   type AiTextOptions,
 } from "../src/server.js";
@@ -66,12 +67,128 @@ const claudeEvents = (
 afterEach(() => vi.unstubAllGlobals());
 
 describe("provider routing", () => {
+  it.each([401, 403, 404, 429, 503])(
+    "preserves discovery HTTP status %s in redacted inference diagnostics",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => jsonResponse(status)),
+      );
+      function jsonResponse(status: number) {
+        return new Response("{}", {
+          status,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const error = await generateAiText({
+        ...options,
+        model: "claude-sonnet-5-6",
+        input: "Hello",
+      }).catch((error: unknown) => error);
+      const diagnostic = describeAiError(error, "anthropic", options.apiKey);
+      expect(diagnostic.status).toBe(status);
+      if (status === 429)
+        expect(diagnostic.userMessage).toContain("rate limited");
+      expect(JSON.stringify(diagnostic)).not.toContain(options.apiKey);
+    },
+  );
+
+  it("verifies a pinned snapshot even when its alias is also available", async () => {
+    const selected = "gpt-6.2-sol-2026-10-24";
+    const requests: { url: string; body?: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const body = init?.body
+          ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+          : undefined;
+        requests.push({ url: String(url), body });
+        if (String(url).includes("/models"))
+          return json({ data: [{ id: "gpt-6.2-sol" }, { id: selected }] });
+        return json({
+          id: "resp_snapshot",
+          object: "response",
+          status: "completed",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "OK", annotations: [] }],
+            },
+          ],
+        });
+      }),
+    );
+    expect(
+      await generateAiText({
+        ...options,
+        model: selected,
+        apiKey: "sk-openai-fixture",
+        input: "Reply OK",
+      }),
+    ).toBe("OK");
+    expect(requests[1].body?.model).toBe(selected);
+  });
+
+  it("verifies newly discovered Claude models and honors their token limit before generation", async () => {
+    const requests: { url: string; body?: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const body = init?.body
+          ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+          : undefined;
+        requests.push({ url: String(url), body });
+        if (String(url).includes("/models"))
+          return json({
+            data: [
+              {
+                id: "claude-sonnet-5-6",
+                max_tokens: 1024,
+                capabilities: {
+                  structured_outputs: { supported: true },
+                  server_tools: { web_search: { supported: true } },
+                },
+              },
+            ],
+          });
+        return json(message([{ type: "text", text: "OK" }]));
+      }),
+    );
+    expect(
+      await generateAiText({
+        ...options,
+        model: "claude-sonnet-5-6",
+        input: "Reply OK",
+      }),
+    ).toBe("OK");
+    expect(requests).toHaveLength(2);
+    expect(requests[0].url).toContain("/models");
+    expect(requests[1].body).toMatchObject({
+      model: "claude-sonnet-5-6",
+      max_tokens: 1024,
+    });
+  });
+
+  it("refuses an unavailable discovered model before sending an inference request", async () => {
+    const fetcher = vi.fn(async () => json({ data: [] }));
+    vi.stubGlobal("fetch", fetcher);
+    await expect(
+      generateAiText({
+        ...options,
+        model: "claude-sonnet-5-6",
+        input: "Hello",
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps defaults stable and resolves only the selected provider's key", () => {
     const env = {
       OPENAI_API_KEY: "openai-secret",
       ANTHROPIC_API_KEY: " claude-secret ",
     };
-    expect(AI_DEFAULT_MODELS.assistant).toBe("gpt-5.6-terra");
+    expect(AI_DEFAULT_MODELS.assistant).toBe("gpt-6.1-sol");
     expect(getProviderApiKey(env, getResponseProvider("claude-opus-5-5"))).toBe(
       "claude-secret",
     );
