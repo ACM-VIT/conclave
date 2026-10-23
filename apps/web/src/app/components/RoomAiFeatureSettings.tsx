@@ -120,9 +120,10 @@ function FeatureEditor({
 }) {
   const catalog = useAiModels(controller);
   const [draft, setDraft] = useState(settings);
+  const savedSettings = JSON.stringify(settings);
   useEffect(() => {
-    setDraft(settings);
-  }, [settings]);
+    setDraft(JSON.parse(savedSettings) as AiFeatureSettings);
+  }, [savedSettings]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);

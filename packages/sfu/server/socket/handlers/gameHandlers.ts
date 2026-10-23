@@ -416,7 +416,7 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
                     ([, value]) => Boolean(value),
                   ),
                 ),
-                CONCLAVE_AI_SETTINGS: JSON.stringify(room.aiCredentials.featureSettings),
+                CONCLAVE_AI_SETTINGS: JSON.stringify(room.aiCredentials.effectiveFeatureSettings(readAiEnvironment(process.env))),
                 ...(room.aiCredentials.assistantModel
                   ? { CONCLAVE_ASSISTANT_MODEL: room.aiCredentials.assistantModel }
                   : {}),

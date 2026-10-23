@@ -528,6 +528,22 @@ describe("AI setup UX", () => {
     expect(container.querySelector<HTMLInputElement>('[aria-label="Research tokens"]')?.value).toBe("16384");
   });
 
+  it("keeps an unsaved feature draft when unrelated room metadata rerenders", async () => {
+    const controller = roomAi({isAdmin: true});
+    const render = () => root.render(<RoomAiSettings controller={{...controller, state: {...controller.state}}} onClose={() => {}} />);
+    await act(async () => render());
+    await openFeature();
+    const output = container.querySelector<HTMLInputElement>('[aria-label="Output tokens"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(output, "64000");
+      output.dispatchEvent(new Event("input", {bubbles: true}));
+    });
+    await act(async () => render());
+    expect(output.value).toBe("64000");
+    await saveFeature();
+    expect(controller.configureFeature).toHaveBeenCalledWith("assistant", expect.objectContaining({maxOutputTokens: 64000}));
+  });
+
   it("preserves the audio draft when the shared assistant changes", async () => {
     const start = vi.fn().mockResolvedValue(true);
     const notes = transcript(start);

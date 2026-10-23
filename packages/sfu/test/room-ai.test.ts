@@ -512,14 +512,14 @@ describe("server-only room credential access", () => {
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(await response.json()).toEqual({
         OPENAI_API_KEY: "sk-donation",
-        CONCLAVE_AI_SETTINGS: "{}",
+        CONCLAVE_AI_SETTINGS: JSON.stringify(room.aiCredentials.effectiveFeatureSettings({})),
         CONCLAVE_ASSISTANT_MODEL: "gpt-6.1-sol",
       });
     }
     vi.stubEnv("OPENAI_API_KEY", "sk-deployment");
     expect(await (await read("server-secret")).json()).toEqual({
       OPENAI_API_KEY: "sk-deployment",
-      CONCLAVE_AI_SETTINGS: "{}",
+      CONCLAVE_AI_SETTINGS: JSON.stringify(room.aiCredentials.effectiveFeatureSettings({})),
       CONCLAVE_ASSISTANT_MODEL: "gpt-6.1-sol",
     });
   });

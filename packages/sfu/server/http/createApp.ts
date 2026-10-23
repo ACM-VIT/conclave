@@ -785,7 +785,7 @@ export const createSfuApp = ({
     if (room.aiCredentials.assistantModel) {
       result.CONCLAVE_ASSISTANT_MODEL = room.aiCredentials.assistantModel;
     }
-    result.CONCLAVE_AI_SETTINGS = JSON.stringify(room.aiCredentials.featureSettings);
+    result.CONCLAVE_AI_SETTINGS = JSON.stringify(room.aiCredentials.effectiveFeatureSettings(environment));
     res.json(result);
   });
 

@@ -1,3 +1,4 @@
+import { gameAiFeatureSettings } from "./gameAiSettings.js";
 import {
   AI_PROVIDERS,
   getProviderApiKey,
@@ -71,9 +72,13 @@ export class RoomAiCredentials {
     return structuredClone(this.#features);
   }
 
+  effectiveFeatureSettings(env: AiEnvironment = {}): RoomAiFeatureSettings {
+    return gameAiFeatureSettings({...env, ...(this.#assistantModel ? {CONCLAVE_ASSISTANT_MODEL: this.#assistantModel} : {})}, this.featureSettings);
+  }
+
   configureFeature(feature: AiFeature, input: unknown, actorId: string, isHost: boolean, env: AiEnvironment = {}): void {
     const patch = validateFeaturePatch(feature, input);
-    const current = resolveAiFeatureSettings({ ...env, ...(this.#assistantModel ? { CONCLAVE_ASSISTANT_MODEL: this.#assistantModel } : {}) }, feature, this.#features);
+    const current = resolveAiFeatureSettings({ ...env, ...(this.#assistantModel ? { CONCLAVE_ASSISTANT_MODEL: this.#assistantModel } : {}) }, feature, this.effectiveFeatureSettings(env));
     const provider = featureProvider(feature, patch.model ?? current.model);
     const ownsKey = !getProviderApiKey(env, provider) && provider !== "elevenlabs" && this.#keys.get(provider)?.ownerId === actorId;
     if (!isHost && !ownsKey) throw new Error("Only a host or this provider's key contributor can change these settings.");
@@ -152,8 +157,7 @@ export class RoomAiCredentials {
 
   status(env: AiEnvironment): RoomAiState {
     const assistantModel = this.#assistantModel || (env.CONCLAVE_ASSISTANT_MODEL && isResponseModel(env.CONCLAVE_ASSISTANT_MODEL) ? env.CONCLAVE_ASSISTANT_MODEL : null);
-    const features = this.featureSettings;
-    if (!assistantModel && env.SFU_GAME_AI_MODEL && isResponseModel(env.SFU_GAME_AI_MODEL) && !features.games?.model) features.games = {...features.games, model: env.SFU_GAME_AI_MODEL};
+    const features = this.effectiveFeatureSettings(env);
     return {
       ...Object.fromEntries(
         ROOM_AI_PROVIDERS.map((provider) => [

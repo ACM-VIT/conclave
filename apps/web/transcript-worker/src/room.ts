@@ -2041,7 +2041,7 @@ export class TranscriptRoom {
   // Debounced auto-refresh: regenerate after the room is quiet for the quiet
   // window, but never wait longer than the hard cap during continuous talk.
   private scheduleMinutes(): void {
-    if (!this.responseApiKey || this.segments.length === 0) return;
+    if (!this.session || this.segments.length === 0) return;
     if (!this.hasAiMinutes && !this.hasEnoughContentForMinutes()) return;
     if (this.minutesGenerating) {
       this.minutesRerunRequested = true;

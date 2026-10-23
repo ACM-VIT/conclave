@@ -17,7 +17,10 @@ vi.mock("../transcript-worker/src/ai", async (original) => ({
   compactMinutes: compact,
   streamQuestionAnswer: stream,
 }));
-afterEach(() => vi.resetAllMocks());
+afterEach(() => {
+  vi.resetAllMocks();
+  vi.useRealTimers();
+});
 type TestRoom = {
   loaded: Promise<void>;
   session: TranscriptSessionState;
@@ -26,6 +29,8 @@ type TestRoom = {
   segments: TranscriptSegment[];
   minutes: TranscriptMinutesSnapshot;
   minutesGenerating: boolean;
+  responseApiKey: string | null;
+  hasAiMinutes: boolean;
   minutesRerunRequested: boolean;
   regenerateMinutes: () => Promise<void>;
   responseProfile: ReturnType<typeof vi.fn>;
@@ -57,14 +62,12 @@ async function fixture() {
       speakerDisplayName: "Ada",
     },
   ] as TranscriptSegment[];
-  room.responseProfile = vi
-    .fn()
-    .mockResolvedValue({
-      env: {},
-      model: "claude-haiku-5-5",
-      apiKey: "sk-ant-fixture",
-      enabled: true,
-    });
+  room.responseProfile = vi.fn().mockResolvedValue({
+    env: {},
+    model: "claude-haiku-5-5",
+    apiKey: "sk-ant-fixture",
+    enabled: true,
+  });
   room.persist = vi.fn().mockResolvedValue(undefined);
   room.scheduleMinutes = vi.fn();
   return room;
@@ -138,3 +141,17 @@ it.each([false, true])(
     expect(frames.some((value) => value.type === "qa.final")).toBe(false);
   },
 );
+
+it("schedules automatic minutes without a transcript questions provider key", async () => {
+  vi.useFakeTimers();
+  const room = await fixture();
+  room.responseApiKey = null;
+  room.hasAiMinutes = true;
+  room.regenerateMinutes = vi.fn().mockResolvedValue(undefined);
+  const schedule = (
+    TranscriptRoom.prototype as unknown as { scheduleMinutes: () => void }
+  ).scheduleMinutes;
+  schedule.call(room);
+  await vi.runOnlyPendingTimersAsync();
+  expect(room.regenerateMinutes).toHaveBeenCalledTimes(1);
+});

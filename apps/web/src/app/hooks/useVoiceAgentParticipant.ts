@@ -1225,7 +1225,8 @@ export function useVoiceAgentParticipant({
             session: {
               type: "realtime",
               model,
-              instructions: sessionInstructions,
+              // The room proxy already installed authoritative instructions.
+              ...(!useRoomKey ? {instructions: sessionInstructions} : {}),
               audio: {
                 input: {
                   turn_detection: {

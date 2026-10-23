@@ -30,8 +30,8 @@ vi.mock("../config/config.js", () => ({
       model: "gpt-5.6-luna",
       reasoningEffort: "low",
       storeResponses: false,
-      timeoutMs: 25_000,
-      maxOutputTokens: 4_096,
+      timeoutMs: 600_000,
+      maxOutputTokens: 32_768,
       topicMaxLength: 120,
       webSearchEnabled: true,
       webSearchContextSize: "low",
@@ -65,7 +65,9 @@ describe("game AI content", () => {
     createResponse.mockReset();
     openAiConstructor.mockClear();
     config.gameAi.apiKey = "test-openai-key";
-    config.gameAi.timeoutMs = 25_000;
+    config.gameAi.timeoutMs = 600_000;
+    config.gameAi.webSearchEnabled = true;
+    config.gameAi.maxOutputTokens = 32768;
   });
 
   afterEach(() => {
@@ -271,11 +273,24 @@ describe("game AI content", () => {
     expect(openAiConstructor).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: "sk-room-game" }),
     );
-    expect(createResponse.mock.calls[0][1]).toHaveProperty("timeout", 600_000);
+    expect(createResponse.mock.calls[0][1]).toHaveProperty("timeout", 120_000);
     vi.stubEnv("SFU_GAME_AI_ENABLED", "false");
     createResponse.mockClear();
     expect(await generateStructuredGameContent(request)).toBeNull();
     expect(createResponse).not.toHaveBeenCalled();
+  });
+
+  it("keeps deployment search and output defaults until a room explicitly overrides them", async () => {
+    config.gameAi.webSearchEnabled = false;
+    config.gameAi.maxOutputTokens = 512;
+    createResponse.mockResolvedValue({output_text: '{"prompts":["Moon"]}'});
+    const request = {gameName: "Quick Draw", topic: "space", instructions: "Create one prompt.", schemaName: "game", schema, parse: (payload: unknown) => payload};
+    await generateStructuredGameContent(request);
+    expect(createResponse.mock.calls[0][0]).not.toHaveProperty("tools");
+    expect(createResponse.mock.calls[0][0]).toHaveProperty("max_output_tokens", 512);
+    await generateStructuredGameContent({...request, aiEnvironment: {OPENAI_API_KEY: "sk-room", CONCLAVE_AI_SETTINGS: JSON.stringify({games: {searchEnabled: true, maxOutputTokens: 64000}})}});
+    expect(createResponse.mock.calls[1][0]).toHaveProperty("tools");
+    expect(createResponse.mock.calls[1][0]).toHaveProperty("max_output_tokens", 64000);
   });
 
   it("lets the model decide when to use web search", async () => {
