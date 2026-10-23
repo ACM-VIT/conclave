@@ -39,6 +39,20 @@ function fixture() {
 }
 
 describe("room AI credentials", () => {
+  it("requires a host for unconfigured or deployment-backed model choices", () => {
+    const keys = new RoomAiCredentials();
+    expect(() => keys.setModel("gpt-5.6-sol", "attendee", false)).toThrow(
+      "Only a host",
+    );
+    const env = { OPENAI_API_KEY: "sk-deployment" };
+    keys.set("openai", "sk-contribution", "attendee", false, env);
+    expect(keys.assistantModel).toBeNull();
+    expect(() => keys.setModel("gpt-5.6-sol", "attendee", false, env)).toThrow(
+      "Only a host",
+    );
+    keys.setModel("gpt-5.6-sol", "host", true, env);
+    expect(keys.assistantModel).toBe("gpt-5.6-sol");
+  });
   it("selects the first contributed provider, shares model changes, and keeps contributor permissions", () => {
     const keys = new RoomAiCredentials();
     keys.set("sarvam", "speech-fixture", "alice", false);

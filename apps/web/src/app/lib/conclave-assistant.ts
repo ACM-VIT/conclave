@@ -302,7 +302,7 @@ export const streamConclaveAssistant = async ({
       supportsToolApproval: true,
       ...(githubIssueApproval ? { githubIssueApproval } : {}),
       ...(apiKey ? { apiKey } : {}),
-      ...(apiKey && model ? { model } : {}),
+      ...(model ? { model } : {}),
     }),
     signal,
   });

@@ -64,7 +64,7 @@ describe("AI setup UX", () => {
     await act(async () =>
       root.render(
         <RoomAiSettings
-          controller={roomAi({ configure })}
+          controller={roomAi({ configure, isAdmin: true })}
           onClose={() => {}}
         />,
       ),
@@ -209,6 +209,8 @@ describe("AI setup UX", () => {
       button.textContent?.includes("OpenAI"),
     )!;
     expect(openai.disabled).toBe(true);
+    expect(container.querySelector<HTMLOptionElement>('option[value="gpt-5.6-sol"]')?.disabled).toBe(true);
+    expect(container.querySelector<HTMLOptionElement>('option[value="claude-sonnet-5-5"]')?.disabled).toBe(true);
     await act(async () =>
       root.render(
         <RoomAiSettings
@@ -218,6 +220,7 @@ describe("AI setup UX", () => {
       ),
     );
     await act(async () => openai.click());
+    expect(container.querySelector<HTMLOptionElement>('option[value="gpt-5.6-sol"]')?.disabled).toBe(false);
     expect(container.textContent).toContain("Your account is billed");
     expect(container.textContent).toContain("when the room ends");
     expect(

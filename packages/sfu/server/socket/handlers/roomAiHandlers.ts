@@ -1,4 +1,5 @@
 import {
+  getProviderApiKey,
   getResponseProvider,
   isResponseModel,
   readAiEnvironment,
@@ -59,6 +60,7 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
       }
       try {
         const host = member.client instanceof Admin;
+        const env = readAiEnvironment(process.env);
         if (
           data.model !== undefined &&
           (typeof data.model !== "string" ||
@@ -66,6 +68,16 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
             getResponseProvider(data.model) !== data.provider)
         ) {
           throw new Error("Choose a supported model for this provider.");
+        }
+        if (data.model !== undefined && data.remove === true) {
+          throw new Error("Remove a key or change its model separately.");
+        }
+        if (
+          data.model !== undefined &&
+          !host &&
+          getProviderApiKey(env, data.provider)
+        ) {
+          throw new Error("Only a host can change deployment-backed models.");
         }
         if (data.remove === true)
           member.room.aiCredentials.remove(
@@ -79,6 +91,7 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
             data.apiKey,
             member.client.id,
             host,
+            env,
           );
         else if (typeof data.model !== "string")
           throw new Error("Enter an API key.");
@@ -87,6 +100,7 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
             data.model,
             member.client.id,
             host,
+            env,
           );
         }
         const state = member.room.aiCredentials.status(

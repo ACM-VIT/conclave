@@ -96,10 +96,12 @@ export default function RoomAiSettings({
           models={AI_RESPONSE_MODELS.map((model) => ({
             ...model,
             disabled:
-              controller.state[model.provider].source === "room" &&
               !controller.isAdmin &&
-              controller.state[model.provider].ownerId !==
-                controller.currentUserId,
+              !(
+                controller.state[model.provider].source === "room" &&
+                controller.state[model.provider].ownerId ===
+                  controller.currentUserId
+              ),
           }))}
           disabled={pending || !controller.connected || !controller.ready}
           onChange={async (model) => {

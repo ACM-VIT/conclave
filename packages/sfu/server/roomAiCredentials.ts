@@ -22,10 +22,23 @@ export class RoomAiCredentials {
     return this.#assistantModel;
   }
 
-  setModel(model: string, actorId: string, isHost: boolean): void {
+  setModel(
+    model: string,
+    actorId: string,
+    isHost: boolean,
+    env: AiEnvironment = {},
+  ): void {
     if (!isResponseModel(model))
       throw new Error("Choose a supported assistant model.");
-    this.assertOwner(getResponseProvider(model), actorId, isHost);
+    const provider = getResponseProvider(model);
+    const ownsEffectiveKey =
+      !getProviderApiKey(env, provider) &&
+      this.#keys.get(provider)?.ownerId === actorId;
+    if (!isHost && !ownsEffectiveKey) {
+      throw new Error(
+        "Only a host or this provider's room-key contributor can change its model.",
+      );
+    }
     this.#assistantModel = model;
   }
 
@@ -38,6 +51,7 @@ export class RoomAiCredentials {
     apiKey: string,
     actorId: string,
     isHost: boolean,
+    env: AiEnvironment = {},
   ): void {
     const key = apiKey.trim();
     if (key.length > 512 || !isProviderApiKey(provider, key))
@@ -45,7 +59,11 @@ export class RoomAiCredentials {
     this.assertOwner(provider, actorId, isHost);
     this.#keys.set(provider, { apiKey: key, ownerId: actorId });
     // The first text-provider contribution selects its model visibly for the room.
-    if (!this.#assistantModel && provider !== "sarvam") {
+    if (
+      !this.#assistantModel &&
+      provider !== "sarvam" &&
+      !getProviderApiKey(env, provider)
+    ) {
       this.#assistantModel = AI_RESPONSE_MODELS.find(
         (model) => model.provider === provider,
       )!.id;
