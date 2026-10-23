@@ -22,7 +22,7 @@ OpenAI or Sarvam: Claude is a text alternative, not a realtime audio provider.
 | `ANTHROPIC_API_KEY` | Claude text credentials |
 | `SARVAM_API_KEY` | Sarvam transcription credentials |
 | `ELEVENLABS_API_KEY` | ElevenLabs voice cloning and synthesis credentials |
-| `CONCLAVE_ASSISTANT_MODEL` | Shared web chat model; defaults to `gpt-5.6-terra` |
+| `CONCLAVE_ASSISTANT_MODEL` | Shared web chat model; defaults to `gpt-6.1-sol` |
 | `SFU_GAME_AI_MODEL` | Game model; defaults to `gpt-5.6-luna` |
 | `CLOUDFLARE_AI_GATEWAY_OPENAI_URL` / `OPENAI_BASE_URL` | OpenAI API base URL, gateway takes precedence |
 | `CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL` / `ANTHROPIC_BASE_URL` | Anthropic API base URL, gateway takes precedence |
@@ -104,9 +104,25 @@ start acknowledgement.
 
 ## Updating models
 
-Edit `src/models.ts`, verify IDs and capabilities against provider documentation,
-and update feature budgets/defaults there. Transcript and chat pickers consume the
-same list. Keep the `meeting-core/transcript-models` re-export for existing clients.
+Room settings, personal assistant setup and notes load account-specific models
+from the OpenAI and Anthropic Models APIs through the owning SFU. Refresh reloads
+the list; shared refreshes update the other room pickers too. Shared catalogs are
+cached for five minutes per effective key and invalidated when keys change.
+Personal-key discovery is not retained in room state. Socket replies contain model
+metadata only, and membership is checked again after discovery completes.
+
+OpenAI lists model IDs without endpoint/tool capabilities, so `src/models.ts`
+limits discovery to supported general-purpose Responses families. Anthropic's
+capability metadata additionally filters for structured outputs and web search.
+Retired models are excluded, and aliases replace duplicate dated snapshots.
+Newly discovered IDs are verified with the selected credential before inference;
+optional tuning uses provider defaults until documented. Known model profiles
+continue to work when a key lacks model-list permissions. Discovery failures show
+an explicit error and built-in choices; an unavailable selection stays visible
+instead of silently switching models or providers.
+
+Update supported families, feature budgets and defaults in `src/models.ts` when
+provider APIs change. Keep the `meeting-core/transcript-models` re-export for existing clients.
 Add a provider adapter behind `createAiTextSession` and `generateAiText` when
 introducing a new text provider; product surfaces should not construct SDKs.
 
@@ -122,6 +138,14 @@ Desktop and narrow viewport checks used local fixtures; no live provider request
 ![Claude provider controls](docs/provider-controls.png)
 
 ![Room AI settings](docs/room-ai-settings.png)
+
+The notes setup retains its original blue spotlight and Sarvam tricolor treatment,
+with separate audio and assistant controls. These captures use a local room and
+fixture provider endpoints, without paid inference.
+
+![Restored blue notes setup](docs/transcript-blue-restored.png)
+
+![Restored Sarvam notes setup](docs/transcript-sarvam-restored.png)
 
 ## Room models and provider diagnostics
 

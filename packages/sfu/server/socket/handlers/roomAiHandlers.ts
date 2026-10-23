@@ -3,6 +3,7 @@ import {
   getResponseProvider,
   isResponseModel,
   readAiEnvironment,
+  isProviderApiKey,
 } from "@conclave/ai/models";
 import { isRoomAiProvider } from "@conclave/ai/room";
 import { Admin } from "../../../config/classes/Admin.js";
@@ -33,6 +34,69 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
       state: member.room.aiCredentials.status(readAiEnvironment(process.env)),
     });
   });
+  socket.on(
+    "ai:models",
+    async (input: unknown, callback: (result: unknown) => void) => {
+      if (typeof callback !== "function") return;
+      const member = active();
+      if (!member) {
+        callback({ error: "Join the meeting to load AI models." });
+        return;
+      }
+      if (!takeToken(socket, "ai:models", RATE_LIMITS.aiModels)) {
+        callback({ error: "Please wait before refreshing models." });
+        return;
+      }
+      const data =
+        input && typeof input === "object"
+          ? (input as Record<string, unknown>)
+          : {};
+      if (data.roomId !== member.room.id) {
+        callback({ error: "The meeting changed. Reopen AI settings." });
+        return;
+      }
+      if (
+        data.apiKey !== undefined &&
+        ((data.provider !== "openai" && data.provider !== "anthropic") ||
+          typeof data.apiKey !== "string" ||
+          data.apiKey.length > 512 ||
+          !isProviderApiKey(data.provider, data.apiKey))
+      ) {
+        callback({ error: "Enter a valid provider key." });
+        return;
+      }
+      const env = readAiEnvironment(process.env);
+      const keyRevision = member.room.aiCredentials.keyRevision;
+      const catalogs = await Promise.all(
+        (["openai", "anthropic"] as const).map((provider) =>
+          member.room.aiCredentials.models(provider, env, {
+            ...(data.provider === provider && typeof data.apiKey === "string"
+              ? { apiKey: data.apiKey.trim() }
+              : {}),
+            refresh: data.refresh === true,
+          }),
+        ),
+      );
+      const current = active();
+      if (current?.room !== member.room || current?.client !== member.client) {
+        callback({
+          error: "The meeting connection changed. Please try again.",
+        });
+        return;
+      }
+      if (keyRevision !== member.room.aiCredentials.keyRevision) {
+        callback({ error: "AI keys changed. Refresh models again." });
+        return;
+      }
+      if (data.refresh === true && data.apiKey === undefined) {
+        io.to(member.room.channelId).emit(
+          "ai:changed",
+          member.room.aiCredentials.status(readAiEnvironment(process.env)),
+        );
+      }
+      callback({ catalogs });
+    },
+  );
   socket.on(
     "ai:configure",
     (input: unknown, callback: (result: unknown) => void) => {

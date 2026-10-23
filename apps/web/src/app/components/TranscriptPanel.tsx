@@ -32,7 +32,6 @@ import type {
 import {
   getTranscriptTranscriptionProvider,
   LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS,
-  TRANSCRIPT_QA_MODELS,
 } from "../lib/transcript-models";
 import type { TranscriptMinutesEntry, TranscriptSegment } from "../lib/types";
 import { formatTranscriptTimestamp } from "../lib/transcript-reducer";
@@ -67,6 +66,7 @@ import {
 } from "./ai-elements/task";
 
 import AiModelSelect from "./AiModelSelect";
+import { useAiModels } from "../hooks/useAiModels";
 import RoomAiSettings from "./RoomAiSettings";
 import type { RoomAiController } from "../hooks/useRoomAi";
 
@@ -244,7 +244,9 @@ function StartStage({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const needsTakeover = transcript.session.status === "takeover_needed";
   const provider = getTranscriptTranscriptionProvider(transcriptModel);
+  const isSarvam = provider === "sarvam";
   const assistantProvider = getResponseProvider(qaModel);
+  const assistantCatalog = useAiModels(roomAi, { provider: assistantProvider, apiKey: assistantApiKey });
   const available = (name: typeof provider | typeof assistantProvider) =>
     transcript.globalProviderKeysAvailable[name] === true ||
     Boolean(roomAi?.ready && roomAi.state[name].source);
@@ -313,7 +315,7 @@ function StartStage({
         spellCheck={false}
         disabled={isSubmitting}
         placeholder={name === "anthropic" ? "sk-ant-…" : name === "openai" ? "sk-…" : "API key"}
-        className="mt-1.5 h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-[12px] text-[#fafafa] outline-none focus:border-[#F95F4A]/60 disabled:opacity-60"
+        className="mt-1.5 h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-[12px] text-[#fafafa] outline-none focus:border-[#4F9CF9]/60 disabled:opacity-60"
       />
     </label>
   );
@@ -324,16 +326,29 @@ function StartStage({
     </p>
   );
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
-      <div className="mx-auto w-full max-w-[320px]">
-        <h3 className="text-[24px] font-medium leading-tight text-[#fafafa]">{needsTakeover ? "Resume live notes" : "Live notes"}</h3>
+    <div className="relative min-h-0 flex-1 overflow-y-auto px-5 py-6">
+      <div
+        aria-hidden="true"
+        data-notes-spotlight={provider}
+        className="pointer-events-none absolute left-1/2 top-[6%] h-72 w-72 -translate-x-1/2 rounded-full opacity-20 blur-[72px] transition-all duration-500"
+        style={{ background: isSarvam ? "linear-gradient(90deg, #FF9933 0%, #FFFFFF 50%, #138808 100%)" : START_ACCENT }}
+      />
+      <div className="relative z-10 mx-auto flex min-h-full w-full max-w-[300px] flex-col items-center justify-center text-center">
+        <span
+          className="text-[13px] font-medium"
+          style={isSarvam ? {
+            background: "linear-gradient(90deg, #FF9933 0%, #f5f5f5 50%, #138808 100%)",
+            WebkitBackgroundClip: "text", backgroundClip: "text", WebkitTextFillColor: "transparent", color: "transparent",
+          } : { color: START_ACCENT }}
+        >Live notes</span>
+        <h3 className="mt-2.5 max-w-[280px] text-[26px] font-medium leading-[1.12] text-[#fafafa]">{needsTakeover ? "Pick up the live notes" : "Turn on live notes"}</h3>
         {transcript.isViewOnly ? (
           <p className="mt-6 flex items-center gap-2 text-[12px] text-[#d4d4d8]">
             <Lock size={14} />
             View only
           </p>
         ) : (
-          <form onSubmit={submit} className="mt-6 space-y-5">
+          <form onSubmit={submit} className="mt-6 w-full space-y-4 text-left">
             <fieldset disabled={isSubmitting} className="space-y-2.5">
               <legend className="mb-2 text-[12px] font-semibold text-[#fafafa]">
                 Audio transcription
@@ -370,7 +385,10 @@ function StartStage({
                   setQaModel(value);
                   setAssistantApiKey("");
                 }}
-                models={TRANSCRIPT_QA_MODELS}
+                models={assistantCatalog.models}
+                loading={assistantCatalog.loading}
+                error={assistantCatalog.error}
+                onRefresh={assistantCatalog.refresh}
                 disabled={isSubmitting}
                 label="Assistant"
               />
@@ -401,7 +419,7 @@ function StartStage({
                 <button
                   type="button"
                   onClick={onOpenSettings}
-                  className="inline-flex items-center gap-1.5 py-1 text-[11.5px] text-[#d4d4d8] hover:text-white"
+                  className="inline-flex w-full items-center justify-center gap-1.5 py-1 text-[11.5px] text-[#d4d4d8] hover:text-white"
                 >
                   <Settings2 size={13} />
                   Room AI settings

@@ -58,7 +58,6 @@ import {
   type AssistantChatMessage,
   type AssistantToolApprovalDecision,
   type ConclaveAssistantModel,
-  CONCLAVE_ASSISTANT_BYOK_MODELS,
   CONCLAVE_ASSISTANT_NAME,
   CONCLAVE_ASSISTANT_USER_ID,
   CONCLAVE_MENTION_TOKEN,
@@ -79,6 +78,7 @@ import ChatLinkEmbedView, {
 import ConclaveMessage from "./ConclaveMessage";
 import GifPicker from "./GifPicker";
 import AiModelSelect from "./AiModelSelect";
+import { useAiModels } from "../hooks/useAiModels";
 import RoomAiSettings from "./RoomAiSettings";
 import type { RoomAiController } from "../hooks/useRoomAi";
 
@@ -296,6 +296,7 @@ function ChatPanel({
     assistantApiKeyPrompt.model,
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const assistantCatalog = useAiModels(roomAi, { enabled: assistantApiKeyPrompt.visible, provider: getResponseProvider(assistantModel), apiKey: assistantApiKeyInput });
   const [highlightedMessageId, setHighlightedMessageId] = useState<
     string | null
   >(null);
@@ -1290,7 +1291,10 @@ function ChatPanel({
                       setAssistantModel(value);
                     }
                   }}
-                  models={CONCLAVE_ASSISTANT_BYOK_MODELS}
+                  models={assistantCatalog.models}
+                  loading={assistantCatalog.loading}
+                  error={assistantCatalog.error}
+                  onRefresh={assistantCatalog.refresh}
                   label="Model"
                 />
               </div>

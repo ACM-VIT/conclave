@@ -25,6 +25,7 @@
     "#types": "./src/types.ts",
     "#errors": "./src/errors.ts",
     "#request-options": "./src/request-options.ts",
+    "#catalog-server": "./src/catalog-server.ts",
     "#openai": "./src/providers/openai.ts",
     "#anthropic": "./src/providers/anthropic.ts"
   }

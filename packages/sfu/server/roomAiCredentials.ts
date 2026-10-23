@@ -6,7 +6,10 @@ import {
   getResponseProvider,
   isResponseModel,
   type AiEnvironment,
+  type AiTextProvider,
+  type AiModelCatalog,
 } from "@conclave/ai/models";
+import { fetchAiModelCatalog } from "@conclave/ai/server";
 import {
   ROOM_AI_PROVIDERS,
   type RoomAiProvider,
@@ -17,6 +20,46 @@ export class RoomAiCredentials {
   // Private fields cannot leak through room snapshots or JSON serialization.
   #keys = new Map<RoomAiProvider, { apiKey: string; ownerId: string }>();
   #assistantModel: string | null = null;
+  #keyRevision = 0;
+
+  get keyRevision(): number {
+    return this.#keyRevision;
+  }
+  #catalogs = new Map<
+    AiTextProvider,
+    {
+      apiKey: string;
+      expiresAt: number;
+      result: Promise<AiModelCatalog>;
+    }
+  >();
+
+  async models(
+    provider: AiTextProvider,
+    env: AiEnvironment,
+    options: { apiKey?: string; refresh?: boolean } = {},
+  ): Promise<AiModelCatalog> {
+    const apiKey =
+      options.apiKey ??
+      (getProviderApiKey(env, provider) || this.get(provider) || "");
+    // Personal keys are used for this request only, never retained on the room.
+    if (options.apiKey !== undefined)
+      return fetchAiModelCatalog({ provider, apiKey, env });
+    const cached = this.#catalogs.get(provider);
+    if (
+      !options.refresh &&
+      cached?.apiKey === apiKey &&
+      cached.expiresAt > Date.now()
+    )
+      return cached.result;
+    const result = fetchAiModelCatalog({ provider, apiKey, env });
+    this.#catalogs.set(provider, {
+      apiKey,
+      expiresAt: Date.now() + 300_000,
+      result,
+    });
+    return result;
+  }
 
   get assistantModel(): string | null {
     return this.#assistantModel;
@@ -58,6 +101,8 @@ export class RoomAiCredentials {
       throw new Error(`Enter a valid ${AI_PROVIDERS[provider].label} API key.`);
     this.assertOwner(provider, actorId, isHost);
     this.#keys.set(provider, { apiKey: key, ownerId: actorId });
+    ++this.#keyRevision;
+    if (provider !== "sarvam") this.#catalogs.delete(provider);
     // The first text-provider contribution selects its model visibly for the room.
     if (
       !this.#assistantModel &&
@@ -73,6 +118,8 @@ export class RoomAiCredentials {
   remove(provider: RoomAiProvider, actorId: string, isHost: boolean): void {
     this.assertOwner(provider, actorId, isHost);
     this.#keys.delete(provider);
+    ++this.#keyRevision;
+    if (provider !== "sarvam") this.#catalogs.delete(provider);
   }
 
   private assertOwner(
@@ -103,6 +150,8 @@ export class RoomAiCredentials {
 
   clear(): void {
     this.#keys.clear();
+    ++this.#keyRevision;
+    this.#catalogs.clear();
     this.#assistantModel = null;
   }
 }

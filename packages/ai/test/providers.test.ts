@@ -66,12 +66,65 @@ const claudeEvents = (
 afterEach(() => vi.unstubAllGlobals());
 
 describe("provider routing", () => {
+  it("verifies newly discovered Claude models and honors their token limit before generation", async () => {
+    const requests: { url: string; body?: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const body = init?.body
+          ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+          : undefined;
+        requests.push({ url: String(url), body });
+        if (String(url).includes("/models"))
+          return json({
+            data: [
+              {
+                id: "claude-sonnet-5-6",
+                max_tokens: 1024,
+                capabilities: {
+                  structured_outputs: { supported: true },
+                  server_tools: { web_search: { supported: true } },
+                },
+              },
+            ],
+          });
+        return json(message([{ type: "text", text: "OK" }]));
+      }),
+    );
+    expect(
+      await generateAiText({
+        ...options,
+        model: "claude-sonnet-5-6",
+        input: "Reply OK",
+      }),
+    ).toBe("OK");
+    expect(requests).toHaveLength(2);
+    expect(requests[0].url).toContain("/models");
+    expect(requests[1].body).toMatchObject({
+      model: "claude-sonnet-5-6",
+      max_tokens: 1024,
+    });
+  });
+
+  it("refuses an unavailable discovered model before sending an inference request", async () => {
+    const fetcher = vi.fn(async () => json({ data: [] }));
+    vi.stubGlobal("fetch", fetcher);
+    await expect(
+      generateAiText({
+        ...options,
+        model: "claude-sonnet-5-6",
+        input: "Hello",
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps defaults stable and resolves only the selected provider's key", () => {
     const env = {
       OPENAI_API_KEY: "openai-secret",
       ANTHROPIC_API_KEY: " claude-secret ",
     };
-    expect(AI_DEFAULT_MODELS.assistant).toBe("gpt-5.6-terra");
+    expect(AI_DEFAULT_MODELS.assistant).toBe("gpt-6.1-sol");
     expect(getProviderApiKey(env, getResponseProvider("claude-opus-5-5"))).toBe(
       "claude-secret",
     );
