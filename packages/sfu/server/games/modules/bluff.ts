@@ -307,7 +307,7 @@ export const bluffModule: GameModule<BluffState> = {
         },
         required: ["prompts"],
       },
-      maxOutputTokens: 320 + rounds * 90,
+      maxOutputTokens: 400 + rounds * 160,
       parse: (payload) => parseGeneratedPrompts(payload, rounds),
     });
   },

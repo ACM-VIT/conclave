@@ -11,6 +11,7 @@ import { getTranscriptResponseModelConfig } from "@conclave/ai/models";
 import {
   useRoomAi,
   parseRoomAiState,
+  configureRoomAiForFeature,
   type RoomAiController,
 } from "../src/app/hooks/useRoomAi";
 import type { MeetingTranscriptController } from "../src/app/hooks/useMeetingTranscript";
@@ -61,16 +62,129 @@ const transcript = (start = vi.fn().mockResolvedValue(true)) =>
   }) as unknown as MeetingTranscriptController;
 
 describe("AI setup UX", () => {
+  it("reflects compact Chat setup in room settings and keeps failed shares retryable", async () => {
+    const state = emptyRoomAiState();
+    let rejectShare = true;
+    const fake = {
+      connected: true,
+      on: vi.fn(),
+      off: vi.fn(),
+      timeout: () => fake,
+      emit: (event: string, ...args: unknown[]) => {
+        const ack = args.at(-1) as (
+          error: Error | null,
+          result: unknown,
+        ) => void;
+        if (event === "ai:settings") return ack(null, { state });
+        if (event === "ai:configure") {
+          if (rejectShare) return ack(null, { error: "Could not share key." });
+          const data = args[0] as { provider: "anthropic"; model?: string };
+          state[data.provider] = { source: "room", ownerId: "alice" };
+          state.assistantModel = data.model ?? state.assistantModel;
+          return ack(null, { state });
+        }
+      },
+    };
+    const submit = vi.fn();
+    function Harness() {
+      const controller = useRoomAi(
+        fake as unknown as Socket,
+        true,
+        "alice",
+        false,
+        "room",
+      );
+      return (
+        <ChatPanel
+          roomAi={controller}
+          messages={[]}
+          chatInput=""
+          currentUserId="alice"
+          onInputChange={() => {}}
+          onSend={() => {}}
+          onSendGif={() => {}}
+          onSendImage={async () => false}
+          onClose={() => {}}
+          assistantApiKeyPrompt={{
+            visible: true,
+            error: null,
+            model: "claude-haiku-5-5",
+          }}
+          onSubmitAssistantApiKey={submit}
+        />
+      );
+    }
+    await act(async () => root.render(<Harness />));
+    const input = container.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "sk-ant-room-fixture");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const connect = () =>
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent === "Share & connect")!
+        .click();
+    await act(async () => connect());
+    expect(submit).not.toHaveBeenCalled();
+    expect(input.value).toBe("sk-ant-room-fixture");
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      "Could not share key.",
+    );
+    rejectShare = false;
+    await act(async () => connect());
+    expect(submit).toHaveBeenCalledWith("", "claude-haiku-5-5");
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent?.trim() === "Room settings")!
+        .click(),
+    );
+    expect(
+      container.querySelector('[aria-label="Anthropic settings"]')?.textContent,
+    ).toContain("Room key");
+    expect(
+      container.querySelector('[aria-label="Sarvam settings"]')?.textContent,
+    ).toContain("Not set");
+    expect(container.textContent).not.toContain("sk-ant-room-fixture");
+  });
+
+  it("stops compact setup when sharing fails, and never selects text for an audio-only key", async () => {
+    const configure = vi.fn().mockResolvedValueOnce("Disconnected");
+    const controller = roomAi({ configure });
+    expect(
+      await configureRoomAiForFeature(
+        controller,
+        { sarvam: "sarvam-fixture", anthropic: "sk-ant-fixture" },
+        "claude-haiku-5-5",
+      ),
+    ).toBe("Disconnected");
+    expect(configure).toHaveBeenCalledTimes(1);
+    configure.mockReset().mockResolvedValue(null);
+    expect(
+      await configureRoomAiForFeature(
+        controller,
+        { sarvam: "sarvam-fixture" },
+        "claude-haiku-5-5",
+      ),
+    ).toBeNull();
+    expect(configure).toHaveBeenCalledExactlyOnceWith(
+      "sarvam",
+      "sarvam-fixture",
+      null,
+    );
+  });
   it("clears a personal catalog and explains refresh when the draft key is invalid", async () => {
-    const requestModels = vi
-      .fn()
-      .mockResolvedValue([
-        {
-          provider: "anthropic",
-          source: "live",
-          models: [getTranscriptResponseModelConfig("claude-sonnet-5-6")],
-        },
-      ]);
+    const requestModels = vi.fn().mockResolvedValue([
+      {
+        provider: "anthropic",
+        source: "live",
+        models: [getTranscriptResponseModelConfig("claude-sonnet-5-6")],
+      },
+    ]);
     await act(async () =>
       root.render(
         <TranscriptPanel
@@ -119,10 +233,11 @@ describe("AI setup UX", () => {
   it("keeps a notes key when selecting another model from the same provider", async () => {
     const start = vi.fn().mockResolvedValue(true);
     const notes = transcript(start);
+    const configure = vi.fn().mockResolvedValue(null);
     await act(async () =>
       root.render(
         <TranscriptPanel
-          roomAi={roomAi()}
+          roomAi={roomAi({ configure })}
           transcript={notes}
           onClose={() => {}}
         />,
@@ -153,9 +268,14 @@ describe("AI setup UX", () => {
     );
     expect(start).toHaveBeenCalledWith(
       expect.objectContaining({
-        assistantApiKey: "sk-ant-personal-fixture",
+        assistantApiKey: undefined,
         qaModel: "claude-haiku-5-5",
       }),
+    );
+    expect(configure).toHaveBeenCalledWith(
+      "anthropic",
+      "sk-ant-personal-fixture",
+      "claude-haiku-5-5",
     );
   });
 
@@ -457,7 +577,7 @@ describe("AI setup UX", () => {
     expect(start).toHaveBeenCalledWith(
       expect.objectContaining({
         transcriptModel: "saaras:v3",
-        apiKey: "sarvam-draft-key",
+        apiKey: undefined,
         qaModel: "claude-haiku-5-5",
       }),
     );
@@ -502,13 +622,10 @@ describe("AI setup UX", () => {
     });
     await act(async () =>
       [...container.querySelectorAll("button")]
-        .find((button) => button.textContent === "Connect")!
+        .find((button) => button.textContent === "Share & connect")!
         .click(),
     );
-    expect(submit).toHaveBeenCalledWith(
-      "sk-ant-replacement",
-      "claude-haiku-5-5",
-    );
+    expect(submit).toHaveBeenCalledWith("", "claude-haiku-5-5");
   });
 
   it("uses the room assistant model for notes setup", async () => {
@@ -545,7 +662,7 @@ describe("AI setup UX", () => {
     );
     expect(input?.closest("label")?.textContent).toContain("Anthropic key");
     const start = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent === "Start notes",
+      (button) => button.textContent === "Share & start notes",
     )!;
     expect(start.disabled).toBe(true);
     const select = container.querySelector("select")!;

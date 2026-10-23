@@ -384,7 +384,7 @@ export const config = {
     }),
   },
   gameAi: {
-    enabled: !gameAiDisabled && Boolean(gameAiApiKey),
+    enabled: !gameAiDisabled,
     model: gameAiModel,
     apiKey: gameAiApiKey,
     reasoningEffort: "low" as const,
@@ -394,7 +394,7 @@ export const config = {
       min: 500,
       max: 120000,
     }),
-    maxOutputTokens: toNumber(process.env.SFU_GAME_AI_MAX_OUTPUT_TOKENS, 2200, {
+    maxOutputTokens: toNumber(process.env.SFU_GAME_AI_MAX_OUTPUT_TOKENS, 4096, {
       integer: true,
       min: 128,
       max: 4096,

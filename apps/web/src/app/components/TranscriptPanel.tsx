@@ -68,7 +68,7 @@ import {
 import AiModelSelect from "./AiModelSelect";
 import { useAiModels } from "../hooks/useAiModels";
 import RoomAiSettings from "./RoomAiSettings";
-import type { RoomAiController } from "../hooks/useRoomAi";
+import { configureRoomAiForFeature, type RoomAiController } from "../hooks/useRoomAi";
 
 interface TranscriptPanelProps {
   roomAi?: RoomAiController;
@@ -242,6 +242,7 @@ function StartStage({
     roomAi?.state.assistantModel ?? transcript.session.qaModel,
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
   const needsTakeover = transcript.session.status === "takeover_needed";
   const provider = getTranscriptTranscriptionProvider(transcriptModel);
   const isSarvam = provider === "sarvam";
@@ -284,10 +285,28 @@ function StartStage({
     event.preventDefault();
     if (!canSubmit || !hasRequiredKeys || isSubmitting) return;
     setIsSubmitting(true);
+    setSetupError(null);
     try {
+      if (roomAi) {
+        const error = await configureRoomAiForFeature(
+          roomAi,
+          {
+            ...(needsProviderKey ? { [provider]: apiKey } : {}),
+            ...(needsAssistantKey
+              ? { [assistantProvider]: assistantApiKey }
+              : {}),
+          },
+          qaModel,
+        );
+        if (error) {
+          setSetupError(error);
+          return;
+        }
+      }
       const options = {
-        apiKey: needsProviderKey ? apiKey : undefined,
-        assistantApiKey: needsAssistantKey ? assistantApiKey : undefined,
+        apiKey: !roomAi && needsProviderKey ? apiKey : undefined,
+        assistantApiKey:
+          !roomAi && needsAssistantKey ? assistantApiKey : undefined,
         transcriptModel,
         qaModel,
         transportMode: "sfu" as const,
@@ -309,7 +328,7 @@ function StartStage({
     onChange: (value: string) => void,
   ) => (
     <label className="block text-[11px] text-[#a1a1aa]">
-      <span className="flex items-center justify-between gap-2">{AI_PROVIDERS[name].label} key<span className="text-[10px] text-[#71717a]">Session</span></span>
+      <span className="flex items-center justify-between gap-2">{AI_PROVIDERS[name].label} key<span className="text-[10px] text-[#71717a]">{roomAi ? "Room" : "Session"}</span></span>
       <input
         type="password"
         value={value}
@@ -404,7 +423,7 @@ function StartStage({
             <div className="space-y-2.5">
               <button
                 type="submit"
-                disabled={!canSubmit || !hasRequiredKeys || isSubmitting}
+                disabled={!canSubmit || !hasRequiredKeys || isSubmitting || Boolean(roomAi && (!roomAi.connected || !roomAi.ready))}
                 className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] px-3 text-[13px] font-semibold text-white transition-colors hover:bg-[#ff735f] disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-[#71717a]"
               >
                 {isSubmitting ? (
@@ -414,8 +433,9 @@ function StartStage({
                   ? "Starting…"
                   : needsTakeover
                     ? "Resume notes"
-                    : "Start notes"}
+                    : roomAi && (needsProviderKey || needsAssistantKey) ? "Share & start notes" : "Start notes"}
               </button>
+              {setupError ? <p role="alert" className="text-[11.5px] text-red-300">{setupError}</p> : null}
               {roomAi ? (
                 <button
                   type="button"

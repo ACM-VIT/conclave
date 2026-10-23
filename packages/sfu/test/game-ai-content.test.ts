@@ -31,7 +31,7 @@ vi.mock("../config/config.js", () => ({
       reasoningEffort: "low",
       storeResponses: false,
       timeoutMs: 25_000,
-      maxOutputTokens: 2_200,
+      maxOutputTokens: 4_096,
       topicMaxLength: 120,
       webSearchEnabled: true,
       webSearchContextSize: "low",
@@ -45,6 +45,8 @@ vi.mock("../utilities/loggers.js", () => ({
 
 import { config } from "../config/config.js";
 import { generateStructuredGameContent } from "../server/games/aiContent.js";
+import { getGameCatalog, getGameModule } from "../server/games/registry.js";
+import type { GameConfig } from "../server/games/types.js";
 
 const schema = {
   type: "object",
@@ -70,6 +72,134 @@ describe("game AI content", () => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
+
+  it.each(["openai", "anthropic"] as const)(
+    "loads generated content for every AI game at maximum rounds with %s",
+    async (provider) => {
+      const players = Array.from({ length: 12 }, (_, i) => ({
+        id: `p${i}`,
+        name: `Player ${i}`,
+      }));
+      const aiGames = getGameCatalog().filter(
+          (game) => typeof getGameModule(game.id)?.generateContent === "function",
+      );
+      expect(aiGames.map((game) => game.id).sort()).toEqual(
+        [
+          "bluff",
+          "imposter",
+          "most-likely-to",
+          "trivia",
+          "would-you-rather",
+        ].sort(),
+      );
+      expect(getGameCatalog().length - aiGames.length).toBe(4);
+      for (const game of aiGames) {
+        const module = getGameModule(game.id)!;
+        const gameConfig: GameConfig = Object.fromEntries(
+          game.options.map((option) => [
+            option.id,
+            option.type === "number" ? option.max : option.default,
+          ]),
+        );
+        const count = Number(gameConfig.questions ?? gameConfig.rounds ?? 12);
+        const payload =
+          game.id === "trivia"
+            ? {
+                questions: Array.from({ length: count }, (_, i) => ({
+                  category: "Fixture",
+                  prompt: `Fixture question ${i}`,
+                  options: ["Moon", "Earth", "Sun", "Mars"],
+                  answer: "Moon",
+                })),
+              }
+            : game.id === "imposter"
+              ? {
+                  set: {
+                    category: "Fixture",
+                    words: Array.from(
+                      { length: 12 },
+                      (_, i) => `Fixture word ${i}`,
+                    ),
+                  },
+                }
+              : {
+                  prompts: Array.from({ length: count }, (_, i) =>
+                    game.id === "bluff"
+                      ? {
+                          question: `Fixture fact ${i}: ___`,
+                          answer: `Answer ${i}`,
+                        }
+                      : game.id === "would-you-rather"
+                        ? {
+                            a: `Fixture choice A ${i}`,
+                            b: `Fixture choice B ${i}`,
+                          }
+                        : `to make fixture ${i}`,
+                  ),
+                };
+        const model =
+          provider === "anthropic" ? "claude-haiku-5-5" : "gpt-6-luna";
+        createResponse.mockResolvedValue({
+          output_text: JSON.stringify(payload),
+        });
+        const fetcher = vi.fn(async (_url: unknown, init: RequestInit) => {
+          const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+          const research = !body.output_config;
+          expect(body.max_tokens).toBeGreaterThanOrEqual(1024);
+          return Response.json({
+            id: "msg_fixture",
+            type: "message",
+            role: "assistant",
+            model,
+            content: [
+              {
+                type: "text",
+                text: research ? "Fixture notes" : JSON.stringify(payload),
+              },
+            ],
+            stop_reason: research ? "max_tokens" : "end_turn",
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          });
+        });
+        vi.stubGlobal("fetch", fetcher);
+        const content = await module.generateContent!({
+          players,
+          config: gameConfig,
+          now: 0,
+          aiEnvironment: {
+            CONCLAVE_ASSISTANT_MODEL: model,
+            [provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"]:
+              "sk-fixture-game-key",
+          },
+        });
+        expect(content, game.id).not.toBeNull();
+        const state = module.setup({
+          players,
+          activePlayers: players,
+          rng: {
+            next: () => 0,
+            int: () => 0,
+            shuffle: (items) => [...items],
+            pick: (items) => items[0],
+          },
+          config: gameConfig,
+          content,
+          now: 0,
+          isAdmin: () => true,
+        });
+        expect(JSON.stringify(state).toLowerCase(), game.id).toContain(
+          "fixture",
+        );
+        if (provider === "anthropic") expect(fetcher).toHaveBeenCalledTimes(2);
+        if (provider === "openai" && game.id === "trivia")
+          expect(createResponse.mock.calls.at(-1)?.[0]).toHaveProperty(
+            "max_output_tokens",
+            3700,
+          );
+      }
+    },
+  );
 
   it("uses the room's Claude model and key even when deployment games use OpenAI", async () => {
     let count = 0;
@@ -114,8 +244,10 @@ describe("game AI content", () => {
       RequestInit,
     ][]) {
       const request = new Request(args[0], args[1]);
-      expect(request.headers.get("authorization")).toBe("Bearer sk-ant-room-game");
-      const body = await request.json() as { model: string };
+      expect(request.headers.get("authorization")).toBe(
+        "Bearer sk-ant-room-game",
+      );
+      const body = (await request.json()) as { model: string };
       expect(body.model).toBe("claude-haiku-5-5");
     }
   });
@@ -193,7 +325,7 @@ describe("game AI content", () => {
     );
     expect(requestRecord).toMatchObject({
       model: "gpt-5.6-luna",
-      max_output_tokens: 500,
+      max_output_tokens: 1024,
       reasoning: { effort: "low", summary: "auto" },
       store: false,
       text: {
@@ -238,10 +370,10 @@ describe("game AI content", () => {
     );
   });
 
-  it("returns null when OpenAI does not return valid structured JSON", async () => {
+  it("reports invalid structured JSON instead of silently starting bundled questions", async () => {
     createResponse.mockResolvedValue({ output_text: "not-json" });
 
-    const result = await generateStructuredGameContent({
+    const result = generateStructuredGameContent({
       gameName: "Quick Draw",
       topic: "space",
       instructions: "Create one prompt.",
@@ -250,6 +382,27 @@ describe("game AI content", () => {
       parse: (payload) => payload,
     });
 
-    expect(result).toBeNull();
+    await expect(result).rejects.toThrow("Questions were incomplete");
+  });
+
+  it("logs redacted provider diagnostics and returns an actionable error", async () => {
+    createResponse.mockRejectedValue(
+      Object.assign(new Error("Rejected sk-secret-fixture"), { status: 401 }),
+    );
+    await expect(
+      generateStructuredGameContent({
+        aiEnvironment: { OPENAI_API_KEY: "sk-secret-fixture" },
+        gameName: "Trivia",
+        topic: "space",
+        instructions: "Make questions",
+        schemaName: "game",
+        schema,
+        parse: (payload) => payload,
+      }),
+    ).rejects.toThrow("OpenAI rejected the API key");
+    const { Logger } = await import("../utilities/loggers.js");
+    expect(JSON.stringify(vi.mocked(Logger.warn).mock.calls)).not.toContain(
+      "sk-secret-fixture",
+    );
   });
 });

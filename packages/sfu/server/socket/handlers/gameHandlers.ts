@@ -1,9 +1,9 @@
 import { AI_PROVIDERS, readAiEnvironment } from "@conclave/ai/models";
 import { ROOM_AI_PROVIDERS } from "@conclave/ai/room";
 import { Admin } from "../../../config/classes/Admin.js";
-import { config as sfuConfig } from "../../../config/config.js";
 import type { Room } from "../../../config/classes/Room.js";
 import { GameSession } from "../../games/engine.js";
+import { GameContentGenerationError, gameContentTopic } from "../../games/aiContent.js";
 import { normalizeConfig } from "../../games/config.js";
 import { getGameCatalog, getGameModule } from "../../games/registry.js";
 import type {
@@ -414,10 +414,23 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
             now: Date.now(),
           });
         } catch (error) {
-          Logger.warn(`[Games] content generation failed for ${gameId}`, error);
+          Logger.warn(`[Games] content generation failed for ${gameId}`);
+          respond(callback, {
+            success: false,
+            error:
+              error instanceof GameContentGenerationError
+                ? error.message
+                : "Could not generate questions. Try again.",
+          });
+          return;
         }
-        if (sfuConfig.gameAi.enabled && content == null) {
-          Logger.warn(`[Games] using bundled content fallback for ${gameId}`);
+        if (content == null && gameContentTopic(gameConfig)) {
+          respond(callback, {
+            success: false,
+            error:
+              "Add a room AI key to generate a topic, or leave Topic blank for built-in content.",
+          });
+          return;
         }
       }
 

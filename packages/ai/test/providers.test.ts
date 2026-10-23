@@ -364,6 +364,39 @@ describe("provider routing", () => {
     expect(Date.now() - started).toBeLessThan(1000);
   });
 
+  it("finishes structured output after truncated research, but rejects truncated final JSON", async () => {
+    let calls = 0;
+    const fetcher = vi.fn(async (_url: unknown, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      const research = ++calls % 2 === 1;
+      if (research) {
+        expect(body.max_tokens).toBe(1536);
+        expect(body.system).toContain("under 200 words");
+      }
+      return json(
+        message(
+          [
+            {
+              type: "text",
+              text: research ? "Partial research notes" : '{"ok":true}',
+            },
+          ],
+          research || calls === 4 ? "max_tokens" : "end_turn",
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const request = {
+      ...options,
+      input: "Make a game",
+      tools: [{ type: "web_search" as const }],
+      format: { name: "game", schema: { type: "object", properties: {} } },
+    };
+    expect(await generateAiText(request)).toBe('{"ok":true}');
+    await expect(generateAiText(request)).rejects.toThrow("max_tokens");
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+
   it("preserves OpenAI web search queries in public activity events", async () => {
     const item = {
       type: "web_search_call",

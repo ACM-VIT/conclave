@@ -113,15 +113,15 @@ names or user content are ever sent; the free-text topic reduces to a
 
 ## OpenAI content
 
-The primitive uses the official OpenAI TypeScript SDK and Responses API with
-strict JSON-schema Structured Outputs. This is intentionally a runtime
-capability, not a patch inside one game:
+The primitive uses the shared AI provider boundary with OpenAI or Anthropic
+and strict JSON-schema output:
 
 - modules opt in with `generateContent`
 - socket handlers stay generic
 - JSON schema constrains the model response
 - each module still validates and sanitizes the object
-- local banks remain as fallbacks
+- local banks are available with an empty topic when no text key is configured
+- generation errors keep setup open with an actionable error
 
 Config:
 
@@ -136,8 +136,15 @@ SFU_GAME_AI_WEB_SEARCH_CONTEXT_SIZE=low
 The default model is `gpt-5.6-luna`. Set `SFU_GAME_AI_MODEL` to a registered
 Claude model and provide `ANTHROPIC_API_KEY` to use Anthropic instead. Provider
 clients and model defaults live in [`@conclave/ai`](../../../ai/README.md). The
-server-side `OPENAI_API_KEY` is shared with other OpenAI-backed SFU
-capabilities and is never sent to clients.
+room's selected model and shared key take part in the same resolution. Keys
+shared from Chat, Notes, or Room AI settings are available to games; public
+room state contains availability and contributor metadata only.
+
+Game output has a 1,024-token minimum and a configurable 4,096-token default
+ceiling (`SFU_GAME_AI_MAX_OUTPUT_TOKENS`). Claude gathers short research notes
+before its final structured pass. Research truncation does not discard usable
+notes; final output must complete and pass the game's parser. Both passes share
+the request deadline.
 
 Web search is enabled by default through the Responses API `web_search` tool.
 The default context size is `low` to keep game startup responsive. Responses

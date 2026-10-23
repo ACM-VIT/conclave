@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import {
   isResponseModel,
+  getResponseProvider,
   type AiModelCatalog,
   type AiTextProvider,
 } from "@conclave/ai/models";
@@ -55,6 +56,29 @@ export type RoomAiController = {
     model?: string | null,
   ) => Promise<string | null>;
 };
+
+// Compact setup controls use the same room credential store as full settings.
+// Save before starting a feature so its server request can resolve the key.
+export async function configureRoomAiForFeature(
+  controller: RoomAiController,
+  keys: Partial<Record<RoomAiProvider, string>>,
+  model: string,
+): Promise<string | null> {
+  const modelProvider = getResponseProvider(model);
+  for (const provider of ROOM_AI_PROVIDERS) {
+    const key = keys[provider]?.trim();
+    if (!key) continue;
+    const error = await controller.configure(
+      provider,
+      key,
+      provider === modelProvider ? model : null,
+    );
+    if (error) return error;
+  }
+  if (keys[modelProvider]?.trim() && controller.state.assistantModel !== model)
+    return controller.configure(modelProvider, undefined, model);
+  return null;
+}
 
 export function useRoomAi(
   socket: Socket | null,

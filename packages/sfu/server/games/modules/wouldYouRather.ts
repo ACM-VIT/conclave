@@ -241,7 +241,7 @@ export const wouldYouRatherModule: GameModule<WyrState> = {
         },
         required: ["prompts"],
       },
-      maxOutputTokens: 280 + rounds * 80,
+      maxOutputTokens: 400 + rounds * 160,
       parse: (payload) => parseGeneratedPrompts(payload, rounds),
     });
   },

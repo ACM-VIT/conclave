@@ -4,7 +4,11 @@ import {
   type AiEnvironment,
   readAiEnvironment,
 } from "@conclave/ai/models";
-import { generateAiText, type AiWebSearchTool } from "@conclave/ai/server";
+import {
+  describeAiError,
+  generateAiText,
+  type AiWebSearchTool,
+} from "@conclave/ai/server";
 import { config as sfuConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
 import { textOption } from "./config.js";
@@ -28,6 +32,8 @@ const GAME_AI_WEB_SEARCH_TOOL: AiWebSearchTool = {
   type: "web_search",
   search_context_size: sfuConfig.gameAi.webSearchContextSize,
 };
+
+export class GameContentGenerationError extends Error {}
 
 const GAME_CONTENT_SYSTEM_INSTRUCTIONS = [
   "You create high-quality party-game content for people playing together in a live video meeting.",
@@ -118,9 +124,17 @@ export const generateStructuredGameContent = async <T>({
   const apiKey =
     getProviderApiKey(env, getResponseProvider(model)) ||
     (getResponseProvider(model) === getResponseProvider(sfuConfig.gameAi.model)
-      ? sfuConfig.gameAi.apiKey : "");
+      ? sfuConfig.gameAi.apiKey
+      : "");
   const disabled = /^(0|false)$/i.test(process.env.SFU_GAME_AI_ENABLED || "");
-  if (!cleanTopic || disabled || !apiKey) return null;
+  if (!cleanTopic || disabled) return null;
+  if (!apiKey) {
+    if (env.OPENAI_API_KEY || env.ANTHROPIC_API_KEY)
+      throw new GameContentGenerationError(
+        "Add a key for the selected model in Room AI settings.",
+      );
+    return null;
+  }
 
   const now = new Date();
   const currentDate = now.toISOString().slice(0, 10);
@@ -164,16 +178,30 @@ export const generateStructuredGameContent = async <T>({
       Logger.warn(
         `[Games AI] ${gameName} returned an empty structured response`,
       );
-      return null;
+      throw new GameContentGenerationError(
+        "Questions were incomplete. Try again or choose another model in Room AI settings.",
+      );
     }
     const parsed = parse(payload);
     if (parsed == null) {
       Logger.warn(`[Games AI] ${gameName} response failed validation`);
+      throw new GameContentGenerationError(
+        "Questions were incomplete. Try again or choose another model in Room AI settings.",
+      );
     }
     return parsed;
   } catch (error) {
-    Logger.warn(`[Games AI] ${gameName} generation failed`, error);
-    return null;
+    if (error instanceof GameContentGenerationError) throw error;
+    const diagnostic = describeAiError(
+      error,
+      getResponseProvider(model),
+      apiKey,
+    );
+    Logger.warn(`[Games AI] ${gameName} generation failed`, {
+      model,
+      ...diagnostic,
+    });
+    throw new GameContentGenerationError(diagnostic.userMessage);
   }
 };
 
@@ -195,7 +223,7 @@ const runAiJson = async (
     instructions,
     input,
     maxOutputTokens: Math.min(
-      maxOutputTokens,
+      Math.max(1024, maxOutputTokens),
       sfuConfig.gameAi.maxOutputTokens,
     ),
     reasoningEffort: sfuConfig.gameAi.reasoningEffort,

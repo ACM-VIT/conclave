@@ -258,7 +258,7 @@ export const triviaModule: GameModule<TriviaState> = {
         },
         required: ["questions"],
       },
-      maxOutputTokens: 400 + questionCount * 150,
+      maxOutputTokens: 400 + questionCount * 220,
       parse: (payload) => parseGeneratedQuestions(payload, questionCount),
     });
   },
