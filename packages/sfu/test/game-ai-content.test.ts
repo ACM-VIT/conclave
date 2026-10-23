@@ -115,7 +115,8 @@ describe("game AI content", () => {
     ][]) {
       const request = new Request(args[0], args[1]);
       expect(request.headers.get("authorization")).toBe("Bearer sk-ant-room-game");
-      expect((await request.json()).model).toBe("claude-haiku-5-5");
+      const body = await request.json() as { model: string };
+      expect(body.model).toBe("claude-haiku-5-5");
     }
   });
 
