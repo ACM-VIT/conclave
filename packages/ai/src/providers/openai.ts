@@ -23,6 +23,7 @@ const openAiParams = (options: AiTextOptions) => ({
   model: options.model,
   instructions: options.instructions,
   max_output_tokens: options.maxOutputTokens,
+  ...(options.maxSearchUses ? { max_tool_calls: options.maxSearchUses } : {}),
   store: false,
   ...(options.tools?.length
     ? {

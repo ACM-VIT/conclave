@@ -1,6 +1,7 @@
 "use client";
 
-import { AI_PROVIDERS, getResponseProvider } from "@conclave/ai/models";
+import { resolveAiFeatureSettings } from "@conclave/ai/room-settings";
+import { AI_PROVIDERS, getResponseProvider, getTranscriptResponseModelConfig, type AiTextProvider } from "@conclave/ai/models";
 
 import {
   Check,
@@ -68,7 +69,7 @@ import {
 import AiModelSelect from "./AiModelSelect";
 import { useAiModels } from "../hooks/useAiModels";
 import RoomAiSettings from "./RoomAiSettings";
-import type { RoomAiController } from "../hooks/useRoomAi";
+import { configureRoomAiForFeature, type RoomAiController } from "../hooks/useRoomAi";
 
 interface TranscriptPanelProps {
   roomAi?: RoomAiController;
@@ -234,14 +235,14 @@ function StartStage({
   onOpenSettings: () => void;
 }) {
   const [apiKey, setApiKey] = useState("");
-  const [assistantApiKey, setAssistantApiKey] = useState("");
+  const [textKeys, setTextKeys] = useState<Partial<Record<AiTextProvider, string>>>({});
   const [transcriptModel, setTranscriptModel] = useState(
     transcript.session.transcriptModel,
   );
-  const [qaModel, setQaModel] = useState(
-    roomAi?.state.assistantModel ?? transcript.session.qaModel,
-  );
+  const defaultQaModel = roomAi?.state.features?.questions?.model ?? roomAi?.state.assistantModel ?? transcript.session.qaModel;
+  const [qaModel, setQaModel] = useState(defaultQaModel);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
   const needsTakeover = transcript.session.status === "takeover_needed";
   const provider = getTranscriptTranscriptionProvider(transcriptModel);
   const isSarvam = provider === "sarvam";
@@ -250,10 +251,17 @@ function StartStage({
     transcript.globalProviderKeysAvailable[name] === true ||
     Boolean(roomAi?.ready && roomAi.state[name].source);
   const needsProviderKey = !available(provider);
-  const needsAssistantKey =
-    !available(assistantProvider) &&
-    (assistantProvider !== provider || !needsProviderKey);
+  const assistantApiKey = textKeys[assistantProvider] ?? "";
+  const setTextKey = (name: AiTextProvider, value: string) => setTextKeys(current => ({...current, [name]: value}));
+  const separateTextProfiles = Boolean(roomAi && (roomAi.state.features?.minutes || roomAi.state.features?.questions));
+  const textProfiles = (["minutes", "questions"] as const).map(feature => ({
+    feature, settings: resolveAiFeatureSettings({CONCLAVE_ASSISTANT_MODEL: feature === "minutes" && separateTextProfiles ? roomAi?.state.assistantModel ?? undefined : qaModel}, feature, roomAi?.state.features ?? {}),
+  }));
+  const requiredTextProviders = [...new Set(textProfiles.filter(({settings}) => settings.enabled).map(({settings}) => getResponseProvider(settings.model)))];
+  const missingTextProviders = requiredTextProviders.filter(name => !available(name) && name !== provider);
+  const needsAssistantKey = missingTextProviders.includes(assistantProvider);
   const assistantCatalog = useAiModels(roomAi, {
+    enabled: !separateTextProfiles,
     provider: assistantProvider,
     apiKey: needsAssistantKey ? assistantApiKey : needsProviderKey && assistantProvider === provider ? apiKey : "",
   });
@@ -262,32 +270,53 @@ function StartStage({
     : transcript.canStart;
   const hasRequiredKeys =
     (!needsProviderKey || Boolean(apiKey.trim())) &&
-    (!needsAssistantKey || Boolean(assistantApiKey.trim()));
+    missingTextProviders.every(name => Boolean(textKeys[name]?.trim()));
   const sourceLabel = (name: typeof provider | typeof assistantProvider) =>
     transcript.globalProviderKeysAvailable[name] ||
     roomAi?.state[name].source === "deployment"
       ? "Conclave key"
       : "Room key";
   useEffect(() => {
-    setTranscriptModel(transcript.session.transcriptModel);
-  }, [transcript.session.transcriptModel]);
+    setTranscriptModel(roomAi?.state.features?.transcription?.model ?? transcript.session.transcriptModel);
+  }, [roomAi?.state.features?.transcription?.model, transcript.session.transcriptModel]);
   useEffect(() => {
-    setQaModel(roomAi?.state.assistantModel ?? transcript.session.qaModel);
-  }, [roomAi?.state.assistantModel, transcript.session.qaModel]);
+    setQaModel(defaultQaModel);
+  }, [defaultQaModel]);
   useEffect(() => {
     setApiKey("");
   }, [provider]);
-  useEffect(() => {
-    setAssistantApiKey("");
-  }, [assistantProvider]);
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!canSubmit || !hasRequiredKeys || isSubmitting) return;
     setIsSubmitting(true);
+    setSetupError(null);
     try {
+      if (roomAi) {
+        const sharedKeys = {
+          ...(needsProviderKey ? { [provider]: apiKey } : {}),
+          ...Object.fromEntries(missingTextProviders.map(name => [name, textKeys[name] ?? ""])),
+        };
+        const saveTextModels = !separateTextProfiles && (qaModel !== defaultQaModel || Boolean(sharedKeys[assistantProvider]?.trim()));
+        const error = await configureRoomAiForFeature(
+          roomAi,
+          sharedKeys,
+          qaModel,
+          saveTextModels ? ["minutes", "questions"] : [],
+        );
+        if (error) {
+          setSetupError(error);
+          return;
+        }
+        const savedTranscriptModel = roomAi.state.features?.transcription?.model ?? transcript.session.transcriptModel;
+        if (savedTranscriptModel !== transcriptModel) {
+          const failure = await roomAi.configureFeature?.("transcription", {model: transcriptModel});
+          if (failure) { setSetupError(failure); return; }
+        }
+      }
       const options = {
-        apiKey: needsProviderKey ? apiKey : undefined,
-        assistantApiKey: needsAssistantKey ? assistantApiKey : undefined,
+        apiKey: !roomAi && needsProviderKey ? apiKey : undefined,
+        assistantApiKey:
+          !roomAi && needsAssistantKey ? assistantApiKey : undefined,
         transcriptModel,
         qaModel,
         transportMode: "sfu" as const,
@@ -297,7 +326,7 @@ function StartStage({
         : await transcript.start(options);
       if (ok) {
         setApiKey("");
-        setAssistantApiKey("");
+        setTextKeys({});
       }
     } finally {
       setIsSubmitting(false);
@@ -309,7 +338,7 @@ function StartStage({
     onChange: (value: string) => void,
   ) => (
     <label className="block text-[11px] text-[#a1a1aa]">
-      <span className="flex items-center justify-between gap-2">{AI_PROVIDERS[name].label} key<span className="text-[10px] text-[#71717a]">Session</span></span>
+      <span className="flex items-center justify-between gap-2">{AI_PROVIDERS[name].label} key<span className="text-[10px] text-[#71717a]">{roomAi ? "Room" : "Session"}</span></span>
       <input
         type="password"
         value={value}
@@ -381,7 +410,12 @@ function StartStage({
               className="space-y-2.5 border-t border-white/10 pt-4"
             >
               <legend className="sr-only">Questions and minutes</legend>
-              <AiModelSelect
+              {separateTextProfiles ? textProfiles.map(({feature, settings}) => (
+                <button key={feature} type="button" onClick={onOpenSettings} className="flex w-full items-center justify-between gap-3 py-1 text-left text-[11px]">
+                  <span className="text-[#a1a1aa]">{feature === "minutes" ? "Notes" : "Questions"}</span>
+                  <span className="min-w-0 truncate text-[#d4d4d8]">{settings.enabled ? getTranscriptResponseModelConfig(settings.model).label : "Off"}</span>
+                </button>
+              )) : <AiModelSelect
                 value={qaModel}
                 onChange={(value) => {
                   setQaModel(value);
@@ -392,19 +426,15 @@ function StartStage({
                 onRefresh={assistantCatalog.refresh}
                 disabled={isSubmitting}
                 label="Assistant"
-              />
-              {needsAssistantKey ? (
-                keyInput(assistantProvider, assistantApiKey, setAssistantApiKey)
-              ) : available(assistantProvider) ? (
-                covered(assistantProvider)
-              ) : (
-                <span className="sr-only">Uses the transcription key.</span>
-              )}
+              />}
+              {requiredTextProviders.map(name => missingTextProviders.includes(name)
+                ? <div key={name}>{keyInput(name, textKeys[name] ?? "", value => setTextKey(name, value))}</div>
+                : available(name) ? <div key={name}>{covered(name)}</div> : null)}
             </fieldset>
             <div className="space-y-2.5">
               <button
                 type="submit"
-                disabled={!canSubmit || !hasRequiredKeys || isSubmitting}
+                disabled={!canSubmit || !hasRequiredKeys || isSubmitting || Boolean(roomAi && (!roomAi.connected || !roomAi.ready))}
                 className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] px-3 text-[13px] font-semibold text-white transition-colors hover:bg-[#ff735f] disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-[#71717a]"
               >
                 {isSubmitting ? (
@@ -414,8 +444,9 @@ function StartStage({
                   ? "Starting…"
                   : needsTakeover
                     ? "Resume notes"
-                    : "Start notes"}
+                    : roomAi && (needsProviderKey || missingTextProviders.length > 0) ? "Share & start notes" : "Start notes"}
               </button>
+              {setupError ? <p role="alert" className="text-[11.5px] text-red-300">{setupError}</p> : null}
               {roomAi ? (
                 <button
                   type="button"
@@ -764,6 +795,9 @@ function AskView({
                   ) : (
                     message.content
                   )}
+                  {message.role === "assistant" && message.content && message.error ? (
+                    <p role="status" className="mt-2 text-[11.5px] text-[#ffb4ad]">{message.error}</p>
+                  ) : null}
                 </MessageContent>
                 {message.role === "assistant" &&
                 message.content &&

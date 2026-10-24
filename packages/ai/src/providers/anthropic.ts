@@ -12,6 +12,7 @@ import type {
   AiEvent,
 } from "#types";
 import { baseUrl, requestOptions } from "#request-options";
+import { AI_GENERATION_LIMITS } from "@conclave/ai/limits";
 const createAnthropicClient = (options: AiTextOptions): Anthropic =>
   new Anthropic({
     apiKey: options.apiKey,
@@ -35,13 +36,14 @@ const anthropicParams = (
   system: options.instructions,
   messages,
   max_tokens: options.maxOutputTokens,
-  ...(options.format
+  ...(options.format || options.reasoningEffort
     ? {
         output_config: {
-          format: {
+          ...(options.reasoningEffort ? {effort: options.reasoningEffort === "none" || options.reasoningEffort === "minimal" ? "low" as const : options.reasoningEffort} : {}),
+          ...(options.format ? { format: {
             type: "json_schema",
             schema: anthropicSchema(options.format.schema),
-          },
+          }} : {}),
         },
       }
     : {}),
@@ -52,7 +54,7 @@ const anthropicParams = (
             ? {
                 type: "web_search_20250305" as const,
                 name: "web_search",
-                max_uses: 5,
+                max_uses: options.maxSearchUses ?? 10,
               }
             : {
                 name: tool.name,
@@ -87,13 +89,17 @@ export const generateAnthropicText = async (
     const researchOptions = {
       ...options,
       format: undefined,
-      instructions: `${options.instructions}\nFirst gather any facts needed for the task. Search only when useful. Return brief research notes; the structured content will be produced in a separate step.`,
+      maxOutputTokens: options.researchTokens ?? AI_GENERATION_LIMITS.researchTokens,
+      instructions: `${options.instructions}\nFirst gather the facts needed for the task. Search when useful. Return research notes sufficient to support the requested content; the structured content will be produced in a separate step.`,
     };
     const research = await client.messages.create(
       anthropicParams(researchOptions, [{ role: "user", content: input }]),
       requestOptions(options),
     );
-    assertAnthropicComplete(research.stop_reason);
+    // A truncated scratchpad is usable evidence, never a final response. The
+    // final structured pass still requires a complete, valid provider result.
+    if (research.stop_reason !== "max_tokens")
+      assertAnthropicComplete(research.stop_reason);
     const notes = research.content
       .filter((block) => block.type === "text")
       .map((block) => block.text)

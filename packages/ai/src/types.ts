@@ -3,6 +3,7 @@ import type {
   TranscriptReasoningEffort,
   TranscriptTextVerbosity,
 } from "@conclave/ai/models";
+import type { AiFeature } from "@conclave/ai/room-settings";
 
 export interface AiFunctionTool {
   type: "function";
@@ -26,11 +27,14 @@ export interface AiToolResult {
   output: string;
 }
 export interface AiTextOptions {
+  feature?: AiFeature;
   env: AiEnvironment;
   apiKey: string;
   model: string;
   instructions: string;
   maxOutputTokens: number;
+  researchTokens?: number;
+  maxSearchUses?: number;
   reasoningEffort?: TranscriptReasoningEffort;
   verbosity?: TranscriptTextVerbosity;
   format?: { name: string; schema: Record<string, unknown> };

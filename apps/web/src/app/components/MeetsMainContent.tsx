@@ -8,7 +8,7 @@ import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import ChatOverlay from "./ChatOverlay";
 import ChatPanel from "./ChatPanel";
-import { useRoomAi } from "../hooks/useRoomAi";
+import type { RoomAiController } from "../hooks/useRoomAi";
 import ControlsBar, { type ControlsBarProps } from "./ControlsBar";
 import CommandPalette from "./CommandPalette";
 import ShortcutsHelpDialog from "./ShortcutsHelpDialog";
@@ -118,6 +118,7 @@ const DevMeetToolsPanel = dynamic(() => import("./DevMeetToolsPanel"), {
 });
 
 interface MeetsMainContentProps {
+  roomAi: RoomAiController;
   isJoined: boolean;
   /** True under the phone-width breakpoint. Gates compact control/panel layout. */
   isMobile?: boolean;
@@ -598,14 +599,8 @@ export default function MeetsMainContent({
   onGenerateWebinarLink,
   onRotateWebinarLink,
   transcript,
+  roomAi,
 }: MeetsMainContentProps) {
-  const roomAi = useRoomAi(
-    socket,
-    isJoined && !isWebinarAttendee,
-    currentUserId,
-    isAdmin,
-    roomId,
-  );
   const {
     state: appsState,
     apps,
@@ -2620,6 +2615,7 @@ export default function MeetsMainContent({
 
       {isJoined && !isWebinarAttendee && isDeviceSettingsOpen && (
         <DeviceSettingsPanel
+          roomAi={roomAi}
           localStream={panelPreviewStream}
           isLocalVideoLive={Boolean(getLiveVideoStream(effectiveLocalStream))}
           isPreviewOnly={panelPreviewIsLocalOnly}

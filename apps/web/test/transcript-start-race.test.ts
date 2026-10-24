@@ -29,6 +29,11 @@ type TestRoom = {
   sendError: ReturnType<typeof vi.fn>;
   responseApiKey: string | null;
   responseEnvironment: Env | null;
+  personalResponseKeys: Record<string, string>;
+  minutesGenerating: boolean;
+  minutesRerunRequested: boolean;
+  scheduleMinutes: ReturnType<typeof vi.fn>;
+  responseProfile: (feature: "minutes" | "questions") => Promise<{model: string; apiKey: string}>;
 };
 async function fixture(env: Partial<Env> = {}) {
   const room = new TranscriptRoom(
@@ -62,6 +67,15 @@ const message: SessionStartEnvelope = {
   qaModel: "gpt-5.6-terra",
   transportMode: "sfu",
 };
+
+it("uses the room default for inherited Minutes independently of an explicit Questions model", async () => {
+  const {room, viewer} = await fixture();
+  lookup.mockResolvedValue({OPENAI_API_KEY: "sk-openai-room", ANTHROPIC_API_KEY: "sk-ant-room", CONCLAVE_ASSISTANT_MODEL: "gpt-6.1-sol", CONCLAVE_AI_SETTINGS: JSON.stringify({questions: {model: "claude-haiku-5-5"}})});
+  await room.startSession(viewer, {...message, qaModel: "claude-haiku-5-5"});
+  expect(room.session?.status).toBe("live");
+  expect(await room.responseProfile("minutes")).toMatchObject({model: "gpt-6.1-sol", apiKey: "sk-openai-room"});
+  expect(await room.responseProfile("questions")).toMatchObject({model: "claude-haiku-5-5", apiKey: "sk-ant-room"});
+});
 
 it("uses the SFU account and endpoint for routed notes even when the Worker has its own keys", async () => {
   const { room, viewer } = await fixture({
@@ -134,4 +148,44 @@ it("does not let a rejected key cancel another participant's pending valid start
   await validStart;
   expect(room.session?.status).toBe("live");
   expect(room.connectTranscriptionProvider).toHaveBeenCalledTimes(1);
+});
+
+it("starts independent notes when the disabled questions provider has no key", async () => {
+  const {room, viewer} = await fixture();
+  lookup.mockResolvedValue({SARVAM_API_KEY: "sarvam-fixture", ANTHROPIC_API_KEY: "sk-ant-room", CONCLAVE_AI_SETTINGS: JSON.stringify({questions: {enabled: false, model: "gpt-6.1-sol"}, minutes: {model: "claude-haiku-5-5"}})});
+  await room.startSession(viewer, {...message, transcriptModel: "saaras:v3"});
+  expect(room.session?.status).toBe("live");
+  expect(room.responseApiKey).toBeNull();
+  expect(room.sendError).not.toHaveBeenCalled();
+});
+it("keeps a personal questions key isolated from another provider's room minutes key", async () => {
+  const {room, viewer} = await fixture();
+  lookup.mockResolvedValue({SARVAM_API_KEY: "sarvam-fixture", OPENAI_API_KEY: "sk-openai-minutes", CONCLAVE_AI_SETTINGS: JSON.stringify({questions: {model: "claude-haiku-5-5"}, minutes: {model: "gpt-6.1-sol"}})});
+  await room.startSession(viewer, {...message, transcriptModel: "saaras:v3", qaModel: "claude-haiku-5-5", assistantApiKey: "sk-ant-personal"});
+  expect(room.session?.status).toBe("live");
+  expect(room.responseApiKey).toBe("sk-ant-personal");
+  expect(room.sendError).not.toHaveBeenCalled();
+});
+
+it("retains both personal response providers for mixed OpenAI minutes and Claude questions", async () => {
+  const {room, viewer} = await fixture();
+  lookup.mockResolvedValue({CONCLAVE_AI_SETTINGS: JSON.stringify({questions: {model: "claude-haiku-5-5"}, minutes: {model: "gpt-6.1-sol"}})});
+  await room.startSession(viewer, {...message, qaModel: "claude-haiku-5-5", apiKey: "sk-openai-personal", assistantApiKey: "sk-ant-personal"});
+  expect(room.session?.status).toBe("live");
+  expect(room.personalResponseKeys).toEqual({openai: "sk-openai-personal", anthropic: "sk-ant-personal"});
+  expect(room.sendError).not.toHaveBeenCalled();
+});
+
+it("unlocks and reschedules cancelled minutes when the controller takes over a live session", async () => {
+  const {room, viewer} = await fixture();
+  lookup.mockResolvedValue({OPENAI_API_KEY: "sk-room"});
+  await room.startSession(viewer, message);
+  room.minutesGenerating = true;
+  room.minutesRerunRequested = true;
+  room.scheduleMinutes = vi.fn();
+  await room.startSession(viewer, {...message, type: "session.takeover"});
+  expect(room.session?.status).toBe("live");
+  expect(room.minutesGenerating).toBe(false);
+  expect(room.minutesRerunRequested).toBe(false);
+  expect(room.scheduleMinutes).toHaveBeenCalledTimes(1);
 });

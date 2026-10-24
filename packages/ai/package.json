@@ -5,6 +5,8 @@
   "type": "module",
   "exports": {
     "./models": "./src/models.ts",
+    "./room-settings": "./src/room-settings.ts",
+    "./limits": "./src/limits.ts",
     "./server": "./src/server.ts",
     "./room": "./src/room.ts",
     "./room-server": "./src/room-server.ts"

@@ -124,8 +124,7 @@ export default function VoiceAgentDialog({
         ) : (
           <>
             <p className="mt-1 text-[12.5px]" style={{ color: color.textMuted }}>
-              An AI assistant that listens and answers by voice. Uses your
-              OpenAI key, sent only to OpenAI.
+              Share an OpenAI key with this room to start voice.
             </p>
 
             <div
@@ -208,7 +207,7 @@ export default function VoiceAgentDialog({
               className="rounded-xl px-4 py-2 text-[12.5px] font-semibold text-white transition-opacity hover:opacity-90"
               style={{ backgroundColor: color.accent }}
             >
-              Start
+              Share & start
             </button>
           ) : null}
         </div>

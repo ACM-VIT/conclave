@@ -172,6 +172,7 @@ export const mostLikelyToModule: GameModule<MltState> = {
     const topic = gameContentTopic(ctx.config) || "fresh friendly group prompts";
     const rounds = numberOption(ctx.config, "rounds", ROUNDS_PER_GAME);
     return generateStructuredGameContent({
+      signal: ctx.signal,
       aiEnvironment: ctx.aiEnvironment,
       gameName: "Most Likely To",
       topic,

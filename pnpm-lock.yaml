@@ -361,6 +361,9 @@ importers:
 
   packages/apps-sdk:
     dependencies:
+      '@conclave/ai':
+        specifier: workspace:*
+        version: link:../ai
       react-player:
         specifier: ^3.4.0
         version: 3.4.0(@svta/cml-cta@1.0.6(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0))(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)

@@ -275,6 +275,14 @@ export function useMeetingTranscript({
   const [minutesStatus, setMinutesStatus] =
     useState<TranscriptMinutesStatus>("idle");
   const [qaMessages, setQaMessages] = useState<TranscriptQaMessage[]>([]);
+  const cancelPendingQuestions = useCallback(() => {
+    setQaMessages(messages => messages.map(message => message.status === "streaming" ? {
+      ...message,
+      status: "error",
+      error: "Response interrupted. Ask again.",
+      updatedAt: Date.now(),
+    } : message));
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [isStreamingAudio, setIsStreamingAudio] = useState(false);
   const isStreamingAudioRef = useRef(false);
@@ -332,6 +340,7 @@ export function useMeetingTranscript({
 
   const scheduleReconnect = useCallback(() => {
     if (!subscribedRef.current || reconnectTimerRef.current !== null) return;
+    cancelPendingQuestions();
     const attempt = reconnectAttemptRef.current;
     const delay = Math.min(
       TRANSCRIPT_RECONNECT_MAX_DELAY_MS,
@@ -348,7 +357,7 @@ export function useMeetingTranscript({
         if (!connected) scheduleReconnect();
       });
     }, delay);
-  }, []);
+  }, [cancelPendingQuestions]);
 
   const clearBufferedAudioMessages = useCallback(() => {
     bufferedAudioMessagesRef.current = [];
@@ -602,6 +611,13 @@ export function useMeetingTranscript({
 
   const applySessionState = useCallback(
     (nextSession: TranscriptSessionState) => {
+      const previous = sessionRef.current;
+      if (
+        previous.status !== nextSession.status &&
+        ["starting", "idle", "error", "takeover_needed"].includes(nextSession.status)
+      ) {
+        cancelPendingQuestions();
+      }
       sessionRef.current = nextSession;
       setSession(nextSession);
       if (
@@ -618,7 +634,7 @@ export function useMeetingTranscript({
         waiter.resolve(nextSession);
       }
     },
-    [clearBufferedAudioMessages],
+    [clearBufferedAudioMessages, cancelPendingQuestions],
   );
 
   const clearSessionWaiters = useCallback(() => {
@@ -1328,9 +1344,11 @@ export function useMeetingTranscript({
           updatedAt: now,
         },
       ]);
-      return send({ type: "qa.ask", id, question: trimmed });
+      const sent = send({ type: "qa.ask", id, question: trimmed });
+      if (!sent) cancelPendingQuestions();
+      return sent;
     },
-    [canAsk, connect, send, setPermissionError],
+    [canAsk, connect, send, setPermissionError, cancelPendingQuestions],
   );
 
   const refreshMinutes = useCallback(async (): Promise<boolean> => {
