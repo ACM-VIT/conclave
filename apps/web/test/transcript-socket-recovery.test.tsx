@@ -34,14 +34,18 @@ async function fixture(getToken = vi.fn(async () => token())) {
   vi.stubGlobal("WebSocket", FakeSocket);
   vi.stubGlobal("fetch", vi.fn(async () => Response.json({ id: "fixture" })));
   let controller!: ReturnType<typeof useMeetingTranscript>;
-  function Harness({ joined = true }: { joined?: boolean }) {
-    controller = useMeetingTranscript({ roomId: "room", isJoined: joined, currentUserId: "alice", currentDisplayName: "Alice", isMuted: true, localStream: null, participants, activeSpeakerId: null, resolveDisplayName: displayName, getTranscriptToken: getToken });
+  function Harness({ joined = true, userId = "alice" }: { joined?: boolean; userId?: string }) {
+    controller = useMeetingTranscript({ roomId: "room", isJoined: joined, currentUserId: userId, currentDisplayName: "Alice", isMuted: true, localStream: null, participants, activeSpeakerId: null, resolveDisplayName: displayName, getTranscriptToken: getToken });
     return null;
   }
   const root = createRoot(document.createElement("div"));
   unmount = async () => { await act(async () => root.unmount()); };
   await act(async () => root.render(<Harness />));
-  return { current: () => controller, leave: async () => { await act(async () => root.render(<Harness joined={false} />)); } };
+  return {
+    current: () => controller,
+    leave: async () => { await act(async () => root.render(<Harness joined={false} />)); },
+    switchIdentity: async () => { await act(async () => root.render(<Harness userId="bob" />)); },
+  };
 }
 
 it("recovers after error-only disconnects and ignores late events from the replaced socket", async () => {
@@ -71,6 +75,16 @@ it("does not open a socket when a token resolves after leaving the meeting", asy
   await act(async () => resolve(token()));
   expect(FakeSocket.sockets).toHaveLength(0);
   expect(current().connectionStatus).toBe("idle");
+});
+
+it("resubscribes after an identity update even when the token callback stays stable", async () => {
+  const { current, switchIdentity } = await fixture();
+  await act(async () => FakeSocket.sockets[0].open());
+  await switchIdentity();
+  expect(FakeSocket.sockets[0].readyState).toBe(3);
+  expect(FakeSocket.sockets).toHaveLength(2);
+  await act(async () => FakeSocket.sockets[1].open());
+  expect(current().connectionStatus).toBe("connected");
 });
 
 it("retries token lookup failures without unhandled rejections", async () => {

@@ -1451,6 +1451,7 @@ export function useMeetingTranscript({
     connect,
     isJoined,
     roomId,
+    currentUserId,
   ]);
 
   useEffect(() => {
