@@ -6,7 +6,7 @@ import {useMeetingTranscript} from "../src/app/hooks/useMeetingTranscript";
 import type {TranscriptSessionState} from "@conclave/meeting-core/transcript-types";
 
 afterEach(() => {vi.unstubAllGlobals(); vi.useRealTimers();});
-it.each(["idle", "starting", "takeover_needed", "error", "disconnect"])("allows another question after %s interrupts an answer", async reason => {
+it.each(["idle", "starting", "takeover_needed", "error", "disconnect", "controller reconnect"])("handles an active question during %s", async reason => {
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("fetch", vi.fn(async () => Response.json({id: "fixture"})));
@@ -40,6 +40,14 @@ it.each(["idle", "starting", "takeover_needed", "error", "disconnect"])("allows 
   const first = sockets[0].sent.find(message => message.type === "qa.ask")!;
   await act(async () => sockets[0].frame({type: "qa.delta", id: first.id, question: "First question", answer: "Partial answer"}));
   expect(controller.qaMessages.some(message => message.status === "streaming")).toBe(true);
+  if (reason === "controller reconnect") {
+    await act(async () => sockets[0].frame({type: "session.state", session: {...live, controller: {...live.controller, connectionId: "host-2"}}}));
+    expect(controller.qaMessages.at(-1)).toMatchObject({content: "Partial answer", status: "streaming"});
+    await act(async () => sockets[0].frame({type: "qa.final", id: first.id, question: "First question", answer: "Completed answer", status: "done"}));
+    expect(controller.qaMessages.at(-1)).toMatchObject({content: "Completed answer", status: "done"});
+    await act(async () => root.unmount());
+    return;
+  }
   if (reason === "disconnect") {
     await act(async () => {sockets[0].close(); await vi.advanceTimersByTimeAsync(500);});
   } else await act(async () => sockets[0].frame({type: "session.state", session: {...live, status: reason, updatedAt: 2}}));

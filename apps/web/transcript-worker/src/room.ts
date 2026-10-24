@@ -889,8 +889,9 @@ export class TranscriptRoom {
       personalResponseKeys[getResponseProvider(qaModel)],
       effectiveEnv,
     );
+    const separateTextProfiles = Boolean(featureSettings.minutes || featureSettings.questions);
     for (const feature of ["minutes", "questions"] as const) {
-      const settings = resolveAiFeatureSettings({...effectiveEnv, CONCLAVE_ASSISTANT_MODEL: qaModel}, feature);
+      const settings = resolveAiFeatureSettings(feature === "minutes" && separateTextProfiles ? effectiveEnv : {...effectiveEnv, CONCLAVE_ASSISTANT_MODEL: qaModel}, feature);
       if (!settings.enabled) continue;
       const key = this.resolveResponseKey(settings.model, transcriptionProvider, message.apiKey, personalResponseKeys[getResponseProvider(settings.model)], effectiveEnv);
       if (!key.ok) { this.sendError(viewer, key.message); return; }
@@ -2087,7 +2088,9 @@ export class TranscriptRoom {
       const room = await fetchRoomAiEnvironment({...route, secret: this.env.TRANSCRIPT_TOKEN_SECRET, providers: ["openai", "anthropic", "sarvam"]});
       env = {...this.env, ...roomAiEnvironment(this.env, room)};
     }
-    const settings = resolveAiFeatureSettings({...env, CONCLAVE_ASSISTANT_MODEL: requestedModel || this.session?.qaModel}, feature);
+    const features = roomAiFeatureSettingsFromEnvironment(env);
+    const separateTextProfiles = Boolean(features.minutes || features.questions);
+    const settings = resolveAiFeatureSettings(feature === "minutes" && separateTextProfiles ? env : {...env, CONCLAVE_ASSISTANT_MODEL: requestedModel || this.session?.qaModel}, feature);
     const provider = getResponseProvider(settings.model);
     const apiKey = this.personalResponseKeys[provider] || getProviderApiKey(env, provider) || (!route && provider === getResponseProvider(this.session?.qaModel || DEFAULT_QA_MODEL) ? this.responseApiKey : "");
     if (settings.enabled && !apiKey) throw new Error("Add a key for this feature in Room AI settings.");

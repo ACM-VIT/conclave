@@ -67,6 +67,29 @@ const openFeature = async (name = "Chat assistant") => act(async () => container
 const saveFeature = async () => act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})));
 
 describe("AI setup UX", () => {
+  it.each(["idle", "takeover_needed"])("starts inherited Notes profiles without requiring key ownership (%s)", async status => {
+    const state = emptyRoomAiState();
+    state.assistantModel = "gpt-6.1-sol";
+    state.openai = {source: "room", ownerId: "bob"};
+    state.anthropic = {source: "room", ownerId: "bob"};
+    state.features = {questions: {model: "claude-haiku-5-5"}};
+    const controller = roomAi({state, configureFeature: vi.fn().mockResolvedValue("Permission denied")});
+    const start = vi.fn().mockResolvedValue(true), takeover = vi.fn().mockResolvedValue(true);
+    const notes = {...transcript(start), canTakeover: true, takeover, session: {...transcript().session, status}, globalProviderKeysAvailable: {}} as MeetingTranscriptController;
+    await act(async () => root.render(<TranscriptPanel transcript={notes} roomAi={controller} onClose={() => {}} />));
+    expect(container.textContent).toContain("GPT-6.1 Sol");
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
+    expect(controller.configureFeature).not.toHaveBeenCalled();
+    expect(status === "idle" ? start : takeover).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows interruption feedback alongside a preserved partial answer", async () => {
+    const notes = {...transcript(), session: {...transcript().session, status: "live"}, qaMessages: [{id: "partial", role: "assistant", content: "The incomplete answer", status: "error", error: "Response interrupted. Ask again.", createdAt: 1, updatedAt: 2}]} as MeetingTranscriptController;
+    await act(async () => root.render(<TranscriptPanel transcript={notes} onClose={() => {}} />));
+    await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent?.trim() === "ask")!.click());
+    expect(container.textContent).toContain("The incomplete answer");
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Response interrupted. Ask again.");
+  });
   it.each([false, true])("saves a compact Chat model before retrying with an existing provider key (denied: %s)", async denied => {
     const state = emptyRoomAiState();
     state.openai = {source: "room", ownerId: "alice"};

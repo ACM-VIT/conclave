@@ -239,9 +239,8 @@ function StartStage({
   const [transcriptModel, setTranscriptModel] = useState(
     transcript.session.transcriptModel,
   );
-  const [qaModel, setQaModel] = useState(
-    roomAi?.state.features?.questions?.model ?? roomAi?.state.assistantModel ?? transcript.session.qaModel,
-  );
+  const defaultQaModel = roomAi?.state.features?.questions?.model ?? roomAi?.state.assistantModel ?? transcript.session.qaModel;
+  const [qaModel, setQaModel] = useState(defaultQaModel);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const needsTakeover = transcript.session.status === "takeover_needed";
@@ -254,10 +253,10 @@ function StartStage({
   const needsProviderKey = !available(provider);
   const assistantApiKey = textKeys[assistantProvider] ?? "";
   const setTextKey = (name: AiTextProvider, value: string) => setTextKeys(current => ({...current, [name]: value}));
-  const textProfiles = (["minutes", "questions"] as const).map(feature => ({
-    feature, settings: resolveAiFeatureSettings({CONCLAVE_ASSISTANT_MODEL: qaModel}, feature, roomAi?.state.features ?? {}),
-  }));
   const separateTextProfiles = Boolean(roomAi && (roomAi.state.features?.minutes || roomAi.state.features?.questions));
+  const textProfiles = (["minutes", "questions"] as const).map(feature => ({
+    feature, settings: resolveAiFeatureSettings({CONCLAVE_ASSISTANT_MODEL: feature === "minutes" && separateTextProfiles ? roomAi?.state.assistantModel ?? undefined : qaModel}, feature, roomAi?.state.features ?? {}),
+  }));
   const requiredTextProviders = [...new Set(textProfiles.filter(({settings}) => settings.enabled).map(({settings}) => getResponseProvider(settings.model)))];
   const missingTextProviders = requiredTextProviders.filter(name => !available(name) && name !== provider);
   const needsAssistantKey = missingTextProviders.includes(assistantProvider);
@@ -281,8 +280,8 @@ function StartStage({
     setTranscriptModel(roomAi?.state.features?.transcription?.model ?? transcript.session.transcriptModel);
   }, [roomAi?.state.features?.transcription?.model, transcript.session.transcriptModel]);
   useEffect(() => {
-    setQaModel(roomAi?.state.features?.questions?.model ?? roomAi?.state.assistantModel ?? transcript.session.qaModel);
-  }, [roomAi?.state.features?.questions?.model, roomAi?.state.assistantModel, transcript.session.qaModel]);
+    setQaModel(defaultQaModel);
+  }, [defaultQaModel]);
   useEffect(() => {
     setApiKey("");
   }, [provider]);
@@ -293,14 +292,16 @@ function StartStage({
     setSetupError(null);
     try {
       if (roomAi) {
+        const sharedKeys = {
+          ...(needsProviderKey ? { [provider]: apiKey } : {}),
+          ...Object.fromEntries(missingTextProviders.map(name => [name, textKeys[name] ?? ""])),
+        };
+        const saveTextModels = !separateTextProfiles && (qaModel !== defaultQaModel || Boolean(sharedKeys[assistantProvider]?.trim()));
         const error = await configureRoomAiForFeature(
           roomAi,
-          {
-            ...(needsProviderKey ? { [provider]: apiKey } : {}),
-            ...Object.fromEntries(missingTextProviders.map(name => [name, textKeys[name] ?? ""])),
-          },
+          sharedKeys,
           qaModel,
-          (["minutes", "questions"] as const).filter(feature => !roomAi.state.features?.[feature]?.model && roomAi.state.features?.[feature]?.enabled !== false),
+          saveTextModels ? ["minutes", "questions"] : [],
         );
         if (error) {
           setSetupError(error);
@@ -794,6 +795,9 @@ function AskView({
                   ) : (
                     message.content
                   )}
+                  {message.role === "assistant" && message.content && message.error ? (
+                    <p role="status" className="mt-2 text-[11.5px] text-[#ffb4ad]">{message.error}</p>
+                  ) : null}
                 </MessageContent>
                 {message.role === "assistant" &&
                 message.content &&

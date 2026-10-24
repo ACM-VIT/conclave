@@ -33,6 +33,7 @@ type TestRoom = {
   minutesGenerating: boolean;
   minutesRerunRequested: boolean;
   scheduleMinutes: ReturnType<typeof vi.fn>;
+  responseProfile: (feature: "minutes" | "questions") => Promise<{model: string; apiKey: string}>;
 };
 async function fixture(env: Partial<Env> = {}) {
   const room = new TranscriptRoom(
@@ -66,6 +67,15 @@ const message: SessionStartEnvelope = {
   qaModel: "gpt-5.6-terra",
   transportMode: "sfu",
 };
+
+it("uses the room default for inherited Minutes independently of an explicit Questions model", async () => {
+  const {room, viewer} = await fixture();
+  lookup.mockResolvedValue({OPENAI_API_KEY: "sk-openai-room", ANTHROPIC_API_KEY: "sk-ant-room", CONCLAVE_ASSISTANT_MODEL: "gpt-6.1-sol", CONCLAVE_AI_SETTINGS: JSON.stringify({questions: {model: "claude-haiku-5-5"}})});
+  await room.startSession(viewer, {...message, qaModel: "claude-haiku-5-5"});
+  expect(room.session?.status).toBe("live");
+  expect(await room.responseProfile("minutes")).toMatchObject({model: "gpt-6.1-sol", apiKey: "sk-openai-room"});
+  expect(await room.responseProfile("questions")).toMatchObject({model: "claude-haiku-5-5", apiKey: "sk-ant-room"});
+});
 
 it("uses the SFU account and endpoint for routed notes even when the Worker has its own keys", async () => {
   const { room, viewer } = await fixture({

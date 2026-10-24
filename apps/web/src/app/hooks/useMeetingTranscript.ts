@@ -613,9 +613,11 @@ export function useMeetingTranscript({
     (nextSession: TranscriptSessionState) => {
       const previous = sessionRef.current;
       if (
-        previous.controller?.connectionId !== nextSession.controller?.connectionId ||
-        (previous.status !== nextSession.status && ["starting", "idle", "error", "takeover_needed"].includes(nextSession.status))
-      ) cancelPendingQuestions();
+        previous.status !== nextSession.status &&
+        ["starting", "idle", "error", "takeover_needed"].includes(nextSession.status)
+      ) {
+        cancelPendingQuestions();
+      }
       sessionRef.current = nextSession;
       setSession(nextSession);
       if (
