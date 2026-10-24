@@ -110,3 +110,20 @@ it("keeps the new connection when an obsolete token lookup completes later", asy
   expect(FakeSocket.sockets).toHaveLength(1);
   expect(current().connectionStatus).toBe("connected");
 });
+
+it("ignores a cancelled retry's continuation after a manual reconnect succeeds", async () => {
+  let resolveRetry!: (value: ReturnType<typeof token>) => void;
+  const staleRetry = new Promise<ReturnType<typeof token>>((done) => { resolveRetry = done; });
+  const getToken = vi.fn(async () => token()).mockResolvedValueOnce(token()).mockReturnValueOnce(staleRetry);
+  const { current } = await fixture(getToken);
+  await act(async () => FakeSocket.sockets[0].open());
+  await act(async () => { FakeSocket.sockets[0].close(); await vi.advanceTimersByTimeAsync(500); });
+  expect(getToken).toHaveBeenCalledTimes(2);
+  let reconnect!: Promise<boolean>;
+  await act(async () => { reconnect = current().reconnect(); });
+  await act(async () => FakeSocket.sockets[1].open());
+  expect(await reconnect).toBe(true);
+  await act(async () => { resolveRetry(token()); await vi.advanceTimersByTimeAsync(2000); });
+  expect(current().connectionStatus).toBe("connected");
+  expect(FakeSocket.sockets).toHaveLength(2);
+});

@@ -354,9 +354,9 @@ export function useMeetingTranscript({
     }
     reconnectTimerRef.current = window.setTimeout(() => {
       reconnectTimerRef.current = null;
-      void connectRef.current?.().then((connected) => {
-        if (!connected) scheduleReconnect();
-      });
+      // The current connect attempt schedules its own failures. An obsolete
+      // attempt must not schedule another retry after a replacement opens.
+      void connectRef.current?.();
     }, delay);
   }, [cancelPendingQuestions]);
 
