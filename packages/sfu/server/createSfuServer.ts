@@ -63,11 +63,13 @@ export const createSfuServer = (
     roomRegistry,
   });
   let io: SocketIOServer | null = null;
+  let socketAdapterLifecycle: SocketAdapterLifecycle | null = null;
 
   const app = createSfuApp({
     state,
     config,
     getIo: () => io,
+    getSocketAdapterHealth: () => socketAdapterLifecycle?.health() ?? null,
   });
   const httpServer = createHttpServer(app);
   io = createSfuSocketServer(httpServer, { state, config });
@@ -82,7 +84,6 @@ export const createSfuServer = (
   let scheduledMeetingTickTimer: NodeJS.Timeout | null = null;
   let roomOwnershipRenewTimer: NodeJS.Timeout | null = null;
   let audioConsumerHealTimer: NodeJS.Timeout | null = null;
-  let socketAdapterLifecycle: SocketAdapterLifecycle | null = null;
 
   const start = async (): Promise<void> => {
     await state.roomRegistry.start();

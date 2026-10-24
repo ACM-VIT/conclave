@@ -10,6 +10,7 @@ import {
   type RoomRegistry,
 } from "../server/roomRegistry.js";
 import { createSfuState } from "../server/state.js";
+import type { RedisPublisherHealth } from "../server/socket/redisPublisher.js";
 
 const servers: Server[] = [];
 
@@ -103,6 +104,7 @@ afterEach(async () => {
 const startPlacementApp = async (options?: {
   draining?: boolean;
   registry?: RoomRegistry;
+  getSocketAdapterHealth?: () => RedisPublisherHealth;
 }) => {
   const registry =
     options?.registry ??
@@ -116,7 +118,7 @@ const startPlacementApp = async (options?: {
     isDraining: options?.draining,
     roomRegistry: registry,
   });
-  const app = createSfuApp({ state, config });
+  const app = createSfuApp({ state, config, getSocketAdapterHealth: options?.getSocketAdapterHealth });
   const server = createServer(app);
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -138,6 +140,18 @@ const reserve = (url: string, roomId = "room-1") =>
   });
 
 describe("room placement HTTP API", () => {
+  it("exposes publishing failures in health and rejects new placements until recovery", async () => {
+    let healthy = false;
+    const { state, url } = await startPlacementApp({ getSocketAdapterHealth: () => ({ healthy, pending: 0, pendingBytes: 0, dropped: 4, recovering: !healthy }) });
+    state.workers.push({ closed: false } as (typeof state.workers)[number]);
+    expect((await fetch(`${url}/health`)).status).toBe(503);
+    expect((await reserve(url)).status).toBe(503);
+    const status = await fetch(`${url}/status`, { headers: { "x-sfu-secret": config.sfuSecret } });
+    expect(await status.json()).toMatchObject({ healthy: false, socketAdapter: { recovering: true, dropped: 4 } });
+    healthy = true;
+    expect((await fetch(`${url}/health`)).status).toBe(200);
+    expect((await reserve(url)).status).toBe(200);
+  });
   it("advertises atomic placement support before web clients call the endpoint", async () => {
     const { url } = await startPlacementApp();
     const response = await fetch(`${url}/status`, {

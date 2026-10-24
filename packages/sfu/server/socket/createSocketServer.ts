@@ -9,6 +9,7 @@ import { isRedisTransientError } from "../redisErrors.js";
 import type { SfuState } from "../state.js";
 import { attachSocketAuth } from "./auth.js";
 import { registerConnectionHandlers } from "./registerConnectionHandlers.js";
+import { guardRedisPublisher, type RedisPublisherHealth } from "./redisPublisher.js";
 
 // Cap the maximum size of a single inbound message. This is socket.io's own
 // default (1 MB) made explicit so it is reviewable and tunable, and so it acts
@@ -23,6 +24,7 @@ export type CreateSocketServerOptions = {
 
 export type SocketAdapterLifecycle = {
   mode: "memory" | "redis";
+  health: () => RedisPublisherHealth;
   close: () => Promise<void>;
 };
 
@@ -71,7 +73,11 @@ export const connectSocketAdapter = async (
       throw new Error("Redis Socket.IO adapter is required but not configured.");
     }
     Logger.info("[Socket.IO] Using in-memory adapter");
-    return { mode: "memory", close: async () => {} };
+    return {
+      mode: "memory",
+      health: () => ({ healthy: true, pending: 0, pendingBytes: 0, dropped: 0, recovering: false }),
+      close: async () => {},
+    };
   }
 
   const pubClient = createClient({
@@ -82,8 +88,12 @@ export const connectSocketAdapter = async (
     },
     disableOfflineQueue: true,
     commandsQueueMaxLength: 1000,
+    commandOptions: { timeout: 2500 },
   });
   const subClient = pubClient.duplicate();
+  const publisher = guardRedisPublisher(pubClient, {
+    onFailure: (reason, health) => Logger.warn("[Socket.IO] Redis publishing degraded", { reason, ...health }),
+  });
 
   pubClient.on("error", (error) => {
     const log = isRedisTransientError(error) ? Logger.warn : Logger.error;
@@ -96,7 +106,7 @@ export const connectSocketAdapter = async (
 
   try {
     await Promise.all([pubClient.connect(), subClient.connect()]);
-    io.adapter(createAdapter(pubClient, subClient));
+    io.adapter(createAdapter(publisher.client, subClient));
     Logger.success("[Socket.IO] Redis adapter connected");
   } catch (error) {
     await Promise.allSettled([pubClient.disconnect(), subClient.disconnect()]);
@@ -105,8 +115,13 @@ export const connectSocketAdapter = async (
 
   return {
     mode: "redis",
+    health: () => {
+      const health = publisher.health();
+      return { ...health, healthy: health.healthy && subClient.isReady };
+    },
     close: async () => {
-      await Promise.allSettled([pubClient.quit(), subClient.quit()]);
+      publisher.close();
+      if (subClient.isOpen) subClient.destroy();
     },
   };
 };
