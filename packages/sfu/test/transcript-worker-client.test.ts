@@ -57,6 +57,45 @@ afterEach(() => {
 });
 
 describe("TranscriptWorkerRelayClient recovery", () => {
+  it("reconnects after a heartbeat write failure in a silent meeting", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const client = new TranscriptWorkerRelayClient({ workerUrl: "https://worker.test", roomId: "room-a", token: "fixture" });
+    const connected = client.connect();
+    const first = FakeWebSocket.instances[0];
+    first.open();
+    await connected;
+    first.send = () => { throw new Error("write failed"); };
+    first.close = () => { first.readyState = FakeWebSocket.CLOSED; };
+    await vi.advanceTimersByTimeAsync(20250);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    FakeWebSocket.instances[1].open();
+    await Promise.resolve();
+    expect(client.sendAudioChunk("resumed", speaker)).toBe(true);
+    client.close();
+  });
+  it("retries a failed replacement handshake even when error is not followed by close", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const client = new TranscriptWorkerRelayClient({ workerUrl: "https://worker.test", roomId: "room-a", token: "fixture" });
+    const initial = client.connect();
+    FakeWebSocket.instances[0].open();
+    await initial;
+    FakeWebSocket.instances[0].serverClose();
+    await vi.advanceTimersByTimeAsync(250);
+    const failed = FakeWebSocket.instances[1];
+    failed.close = () => { failed.readyState = FakeWebSocket.CLOSED; };
+    failed.onerror?.();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    FakeWebSocket.instances[2].open();
+    await Promise.resolve();
+    expect(client.sendAudioChunk("recovered", speaker)).toBe(true);
+    failed.open();
+    expect(client.sendAudioChunk("still current", speaker)).toBe(true);
+    expect(FakeWebSocket.instances[2].sent.some((raw) => raw.includes("still current"))).toBe(true);
+    client.close();
+  });
   it("reconnects a dropped worker socket and flushes audio queued during the gap", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("WebSocket", FakeWebSocket);

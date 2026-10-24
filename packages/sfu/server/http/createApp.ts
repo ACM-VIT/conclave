@@ -44,6 +44,7 @@ import { registerScheduledWebinarRoutes } from "./scheduledWebinarRoutes.js";
 import { registerScheduledMeetingRoutes } from "./scheduledMeetingRoutes.js";
 import { registerSchedulingRoutes } from "./schedulingRoutes.js";
 import type { SfuState } from "../state.js";
+import type { RedisPublisherHealth } from "../socket/redisPublisher.js";
 import { resolveWebinarLinkTarget } from "../webinar.js";
 import { canonicalizeClientId } from "../clientIds.js";
 import {
@@ -66,6 +67,7 @@ export type CreateSfuAppOptions = {
   config?: typeof defaultConfig;
   getIo?: () => SocketIOServer | null;
   moderateImage?: typeof moderateChatImage;
+  getSocketAdapterHealth?: () => RedisPublisherHealth | null;
 };
 
 type ChatImageUploadLocals = {
@@ -274,6 +276,7 @@ export const createSfuApp = ({
   config = defaultConfig,
   getIo,
   moderateImage = moderateChatImage,
+  getSocketAdapterHealth = () => null,
 }: CreateSfuAppOptions): Express => {
   const app = express();
   // Env-driven CORS allow-list. Defaults to "*" (unchanged dev behavior); set
@@ -496,13 +499,15 @@ export const createSfuApp = ({
 
   app.get("/health", (_req, res) => {
     const healthyWorkers = state.workers.filter((worker) => !worker.closed);
-    const isHealthy = healthyWorkers.length > 0;
+    const socketAdapter = getSocketAdapterHealth();
+    const isHealthy = healthyWorkers.length > 0 && socketAdapter?.healthy !== false;
 
     const healthData = {
       status: isHealthy ? "healthy" : "unhealthy",
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       port: config.port,
+      ...(socketAdapter ? { socketAdapter } : {}),
       workers: {
         total: state.workers.length,
         healthy: healthyWorkers.length,
@@ -511,7 +516,6 @@ export const createSfuApp = ({
     };
 
     if (!isHealthy) {
-      Logger.error("Health check failed: No healthy workers available");
       return res.status(503).json(healthData);
     }
 
@@ -928,6 +932,11 @@ export const createSfuApp = ({
         });
         return;
       }
+      if (!existing && getSocketAdapterHealth()?.healthy === false) {
+        res.set("Retry-After", "2");
+        res.status(503).json({ error: "Meeting server is reconnecting" });
+        return;
+      }
 
       const result = await state.roomRegistry.reservePlacement({
         channelId,
@@ -957,8 +966,11 @@ export const createSfuApp = ({
       return res.status(401).json({ error: "Unauthorized" });
     }
 
+    const socketAdapter = getSocketAdapterHealth();
     return res.json({
       instanceId: config.instanceId,
+      healthy: socketAdapter?.healthy !== false && state.workers.some((worker) => !worker.closed),
+      ...(socketAdapter ? { socketAdapter } : {}),
       region: config.region,
       version: config.version,
       draining: state.isDraining,

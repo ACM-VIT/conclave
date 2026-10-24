@@ -311,6 +311,7 @@ export function useMeetingTranscript({
   const socketRef = useRef<WebSocket | null>(null);
   const relayRef = useRef<TranscriptAudioRelay | null>(null);
   const connectPromiseRef = useRef<Promise<boolean> | null>(null);
+  const connectionGenerationRef = useRef(0);
   const subscribedRef = useRef(false);
   const connectRef = useRef<(() => Promise<boolean>) | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -353,9 +354,9 @@ export function useMeetingTranscript({
     }
     reconnectTimerRef.current = window.setTimeout(() => {
       reconnectTimerRef.current = null;
-      void connectRef.current?.().then((connected) => {
-        if (!connected) scheduleReconnect();
-      });
+      // The current connect attempt schedules its own failures. An obsolete
+      // attempt must not schedule another retry after a replacement opens.
+      void connectRef.current?.();
     }, delay);
   }, [cancelPendingQuestions]);
 
@@ -828,10 +829,12 @@ export function useMeetingTranscript({
     if (hasUsableOpenSocket(socketRef.current)) return true;
     if (connectPromiseRef.current) return connectPromiseRef.current;
 
-    connectPromiseRef.current = (async () => {
+    const generation = ++connectionGenerationRef.current;
+    const connecting = (async () => {
       setConnectionStatus("connecting");
       setError(null);
       const token = await getTranscriptToken();
+      if (!subscribedRef.current || generation !== connectionGenerationRef.current) return false;
       if (!token) {
         scheduleReconnect();
         return false;
@@ -840,7 +843,10 @@ export function useMeetingTranscript({
       setTokenInfo(token);
       const socket = new WebSocket(toWorkerWebSocketUrl(token));
       socketRef.current = socket;
-      socket.onmessage = (event) => handleServerMessage(String(event.data));
+      const isCurrent = () => subscribedRef.current && generation === connectionGenerationRef.current && socketRef.current === socket;
+      socket.onmessage = (event) => {
+        if (isCurrent()) handleServerMessage(String(event.data));
+      };
       const connected = await new Promise<boolean>((resolve) => {
         let settled = false;
         const finish = (ok: boolean) => {
@@ -850,16 +856,21 @@ export function useMeetingTranscript({
           resolve(ok);
         };
         const timeout = window.setTimeout(() => {
-          if (socketRef.current === socket) {
+          if (isCurrent()) {
             socketRef.current = null;
+            scheduleReconnect();
           }
           try {
             socket.close();
           } catch {}
-          scheduleReconnect();
           finish(false);
         }, 8000);
         socket.onopen = () => {
+          if (!isCurrent()) {
+            finish(false);
+            try { socket.close(); } catch {}
+            return;
+          }
           if (!flushBufferedAudioMessages(socket)) {
             if (socketRef.current === socket) socketRef.current = null;
             scheduleReconnect();
@@ -874,17 +885,17 @@ export function useMeetingTranscript({
           finish(true);
         };
         socket.onerror = () => {
-          if (socketRef.current === socket) {
+          if (isCurrent()) {
             socketRef.current = null;
+            scheduleReconnect();
           }
           try {
             socket.close();
           } catch {}
-          scheduleReconnect();
           finish(false);
         };
         socket.onclose = () => {
-          if (socketRef.current === socket) {
+          if (isCurrent()) {
             socketRef.current = null;
             scheduleReconnect();
           }
@@ -892,12 +903,19 @@ export function useMeetingTranscript({
         };
       });
       return connected;
-    })();
+    })().catch((connectionError: unknown) => {
+      if (subscribedRef.current && generation === connectionGenerationRef.current) {
+        setError(connectionError instanceof Error ? connectionError.message : "Transcript connection failed.");
+        scheduleReconnect();
+      }
+      return false;
+    });
+    connectPromiseRef.current = connecting;
 
     try {
-      return await connectPromiseRef.current;
+      return await connecting;
     } finally {
-      connectPromiseRef.current = null;
+      if (connectPromiseRef.current === connecting) connectPromiseRef.current = null;
     }
   }, [
     clearReconnectTimer,
@@ -1031,6 +1049,7 @@ export function useMeetingTranscript({
   ]);
 
   const reconnect = useCallback(async (): Promise<boolean> => {
+    connectionGenerationRef.current += 1;
     const relay = relayRef.current;
     relayRef.current = null;
     const socket = socketRef.current;
@@ -1377,6 +1396,8 @@ export function useMeetingTranscript({
 
   useEffect(() => {
     if (!isJoined) {
+      connectionGenerationRef.current += 1;
+      connectPromiseRef.current = null;
       subscribedRef.current = false;
       clearReconnectTimer();
       reconnectAttemptRef.current = 0;
@@ -1430,6 +1451,7 @@ export function useMeetingTranscript({
     connect,
     isJoined,
     roomId,
+    currentUserId,
   ]);
 
   useEffect(() => {
@@ -1445,6 +1467,8 @@ export function useMeetingTranscript({
 
   useEffect(() => {
     return () => {
+      connectionGenerationRef.current += 1;
+      connectPromiseRef.current = null;
       subscribedRef.current = false;
       clearReconnectTimer();
       clearBufferedAudioMessages();
@@ -1471,6 +1495,8 @@ export function useMeetingTranscript({
     clearBufferedAudioMessages,
     clearSessionWaiters,
     clearSfuRelayStartTokenWaiters,
+    roomId,
+    currentUserId,
   ]);
 
   useEffect(() => {
