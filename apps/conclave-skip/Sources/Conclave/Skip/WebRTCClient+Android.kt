@@ -1759,10 +1759,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     // its suspension points so a mute that lands while it waits for the send
     // transport or the RECORD_AUDIO prompt is never overridden by a live mic.
     private var localAudioMuteIntentGeneration = 0
-    // Bumped by every local camera-off that keeps the producer
-    // (setVideoEnabled(false), suspendLocalVideoForRecovery()). A camera
-    // enable compares it across its suspension points, as the microphone
-    // compares localAudioMuteIntentGeneration, so a late acknowledgement
+    // Bumped by every local camera-off: setVideoEnabled(false),
+    // suspendLocalVideoForRecovery(), closeLocalVideoProducer() and a webcam
+    // closeLocalMedia without an id. A camera enable and a camera start compare it across
+    // their suspension points, as the microphone compares
+    // localAudioMuteIntentGeneration, so a late acknowledgement or a start
     // never turns a newer camera-off back on.
     private var localVideoOffIntentGeneration = 0
     private var bluetoothConnectAutoRequestAttempted = false
@@ -2151,10 +2152,15 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun startProducingVideo() {
+        // Captured before the first suspension: a camera-off during transport
+        // creation, the permission prompt or the preview release cancels this
+        // start, as a mute cancels a microphone start.
+        val offIntentGeneration = localVideoOffIntentGeneration
         createSendTransportIfNeeded()
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
         val generation = configurationGeneration
         if (hasLocalVideoProducer) {
+            if (localVideoOffIntentGeneration != offIntentGeneration) return
             setVideoEnabled(true)
             return
         }
@@ -2183,6 +2189,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             // The preview release suspends: after a teardown, touch nothing
             // of the session that replaced this one.
             ensureCurrentConfiguration(generation)
+            if (localVideoOffIntentGeneration != offIntentGeneration) {
+                // produceWebcamVideo below is synchronous, so this is the last
+                // point where a camera-off can land before the producer
+                // commits: never start capture or publish after one.
+                debugLog("[WebRTC] Camera start cancelled by a camera-off before producing")
+                return
+            }
 
             if (videoCapturer == null) {
                 videoCapturer = createCameraCapturer(ProcessInfo.processInfo.androidContext)
@@ -3033,7 +3046,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             if (generation != configurationGeneration) throw error
             if (localVideoOffIntentGeneration != offIntentGeneration) return
             if (videoProducer !== producer) {
-                if (videoProducer == null) throw error
+                if (videoProducer == null) {
+                    // A same-session path cleared the producer without
+                    // stopping capture: stop the capture this enable started,
+                    // then let the caller recreate a producer.
+                    if (enabled && !previous) stopWebcamCapture()
+                    throw error
+                }
                 return
             }
             try {
@@ -3089,6 +3108,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun closeLocalVideoProducer() {
+        // A camera-off: cancels a camera start still in flight.
+        localVideoOffIntentGeneration += 1
         val socket = socketManager
         val producerId = videoProducer?.id
         if (producerId == null) {
@@ -3129,6 +3150,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal suspend fun closeLocalMedia(kind: String, type: String, producerId: String? = null): Boolean {
         val isWebcam = type == ProducerType.webcam.rawValue
         val isScreen = type == ProducerType.screen.rawValue
+
+        // Closing whatever camera there is (no id: a server camera-off) is a
+        // camera-off: it cancels a camera start still in flight. A close by
+        // id (the SFU closed that producer) is not an intent.
+        if (kind == "video" && isWebcam && producerId == null) {
+            localVideoOffIntentGeneration += 1
+        }
 
         if (kind == "audio" && isWebcam && matchesProducer(audioProducer, producerId)) {
             audioProducer?.close()

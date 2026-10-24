@@ -444,21 +444,91 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
 - A failed mute fails closed on both platforms: `setAudioEnabled(false)`
   keeps the producer paused and the track silent, and the view model stays
   muted while showing the error.
-- Mic, camera and hand toggle guards (`isMuteToggleInFlight`,
-  `isCameraToggleInFlight`, `isHandRaiseToggleInFlight`) derive from a
-  per-toggle token (`muteToggleToken` and siblings). A completion clears its
-  guard only while it still owns the token, and `joinRoom` releases all
-  three for every new attempt through `releaseLocalToggleGuards()`, as
-  `cleanup()` does, because recovery rejoins skip `cleanup()` and an SFU ack
-  can take 30 s. Never clear a guard by call context: a rejoin landing
-  mid-await stranded it and turned later toggles, CallKit and notification
-  mutes into silent no-ops (F7, fixed 2026-10-24, also covered by
+- Mic, camera, screen-share, hand and camera-switch guards
+  (`isMuteToggleInFlight`, `isCameraToggleInFlight`,
+  `isScreenShareToggleInFlight`, `isHandRaiseToggleInFlight`,
+  `isCameraSwitchInFlight`) derive from a per-toggle token
+  (`muteToggleToken` and siblings). A completion clears its guard only while
+  it still owns the token, and `joinRoom` releases all of them for every new
+  attempt through `releaseLocalToggleGuards()`, as `cleanup()` does, because
+  recovery rejoins skip `cleanup()` and an SFU ack can take 30 s. Never clear
+  a guard by call context: a rejoin landing mid-await stranded it and turned
+  later toggles, CallKit and notification mutes into silent no-ops (F7, fixed
+  2026-10-24; screen share and camera switch in WP2-S1c; also covered by
   `LocalToggleGuardRecoveryTests`). After its await, an orphaned toggle
   re-checks `isCurrentJoinedCall` before touching the attempt that replaced
   it: the unmute confirmation (it bypasses the guard via
-  `allowCurrentMuteToggle`), the chat camera-on commit, and the
-  `enableOrStartLocalVideo` recreate fallback. A toggle that still owns
+  `allowCurrentMuteToggle`), the chat camera-on commit, the
+  `enableOrStartLocalVideo` recreate fallback, the camera-switch PiP refresh
+  and the screen-share close. An orphaned screen-share toggle stops the
+  shared capture (and clears its end callback) only while no newer toggle
+  owns the guard and no share is live
+  (`canOrphanedScreenShareToggleStopCapture()`). A toggle that still owns
   its token keeps suppressing the `handleLocalProducerClosed` restart.
+- The newest local media intent wins (WP2-S1c, fixed 2026-10-24, covered by
+  `LocalToggleGuardRecoveryTests`). A mute is never dropped or deferred: a
+  CallKit, notification, PiP, chat or in-app mute that lands while a toggle
+  owns the mic guard, and every server mute, goes through
+  `applyLocalMuteNow`: state and system surfaces first, then a synchronous
+  `suspendLocalAudioForRecovery()`, which bumps the client's mute intent
+  before a pending unmute's ack can land (that unmute then neither resumes
+  the producer nor reports the mic live), then the signalled mute. That mute
+  takes the mic guard until its own signal completes, so no newer unmute
+  overlaps it (both clients let an older mute's late completion silence a
+  newer unmute), and the discarded toggle's completion frees nothing. A
+  pending unmute that sees `localMuteIntentRevision` change confirms nothing
+  and reports no error; an unmute while the guard is held stays ignored (fail
+  closed). Admin mutes (bulk and enforced) also suspend the client before
+  awaiting their close. A reconnecting-screen mute suspends the client at
+  once, never on a later hop: the recovered attempt can join first, and the
+  hop then skipped the mute and left its new microphone live. A camera-off
+  is never dropped either: every camera intent, on or off (user in call, on
+  the reconnecting screen or by chat, server, admin bulk or enforced,
+  audio-only mode, disabled publishing), bumps `localCameraIntentRevision`;
+  client state reports and producer closes never do. A camera-off
+  that lands over a pending camera-on (in-app or chat) applies at once
+  (`applyLocalCameraOffNow`). The camera-on paths (`toggleCamera`, chat
+  `/camera on`, the publishing reassert, the producer-closed restart)
+  capture that revision and `videoPublishingPolicyRevision` before their
+  await and never commit camera-on once either changed
+  (`isLocalCameraOnStillWanted`; the restart also re-checks before it
+  starts the camera); `startProducing` and the enable fallback compare the
+  revision alone (audio-only mode bumps it too). While the camera is meant
+  to be off they close what the enable or start committed.
+  The reconnecting-screen camera-off hop is gated on that revision, not on
+  `isCameraOff` (a stale camera-on report can flip the UI first): it
+  re-asserts off and closes the camera if the recovered attempt joined
+  first, and the recovered start converges on the newest intent (close for
+  a newer off, start again for a newer on). Admin camera-offs (bulk and
+  `admin:mediaEnforced`) record the intent before their awaited close (an
+  enforced close also closes the installed camera first and tells the SFU,
+  so a start that matches no id yet still cancels and no paused producer
+  stays registered) and never write off afterwards over a newer camera-on.
+  A producer close records no camera intent, admin or not: the SFU's own
+  close reaches the owner first as a plain `producerClosed`, which normally
+  removes the producer (unless an intentional-close marker consumes it), so
+  `admin:producerClosed` cannot tell a camera from a microphone or screen
+  (`admin:mediaEnforced` always follows). After its
+  awaited close it restarts the camera only while camera-on is still the
+  newest intent, and writes off only while it is and no camera is live
+  (one a reassert, rejoin or owning camera-on started during the close;
+  after an admin close `admin:mediaEnforced` closes it). A server
+  camera-off's later close hop closes nothing once a newer camera intent
+  landed (a camera-on tapped before it ran), and an admin room snapshot
+  (producer state, not intent) never overrides a mic or camera toggle in
+  flight. A cancelled iOS camera start stops its media before awaiting the
+  SFU close. Chat `/camera on` refuses
+  audio-only mode. An enable whose producer the SFU closed during its ack
+  (the toggle suppressed the restart) recreates it for a camera-on that is
+  still the newest intent. Both clients' camera starts
+  capture `localVideoOffIntentGeneration` before their first await and
+  compare it after every suspension (iOS: before resuming, after the
+  permission prompt and after the off-main create; Android: before resuming
+  and after the preview release, its produce being synchronous), dropping
+  the start without an error or an enabled callback. An iOS camera close
+  clears shared capture state after `stopCapture()` only while it still owns
+  it. Pinned by `testNativeCallCorrectnessBlockersStayFixed` and
+  `testLateMediaAcknowledgementsAreFencedInBothClients`.
 - A view-model check after an await cannot stop effects inside the awaited
   media call, so both clients fence late acknowledgements themselves, as
   `setAudioEnabled` does. `reassertLocalAudioProducerUnmuted` re-checks the
@@ -466,12 +536,15 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   after its ack and never re-enables capture for an orphaned confirmation
   (that would be a live mic while muted). `setVideoEnabled` re-checks the
   configuration generation, `localVideoOffIntentGeneration` (bumped by every
-  camera-off that keeps the producer: `setVideoEnabled(false)`,
-  `suspendLocalVideoForRecovery()`) and producer identity before its success
-  effects and before its rollback. Both write `localVideoEnabled` and fire
-  `onLocalVideoEnabledChanged` (iOS through the `didSet`). A newer camera-off
-  or a replacement producer keeps the camera; with no producer left the
-  error goes back so the caller can recreate one. Android re-checks the same
+  camera-off: `setVideoEnabled(false)`, `suspendLocalVideoForRecovery()`,
+  `closeLocalVideoProducer()` and a webcam `closeLocalMedia` without an
+  id, which is a server camera-off; a close by id is not an intent) and producer
+  identity before its success effects and before its rollback. Both write
+  `localVideoEnabled` and fire `onLocalVideoEnabledChanged` (iOS through the
+  `didSet`). A newer camera-off or a replacement producer keeps the camera;
+  with no producer left the enable stops the capture it started (iOS only
+  while that is still the current capturer) and the error goes back so the
+  caller can recreate one. Android re-checks the same
   after its permission prompt and the 350 ms pre-join preview release (both
   suspend), before restarting capture; its camera start re-checks the
   configuration after that release and clears only camera state its own

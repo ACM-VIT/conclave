@@ -1236,20 +1236,27 @@ final class ConclaveTests: XCTestCase {
         for (token, guardName) in [
             ("muteToggleToken", "isMuteToggleInFlight"),
             ("cameraToggleToken", "isCameraToggleInFlight"),
-            ("handRaiseToggleToken", "isHandRaiseToggleInFlight")
+            ("screenShareToggleToken", "isScreenShareToggleInFlight"),
+            ("handRaiseToggleToken", "isHandRaiseToggleInFlight"),
+            ("cameraSwitchToken", "isCameraSwitchInFlight")
         ] {
             XCTAssertNotNil(codeRange(of: "private var \(guardName): Bool { \(token) != nil }", in: viewModelCode))
             XCTAssertFalse(viewModelCode.contains("\(guardName) = "), "\(guardName) must derive from \(token)")
         }
         XCTAssertEqual(codeCount(of: "if muteToggleToken == toggleToken {", in: viewModelCode), 2)
         XCTAssertEqual(codeCount(of: "if cameraToggleToken == toggleToken {", in: viewModelCode), 2)
+        // The iOS, Android and host screen-share branches.
+        XCTAssertEqual(codeCount(of: "if screenShareToggleToken == toggleToken {", in: viewModelCode), 3)
         XCTAssertEqual(codeCount(of: "if handRaiseToggleToken == toggleToken {", in: viewModelCode), 1)
+        XCTAssertEqual(codeCount(of: "if cameraSwitchToken == switchToken {", in: viewModelCode), 1)
         let releaseGuards = try body(
             viewModelCode,
             from: "private func releaseLocalToggleGuards() {",
-            to: "private func enableOrStartLocalAudio() async throws {"
+            to: "private func isLocalCameraOnStillWanted("
         )
-        for token in ["muteToggleToken", "cameraToggleToken", "handRaiseToggleToken"] {
+        for token in [
+            "muteToggleToken", "cameraToggleToken", "screenShareToggleToken", "handRaiseToggleToken", "cameraSwitchToken"
+        ] {
             XCTAssertNotNil(codeRange(of: "\(token) = nil", in: releaseGuards))
         }
         let joinRoom = try body(viewModelCode, from: "    func joinRoom(", to: "    func rejoinIfPossible() async {")
@@ -1314,6 +1321,284 @@ final class ConclaveTests: XCTestCase {
             from: videoRecreateClose.upperBound
         ))
         XCTAssertLessThan(videoRestartGuard.lowerBound, videoRestart.lowerBound)
+
+        // WP2-S1c: the newest local media intent wins (P1, P2, P3). A mute is
+        // never dropped or deferred behind a pending toggle: it is applied at
+        // once, locally first and synchronously (so the client's mute intent
+        // fences a pending unmute's acknowledgement), then signalled. Server
+        // mutes and camera-offs reach the media whoever owns the guard. A
+        // superseded unmute confirms nothing, and every camera-on re-checks
+        // the camera-off intent and the video policy before committing.
+        func assertCodeOrder(_ text: String, _ markers: [String], _ label: String) throws {
+            var from = text.startIndex
+            for marker in markers {
+                let range = try XCTUnwrap(codeRange(of: marker, in: text, from: from), "\(label): missing \(marker) in order")
+                from = range.upperBound
+            }
+        }
+        let applyMuteNow = try body(
+            viewModelCode,
+            from: "private func applyLocalMuteNow(context: SocketEventContext) {",
+            to: "private func applyLocalCameraOffStateFromServer("
+        )
+        try assertCodeOrder(applyMuteNow, [
+            "localMuteIntentRevision += 1",
+            "muteToggleToken = toggleToken",
+            "state.isMuted = true",
+            "syncCallPresenceState()",
+            "webRTCClient.suspendLocalAudioForRecovery()",
+            "Task { @MainActor [weak self] in",
+            "if self.muteToggleToken == toggleToken {",
+            "self.muteToggleToken = nil",
+            "try await self.disableLocalAudioIfNeeded()"
+        ], "applyLocalMuteNow owns the guard until its signal completes")
+        let serverMute = try body(
+            viewModelCode,
+            from: "private func applyLocalMutedStateFromServer(",
+            to: "private func applyLocalMuteNow(context: SocketEventContext) {"
+        )
+        XCTAssertNotNil(codeRange(of: "applyLocalMuteNow(context: context ?? currentSocketEventContext())", in: serverMute))
+        XCTAssertFalse(serverMute.contains("isMuteToggleInFlight"))
+        let serverCameraOff = try body(
+            viewModelCode,
+            from: "private func applyLocalCameraOffStateFromServer(",
+            to: "private func resetReconnectRetryState() {"
+        )
+        XCTAssertFalse(serverCameraOff.contains("isCameraToggleInFlight"))
+        // Its later hop closes nothing once a newer camera intent landed (a
+        // camera-on tapped before the hop ran), and writes off only while it
+        // is still the newest intent.
+        try assertCodeOrder(serverCameraOff, [
+            "localCameraIntentRevision += 1",
+            "setLocalCameraOffState(true)",
+            "self.localCameraIntentRevision == intentRevision else { return }",
+            "_ = await self.webRTCClient.closeLocalMedia(",
+            "self.localCameraIntentRevision == intentRevision else { return }",
+            "self.setLocalCameraOffState(true)"
+        ], "server camera-off")
+        let toggleMuteBody = try body(viewModelCode, from: "    func toggleMute() {", to: "    func toggleCamera() {")
+        try assertCodeOrder(toggleMuteBody, [
+            "if isMuteToggleInFlight {",
+            "applyLocalMuteNow(context: currentSocketEventContext())",
+            "let toggleToken = UUID()"
+        ], "toggleMute never drops a mute")
+        XCTAssertFalse(toggleMuteBody.contains("!isMuteToggleInFlight else { return }"))
+        let chatMute = try body(viewModelCode, from: "if isMuteToggleInFlight, !state.isMuted {", to: "case .unmute:")
+        try assertCodeOrder(chatMute, [
+            "applyLocalMuteNow(context: currentSocketEventContext())",
+            "addSystemMessage(.commandExecuted(command: .mute, userName: localDisplayNameForFeedback))",
+            "return",
+            "guard !isMuteToggleInFlight else {"
+        ], "chat /mute never drops a mute")
+        for (start, end) in [
+            ("    func toggleMute() {", "    func toggleCamera() {"),
+            ("private func setMuted(_ muted: Bool) async {", "private func setCameraOff(_ cameraOff: Bool) async {")
+        ] {
+            let toggle = try body(viewModelCode, from: start, to: end)
+            try assertCodeOrder(toggle, [
+                "let actionMuteRevision = localMuteIntentRevision",
+                "try await enableOrStartLocalAudio()",
+                orphanGuard,
+                "guard localMuteIntentRevision == actionMuteRevision else { return }",
+                "await confirmLocalAudioProducerUnmutedOrRecover("
+            ], "superseded unmute in \(start)")
+        }
+        let recoveryMute = try body(
+            viewModelCode,
+            from: "private func toggleMuteIntentDuringRecovery() {",
+            to: "private func toggleCameraIntentDuringRecovery() {"
+        )
+        XCTAssertNotNil(codeRange(of: "webRTCClient.suspendLocalAudioForRecovery()", in: recoveryMute))
+        XCTAssertFalse(recoveryMute.contains("Task {"), "the reconnecting-screen mute must reach the client at once")
+        let recoveryCamera = try body(
+            viewModelCode,
+            from: "private func toggleCameraIntentDuringRecovery() {",
+            to: "    func toggleMute() {"
+        )
+        XCTAssertFalse(recoveryCamera.contains("isRecoveringConnection,"), "the camera-off hop must survive the attempt joining first")
+        // Gated on the intent revision, never on isCameraOff, which a stale
+        // camera-on report can flip back before the hop runs.
+        XCTAssertFalse(recoveryCamera.contains("self.state.isCameraOff"))
+        try assertCodeOrder(recoveryCamera, [
+            "localCameraIntentRevision += 1",
+            "let intentRevision = localCameraIntentRevision",
+            "guard newState else { return }",
+            "self.localCameraIntentRevision == intentRevision else { return }",
+            "self.setLocalCameraOffState(true)",
+            "if self.state.connectionState == .joined {",
+            "await self.webRTCClient.closeLocalVideoProducer()",
+            "await self.webRTCClient.suspendLocalVideoForRecovery()"
+        ], "reconnecting-screen camera-off")
+        let toggleCameraBody = try body(viewModelCode, from: "    func toggleCamera() {", to: "    func setAudioOnlyMode(")
+        try assertCodeOrder(toggleCameraBody, [
+            "if isCameraToggleInFlight {",
+            "applyLocalCameraOffNow(context: currentCallActionContext())",
+            "let toggleToken = UUID()"
+        ], "toggleCamera never drops a camera-off")
+        let restart = try body(viewModelCode, from: "let wasCameraOff = state.isCameraOff", to: "private func handleRemoteProducerClosed(")
+        // A producer close records no camera intent, admin or not: the owner
+        // gets an admin close first as a plain producerClosed, so the admin
+        // one cannot be classified (admin:mediaEnforced records the off).
+        let localCloseFull = try body(
+            viewModelCode,
+            from: "private func handleLocalProducerClosed(_ notification: ProducerClosedNotification) async -> Bool {",
+            to: "private func handleRemoteProducerClosed("
+        )
+        XCTAssertNil(codeRange(of: "localCameraIntentRevision += 1", in: localCloseFull))
+        // The restart starts the camera only while camera-on is still the
+        // newest intent after the awaited close, and re-checks after it.
+        try assertCodeOrder(restart, [
+            "let cameraIntentRevision = localCameraIntentRevision",
+            "if await webRTCClient.closeLocalMedia(",
+            "!isCameraToggleInFlight,\n"
+                + "               isLocalCameraOnStillWanted(",
+            "try await webRTCClient.startProducingVideo()",
+            "guard isLocalCameraOnStillWanted("
+        ], "producer-closed restart pre-start check")
+        // An admin room snapshot reports producer state: it never overrides a
+        // toggle in flight.
+        let snapshot = try body(
+            viewModelCode,
+            from: "private func applyAdminParticipantSnapshot(",
+            to: "} else if isRemoteParticipant {"
+        )
+        try assertCodeOrder(snapshot, [
+            "if let muted = snapshot.muted, !isMuteToggleInFlight {",
+            "applyLocalMutedStateFromServer(muted)",
+            "if let cameraOff = snapshot.cameraOff, !isCameraToggleInFlight {",
+            "applyLocalCameraOffStateFromServer(cameraOff)"
+        ], "admin room snapshot")
+        let reassertVideo = try body(
+            viewModelCode,
+            from: "private func reassertLocalVideoPublishingIfNeeded(",
+            to: "private func shouldDisableCameraIntentAfterPublishingFailure("
+        )
+        let chatCamera = try body(
+            viewModelCode,
+            from: "private func setCameraOff(_ cameraOff: Bool) async {",
+            to: "private func sendChatContent("
+        )
+        for (label, text, awaited) in [
+            ("toggleCamera", toggleCameraBody, "try await enableOrStartLocalVideo("),
+            ("chat /camera on", chatCamera, "try await enableOrStartLocalVideo("),
+            ("publishing reassert", reassertVideo, "try await enableOrStartLocalVideo("),
+            ("producer-closed restart", restart, "try await webRTCClient.startProducingVideo()")
+        ] {
+            try assertCodeOrder(text, [awaited, "guard isLocalCameraOnStillWanted(", "setLocalCameraOffState(false)"], label)
+        }
+        XCTAssertNotNil(codeRange(
+            of: "cameraOff || (!state.mediaPublishingDisabled && !state.isAudioOnlyMode),",
+            in: chatCamera
+        ))
+        let startProducingBody = try body(
+            viewModelCode,
+            from: "    func startProducing(joinAttemptId: UUID? = nil) async -> Bool {",
+            to: "private func disableLocalMediaPublishingState() {"
+        )
+        // The recovered start converges on the newest camera intent from the
+        // reconnecting screen: close for a newer off, start for a newer on.
+        try assertCodeOrder(startProducingBody, [
+            "var cameraIntentRevision = localCameraIntentRevision",
+            "try await webRTCClient.startProducingVideo()",
+            "while localCameraIntentRevision != cameraIntentRevision {",
+            "cameraIntentRevision = localCameraIntentRevision",
+            "if state.isCameraOff {",
+            "await webRTCClient.closeLocalVideoProducer()",
+            "try await webRTCClient.startProducingVideo()"
+        ], "recovered camera start")
+        // After its awaited close a producer close reports off only while it
+        // is still the newest camera intent and no camera is live (admin or
+        // not): never over a newer camera-on, nor over a camera started
+        // during the close.
+        try assertCodeOrder(restart, [
+            "let cameraIntentRevision = localCameraIntentRevision",
+            "if await webRTCClient.closeLocalMedia(",
+            "if localCameraIntentRevision == cameraIntentRevision,\n"
+                + "               !webRTCClient.hasLocalVideoProducer {",
+            "setLocalCameraOffState(true)"
+        ], "producer close late write")
+        XCTAssertFalse(
+            restart.contains("notification.adminEnforced == true || !webRTCClient.hasLocalVideoProducer"),
+            "an admin close must not report off over a live camera"
+        )
+        try assertCodeOrder(videoEnable, [
+            "let cameraIntentRevision = localCameraIntentRevision",
+            "try await webRTCClient.setVideoEnabled(true)",
+            // A producer the SFU closed during the acknowledgement is
+            // recreated for the camera-on that is still the newest intent.
+            "localCameraIntentRevision == cameraIntentRevision,",
+            "!webRTCClient.hasLocalVideoProducer else { return }",
+            "try await webRTCClient.startProducingVideo()",
+            "guard localCameraIntentRevision == cameraIntentRevision else { return }",
+            "await webRTCClient.closeLocalVideoProducer()",
+            "guard localCameraIntentRevision == cameraIntentRevision else { return }",
+            "try await webRTCClient.startProducingVideo()"
+        ], "camera enable fallback")
+        // Every camera intent bumps the revision: server camera-off, disabled
+        // publishing, camera-off over a pending toggle, reconnecting screen,
+        // in-call toggle, audio-only mode, chat, admin bulk camera-off and
+        // admin-enforced camera close.
+        XCTAssertEqual(codeCount(of: "localCameraIntentRevision += 1", in: viewModelCode), 9)
+        // Chat /camera off is never dropped behind a pending camera-on.
+        let cameraCommand = try body(
+            viewModelCode,
+            from: "private func setCameraCommandState(cameraOff: Bool, command: ChatCommand) async {",
+            to: "private func setMuted(_ muted: Bool) async {"
+        )
+        try assertCodeOrder(cameraCommand, [
+            "if isCameraToggleInFlight, cameraOff, state.connectionState == .joined {",
+            "applyLocalCameraOffNow(context: currentCallActionContext())",
+            "if isCameraToggleInFlight {"
+        ], "chat /camera off never drops a camera-off")
+        // Admin mutes and camera-offs record the newer intent and cancel a
+        // start that matches no producer id before awaiting the close.
+        let adminBulk = try body(
+            viewModelCode,
+            from: "private func applyLocalAdminBulkMediaState(_ action: AdminBulkMediaAction) async {",
+            to: "private func applyRemoteAdminClosedProducerState("
+        )
+        try assertCodeOrder(adminBulk, [
+            "case .mute:",
+            "localMuteIntentRevision += 1",
+            "webRTCClient.suspendLocalAudioForRecovery()",
+            "_ = await webRTCClient.closeLocalMedia(",
+            "case .camera:",
+            "localCameraIntentRevision += 1",
+            "let intentRevision = localCameraIntentRevision",
+            "setLocalCameraOffState(true)",
+            "_ = await webRTCClient.closeLocalMedia(",
+            "if localCameraIntentRevision == intentRevision {",
+            "setLocalCameraOffState(true)"
+        ], "admin bulk media")
+        let adminEnforced = try body(
+            viewModelCode,
+            from: "func closeAdminEnforcedProducer(_ producer: AdminMediaProducer) async -> Bool {",
+            to: "let didClose = await webRTCClient.closeLocalMedia("
+        )
+        try assertCodeOrder(adminEnforced, [
+            "var adminCameraIntentRevision = localCameraIntentRevision",
+            "webRTCClient.suspendLocalAudioForRecovery()",
+            "} else if producer.kind == \"video\", producer.type == ProducerType.webcam.rawValue {",
+            "localCameraIntentRevision += 1",
+            "adminCameraIntentRevision = localCameraIntentRevision",
+            "await webRTCClient.closeLocalVideoProducer()"
+        ], "admin-enforced camera close")
+        XCTAssertNotNil(codeRange(of: "if localCameraIntentRevision == adminCameraIntentRevision {", in: viewModelCode))
+        // An orphaned screen-share toggle never stops a capture, or clears an
+        // end callback, that the attempt replacing it uses.
+        XCTAssertEqual(codeCount(of: "if canOrphanedScreenShareToggleStopCapture() {", in: viewModelCode), 2)
+        XCTAssertEqual(codeCount(
+            of: "guard isCurrentCallAfterStart || canOrphanedScreenShareToggleStopCapture() else { return }",
+            in: viewModelCode
+        ), 2)
+        XCTAssertNotNil(codeRange(
+            of: "await ScreenCaptureManager.shared.stopCapture()\n"
+                + "                    // Orphaned by a rejoin: a share in the attempt that\n"
+                + "                    // replaced this one is not this toggle's to close.\n"
+                + "                    guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }\n"
+                + "                    await webRTCClient.closeLocalScreenProducer()",
+            in: viewModelCode
+        ))
 
         XCTAssertTrue(activitySource.contains("SideEffect { saveableStateHolder.removeState(FULL_ROOT_SAVEABLE_KEY) }"))
 
@@ -1479,12 +1764,20 @@ final class ConclaveTests: XCTestCase {
             fence: "guard generation == configurationGeneration else { throw error }\n"
                 + "            guard localVideoOffIntentGeneration == offIntentGeneration else { return }\n"
                 + "            guard videoProducer === producer else {\n"
-                + "                if videoProducer == nil { throw error }\n"
-                + "                return\n"
-                + "            }",
+                + "                if videoProducer == nil {",
             before: "producer.resume()",
             "iOS camera rollback"
         )
+        // With no producer left, the enable stops the capture it started (and
+        // only while it is still the current capturer) before rethrowing.
+        try assertOrder(iosVideo, [
+            "let enableCapturer = videoCapturer",
+            "} catch {",
+            "if videoProducer == nil {",
+            "if enabled, !previous, let enableCapturer, videoCapturer === enableCapturer {",
+            "await enableCapturer.stopCapture()",
+            "throw error"
+        ], "iOS camera enable with no producer left")
         // Both stopCapture awaits use the capturer read right after the fence
         // and come after every state write, so nothing is written after them.
         XCTAssertFalse(iosVideo.contains("await videoCapturer?.stopCapture()"))
@@ -1555,9 +1848,13 @@ final class ConclaveTests: XCTestCase {
         let androidRollbackFence = "if (generation != configurationGeneration) throw error\n"
             + "            if (localVideoOffIntentGeneration != offIntentGeneration) return\n"
             + "            if (videoProducer !== producer) {\n"
-            + "                if (videoProducer == null) throw error\n"
-            + "                return\n"
-            + "            }"
+            + "                if (videoProducer == null) {"
+        try assertOrder(androidVideo, [
+            "} catch (error: Throwable) {",
+            "if (videoProducer == null) {",
+            "if (enabled && !previous) stopWebcamCapture()",
+            "throw error"
+        ], "Android camera enable with no producer left")
         try assertFence(
             in: androidVideo,
             after: "} catch (error: Throwable) {",
@@ -1595,6 +1892,92 @@ final class ConclaveTests: XCTestCase {
             in: androidStart
         ))
         XCTAssertEqual(codeCount(of: "clearLocalWebcamCaptureState(notifyLocalState = false)", in: androidStart), 2)
+
+        // WP2-S1c (P2): a camera start compares the off intent across every
+        // await and never publishes, or reports the camera on, after a
+        // camera-off. iOS checks before resuming, after the permission prompt
+        // and after the off-main create; Android before resuming and after
+        // its preview release (its produce is synchronous).
+        let iosStart = try body(
+            iosSource,
+            from: "func startProducingVideo() async throws {",
+            to: "func startCameraCapture() throws {"
+        )
+        try assertOrder(iosStart, [
+            "let offIntentGeneration = localVideoOffIntentGeneration",
+            "try await createSendTransportIfNeeded()",
+            "guard localVideoOffIntentGeneration == offIntentGeneration else {",
+            "try await setVideoEnabled(true)",
+            "guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }\n"
+                + "        guard localVideoOffIntentGeneration == offIntentGeneration else {",
+            "let source = Self.factory.videoSource()",
+            "let producer = try await createProducerOffMain(",
+            "let isCancelled = localVideoOffIntentGeneration != offIntentGeneration",
+            "guard !isStale, !isCancelled, videoCapturer === capturer else {",
+            "if !isStale, isCancelled {",
+            "if isStale || videoCapturer == nil {",
+            "producer.delegate = self",
+            "localVideoEnabled = true"
+        ], "iOS camera start")
+        let iosCancelledStart = try body(iosStart, from: "if !isStale, isCancelled {", to: "if isStale || videoCapturer == nil {")
+        XCTAssertNotNil(codeRange(of: "return", in: iosCancelledStart))
+        XCTAssertFalse(iosCancelledStart.contains("localVideoEnabled = "))
+        // A cancelled start stops its media before awaiting the SFU close, so
+        // no frame flows during that round trip.
+        try assertOrder(iosCancelledStart, [
+            "track.isEnabled = false",
+            "closeSendProducer(producer)",
+            "await capturer.stopCapture()",
+            "try? await socketManager?.closeProducer(producerId: producer.id)",
+            "return"
+        ], "iOS cancelled camera start")
+        try assertOrder(androidStart, [
+            "val offIntentGeneration = localVideoOffIntentGeneration",
+            "createSendTransportIfNeeded()",
+            "if (localVideoOffIntentGeneration != offIntentGeneration) return\n            setVideoEnabled(true)",
+            "releasePreJoinCameraPreview()",
+            "ensureCurrentConfiguration(generation)\n            if (localVideoOffIntentGeneration != offIntentGeneration) {",
+            "videoCapturer = createCameraCapturer(",
+            "startWebcamCapture(capturer, \"start\")",
+            "onLocalVideoEnabledChanged?.invoke(true)"
+        ], "Android camera start")
+        for (source, start, end, label) in [
+            (iosSource, "func closeLocalVideoProducer() async {", "guard let producerId = videoProducer?.id else {", "iOS"),
+            (androidSource, "internal suspend fun closeLocalVideoProducer() {", "val producerId = videoProducer?.id", "Android")
+        ] {
+            let close = try body(source, from: start, to: end)
+            XCTAssertNotNil(codeRange(of: "localVideoOffIntentGeneration += 1", in: close), "\(label) camera close")
+        }
+        // A close without an id (a server camera-off) is a camera-off; a
+        // close by id (the SFU closed that producer) is not an intent.
+        XCTAssertNotNil(codeRange(
+            of: "if kind == \"video\", isWebcam, producerId == nil {\n"
+                + "            localVideoOffIntentGeneration += 1",
+            in: iosSource
+        ))
+        XCTAssertNotNil(codeRange(
+            of: "if (kind == \"video\" && isWebcam && producerId == null) {\n"
+                + "            localVideoOffIntentGeneration += 1",
+            in: androidSource
+        ))
+        // An older iOS camera close never clears the capture state of a newer
+        // camera-on installed while it awaited stopCapture().
+        XCTAssertGreaterThanOrEqual(codeCount(of: "if videoCapturer === capturer {", in: iosSource), 4)
+        for (start, end) in [
+            ("func closeLocalMedia(kind: String, type: String, producerId: String?) async -> Bool {",
+             "if kind == \"video\", isScreen, matchesProducer(screenProducer, producerId: producerId) {"),
+            ("private func clearLocalWebcamCaptureState() async {", "func closeLocalScreenProducer() async {")
+        ] {
+            let close = try body(iosSource, from: start, to: end)
+            XCTAssertFalse(close.contains("await videoCapturer?.stopCapture()"), start)
+            try assertOrder(close, [
+                "let capturer = videoCapturer",
+                "await capturer?.stopCapture()",
+                "if videoCapturer === capturer {",
+                "if videoProducer == nil {",
+                "localVideoEnabled = false"
+            ], "iOS camera close ownership in \(start)")
+        }
 
         // A camera-off that keeps the producer bumps the off intent first.
         XCTAssertNotNil(codeRange(

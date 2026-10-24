@@ -553,11 +553,12 @@ final class WebRTCClient: NSObject, ObservableObject {
     private(set) var localVideoEnabled: Bool = false {
         didSet { if !suppressLocalStateCallbacks { onLocalVideoEnabledChanged?(localVideoEnabled) } }
     }
-    /// Bumped by every local camera-off that keeps the producer
-    /// (`setVideoEnabled(false)`, `suspendLocalVideoForRecovery()`). A camera
-    /// enable compares it across its acknowledgement, as the microphone
-    /// compares `localAudioMuteIntentGeneration`, so a late acknowledgement
-    /// never turns a newer camera-off back on.
+    /// Bumped by every local camera-off: `setVideoEnabled(false)`,
+    /// `suspendLocalVideoForRecovery()`, `closeLocalVideoProducer()` and a
+    /// webcam `closeLocalMedia` without an id. A camera enable compares it across its
+    /// acknowledgement and a camera start across every await, as the
+    /// microphone compares `localAudioMuteIntentGeneration`, so a late
+    /// acknowledgement or a start never turns a newer camera-off back on.
     private var localVideoOffIntentGeneration = 0
     var hasLocalVideoProducer: Bool {
         isUsableProducer(videoProducer) &&
@@ -2613,12 +2614,21 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     func startProducingVideo() async throws {
+        // Captured before the first await: a camera-off during transport
+        // creation, the permission prompt or the producer create cancels this
+        // start, as a mute cancels a microphone start. A later camera-on
+        // starts its own producer.
+        let offIntentGeneration = localVideoOffIntentGeneration
         try await createSendTransportIfNeeded()
         guard let sendTransport = sendTransport else {
             throw WebRTCError.noTransport
         }
         let generation = configurationGeneration
         if hasLocalVideoProducer {
+            guard localVideoOffIntentGeneration == offIntentGeneration else {
+                debugLog("[WebRTC] Camera start cancelled by a camera-off before resuming")
+                return
+            }
             try await setVideoEnabled(true)
             return
         }
@@ -2645,6 +2655,10 @@ final class WebRTCClient: NSObject, ObservableObject {
             throw WebRTCError.permissionDenied
         }
         guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }
+        guard localVideoOffIntentGeneration == offIntentGeneration else {
+            debugLog("[WebRTC] Camera start cancelled by a camera-off before producing")
+            return
+        }
 
         let source = Self.factory.videoSource()
         let capturer = RTCCameraVideoCapturer(delegate: source)
@@ -2680,7 +2694,27 @@ final class WebRTCClient: NSObject, ObservableObject {
             // session only) and let the catch below stop this attempt.
             let isSameSession = generation == configurationGeneration
             let isStale = !isSameSession || self.sendTransport !== sendTransport
-            guard !isStale, videoCapturer === capturer else {
+            let isCancelled = localVideoOffIntentGeneration != offIntentGeneration
+            guard !isStale, !isCancelled, videoCapturer === capturer else {
+                if !isStale, isCancelled {
+                    // A camera-off landed during the create: never publish.
+                    // Stop this attempt's media before the awaited SFU close,
+                    // so no frame flows meanwhile; drop it without an error and
+                    // without reporting the camera on, and clear only capture
+                    // state it still owns (a newer start may have installed
+                    // its own).
+                    pendingProducer = nil
+                    track.isEnabled = false
+                    closeSendProducer(producer)
+                    if videoCapturer === capturer {
+                        videoCapturer = nil
+                        videoSource = nil
+                    }
+                    await capturer.stopCapture()
+                    try? await socketManager?.closeProducer(producerId: producer.id)
+                    debugLog("[WebRTC] Dropped camera producer cancelled by a camera-off: \(producer.id)")
+                    return
+                }
                 if isSameSession {
                     try? await socketManager?.closeProducer(producerId: producer.id)
                 }
@@ -3862,6 +3896,9 @@ final class WebRTCClient: NSObject, ObservableObject {
         let generation = configurationGeneration
         let offIntentGeneration = localVideoOffIntentGeneration
         let previous = localVideoEnabled
+        // The capturer an enable starts (when the camera was off), so a failure
+        // with no producer left can stop exactly that capture.
+        let enableCapturer = videoCapturer
         do {
             if enabled {
                 let status = AVCaptureDevice.authorizationStatus(for: .video)
@@ -3899,7 +3936,16 @@ final class WebRTCClient: NSObject, ObservableObject {
             guard generation == configurationGeneration else { throw error }
             guard localVideoOffIntentGeneration == offIntentGeneration else { return }
             guard videoProducer === producer else {
-                if videoProducer == nil { throw error }
+                if videoProducer == nil {
+                    // A same-session path cleared the producer without
+                    // stopping capture: stop the capture this enable started
+                    // (only while it is still the current capturer), then let
+                    // the caller recreate a producer.
+                    if enabled, !previous, let enableCapturer, videoCapturer === enableCapturer {
+                        await enableCapturer.stopCapture()
+                    }
+                    throw error
+                }
                 return
             }
             let capturer = videoCapturer
@@ -3950,6 +3996,8 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     func closeLocalVideoProducer() async {
+        // A camera-off: cancels a camera start still in flight.
+        localVideoOffIntentGeneration += 1
         guard let producerId = videoProducer?.id else {
             await clearLocalWebcamCaptureState()
             return
@@ -3978,10 +4026,16 @@ final class WebRTCClient: NSObject, ObservableObject {
         rtcLocalVideoTrack = nil
         localVideoTrack?.isEnabled = false
         localVideoTrack = nil
-        await videoCapturer?.stopCapture()
-        videoCapturer = nil
-        videoSource = nil
-        localVideoEnabled = false
+        // As closeLocalMedia: clear only state this close still owns.
+        let capturer = videoCapturer
+        await capturer?.stopCapture()
+        if videoCapturer === capturer {
+            videoCapturer = nil
+            videoSource = nil
+        }
+        if videoProducer == nil {
+            localVideoEnabled = false
+        }
     }
 
     func closeLocalScreenProducer() async {
@@ -4002,6 +4056,13 @@ final class WebRTCClient: NSObject, ObservableObject {
         let isWebcam = type == ProducerType.webcam.rawValue
         let isScreen = type == ProducerType.screen.rawValue
 
+        // Closing whatever camera there is (no id: a server camera-off) is a
+        // camera-off: it cancels a camera start still in flight. A close by
+        // id (the SFU closed that producer) is not an intent.
+        if kind == "video", isWebcam, producerId == nil {
+            localVideoOffIntentGeneration += 1
+        }
+
         if kind == "audio", isWebcam, matchesProducer(audioProducer, producerId: producerId) {
             closeSendProducer(audioProducer)
             audioProducer = nil
@@ -4021,10 +4082,18 @@ final class WebRTCClient: NSObject, ObservableObject {
             localVideoTrack?.isEnabled = false
             localVideoTrack = nil
             rtcLocalVideoTrack = nil
-            await videoCapturer?.stopCapture()
-            videoCapturer = nil
-            videoSource = nil
-            localVideoEnabled = false
+            // A newer camera-on can install its own capturer, or commit its
+            // producer, while this stop is awaited: clear only state this
+            // close still owns.
+            let capturer = videoCapturer
+            await capturer?.stopCapture()
+            if videoCapturer === capturer {
+                videoCapturer = nil
+                videoSource = nil
+            }
+            if videoProducer == nil {
+                localVideoEnabled = false
+            }
             return true
         }
 

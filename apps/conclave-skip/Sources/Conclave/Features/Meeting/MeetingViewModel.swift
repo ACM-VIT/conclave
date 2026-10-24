@@ -578,26 +578,43 @@ final class MeetingViewModel {
     private var webRTCJoinAttemptId: UUID?
     private var pendingProducerRetryTask: Task<Void, Never>?
     private var ttsHighlightTask: Task<Void, Never>?
-    // A mic, camera or hand toggle is in flight while the token it set is
-    // current; see releaseLocalToggleGuards().
+    // A mic, camera, screen-share, hand or camera-switch toggle is in flight
+    // while the token it set is current; see releaseLocalToggleGuards().
     private var muteToggleToken: UUID?
     private var isMuteToggleInFlight: Bool { muteToggleToken != nil }
+    /// Bumped by every mute applyLocalMuteNow() applies (a server mute, or one
+    /// that lands over a pending toggle). A pending unmute that sees it change
+    /// was superseded: it confirms nothing and reports no error.
+    private var localMuteIntentRevision = 0
     private var isReplacingLocalAudioProducer = false
     private var localAudioProducerReplacementToken: UUID?
     private var cameraToggleToken: UUID?
     private var isCameraToggleInFlight: Bool { cameraToggleToken != nil }
-    private var isScreenShareToggleInFlight = false
+    private var screenShareToggleToken: UUID?
+    private var isScreenShareToggleInFlight: Bool { screenShareToggleToken != nil }
     private var videoPublishingPolicyRevision = 0
+    /// Bumped by every camera intent, on or off: the user (in call, on the
+    /// reconnecting screen or by chat command), a server or admin camera-off,
+    /// audio-only mode and disabled publishing. Client state reports never
+    /// bump it. A camera-on path captures it before its awaited enable or
+    /// start and never commits camera-on once it changed, and a camera-off
+    /// that is still the newest intent wins over a stale camera-on report:
+    /// the newest intent wins.
+    private var localCameraIntentRevision = 0
     private var handRaiseToggleToken: UUID?
     private var isHandRaiseToggleInFlight: Bool { handRaiseToggleToken != nil }
     #if os(macOS) && !SKIP
     /// Host-test seam (macOS host tests only; iOS and Android never compile
-    /// it): a mic, camera or hand toggle that took its guard reports here
-    /// when it finishes, so a test can wait for an orphaned toggle to end.
+    /// it): a toggle that took its guard, or the later hop of a server
+    /// camera-off, reports here when it finishes, so a test can wait for it.
     var testLocalToggleEnded: ((String) -> Void)?
+    /// Host-test seam (macOS only): the view model finished handling one
+    /// local microphone or camera state report from the media client.
+    var testLocalMediaReportHandled: (() -> Void)?
     #endif
     private var isDisplayNameUpdateInFlight = false
-    private var isCameraSwitchInFlight = false
+    private var cameraSwitchToken: UUID?
+    private var isCameraSwitchInFlight: Bool { cameraSwitchToken != nil }
     private var networkMonitorReportsOffline = false
     private var networkQualityHint: ConnectionQuality = .unknown
     private var publishConnectionQuality: ConnectionQuality = .unknown
@@ -2000,6 +2017,9 @@ final class MeetingViewModel {
         webRTCClient.onLocalVideoEnabledChanged = { [weak self] enabled in
             Task { @MainActor in
                 guard let self = self else { return }
+                #if os(macOS) && !SKIP
+                defer { self.testLocalMediaReportHandled?() }
+                #endif
                 self.setLocalCameraOffState(!enabled)
             }
         }
@@ -2007,6 +2027,9 @@ final class MeetingViewModel {
         webRTCClient.onLocalAudioEnabledChanged = { [weak self] enabled in
             Task { @MainActor in
                 guard let self = self else { return }
+                #if os(macOS) && !SKIP
+                defer { self.testLocalMediaReportHandled?() }
+                #endif
                 if !enabled,
                    self.isReplacingLocalAudioProducer,
                    self.state.connectionState == .joined,
@@ -2069,25 +2092,52 @@ final class MeetingViewModel {
         // user's intent ("joining turns my mic on"). Matches the web, where local
         // mute is driven by mediaIntent, not server notifications.
         guard muted else { return }
+        // Applied to the microphone even while a toggle owns the guard: an
+        // unmute awaiting its acknowledgement must not outlive a server mute.
+        applyLocalMuteNow(context: context ?? currentSocketEventContext())
+    }
+
+    /// Mutes now, whoever owns the microphone guard: a server mute, or a
+    /// CallKit, notification, PiP, chat or in-app mute that lands while an
+    /// unmute awaits its acknowledgement, is never dropped or deferred. The
+    /// local mute is synchronous, so it bumps the client's mute intent before
+    /// any pending unmute's acknowledgement can land: that unmute then neither
+    /// resumes the producer nor reports the microphone live, and its toggle
+    /// confirms nothing. Then the SFU is told.
+    private func applyLocalMuteNow(context: SocketEventContext) {
+        localMuteIntentRevision += 1
+        // This mute owns the microphone guard until its signal completes (a
+        // pending toggle's completion then frees nothing), so no newer unmute
+        // can overlap it: both clients would let this mute's late completion
+        // silence that unmute.
+        let toggleToken = UUID()
+        muteToggleToken = toggleToken
         state.isMuted = true
         for localId in currentLocalParticipantIds() {
             clearHeldActiveSpeakerIfNeeded(localId)
         }
         syncCallPresenceState()
-
-        let eventContext = context ?? currentSocketEventContext()
-        guard !isMuteToggleInFlight else { return }
+        webRTCClient.suspendLocalAudioForRecovery()
         Task { @MainActor [weak self] in
-            guard let self,
-                  self.isCurrentSocketEvent(eventContext) else { return }
+            guard let self else { return }
+            defer {
+                if self.muteToggleToken == toggleToken {
+                    self.muteToggleToken = nil
+                }
+                #if os(macOS) && !SKIP
+                self.testLocalToggleEnded?("applyLocalMuteNow")
+                #endif
+            }
+            guard self.isCurrentSocketEvent(context) else { return }
             do {
                 try await self.disableLocalAudioIfNeeded()
-                guard self.isCurrentSocketEvent(eventContext) else { return }
+                guard self.isCurrentSocketEvent(context) else { return }
                 self.state.isMuted = true
                 self.syncCallPresenceState()
             } catch {
-                guard self.isCurrentSocketEvent(eventContext) else { return }
-                debugLog("[Meeting] Failed to apply server mute locally: \(error)")
+                guard self.isCurrentSocketEvent(context) else { return }
+                // A failed mute fails closed: the client kept the local mute.
+                debugLog("[Meeting] Failed to signal the local mute: \(error)")
             }
         }
     }
@@ -2097,20 +2147,39 @@ final class MeetingViewModel {
         // applyLocalMutedStateFromServer for why turning it on would fight intent.
         guard cameraOff else { return }
         let eventContext = context ?? currentSocketEventContext()
+        // Applied to the camera even while a toggle owns the guard; a pending
+        // camera-on sees the newer camera-off and turns nothing back on.
+        localCameraIntentRevision += 1
+        let intentRevision = localCameraIntentRevision
         setLocalCameraOffState(true)
-        guard !isCameraToggleInFlight else { return }
         Task { @MainActor [weak self] in
-            guard let self,
-                  self.isCurrentSocketEvent(eventContext) else { return }
+            guard let self else { return }
+            #if os(macOS) && !SKIP
+            defer { self.testLocalToggleEnded?("applyLocalCameraOffStateFromServer") }
+            #endif
+            // A camera-on the user tapped before this hop ran is newer: this
+            // close must not close its camera or cancel its start.
+            guard self.isCurrentSocketEvent(eventContext),
+                  self.localCameraIntentRevision == intentRevision else { return }
             _ = await self.webRTCClient.closeLocalMedia(
                 kind: "video",
                 type: ProducerType.webcam.rawValue,
                 producerId: nil
             )
-            guard self.isCurrentSocketEvent(eventContext) else { return }
+            guard self.isCurrentSocketEvent(eventContext),
+                  self.localCameraIntentRevision == intentRevision else { return }
             self.setLocalCameraOffState(true)
         }
     }
+
+    #if os(macOS) && !SKIP
+    /// Host-test seam (macOS only): the local participant's server camera-off
+    /// as its event handlers apply it, synchronously, so a test can act before
+    /// its later close hop runs.
+    func testApplyServerCameraOff() {
+        applyLocalCameraOffStateFromServer(true)
+    }
+    #endif
 
     private func resetReconnectRetryState() {
         reconnectAttempts = 0
@@ -4231,10 +4300,14 @@ final class MeetingViewModel {
                 if !displayName.isEmpty {
                     applyLocalDisplayName(displayName)
                 }
-                if let muted = snapshot.muted {
+                // The snapshot reports producer state, not intent: while a
+                // toggle is in flight it can predate that toggle, so it never
+                // overrides it (an admin mute or camera-off still arrives, and
+                // applies, as its own events).
+                if let muted = snapshot.muted, !isMuteToggleInFlight {
                     applyLocalMutedStateFromServer(muted)
                 }
-                if let cameraOff = snapshot.cameraOff {
+                if let cameraOff = snapshot.cameraOff, !isCameraToggleInFlight {
                     applyLocalCameraOffStateFromServer(cameraOff)
                 }
                 state.isScreenSharing = activeScreenProducer != nil
@@ -5059,6 +5132,12 @@ final class MeetingViewModel {
     private func applyLocalAdminBulkMediaState(_ action: AdminBulkMediaAction) async {
         switch action {
         case .mute:
+            // As closeAdminEnforcedProducer: cancel a microphone start (or
+            // pending unmute) before awaiting the close.
+            localMuteIntentRevision += 1
+            webRTCClient.suspendLocalAudioForRecovery()
+            state.isMuted = true
+            syncCallPresenceState()
             _ = await webRTCClient.closeLocalMedia(
                 kind: "audio",
                 type: ProducerType.webcam.rawValue,
@@ -5067,12 +5146,18 @@ final class MeetingViewModel {
             state.isMuted = true
             syncCallPresenceState()
         case .camera:
+            localCameraIntentRevision += 1
+            let intentRevision = localCameraIntentRevision
+            setLocalCameraOffState(true)
             _ = await webRTCClient.closeLocalMedia(
                 kind: "video",
                 type: ProducerType.webcam.rawValue,
                 producerId: nil
             )
-            setLocalCameraOffState(true)
+            // A newer camera-on by the user since stands.
+            if localCameraIntentRevision == intentRevision {
+                setLocalCameraOffState(true)
+            }
         case .screen:
             _ = await webRTCClient.closeLocalMedia(
                 kind: "video",
@@ -5150,28 +5235,63 @@ final class MeetingViewModel {
         }
 
         let wasCameraOff = state.isCameraOff
+        // A producer close records no camera intent, admin or not. The SFU
+        // closes the producer itself first, which reaches its owner as a plain
+        // producerClosed and removes it locally, so admin:producerClosed for
+        // the same id cannot tell a camera from a microphone or screen here.
+        // admin:mediaEnforced, which follows every admin close, records the
+        // camera-off (closeAdminEnforcedProducer).
+        let cameraIntentRevision = localCameraIntentRevision
+        let videoPolicyRevision = videoPublishingPolicyRevision
         if await webRTCClient.closeLocalMedia(
             kind: "video",
             type: ProducerType.webcam.rawValue,
             producerId: notification.producerId
         ) {
+            // Restart only while camera-on is still the newest intent after
+            // the awaited close: an admin close's camera-off events land
+            // during it, and the restart must not publish the camera over them.
             if !wasCameraOff,
                notification.adminEnforced != true,
                state.connectionState == ConnectionState.joined,
                !state.mediaPublishingDisabled,
-               !isCameraToggleInFlight {
+               !isCameraToggleInFlight,
+               isLocalCameraOnStillWanted(
+                   cameraIntentRevision: cameraIntentRevision,
+                   videoPolicyRevision: videoPolicyRevision
+               ) {
                 let actionContext = currentCallActionContext()
                 do {
                     guard isCurrentJoinedCall(actionContext) else { return false }
                     try await webRTCClient.startProducingVideo()
                     guard isCurrentJoinedCall(actionContext) else { return false }
+                    // A camera-off or audio-only mode that landed during the
+                    // close or the restart wins over the restart.
+                    guard isLocalCameraOnStillWanted(
+                        cameraIntentRevision: cameraIntentRevision,
+                        videoPolicyRevision: videoPolicyRevision
+                    ) else {
+                        if state.isCameraOff {
+                            await webRTCClient.closeLocalVideoProducer()
+                        }
+                        return true
+                    }
                     setLocalCameraOffState(false)
                     return true
                 } catch {
                     applyActionError(error, context: actionContext)
                 }
             }
-            setLocalCameraOffState(true)
+            // Report off only while this close is still the newest camera
+            // intent and no camera is live. A newer camera-on by the user
+            // stands, and so does a camera started during the close (by a
+            // camera-on that owns the camera, a publishing reassert or a
+            // rejoin), after an admin close too: admin:mediaEnforced closes
+            // that camera. Never report off over a live one.
+            if localCameraIntentRevision == cameraIntentRevision,
+               !webRTCClient.hasLocalVideoProducer {
+                setLocalCameraOffState(true)
+            }
             return true
         }
 
@@ -5358,13 +5478,25 @@ final class MeetingViewModel {
     }
 
     func closeAdminEnforcedProducer(_ producer: AdminMediaProducer) async -> Bool {
+        var adminCameraIntentRevision = localCameraIntentRevision
         if producer.kind == "audio", producer.type == ProducerType.webcam.rawValue {
             // The server can close a producer before its off-main create has
             // installed it locally. Cancel that start (and any pending unmute)
             // before awaiting the close, even when no producer matches yet.
+            localMuteIntentRevision += 1
             webRTCClient.suspendLocalAudioForRecovery()
             state.isMuted = true
             syncCallPresenceState()
+        } else if producer.kind == "video", producer.type == ProducerType.webcam.rawValue {
+            // The same for the camera, which is the newest intent once this
+            // runs: close whatever camera is installed (its id may not be the
+            // enforced one if its acknowledgement overtook this event) and
+            // tell the SFU, and cancel a start whose off-main create has not
+            // installed its producer yet.
+            localCameraIntentRevision += 1
+            adminCameraIntentRevision = localCameraIntentRevision
+            setLocalCameraOffState(true)
+            await webRTCClient.closeLocalVideoProducer()
         }
         let didClose = await webRTCClient.closeLocalMedia(
             kind: producer.kind,
@@ -5377,7 +5509,10 @@ final class MeetingViewModel {
             syncCallPresenceState()
             return true
         } else if producer.kind == "video", producer.type == ProducerType.webcam.rawValue {
-            setLocalCameraOffState(true)
+            // A newer camera-on by the user since stands.
+            if localCameraIntentRevision == adminCameraIntentRevision {
+                setLocalCameraOffState(true)
+            }
             return true
         } else if producer.kind == "video", producer.type == ProducerType.screen.rawValue {
             await stopScreenCaptureManager()
@@ -6130,12 +6265,29 @@ final class MeetingViewModel {
         }
 
         let actionContext = currentCallActionContext()
+        let cameraIntentRevision = localCameraIntentRevision
+        let videoPolicyRevision = videoPublishingPolicyRevision
         do {
             try await enableOrStartLocalVideo(context: actionContext)
             guard isCurrentJoinedCall(actionContext) else { return }
+            // A camera-off or audio-only mode that landed during the enable
+            // wins: never commit camera-on over it.
+            guard isLocalCameraOnStillWanted(
+                cameraIntentRevision: cameraIntentRevision,
+                videoPolicyRevision: videoPolicyRevision
+            ) else {
+                if state.isCameraOff {
+                    await webRTCClient.closeLocalVideoProducer()
+                }
+                return
+            }
             setLocalCameraOffState(false)
         } catch {
             guard isCurrentJoinedCall(actionContext) else { return }
+            guard isLocalCameraOnStillWanted(
+                cameraIntentRevision: cameraIntentRevision,
+                videoPolicyRevision: videoPolicyRevision
+            ) else { return }
             debugLog("[Meeting] Failed to reassert camera publishing: \(error)")
             if shouldDisableCameraIntentAfterPublishingFailure(error) {
                 setLocalCameraOffState(true)
@@ -6560,9 +6712,24 @@ final class MeetingViewModel {
 
         guard isCurrentJoinAttempt(joinAttemptId) else { return false }
         if !state.isCameraOff {
+            var cameraIntentRevision = localCameraIntentRevision
             do {
                 try await webRTCClient.startProducingVideo()
                 guard isCurrentJoinAttempt(joinAttemptId) else { return false }
+                // Camera intents from the reconnecting screen that landed
+                // during the start win: close what the start committed for a
+                // newer camera-off (the clients cancel such a start themselves
+                // once the camera-off reached them), start again for a newer
+                // camera-on, until the camera matches the newest intent.
+                while localCameraIntentRevision != cameraIntentRevision {
+                    cameraIntentRevision = localCameraIntentRevision
+                    if state.isCameraOff {
+                        await webRTCClient.closeLocalVideoProducer()
+                    } else {
+                        try await webRTCClient.startProducingVideo()
+                    }
+                    guard isCurrentJoinAttempt(joinAttemptId) else { return false }
+                }
             } catch {
                 guard isCurrentJoinAttempt(joinAttemptId) else { return false }
                 debugLog("[Meeting] Failed to start video: \(error)")
@@ -6580,6 +6747,7 @@ final class MeetingViewModel {
             syncCallPresenceState()
         }
         if !state.isCameraOff {
+            localCameraIntentRevision += 1
             setLocalCameraOffState(true)
         }
         if state.isScreenSharing {
@@ -7178,8 +7346,6 @@ final class MeetingViewModel {
         releaseLocalToggleGuards()
         isReplacingLocalAudioProducer = false
         localAudioProducerReplacementToken = nil
-        isCameraSwitchInFlight = false
-        isScreenShareToggleInFlight = false
         isDisplayNameUpdateInFlight = false
         adminActionsInFlight.removeAll()
         state.chatMessages.removeAll()
@@ -7326,7 +7492,32 @@ final class MeetingViewModel {
     private func releaseLocalToggleGuards() {
         muteToggleToken = nil
         cameraToggleToken = nil
+        screenShareToggleToken = nil
         handRaiseToggleToken = nil
+        cameraSwitchToken = nil
+    }
+
+    /// Whether a camera-on that captured these revisions before its awaited
+    /// enable or start may still commit: no newer camera intent and no change
+    /// of video policy (audio-only mode) landed meanwhile.
+    private func isLocalCameraOnStillWanted(cameraIntentRevision: Int, videoPolicyRevision: Int) -> Bool {
+        localCameraIntentRevision == cameraIntentRevision
+            && videoPublishingPolicyRevision == videoPolicyRevision
+            && !state.isAudioOnlyMode
+    }
+
+    /// Turns the camera off now, whoever owns the camera guard: a camera-off
+    /// that lands while a camera-on awaits its acknowledgement is never
+    /// dropped. The pending camera-on then sees the newer camera-off and
+    /// closes what it started instead of committing camera-on.
+    private func applyLocalCameraOffNow(context: CallActionContext) {
+        localCameraIntentRevision += 1
+        setLocalCameraOffState(true)
+        Task { @MainActor [weak self] in
+            guard let self,
+                  self.isCurrentJoinedCall(context) else { return }
+            await self.webRTCClient.closeLocalVideoProducer()
+        }
     }
 
     private func enableOrStartLocalAudio() async throws {
@@ -7363,18 +7554,30 @@ final class MeetingViewModel {
     /// caller captured. Every close or restart below acts for that call only.
     private func enableOrStartLocalVideo(context: CallActionContext) async throws {
         guard isCurrentJoinedCall(context) else { return }
+        let cameraIntentRevision = localCameraIntentRevision
         if webRTCClient.hasLocalVideoProducer {
             do {
                 try await webRTCClient.setVideoEnabled(true)
+                // The SFU can close the producer during the acknowledgement
+                // while this caller suppresses the producer-closed restart;
+                // the client then returns without a camera. Recreate it for
+                // the camera-on that is still the newest intent.
+                guard isCurrentJoinedCall(context),
+                      localCameraIntentRevision == cameraIntentRevision,
+                      !webRTCClient.hasLocalVideoProducer else { return }
+                try await webRTCClient.startProducingVideo()
             } catch {
                 // An enable orphaned by a rejoin must not close or restart the
                 // producer of the attempt that replaced it. (The clients never
                 // report a failure while a replacement producer owns the camera.)
                 guard isCurrentJoinedCall(context),
                       shouldRecreateLocalProducerAfterEnableFailure(error) else { throw error }
+                // A newer camera-off owns the camera: restart nothing.
+                guard localCameraIntentRevision == cameraIntentRevision else { return }
                 debugLog("[Meeting] Recreating stale local video producer after enable failure: \(error)")
                 await webRTCClient.closeLocalVideoProducer()
                 guard isCurrentJoinedCall(context) else { throw error }
+                guard localCameraIntentRevision == cameraIntentRevision else { return }
                 try await webRTCClient.startProducingVideo()
             }
         } else {
@@ -7433,19 +7636,18 @@ final class MeetingViewModel {
         #endif
 
         guard newState else { return }
-        let lifecycleGeneration = meetingLifecycleGeneration
-        Task { @MainActor [weak self] in
-            guard let self,
-                  self.meetingLifecycleGeneration == lifecycleGeneration,
-                  self.state.isRecoveringConnection,
-                  self.state.isMuted else { return }
-            self.webRTCClient.suspendLocalAudioForRecovery()
-        }
+        // Mute now, not on a later hop: the recovered attempt can join (and
+        // end recovery) before such a hop runs, which skipped the mute and
+        // left that attempt's microphone live under a muted UI. The mute also
+        // cancels a microphone start still in flight.
+        webRTCClient.suspendLocalAudioForRecovery()
     }
 
     private func toggleCameraIntentDuringRecovery() {
         guard state.isRecoveringConnection else { return }
         let newState = !state.isCameraOff
+        localCameraIntentRevision += 1
+        let intentRevision = localCameraIntentRevision
         setLocalCameraOffState(newState)
         #if !SKIP
         HapticManager.shared.trigger(.light)
@@ -7454,11 +7656,22 @@ final class MeetingViewModel {
         guard newState else { return }
         let lifecycleGeneration = meetingLifecycleGeneration
         Task { @MainActor [weak self] in
+            // Gated on the intent, not on isCameraOff: a stale camera-on
+            // report from the recovered attempt's start can flip the UI back
+            // on before this hop runs, and this camera-off must still win.
             guard let self,
                   self.meetingLifecycleGeneration == lifecycleGeneration,
-                  self.state.isRecoveringConnection,
-                  self.state.isCameraOff else { return }
-            await self.webRTCClient.suspendLocalVideoForRecovery()
+                  self.localCameraIntentRevision == intentRevision else { return }
+            self.setLocalCameraOffState(true)
+            // The recovered attempt may have joined, with its camera
+            // published, before this hop ran: the camera-off still applies,
+            // as an in-call one. Otherwise suspend; a camera start in flight
+            // cancels itself on it.
+            if self.state.connectionState == .joined {
+                await self.webRTCClient.closeLocalVideoProducer()
+            } else {
+                await self.webRTCClient.suspendLocalVideoForRecovery()
+            }
         }
     }
 
@@ -7472,10 +7685,26 @@ final class MeetingViewModel {
             toggleMuteIntentDuringRecovery()
             return
         }
-        guard !state.mediaPublishingDisabled,
-              !isMuteToggleInFlight else { return }
+        guard !state.mediaPublishingDisabled else { return }
+        if isMuteToggleInFlight {
+            // A mute is never dropped: a CallKit, notification, PiP or second
+            // in-app mute that lands while an unmute awaits its
+            // acknowledgement applies now, and that unmute is discarded. An
+            // unmute while a toggle is in flight stays ignored (fail closed);
+            // the system surfaces are re-synced to the real state.
+            if state.isMuted {
+                syncCallPresenceState()
+                return
+            }
+            #if !SKIP
+            HapticManager.shared.trigger(.light)
+            #endif
+            applyLocalMuteNow(context: currentSocketEventContext())
+            return
+        }
         let actionRoomId = state.roomId
         let actionJoinAttemptId = activeJoinAttemptId
+        let actionMuteRevision = localMuteIntentRevision
         let toggleToken = UUID()
         muteToggleToken = toggleToken
         let newState = !state.isMuted
@@ -7503,6 +7732,9 @@ final class MeetingViewModel {
                     // attempt publishes from state.isMuted, and this confirm
                     // would bypass the guard a newer toggle may hold.
                     guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+                    // A mute that landed meanwhile won (applyLocalMuteNow):
+                    // this unmute is discarded and confirms nothing.
+                    guard localMuteIntentRevision == actionMuteRevision else { return }
                     await confirmLocalAudioProducerUnmutedOrRecover(
                         context: currentSocketEventContext(),
                         allowCurrentMuteToggle: true
@@ -7510,6 +7742,8 @@ final class MeetingViewModel {
                 }
             } catch {
                 guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+                // A discarded unmute reports no error: the newer mute stands.
+                guard newState || localMuteIntentRevision == actionMuteRevision else { return }
                 // A failed unmute reverts to muted; a failed mute fails closed
                 // (the client kept the local mute), so it stays muted too.
                 state.isMuted = true
@@ -7530,14 +7764,26 @@ final class MeetingViewModel {
             toggleCameraIntentDuringRecovery()
             return
         }
-        guard !state.mediaPublishingDisabled,
-              !isCameraToggleInFlight else { return }
+        guard !state.mediaPublishingDisabled else { return }
+        if isCameraToggleInFlight {
+            // A camera-off is never dropped: one that lands while a
+            // camera-on awaits its acknowledgement applies now. A camera-on
+            // while a toggle is in flight stays ignored.
+            guard !state.isCameraOff else { return }
+            #if !SKIP
+            HapticManager.shared.trigger(.light)
+            #endif
+            applyLocalCameraOffNow(context: currentCallActionContext())
+            return
+        }
         let actionRoomId = state.roomId
         let actionJoinAttemptId = activeJoinAttemptId
         let actionVideoPolicyRevision = videoPublishingPolicyRevision
         let toggleToken = UUID()
         cameraToggleToken = toggleToken
         let newState = !state.isCameraOff
+        localCameraIntentRevision += 1
+        let actionCameraIntentRevision = localCameraIntentRevision
         setLocalCameraOffState(newState, syncCallPresence: newState)
         #if !SKIP
         HapticManager.shared.trigger(.light)
@@ -7560,8 +7806,12 @@ final class MeetingViewModel {
                         context: CallActionContext(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId)
                     )
                     guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
-                    guard actionVideoPolicyRevision == videoPublishingPolicyRevision,
-                          !state.isAudioOnlyMode else {
+                    // A camera-off (user, server) or audio-only mode that
+                    // landed during the enable wins over this camera-on.
+                    guard isLocalCameraOnStillWanted(
+                        cameraIntentRevision: actionCameraIntentRevision,
+                        videoPolicyRevision: actionVideoPolicyRevision
+                    ) else {
                         await webRTCClient.closeLocalVideoProducer()
                         setLocalCameraOffState(true)
                         return
@@ -7570,6 +7820,8 @@ final class MeetingViewModel {
                 }
             } catch {
                 guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+                // A superseded camera-on reports no error: the camera-off stands.
+                guard newState || localCameraIntentRevision == actionCameraIntentRevision else { return }
                 setLocalCameraOffState(!newState)
                 state.errorMessage = MeetingMediaErrorPresentation.message(for: error)
             }
@@ -7581,6 +7833,7 @@ final class MeetingViewModel {
         state.isAudioOnlyMode = enabled
         videoPublishingPolicyRevision += 1
         if enabled && !state.isCameraOff {
+            localCameraIntentRevision += 1
             setLocalCameraOffState(true)
             Task { @MainActor [weak self] in
                 await self?.webRTCClient.closeLocalVideoProducer()
@@ -7611,22 +7864,26 @@ final class MeetingViewModel {
     func switchLocalCamera() {
         guard canSwitchLocalCamera(), !isCameraSwitchInFlight else { return }
         let actionContext = currentCallActionContext()
-        isCameraSwitchInFlight = true
+        let switchToken = UUID()
+        cameraSwitchToken = switchToken
         #if !SKIP
         HapticManager.shared.trigger(.light)
         #endif
         Task { @MainActor in
             defer {
-                if isSameCallContext(
-                    roomId: actionContext.roomId,
-                    joinAttemptId: actionContext.joinAttemptId
-                ) {
-                    isCameraSwitchInFlight = false
+                if cameraSwitchToken == switchToken {
+                    cameraSwitchToken = nil
                 }
+                #if os(macOS) && !SKIP
+                testLocalToggleEnded?("switchLocalCamera")
+                #endif
             }
             guard isCurrentJoinedCall(actionContext) else { return }
             do {
                 try await webRTCClient.switchCamera()
+                // An orphaned switch refreshes nothing for the attempt that
+                // replaced it.
+                guard isCurrentJoinedCall(actionContext) else { return }
                 #if SKIP
                 refreshPipVideo(requestKeyFrame: true)
                 #endif
@@ -7651,12 +7908,13 @@ final class MeetingViewModel {
         let actionRoomId = state.roomId
         let actionJoinAttemptId = activeJoinAttemptId
         let actionVideoPolicyRevision = videoPublishingPolicyRevision
-        isScreenShareToggleInFlight = true
+        let toggleToken = UUID()
+        screenShareToggleToken = toggleToken
         #if canImport(UIKit) && !SKIP
         Task { @MainActor in
             defer {
-                if isSameCallContext(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) {
-                    isScreenShareToggleInFlight = false
+                if screenShareToggleToken == toggleToken {
+                    screenShareToggleToken = nil
                 }
             }
             guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
@@ -7664,6 +7922,9 @@ final class MeetingViewModel {
                 if state.isScreenSharing {
                     ScreenCaptureManager.shared.onBroadcastStopped = nil
                     await ScreenCaptureManager.shared.stopCapture()
+                    // Orphaned by a rejoin: a share in the attempt that
+                    // replaced this one is not this toggle's to close.
+                    guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
                     await webRTCClient.closeLocalScreenProducer()
                     guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
                     state.isScreenSharing = false
@@ -7681,8 +7942,10 @@ final class MeetingViewModel {
                     }
                     try await ScreenCaptureManager.shared.startCapture(webRTCClient: webRTCClient)
                     guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else {
-                        ScreenCaptureManager.shared.onBroadcastStopped = nil
-                        await ScreenCaptureManager.shared.stopCapture()
+                        if canOrphanedScreenShareToggleStopCapture() {
+                            ScreenCaptureManager.shared.onBroadcastStopped = nil
+                            await ScreenCaptureManager.shared.stopCapture()
+                        }
                         return
                     }
                     guard actionVideoPolicyRevision == videoPublishingPolicyRevision,
@@ -7702,6 +7965,7 @@ final class MeetingViewModel {
                           actionVideoPolicyRevision == videoPublishingPolicyRevision,
                           !state.isAudioOnlyMode,
                           ScreenCaptureManager.shared.isCaptureActive else {
+                        guard isCurrentCallAfterStart || canOrphanedScreenShareToggleStopCapture() else { return }
                         ScreenCaptureManager.shared.onBroadcastStopped = nil
                         await ScreenCaptureManager.shared.stopCapture()
                         if isCurrentCallAfterStart {
@@ -7736,8 +8000,8 @@ final class MeetingViewModel {
         // the Kotlin bridge object in this same module).
         Task { @MainActor in
             defer {
-                if isSameCallContext(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) {
-                    isScreenShareToggleInFlight = false
+                if screenShareToggleToken == toggleToken {
+                    screenShareToggleToken = nil
                 }
             }
             guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
@@ -7759,9 +8023,11 @@ final class MeetingViewModel {
                 }
                 let granted = await ScreenCaptureManager.requestCapture()
                 guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else {
-                    ScreenCaptureManager.onProjectionRevoked = nil
-                    if granted && !state.isScreenSharing {
-                        ScreenCaptureManager.stopCapture()
+                    if canOrphanedScreenShareToggleStopCapture() {
+                        ScreenCaptureManager.onProjectionRevoked = nil
+                        if granted {
+                            ScreenCaptureManager.stopCapture()
+                        }
                     }
                     return
                 }
@@ -7786,6 +8052,7 @@ final class MeetingViewModel {
                               actionVideoPolicyRevision == videoPublishingPolicyRevision,
                               !state.isAudioOnlyMode,
                               ScreenCaptureManager.isCaptureActive() else {
+                            guard isCurrentCallAfterStart || canOrphanedScreenShareToggleStopCapture() else { return }
                             ScreenCaptureManager.onProjectionRevoked = nil
                             ScreenCaptureManager.stopCapture()
                             if isCurrentCallAfterStart {
@@ -7818,9 +8085,31 @@ final class MeetingViewModel {
             }
         }
         #else
-        debugLog("[Meeting] Screen sharing not supported on this platform")
-        isScreenShareToggleInFlight = false
+        // Host builds (the macOS test target) have no screen capture. The
+        // toggle still owns its guard across one awaited media-layer call, so
+        // host tests can hold it as a slow capture start would.
+        Task { @MainActor in
+            defer {
+                if screenShareToggleToken == toggleToken {
+                    screenShareToggleToken = nil
+                }
+                #if os(macOS) && !SKIP
+                testLocalToggleEnded?("toggleScreenShare")
+                #endif
+            }
+            guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+            await webRTCClient.testUnsupportedScreenShare()
+            debugLog("[Meeting] Screen sharing not supported on this platform")
+        }
         #endif
+    }
+
+    /// A screen-share toggle orphaned by a rejoin stops the shared capture
+    /// (and clears its end callback) only while nothing in the attempt that
+    /// replaced it uses that capture: no newer toggle owns the guard and no
+    /// share is live.
+    private func canOrphanedScreenShareToggleStopCapture() -> Bool {
+        screenShareToggleToken == nil && !state.isScreenSharing
     }
 
     // The screen share was ended from OUTSIDE the in-app toggle (iOS: Control
@@ -8280,6 +8569,12 @@ final class MeetingViewModel {
                     }
 
                 case .mute:
+                    if isMuteToggleInFlight, !state.isMuted {
+                        // A mute is never dropped behind a pending unmute.
+                        applyLocalMuteNow(context: currentSocketEventContext())
+                        addSystemMessage(.commandExecuted(command: .mute, userName: localDisplayNameForFeedback))
+                        return
+                    }
                     guard !isMuteToggleInFlight else {
                         addSystemMessage(.info("Microphone is already changing."))
                         return
@@ -8378,6 +8673,12 @@ final class MeetingViewModel {
             addSystemMessage(.info(cameraOff ? "Camera is already off." : "Camera is already on."))
             return
         }
+        if isCameraToggleInFlight, cameraOff, state.connectionState == .joined {
+            // A camera-off is never dropped behind a pending camera-on.
+            applyLocalCameraOffNow(context: currentCallActionContext())
+            addSystemMessage(.commandExecuted(command: command, userName: localDisplayNameForFeedback))
+            return
+        }
         if isCameraToggleInFlight {
             addSystemMessage(.info("Camera is already changing."))
             return
@@ -8401,6 +8702,7 @@ final class MeetingViewModel {
               !isMuteToggleInFlight else { return }
         let actionRoomId = state.roomId
         let actionJoinAttemptId = activeJoinAttemptId
+        let actionMuteRevision = localMuteIntentRevision
         let previousMuted = state.isMuted
         let toggleToken = UUID()
         muteToggleToken = toggleToken
@@ -8422,6 +8724,8 @@ final class MeetingViewModel {
                 try await enableOrStartLocalAudio()
                 // Orphaned by a rejoin: see toggleMute().
                 guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+                // Superseded by a newer mute: see toggleMute().
+                guard localMuteIntentRevision == actionMuteRevision else { return }
                 await confirmLocalAudioProducerUnmutedOrRecover(
                     context: currentSocketEventContext(),
                     allowCurrentMuteToggle: true
@@ -8429,6 +8733,7 @@ final class MeetingViewModel {
             }
         } catch {
             guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+            guard muted || localMuteIntentRevision == actionMuteRevision else { return }
             // A failed mute fails closed (the client kept the local mute).
             state.isMuted = muted ? true : previousMuted
             syncCallPresenceState()
@@ -8438,13 +8743,16 @@ final class MeetingViewModel {
 
     private func setCameraOff(_ cameraOff: Bool) async {
         guard state.connectionState == .joined,
-              cameraOff || !state.mediaPublishingDisabled,
+              cameraOff || (!state.mediaPublishingDisabled && !state.isAudioOnlyMode),
               !isCameraToggleInFlight else { return }
         let actionRoomId = state.roomId
         let actionJoinAttemptId = activeJoinAttemptId
+        let actionVideoPolicyRevision = videoPublishingPolicyRevision
         let previousCameraOff = state.isCameraOff
         let toggleToken = UUID()
         cameraToggleToken = toggleToken
+        localCameraIntentRevision += 1
+        let actionCameraIntentRevision = localCameraIntentRevision
         setLocalCameraOffState(cameraOff, syncCallPresence: cameraOff)
         defer {
             if cameraToggleToken == toggleToken {
@@ -8464,10 +8772,21 @@ final class MeetingViewModel {
                 )
                 // An orphaned start must not turn the recovered call's camera back on.
                 guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+                // Nor may a camera-off or audio-only mode that landed meanwhile.
+                guard isLocalCameraOnStillWanted(
+                    cameraIntentRevision: actionCameraIntentRevision,
+                    videoPolicyRevision: actionVideoPolicyRevision
+                ) else {
+                    await webRTCClient.closeLocalVideoProducer()
+                    setLocalCameraOffState(true)
+                    return
+                }
                 setLocalCameraOffState(false)
             }
         } catch {
             guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+            // A superseded camera-on reports no error: the camera-off stands.
+            guard cameraOff || localCameraIntentRevision == actionCameraIntentRevision else { return }
             setLocalCameraOffState(previousCameraOff)
             state.errorMessage = MeetingMediaErrorPresentation.message(for: error)
         }

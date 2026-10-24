@@ -45,17 +45,43 @@ final class WebRTCClient {
     /// acknowledgement would, and later release or fail it.
     var testCallGate: (@MainActor (String) async throws -> Void)?
     /// Host-test seam: whether `closeLocalMedia(kind:...)` finds a local
-    /// producer of that kind (the stub has none by default).
+    /// producer of that kind, "audio" or "video", or "screen" for a screen
+    /// producer (the stub has none by default).
     var testClosesLocalMedia: (@MainActor (String) -> Bool)?
     /// Host-test seam modelling the real clients' media session: `configure`
     /// and `cleanup` bump it at entry, a teardown or close drops the local
     /// producers, and a start commits its producer only if no teardown
     /// landed while it was held.
     private(set) var configurationGeneration = 0
+    /// Host-test seam: synchronous media calls, which cannot pass the async
+    /// gate, are reported here.
+    var testCallLog: (@MainActor (String) -> Void)?
+    /// Host-test seam modelling the real clients' microphone (off by
+    /// default). An unmute or a microphone start commits a live microphone
+    /// after its gate only if no local mute (`setAudioEnabled(false)`,
+    /// `suspendLocalAudioForRecovery()`) landed meanwhile, as both clients
+    /// fence by `localAudioMuteIntentGeneration`, and it reports that through
+    /// `onLocalAudioEnabledChanged`, as they do.
+    var testModelsLocalAudioState = false
+    /// Host-test seam modelling the real clients' camera state reports (off
+    /// by default): a committed camera start reports on, and a close or a
+    /// suspend reports off, through `onLocalVideoEnabledChanged`. Unlike the
+    /// real clients, a start here does not cancel itself on a camera-off; the
+    /// view model must not rely on that.
+    var testReportsLocalVideoState = false
+    /// Host-test seam: whether `canSwitchCamera()` finds a second camera.
+    var testCanSwitchCamera = false
+    /// Host-test seam: local state reports this stub made to a listener, so
+    /// a test can wait until the view model has handled every one.
+    private(set) var testLocalMediaReportCount = 0
+    private var testLocalAudioMuteIntent = 0
+    private var testLocalAudioLive = false
 
     private(set) var localAudioEnabled: Bool = false
     var hasLocalAudioProducer = false
-    var isLocalAudioPublishingHealthy: Bool { false }
+    var isLocalAudioPublishingHealthy: Bool {
+        testModelsLocalAudioState && hasLocalAudioProducer && testLocalAudioLive
+    }
     private(set) var localVideoEnabled: Bool = false
     var hasLocalVideoProducer = false
     var currentCameraFacing: LocalCameraFacing { .front }
@@ -102,18 +128,30 @@ final class WebRTCClient {
     func activateCallAudioSession() { }
     func startProducingAudio() async throws {
         let generation = configurationGeneration
+        let muteIntent = testLocalAudioMuteIntent
         try await testCallGate?("startProducingAudio")
-        if generation == configurationGeneration { hasLocalAudioProducer = true }
+        guard generation == configurationGeneration else { return }
+        guard testModelsLocalAudioState else {
+            hasLocalAudioProducer = true
+            return
+        }
+        // Both clients drop a start that a mute overtook.
+        guard muteIntent == testLocalAudioMuteIntent else { return }
+        hasLocalAudioProducer = true
+        testCommitLiveMicrophone()
     }
     func startProducingVideo() async throws {
         let generation = configurationGeneration
         try await testCallGate?("startProducingVideo")
-        if generation == configurationGeneration { hasLocalVideoProducer = true }
+        guard generation == configurationGeneration else { return }
+        hasLocalVideoProducer = true
+        testReportLocalVideo(true)
     }
     func cleanup(notifyLocalState: Bool = true, preserveCallAudioRouting: Bool = false) async {
         configurationGeneration += 1
         hasLocalAudioProducer = false
         hasLocalVideoProducer = false
+        testLocalAudioLive = false
         try? await testCallGate?("cleanup(notifyLocalState: \(notifyLocalState))")
     }
     func checkVideoFreezes() async { }
@@ -143,34 +181,99 @@ final class WebRTCClient {
     func consumeIntentionalLocalAudioProducerClose(producerId: String) -> Bool { false }
     func hasAudioConsumer(userIdPrefix: String) -> Bool { false }
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { }
-    func setAudioEnabled(_ enabled: Bool) async throws { try await testCallGate?("setAudioEnabled(\(enabled))") }
+    func setAudioEnabled(_ enabled: Bool) async throws {
+        let muteIntent = testLocalAudioMuteIntent
+        if !enabled, testModelsLocalAudioState {
+            // Both clients silence a mute before its acknowledgement.
+            testApplyLocalMute()
+        }
+        try await testCallGate?("setAudioEnabled(\(enabled))")
+        guard testModelsLocalAudioState, enabled, hasLocalAudioProducer,
+              muteIntent == testLocalAudioMuteIntent else { return }
+        testCommitLiveMicrophone()
+    }
     func suspendLocalAudioForRecovery() {
+        testCallLog?("suspendLocalAudioForRecovery")
+        if testModelsLocalAudioState {
+            testApplyLocalMute()
+            return
+        }
         localAudioEnabled = false
-        onLocalAudioEnabledChanged?(false)
+        testReportLocalAudio(false)
     }
     func reassertLocalAudioProducerUnmuted() async throws { try await testCallGate?("reassertLocalAudioProducerUnmuted") }
     func setVideoEnabled(_ enabled: Bool) async throws { try await testCallGate?("setVideoEnabled(\(enabled))") }
-    func suspendLocalVideoForRecovery() async { try? await testCallGate?("suspendLocalVideoForRecovery") }
-    func canSwitchCamera() -> Bool { false }
+    func suspendLocalVideoForRecovery() async {
+        testReportLocalVideo(false)
+        try? await testCallGate?("suspendLocalVideoForRecovery")
+    }
+    func canSwitchCamera() -> Bool { testCanSwitchCamera }
     func setPreferredCameraFacing(_ facing: LocalCameraFacing) { }
-    func switchCamera() async throws { }
+    func switchCamera() async throws { try await testCallGate?("switchCamera") }
     func closeLocalAudioProducer() async {
         hasLocalAudioProducer = false
+        testLocalAudioLive = false
         try? await testCallGate?("closeLocalAudioProducer")
     }
     func closeLocalVideoProducer() async {
         hasLocalVideoProducer = false
+        testReportLocalVideo(false)
         try? await testCallGate?("closeLocalVideoProducer")
     }
     func closeLocalScreenProducer() async { }
+    /// Host-test seam: the one awaited media-layer call of the host build's
+    /// screen-share toggle, which has no screen capture.
+    func testUnsupportedScreenShare() async { try? await testCallGate?("screenShare") }
     func closeLocalMedia(kind: String, type: String, producerId: String? = nil) async -> Bool {
-        guard testClosesLocalMedia?(kind) == true else { return false }
-        if kind == "audio" {
-            hasLocalAudioProducer = false
-        } else if type == ProducerType.webcam.rawValue {
-            hasLocalVideoProducer = false
+        // A screen producer is "screen" to the seam and in the call log.
+        let isScreen = type == ProducerType.screen.rawValue
+        let name = isScreen ? "screen" : kind
+        guard testClosesLocalMedia?(name) == true else {
+            testCallLog?("closeLocalMedia(\(name))")
+            return false
         }
+        switch name {
+        case "audio":
+            hasLocalAudioProducer = false
+            testLocalAudioLive = false
+        case "video":
+            hasLocalVideoProducer = false
+            testReportLocalVideo(false)
+        default:
+            // The stub models no screen capture state.
+            break
+        }
+        // The iOS client awaits the capture stop after clearing the producer.
+        try? await testCallGate?("closeLocalMedia(\(name))")
         return true
+    }
+
+    private func testApplyLocalMute() {
+        testLocalAudioMuteIntent += 1
+        testLocalAudioLive = false
+        localAudioEnabled = false
+        testReportLocalAudio(false)
+    }
+
+    private func testCommitLiveMicrophone() {
+        testCallLog?("microphoneLive")
+        testLocalAudioLive = true
+        localAudioEnabled = true
+        testReportLocalAudio(true)
+    }
+
+    private func testReportLocalAudio(_ enabled: Bool) {
+        guard let listener = onLocalAudioEnabledChanged else { return }
+        testLocalMediaReportCount += 1
+        listener(enabled)
+    }
+
+    private func testReportLocalVideo(_ enabled: Bool) {
+        guard testReportsLocalVideoState else { return }
+        localVideoEnabled = enabled
+        guard let listener = onLocalVideoEnabledChanged else { return }
+        testLocalMediaReportCount += 1
+        listener(enabled)
     }
 
     func getCaptureSession() -> Any? { nil }
