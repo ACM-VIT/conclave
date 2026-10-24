@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
-import { parseRoomAiFeatureSettings, type AiFeature, type AiFeatureSettings } from "@conclave/ai/room-settings";
+import { parseRoomAiFeatureSettings, resolveAiFeatureSettings, type AiFeature, type AiFeatureSettings } from "@conclave/ai/room-settings";
 import {
   isResponseModel,
   getResponseProvider,
@@ -83,15 +83,16 @@ export async function configureRoomAiForFeature(
     );
     if (error) return error;
   }
-  if (keys[modelProvider]?.trim()) {
-    if (controller.configureFeature) {
-      for (const feature of features) {
+  if (controller.configureFeature) {
+    for (const feature of features) {
+      const current = resolveAiFeatureSettings({CONCLAVE_ASSISTANT_MODEL: controller.state.assistantModel ?? undefined}, feature, controller.state.features ?? {});
+      if (current.model !== model) {
         const error = await controller.configureFeature(feature, {model});
         if (error) return error;
       }
-    } else if (features.includes("assistant") && controller.state.assistantModel !== model)
-      return controller.configure(modelProvider, undefined, model);
-  }
+    }
+  } else if (features.includes("assistant") && controller.state.assistantModel !== model)
+    return controller.configure(modelProvider, undefined, model);
   return null;
 }
 

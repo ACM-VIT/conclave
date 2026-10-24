@@ -67,6 +67,43 @@ const openFeature = async (name = "Chat assistant") => act(async () => container
 const saveFeature = async () => act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})));
 
 describe("AI setup UX", () => {
+  it.each([false, true])("saves a compact Chat model before retrying with an existing provider key (denied: %s)", async denied => {
+    const state = emptyRoomAiState();
+    state.openai = {source: "room", ownerId: "alice"};
+    state.features = {assistant: {model: "claude-haiku-5-5"}};
+    const configureFeature = vi.fn().mockResolvedValue(denied ? "Only a host can change this model." : null);
+    const submit = vi.fn();
+    const controller = roomAi({state, isAdmin: true, configureFeature});
+    await act(async () => root.render(<ChatPanel roomAi={controller} messages={[]} chatInput="" currentUserId="alice" onInputChange={() => {}} onSend={() => {}} onSendGif={() => {}} onSendImage={async () => false} onClose={() => {}} assistantApiKeyPrompt={{visible: true, error: null, model: "claude-haiku-5-5"}} onSubmitAssistantApiKey={submit} />));
+    const select = container.querySelector<HTMLSelectElement>('select')!;
+    await act(async () => {select.value = "gpt-6.1-sol"; select.dispatchEvent(new Event("change", {bubbles: true}));});
+    await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === "Continue")!.click());
+    expect(controller.configure).not.toHaveBeenCalled();
+    expect(configureFeature).toHaveBeenCalledWith("assistant", {model: "gpt-6.1-sol"});
+    if (denied) expect(submit).not.toHaveBeenCalled();
+    else {
+      expect(submit).toHaveBeenCalledWith("", "gpt-6.1-sol");
+      expect(configureFeature.mock.invocationCallOrder[0]).toBeLessThan(submit.mock.invocationCallOrder[0]);
+    }
+  });
+
+  it.each([false, true])("saves a changed transcription provider before Notes starts (existing Sarvam key: %s)", async existing => {
+    const state = emptyRoomAiState();
+    state.features = {transcription: {model: "gpt-live-transcribe"}, minutes: {enabled: false}, questions: {enabled: false}};
+    if (existing) state.sarvam = {source: "room", ownerId: "alice"};
+    const controller = roomAi({state, isAdmin: true});
+    const start = vi.fn().mockResolvedValue(true);
+    await act(async () => root.render(<TranscriptPanel roomAi={controller} transcript={{...transcript(start), globalProviderKeysAvailable: {}}} onClose={() => {}} />));
+    await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === "Sarvam")!.click());
+    if (!existing) {
+      const key = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+      await act(async () => {Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")!.set!.call(key,"sarvam-fixture"); key.dispatchEvent(new Event("input",{bubbles:true}));});
+    }
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event("submit",{bubbles:true,cancelable:true})));
+    expect(controller.configureFeature).toHaveBeenCalledExactlyOnceWith("transcription", {model: "saaras:v3"});
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({transcriptModel: "saaras:v3"}));
+    expect(vi.mocked(controller.configureFeature!).mock.invocationCallOrder[0]).toBeLessThan(start.mock.invocationCallOrder[0]);
+  });
   it("lets a Sarvam contributor switch transcription from an unowned OpenAI model", async () => {
     const state = emptyRoomAiState();
     state.openai = {source: "room", ownerId: "bob"};

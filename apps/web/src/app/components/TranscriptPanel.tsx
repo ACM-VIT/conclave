@@ -300,11 +300,16 @@ function StartStage({
             ...Object.fromEntries(missingTextProviders.map(name => [name, textKeys[name] ?? ""])),
           },
           qaModel,
-          (["minutes", "questions"] as const).filter(feature => !roomAi.state.features?.[feature]?.model),
+          (["minutes", "questions"] as const).filter(feature => !roomAi.state.features?.[feature]?.model && roomAi.state.features?.[feature]?.enabled !== false),
         );
         if (error) {
           setSetupError(error);
           return;
+        }
+        const savedTranscriptModel = roomAi.state.features?.transcription?.model ?? transcript.session.transcriptModel;
+        if (savedTranscriptModel !== transcriptModel) {
+          const failure = await roomAi.configureFeature?.("transcription", {model: transcriptModel});
+          if (failure) { setSetupError(failure); return; }
         }
       }
       const options = {

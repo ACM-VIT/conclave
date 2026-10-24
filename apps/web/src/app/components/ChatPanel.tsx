@@ -434,7 +434,7 @@ function ChatPanel({
     setAssistantKeyPending(true);
     setAssistantKeyError(null);
     try {
-      if (roomAi && assistantApiKeyInput.trim()) {
+      if (roomAi) {
         const error = await configureRoomAiForFeature(
           roomAi,
           { [getResponseProvider(assistantModel)]: assistantApiKeyInput },

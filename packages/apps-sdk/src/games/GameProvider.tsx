@@ -226,13 +226,14 @@ export function GameProvider({
       return { success: false, error: "Observer mode is read-only" };
     }
     if (!socket) return { success: false, error: "Not connected" };
+    const attempt = pendingStart.current;
     const result = await emitWithAck<GameMoveResult>(
       socket,
       "game:end",
       undefined,
       { success: false, error: "Timed out" },
     );
-    if (result.success) pendingStart.current?.abort();
+    if (result.success) attempt?.abort();
     return result;
   }, [socket, isReadOnly]);
 
