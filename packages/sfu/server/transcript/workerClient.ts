@@ -137,6 +137,7 @@ export class TranscriptWorkerRelayClient {
     this.socket = socket;
 
     socket.onmessage = (event) => {
+      if (this.socket !== socket || this.intentionallyClosed) return;
       try {
         const message = JSON.parse(String(event.data ?? "")) as {
           type?: string;
@@ -176,22 +177,34 @@ export class TranscriptWorkerRelayClient {
         resolve();
       };
       const timeout = setTimeout(() => {
+        if (this.socket === socket) this.socket = null;
+        finish(new Error("Transcript worker relay connection timed out."));
         try {
           socket.close();
         } catch {}
-        finish(new Error("Transcript worker relay connection timed out."));
       }, WORKER_CONNECT_TIMEOUT_MS);
-      socket.onopen = () => finish();
+      socket.onopen = () => {
+        if (this.socket !== socket || this.intentionallyClosed) {
+          finish(new Error("Transcript worker relay connection was cancelled."));
+          try { socket.close(); } catch {}
+          return;
+        }
+        finish();
+      };
       socket.onerror = () => {
+        if (this.socket !== socket || this.intentionallyClosed) return;
+        this.socket = null;
+        this.stopHeartbeat();
         const message = "Transcript worker relay connection failed.";
         if (!settled) {
           finish(new Error(message));
-          return;
+        } else {
+          this.options.onError?.("Transcript worker relay socket failed; reconnecting.");
         }
-        this.options.onError?.("Transcript worker relay socket failed; reconnecting.");
         try {
           socket.close();
         } catch {}
+        if (this.hasConnected) this.scheduleReconnect();
       };
       socket.onclose = () => {
         const isCurrentSocket = this.socket === socket;
@@ -223,6 +236,10 @@ export class TranscriptWorkerRelayClient {
         socket.send(serialized);
         return true;
       } catch {
+        if (this.socket === socket) {
+          this.socket = null;
+          this.stopHeartbeat();
+        }
         try {
           socket.close();
         } catch {}
@@ -347,12 +364,15 @@ export class TranscriptWorkerRelayClient {
         return;
       }
       if (Date.now() - this.lastPongAt > WORKER_HEARTBEAT_TIMEOUT_MS) {
+        this.socket = null;
+        this.stopHeartbeat();
         this.options.onError?.(
           "Transcript worker relay heartbeat timed out; reconnecting.",
         );
         try {
           socket.close();
         } catch {}
+        this.scheduleReconnect();
         return;
       }
       this.send({

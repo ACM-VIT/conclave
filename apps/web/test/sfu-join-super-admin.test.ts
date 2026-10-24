@@ -40,6 +40,20 @@ const join = async (user: { email: string }) => {
 };
 
 describe("join token super admin authorization", () => {
+  it("bounds routing and placement response bodies when an upstream stalls after headers", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, options: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: () => new Promise((_resolve, reject) => options.signal!.addEventListener("abort", () => reject(options.signal!.reason), { once: true })),
+    })));
+    const started = performance.now();
+    const response = await POST(new Request("http://localhost/api/sfu/join", {
+      method: "POST",
+      body: JSON.stringify({ roomId: "room", sessionId: "session" }),
+    }));
+    expect(response.status).toBe(503);
+    expect(performance.now() - started).toBeLessThan(4500);
+  });
   it("grants super admin and host privileges to an authenticated allowlisted email", async () => {
     getSession.mockResolvedValue({ user: { id: "admin", email: " ADMIN@example.com ", name: "Admin" } });
     expect(await join({ email: "guest@example.com" })).toMatchObject({

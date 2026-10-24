@@ -94,6 +94,7 @@ type SfuStatusResponse = {
   instanceId?: string;
   region?: string | null;
   draining?: boolean;
+  healthy?: boolean;
   rooms?: number;
   capabilities?: {
     roomPlacement?: number;
@@ -147,16 +148,12 @@ const fetchWithTimeout = async (
   init: RequestInit,
   timeoutMs: number,
 ): Promise<Response> => {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(input, {
-      ...init,
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
+  const deadline = AbortSignal.timeout(timeoutMs);
+  return fetch(input, {
+    ...init,
+    // Keep the deadline active while callers consume the response body too.
+    signal: init.signal ? AbortSignal.any([init.signal, deadline]) : deadline,
+  });
 };
 
 const resolveRoomOwnerSfuUrl = async (options: {
@@ -267,7 +264,9 @@ const resolveNonDrainingSfuUrl = async (options: {
         url: candidateSfuUrl,
         availability:
           status && typeof status === "object"
-            ? status.draining === true
+            ? status.healthy === false
+              ? "unhealthy"
+              : status.draining === true
               ? "draining"
               : "healthy"
             : "unknown",

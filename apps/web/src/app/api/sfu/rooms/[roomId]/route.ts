@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import {
   resolveSfuClientId,
   resolveSfuSecret,
-  resolveSfuUrl,
 } from "@/lib/sfu-admin-auth";
+import { resolveSfuUrls } from "@/lib/sfu-url";
 import { readResponseError } from "@/app/lib/utils";
 
 type RouteContext = {
@@ -36,74 +36,37 @@ export async function GET(request: Request, context: RouteContext) {
   }
 
   const clientId = resolveSfuClientId(request);
-  const targetUrl = new URL(
-    `/rooms/${encodeURIComponent(normalizedRoomId)}`,
-    resolveSfuUrl(),
-  );
-  if (clientId) {
-    targetUrl.searchParams.set("clientId", clientId);
-  }
-
-  try {
+  const secret = resolveSfuSecret();
+  const results = await Promise.allSettled(resolveSfuUrls().map(async (sfuUrl) => {
+    const targetUrl = new URL(`/rooms/${encodeURIComponent(normalizedRoomId)}`, sfuUrl);
+    if (clientId) targetUrl.searchParams.set("clientId", clientId);
     const response = await fetch(targetUrl.toString(), {
       headers: {
-        "x-sfu-secret": resolveSfuSecret(),
+        "x-sfu-secret": secret,
         "accept": "application/json",
         ...(clientId ? { "x-sfu-client": clientId } : {}),
       },
       cache: "no-store",
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(2000)]),
     });
-
-    if (response.status === 404) {
-      return NextResponse.json(
-        { room: null },
-        {
-          headers: {
-            "Cache-Control": "no-store",
-          },
-        },
-      );
-    }
-
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: await readError(response) },
-        { status: response.status },
-      );
-    }
-
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(await readError(response));
     const data = (await response.json()) as RoomOccupancyResponse;
     const room = data.room;
-    if (!room) {
-      return NextResponse.json(
-        { room: null },
-        {
-          headers: {
-            "Cache-Control": "no-store",
-          },
-        },
-      );
-    }
-
-    const responseRoomId =
-      typeof room?.id === "string" && room.id.trim()
-        ? room.id.trim()
-        : normalizedRoomId;
-
-    return NextResponse.json(
-      {
-        room: {
-          id: responseRoomId,
-          userCount: toNonNegativeInteger(room?.userCount),
-        },
-      },
-      {
-        headers: {
-          "Cache-Control": "no-store",
-        },
-      },
-    );
-  } catch (_error) {
-    return NextResponse.json({ error: "Failed to load room" }, { status: 500 });
+    if (!room) return null;
+    return {
+      id: typeof room.id === "string" && room.id.trim() ? room.id.trim() : normalizedRoomId,
+      userCount: toNonNegativeInteger(room.userCount),
+    };
+  }));
+  const rooms = results.flatMap((result) => result.status === "fulfilled" && result.value ? [result.value] : []);
+  const room = rooms.sort((left, right) => right.userCount - left.userCount)[0] ?? null;
+  const headers = { "Cache-Control": "no-store" };
+  if (!room && results.some((result) => result.status === "rejected")) {
+    return NextResponse.json({ error: "Room status is temporarily unavailable" }, {
+      status: 503,
+      headers: { ...headers, "Retry-After": "2" },
+    });
   }
+  return NextResponse.json({ room }, { headers });
 }
