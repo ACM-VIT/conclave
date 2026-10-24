@@ -160,16 +160,21 @@ export const createInstantVoiceClone = async ({
 export const synthesizeClonedSpeech = async ({
   voiceId,
   text,
+  model,
+  timeoutMs,
 }: {
   voiceId: string;
   text: string;
+  model?: string;
+  timeoutMs?: number;
 }): Promise<Response> => {
   const modelId =
-    process.env.ELEVENLABS_TTS_MODEL?.trim() || AI_DEFAULT_MODELS.tts;
+    model || process.env.ELEVENLABS_TTS_MODEL?.trim() || AI_DEFAULT_MODELS.tts;
   const response = await fetch(
     `${ELEVENLABS_API_BASE}/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`,
     {
       method: "POST",
+      ...(timeoutMs ? {signal: AbortSignal.timeout(timeoutMs)} : {}),
       headers: {
         "xi-api-key": requireElevenLabsApiKey(),
         "content-type": "application/json",

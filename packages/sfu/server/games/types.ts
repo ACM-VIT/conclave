@@ -92,6 +92,7 @@ export type GameContext = {
 };
 
 type GameContentContext = {
+  signal?: AbortSignal;
   aiEnvironment?: AiEnvironment;
   players: GamePlayer[];
   /** Host-chosen configuration (validated, with defaults filled in). */

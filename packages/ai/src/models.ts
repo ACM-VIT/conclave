@@ -1,5 +1,6 @@
+import { AI_GENERATION_LIMITS } from "@conclave/ai/limits";
 export type TranscriptReasoningEffort =
-  "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export type TranscriptTextVerbosity = "low" | "medium" | "high";
 
@@ -25,6 +26,7 @@ export interface TranscriptTranscriptionModelConfig {
 }
 
 export interface TranscriptResponseModelConfig {
+  maxOutputTokens?: number;
   provider: AiTextProvider;
   id: string;
   label: string;
@@ -101,8 +103,8 @@ const RESPONSE_MODEL_CONFIGS = [
     qaReasoningEffort: "low",
     minutesVerbosity: "medium",
     qaVerbosity: "low",
-    minutesMaxOutputTokens: 8192,
-    qaMaxOutputTokens: 4096,
+    minutesMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
+    qaMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
   },
   {
     id: "gpt-6-luna",
@@ -116,8 +118,8 @@ const RESPONSE_MODEL_CONFIGS = [
     qaReasoningEffort: "low",
     minutesVerbosity: "medium",
     qaVerbosity: "low",
-    minutesMaxOutputTokens: 8192,
-    qaMaxOutputTokens: 4096,
+    minutesMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
+    qaMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
   },
   {
     id: "gpt-6-astra",
@@ -131,8 +133,8 @@ const RESPONSE_MODEL_CONFIGS = [
     qaReasoningEffort: "low",
     minutesVerbosity: "medium",
     qaVerbosity: "low",
-    minutesMaxOutputTokens: 8192,
-    qaMaxOutputTokens: 4096,
+    minutesMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
+    qaMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
   },
   {
     id: "gpt-5.6-terra",
@@ -146,8 +148,8 @@ const RESPONSE_MODEL_CONFIGS = [
     qaReasoningEffort: "medium",
     minutesVerbosity: "medium",
     qaVerbosity: "low",
-    minutesMaxOutputTokens: 2400,
-    qaMaxOutputTokens: 1200,
+    minutesMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
+    qaMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
   },
   {
     id: "gpt-5.6-luna",
@@ -161,8 +163,8 @@ const RESPONSE_MODEL_CONFIGS = [
     qaReasoningEffort: "medium",
     minutesVerbosity: "medium",
     qaVerbosity: "low",
-    minutesMaxOutputTokens: 2200,
-    qaMaxOutputTokens: 1100,
+    minutesMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
+    qaMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
   },
   {
     id: "gpt-5.6-sol",
@@ -176,8 +178,8 @@ const RESPONSE_MODEL_CONFIGS = [
     qaReasoningEffort: "low",
     minutesVerbosity: "low",
     qaVerbosity: "low",
-    minutesMaxOutputTokens: 1800,
-    qaMaxOutputTokens: 900,
+    minutesMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
+    qaMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
   },
   {
     id: "claude-sonnet-5-5",
@@ -187,8 +189,8 @@ const RESPONSE_MODEL_CONFIGS = [
     supportsReasoning: true,
     supportsTextVerbosity: false,
     supportsStructuredOutputs: true,
-    minutesMaxOutputTokens: 4096,
-    qaMaxOutputTokens: 4096,
+    minutesMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
+    qaMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
   },
   {
     id: "claude-haiku-5-5",
@@ -198,8 +200,8 @@ const RESPONSE_MODEL_CONFIGS = [
     supportsReasoning: true,
     supportsTextVerbosity: false,
     supportsStructuredOutputs: true,
-    minutesMaxOutputTokens: 4096,
-    qaMaxOutputTokens: 4096,
+    minutesMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
+    qaMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
   },
   {
     id: "claude-opus-5-5",
@@ -209,8 +211,8 @@ const RESPONSE_MODEL_CONFIGS = [
     supportsReasoning: true,
     supportsTextVerbosity: false,
     supportsStructuredOutputs: true,
-    minutesMaxOutputTokens: 8192,
-    qaMaxOutputTokens: 8192,
+    minutesMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
+    qaMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
   },
   {
     id: "claude-fable-5-1",
@@ -220,8 +222,8 @@ const RESPONSE_MODEL_CONFIGS = [
     supportsReasoning: true,
     supportsTextVerbosity: false,
     supportsStructuredOutputs: true,
-    minutesMaxOutputTokens: 8192,
-    qaMaxOutputTokens: 8192,
+    minutesMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
+    qaMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
   },
 ] as const satisfies readonly TranscriptResponseModelConfig[];
 
@@ -272,8 +274,8 @@ export const getTranscriptResponseModelConfig = (
     supportsReasoning: false,
     supportsTextVerbosity: false,
     supportsStructuredOutputs: false,
-    minutesMaxOutputTokens: 1800,
-    qaMaxOutputTokens: 900,
+    minutesMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
+    qaMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
   };
 
 // Older selections remain valid, but the built-in picker starts with current models.
@@ -309,8 +311,8 @@ const responseModelProfile = (
     supportsReasoning: false,
     supportsTextVerbosity: false,
     supportsStructuredOutputs: true,
-    minutesMaxOutputTokens: 8192,
-    qaMaxOutputTokens: 4096,
+    minutesMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
+    qaMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
   };
 };
 
@@ -324,7 +326,7 @@ export type AiModelCatalog = {
 export const AI_DEFAULT_MODELS = {
   assistant: DEFAULT_TRANSCRIPT_QA_MODEL,
   transcript: DEFAULT_TRANSCRIPT_TRANSCRIPTION_MODEL,
-  games: "gpt-5.6-luna",
+  games: "gpt-6-luna",
   voice: "gpt-realtime-1.5",
   moderation: "omni-moderation-latest",
   tts: "eleven_multilingual_v2",
@@ -376,6 +378,7 @@ export type AiEnvironment = Partial<
     | "ANTHROPIC_BASE_URL"
     | "CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL"
     | "CONCLAVE_ASSISTANT_MODEL"
+    | "CONCLAVE_AI_SETTINGS"
     | "SFU_GAME_AI_MODEL",
     string
   >
@@ -413,6 +416,7 @@ export const readAiEnvironment = (
   ANTHROPIC_API_KEY: source.ANTHROPIC_API_KEY,
   SARVAM_API_KEY: source.SARVAM_API_KEY,
   ELEVENLABS_API_KEY: source.ELEVENLABS_API_KEY,
+  CONCLAVE_AI_SETTINGS: source.CONCLAVE_AI_SETTINGS,
   OPENAI_BASE_URL: source.OPENAI_BASE_URL,
   CLOUDFLARE_AI_GATEWAY_OPENAI_URL: source.CLOUDFLARE_AI_GATEWAY_OPENAI_URL,
   ANTHROPIC_BASE_URL: source.ANTHROPIC_BASE_URL,

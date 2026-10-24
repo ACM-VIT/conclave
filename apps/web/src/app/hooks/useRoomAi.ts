@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
+import { parseRoomAiFeatureSettings, resolveAiFeatureSettings, type AiFeature, type AiFeatureSettings } from "@conclave/ai/room-settings";
 import {
   isResponseModel,
+  getResponseProvider,
   type AiModelCatalog,
   type AiTextProvider,
 } from "@conclave/ai/models";
@@ -23,6 +25,10 @@ export function parseRoomAiState(value: unknown): RoomAiState | null {
     if (typeof model !== "string" || !isResponseModel(model)) return null;
     state.assistantModel = model;
   }
+  try {
+    const features = (value as Record<string, unknown>).features;
+    if (features !== undefined) state.features = parseRoomAiFeatureSettings(features);
+  } catch { return null; }
   for (const provider of ROOM_AI_PROVIDERS) {
     const entry = (value as Record<string, unknown>)[provider];
     if (!entry || typeof entry !== "object") return null;
@@ -43,18 +49,52 @@ export type RoomAiController = {
   connected: boolean;
   currentUserId: string;
   isAdmin: boolean;
+  requestAccessToken?: (purpose: "voice" | "speech") => Promise<string>;
   requestModels?: (options?: {
     provider?: AiTextProvider;
     apiKey?: string;
     refresh?: boolean;
   }) => Promise<AiModelCatalog[]>;
+  configureFeature?: (feature: AiFeature, settings: Partial<AiFeatureSettings>) => Promise<string | null>;
   configure: (
     provider: RoomAiProvider,
     apiKey: string | null | undefined,
-    // null shares an audio/image-only credential without selecting text.
+    // null shares a credential without changing the legacy Chat model.
     model?: string | null,
   ) => Promise<string | null>;
 };
+
+// Compact setup controls use the same room credential store as full settings.
+// Save before starting a feature so its server request can resolve the key.
+export async function configureRoomAiForFeature(
+  controller: RoomAiController,
+  keys: Partial<Record<RoomAiProvider, string>>,
+  model: string,
+  features: AiFeature[] = ["assistant"],
+): Promise<string | null> {
+  const modelProvider = getResponseProvider(model);
+  for (const provider of ROOM_AI_PROVIDERS) {
+    const key = keys[provider]?.trim();
+    if (!key) continue;
+    const error = await controller.configure(
+      provider,
+      key,
+      provider === modelProvider && features.includes("assistant") ? model : null,
+    );
+    if (error) return error;
+  }
+  if (controller.configureFeature) {
+    for (const feature of features) {
+      const current = resolveAiFeatureSettings({CONCLAVE_ASSISTANT_MODEL: controller.state.assistantModel ?? undefined}, feature, controller.state.features ?? {});
+      if (current.model !== model) {
+        const error = await controller.configureFeature(feature, {model});
+        if (error) return error;
+      }
+    }
+  } else if (features.includes("assistant") && controller.state.assistantModel !== model)
+    return controller.configure(modelProvider, undefined, model);
+  return null;
+}
 
 export function useRoomAi(
   socket: Socket | null,
@@ -127,12 +167,8 @@ export function useRoomAi(
     };
   }, [socket, joined, currentUserId, roomId]);
 
-  const configure = useCallback(
-    async (
-      provider: RoomAiProvider,
-      apiKey: string | null | undefined,
-      model?: string | null,
-    ): Promise<string | null> => {
+  const saveConfiguration = useCallback(
+    async (data: Record<string, unknown>): Promise<string | null> => {
       if (!socket?.connected || !joined)
         return "Reconnect to the meeting to change AI settings.";
       const generation = epoch.current;
@@ -140,14 +176,8 @@ export function useRoomAi(
         socket.timeout(8000).emit(
           "ai:configure",
           {
-            provider,
+            ...data,
             roomId,
-            ...(apiKey === null
-              ? { remove: true }
-              : apiKey !== undefined
-                ? { apiKey }
-                : {}),
-            ...(model !== undefined ? { model } : {}),
           },
           (
             error: Error | null,
@@ -175,6 +205,8 @@ export function useRoomAi(
     },
     [socket, joined, roomId],
   );
+  const configure = useCallback((provider: RoomAiProvider, apiKey: string | null | undefined, model?: string | null) => saveConfiguration({provider, ...(apiKey === null ? {remove: true} : apiKey !== undefined ? {apiKey} : {}), ...(model !== undefined ? {model} : {})}), [saveConfiguration]);
+  const configureFeature = useCallback((feature: AiFeature, settings: Partial<AiFeatureSettings>) => saveConfiguration({feature, settings}), [saveConfiguration]);
   const requestModels = useCallback(
     async (
       options: {
@@ -217,6 +249,18 @@ export function useRoomAi(
     },
     [socket, joined, roomId],
   );
+  const accessTokens = useRef(new Map<string, {token: string; expiresAt: number; epoch: number}>());
+  const requestAccessToken = useCallback(async (purpose: "voice" | "speech"): Promise<string> => {
+    if (!socket?.connected || !joined) throw new Error("Reconnect to the meeting.");
+    const generation = epoch.current;
+    const cached = accessTokens.current.get(purpose);
+    if (cached && cached.epoch === generation && cached.expiresAt > Date.now() + 15_000) return cached.token;
+    return new Promise((resolve, reject) => socket.timeout(8000).emit("ai:access", {purpose}, (error: Error | null, result: {token?: string; expiresAt?: number; error?: string} | undefined) => {
+      if (error || !socket.connected || generation !== epoch.current || typeof result?.token !== "string" || typeof result.expiresAt !== "number") {reject(new Error(result?.error || "AI access could not be loaded.")); return;}
+      accessTokens.current.set(purpose, {token: result.token, expiresAt: result.expiresAt, epoch: generation});
+      resolve(result.token);
+    }));
+  }, [socket, joined]);
   return {
     state,
     ready,
@@ -224,6 +268,8 @@ export function useRoomAi(
     currentUserId,
     isAdmin,
     configure,
+    configureFeature,
     requestModels,
+    requestAccessToken,
   };
 }

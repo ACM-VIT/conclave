@@ -2,8 +2,10 @@ import { AI_PROVIDERS, readAiEnvironment } from "@conclave/ai/models";
 import { ROOM_AI_PROVIDERS } from "@conclave/ai/room";
 import { Admin } from "../../../config/classes/Admin.js";
 import { config as sfuConfig } from "../../../config/config.js";
+import { resolveAiFeatureSettings } from "@conclave/ai/room-settings";
 import type { Room } from "../../../config/classes/Room.js";
 import { GameSession } from "../../games/engine.js";
+import { GameContentGenerationError, gameContentTopic } from "../../games/aiContent.js";
 import { normalizeConfig } from "../../games/config.js";
 import { getGameCatalog, getGameModule } from "../../games/registry.js";
 import type {
@@ -388,125 +390,156 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
         return;
       }
       const gameConfig = normalizeConfig(module.options, data?.options);
-
-      let content: unknown | null = null;
-      if (module.generateContent) {
-        try {
-          content = await module.generateContent({
-            players,
-            aiEnvironment: {
-              ...Object.fromEntries(
-                ROOM_AI_PROVIDERS.map((provider) => [
-                  AI_PROVIDERS[provider].keyEnv,
-                  room.aiCredentials.get(provider),
-                ]),
-              ),
-              ...Object.fromEntries(
-                Object.entries(readAiEnvironment(process.env)).filter(
-                  ([, value]) => Boolean(value),
-                ),
-              ),
-              ...(room.aiCredentials.assistantModel
-                ? { CONCLAVE_ASSISTANT_MODEL: room.aiCredentials.assistantModel }
-                : {}),
-            },
-            config: gameConfig,
-            now: Date.now(),
-          });
-        } catch (error) {
-          Logger.warn(`[Games] content generation failed for ${gameId}`, error);
-        }
-        if (sfuConfig.gameAi.enabled && content == null) {
-          Logger.warn(`[Games] using bundled content fallback for ${gameId}`);
-        }
-      }
-
-      try {
-        // Re-check after the async content load: a finished session is still
-        // replaceable, but a game that became live in the meantime blocks.
-        if (room.gameSession && !room.gameSession.isFinished()) {
-          respond(callback, { success: false, error: "A game is already running" });
-          return;
-        }
-        const hostClient = room.clients.get(hostId);
-        if (!(hostClient instanceof Admin) || hostClient.isObserver) {
-          respond(callback, { success: false, error: "Only the host can start a game" });
-          return;
-        }
-        players = snapshotPlayers(room);
-        const currentPlayerError = validatePlayerCount(players, module);
-        if (currentPlayerError) {
-          respond(callback, { success: false, error: currentPlayerError });
-          return;
-        }
-        stopGameLoop(room);
-        room.gameSession = new GameSession({
-          module,
-          players,
-          adminIds: collectAdminIds(room),
-          hostId,
-          config: gameConfig,
-          content,
-        });
-      } catch (error) {
-        Logger.error("[Games] failed to start", error);
-        room.gameSession = null;
-        respond(callback, { success: false, error: "Failed to start game" });
+      if (room.gameGeneration) {
+        respond(callback, {success: false, error: "A game is already starting."});
         return;
       }
+      const generation = new AbortController();
+      room.gameGeneration = {controller: generation, requestedBy: hostId};
+      try {
 
-      // Register per-play analytics BEFORE the tick loop starts, so a timer that
-      // finishes the game immediately still finds the record. `instanceId`
-      // correlates this play's started/finished/ended events.
-      const session = room.gameSession;
-      const startedAtMs = Date.now();
-      const play: PlayAnalytics = {
-        instanceId: randomUUID(),
-        gameId,
-        startedAtMs,
-        playerCount: players.length,
-        hasLeaderboard: Boolean(module.hasLeaderboard),
-        finishedSent: false,
-      };
-      playAnalyticsBySession.set(session, play);
-      captureGameEvent({
-        event: "game_started",
-        distinctId: stableDistinctId(room, hostId),
-        roomKey: room.channelId,
-        properties: {
-          instance_id: play.instanceId,
-          game_id: gameId,
-          player_count: play.playerCount,
-          has_leaderboard: play.hasLeaderboard,
-          ...buildConfigProps(gameId, gameConfig),
-        },
-      });
+        let content: unknown | null = null;
+        if (module.generateContent) {
+          try {
+            content = await module.generateContent({
+              signal: generation.signal,
+              players,
+              aiEnvironment: {
+                ...Object.fromEntries(
+                  ROOM_AI_PROVIDERS.map((provider) => [
+                    AI_PROVIDERS[provider].keyEnv,
+                    room.aiCredentials.get(provider),
+                  ]),
+                ),
+                ...Object.fromEntries(
+                  Object.entries(readAiEnvironment(process.env)).filter(
+                    ([, value]) => Boolean(value),
+                  ),
+                ),
+                CONCLAVE_AI_SETTINGS: JSON.stringify(room.aiCredentials.effectiveFeatureSettings(readAiEnvironment(process.env))),
+                ...(room.aiCredentials.assistantModel
+                  ? { CONCLAVE_ASSISTANT_MODEL: room.aiCredentials.assistantModel }
+                  : {}),
+              },
+              config: gameConfig,
+              now: Date.now(),
+            });
+          } catch (error) {
+            if (generation.signal.aborted) { respond(callback, {success: false, error: "Game creation cancelled."}); return; }
+            Logger.warn(`[Games] content generation failed for ${gameId}`);
+            respond(callback, {
+              success: false,
+              error:
+                error instanceof GameContentGenerationError
+                  ? error.message
+                  : "Could not generate questions. Try again.",
+            });
+            return;
+          }
+          if (content == null && gameContentTopic(gameConfig)) {
+            const serverDisabled = !sfuConfig.gameAi.enabled || /^(0|false)$/i.test(process.env.SFU_GAME_AI_ENABLED || "");
+            const roomDisabled = !resolveAiFeatureSettings({}, "games", room.aiCredentials.featureSettings).enabled;
+            respond(callback, {
+              success: false,
+              error:
+                serverDisabled ? "AI generation is disabled on this server. Clear Topic for built-in content."
+                  : roomDisabled ? "Enable Games in Room AI settings or clear Topic for built-in content."
+                    : "Add a room AI key to generate a topic, or leave Topic blank for built-in content.",
+            });
+            return;
+          }
+        }
 
-      // If a vote was open when the host started this game, the vote resolved
-      // into this play. Correlate it with the started play's `instanceId`.
-      const resolvedVote = room.gameVote;
-      if (resolvedVote) {
+        try {
+          if (generation.signal.aborted) { respond(callback, {success: false, error: "Game creation cancelled."}); return; }
+          // Re-check after the async content load: a finished session is still
+          // replaceable, but a game that became live in the meantime blocks.
+          if (room.gameSession && !room.gameSession.isFinished()) {
+            respond(callback, { success: false, error: "A game is already running" });
+            return;
+          }
+          const hostClient = room.clients.get(hostId);
+          if (!(hostClient instanceof Admin) || hostClient.isObserver) {
+            respond(callback, { success: false, error: "Only the host can start a game" });
+            return;
+          }
+          players = snapshotPlayers(room);
+          const currentPlayerError = validatePlayerCount(players, module);
+          if (currentPlayerError) {
+            respond(callback, { success: false, error: currentPlayerError });
+            return;
+          }
+          stopGameLoop(room);
+          room.gameSession = new GameSession({
+            module,
+            players,
+            adminIds: collectAdminIds(room),
+            hostId,
+            config: gameConfig,
+            content,
+          });
+        } catch (error) {
+          Logger.error("[Games] failed to start", error);
+          room.gameSession = null;
+          respond(callback, { success: false, error: "Failed to start game" });
+          return;
+        }
+
+        // Register per-play analytics BEFORE the tick loop starts, so a timer that
+        // finishes the game immediately still finds the record. `instanceId`
+        // correlates this play's started/finished/ended events.
+        const session = room.gameSession;
+        const startedAtMs = Date.now();
+        const play: PlayAnalytics = {
+          instanceId: randomUUID(),
+          gameId,
+          startedAtMs,
+          playerCount: players.length,
+          hasLeaderboard: Boolean(module.hasLeaderboard),
+          finishedSent: false,
+        };
+        playAnalyticsBySession.set(session, play);
         captureGameEvent({
-          event: "game_vote_resolved",
+          event: "game_started",
           distinctId: stableDistinctId(room, hostId),
           roomKey: room.channelId,
           properties: {
             instance_id: play.instanceId,
             game_id: gameId,
-            candidate_count: resolvedVote.candidates.length,
-            vote_count: Object.keys(resolvedVote.votes).length,
             player_count: play.playerCount,
+            has_leaderboard: play.hasLeaderboard,
+            ...buildConfigProps(gameId, gameConfig),
           },
         });
-      }
 
-      room.gameVote = null;
-      broadcastVote(io, room);
-      startGameLoop(io, room);
-      broadcastGame(io, room);
-      // A move-free game could already be finished at setup (rare); capture it.
-      maybeCaptureGameFinished(room);
-      respond(callback, { success: true, gameId });
+        // If a vote was open when the host started this game, the vote resolved
+        // into this play. Correlate it with the started play's `instanceId`.
+        const resolvedVote = room.gameVote;
+        if (resolvedVote) {
+          captureGameEvent({
+            event: "game_vote_resolved",
+            distinctId: stableDistinctId(room, hostId),
+            roomKey: room.channelId,
+            properties: {
+              instance_id: play.instanceId,
+              game_id: gameId,
+              candidate_count: resolvedVote.candidates.length,
+              vote_count: Object.keys(resolvedVote.votes).length,
+              player_count: play.playerCount,
+            },
+          });
+        }
+
+        room.gameVote = null;
+        broadcastVote(io, room);
+        startGameLoop(io, room);
+        broadcastGame(io, room);
+        // A move-free game could already be finished at setup (rare); capture it.
+        maybeCaptureGameFinished(room);
+        respond(callback, { success: true, gameId });
+      } finally {
+        if (room.gameGeneration?.controller === generation) room.gameGeneration = null;
+      }
     },
   );
 
@@ -714,6 +747,8 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
       return;
     }
     const room = context.currentRoom;
+    room.gameGeneration?.controller.abort();
+    room.gameGeneration = null;
     const session = room.gameSession;
     const gameId = session?.gameId ?? null;
 

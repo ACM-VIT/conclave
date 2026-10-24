@@ -166,6 +166,7 @@ export async function fetchAiModelCatalog(options: {
             : {}),
           ...(typeof row.max_tokens === "number" && row.max_tokens > 0
             ? {
+                maxOutputTokens: row.max_tokens,
                 qaMaxOutputTokens: Math.min(
                   config.qaMaxOutputTokens,
                   row.max_tokens,

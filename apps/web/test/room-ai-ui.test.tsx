@@ -11,6 +11,7 @@ import { getTranscriptResponseModelConfig } from "@conclave/ai/models";
 import {
   useRoomAi,
   parseRoomAiState,
+  configureRoomAiForFeature,
   type RoomAiController,
 } from "../src/app/hooks/useRoomAi";
 import type { MeetingTranscriptController } from "../src/app/hooks/useMeetingTranscript";
@@ -37,6 +38,7 @@ const roomAi = (
   currentUserId: "alice",
   isAdmin: false,
   configure: vi.fn().mockResolvedValue(null),
+  configureFeature: vi.fn().mockResolvedValue(null),
   ...overrides,
 });
 const transcript = (start = vi.fn().mockResolvedValue(true)) =>
@@ -60,17 +62,218 @@ const transcript = (start = vi.fn().mockResolvedValue(true)) =>
     start,
   }) as unknown as MeetingTranscriptController;
 
+const openKeys = async () => act(async () => container.querySelector<HTMLButtonElement>('[role="tab"][aria-selected]')?.parentElement?.querySelectorAll<HTMLButtonElement>('button')[1].click());
+const openFeature = async (name = "Chat assistant") => act(async () => container.querySelector<HTMLButtonElement>(`[aria-label="${name} settings"]`)!.click());
+const saveFeature = async () => act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})));
+
 describe("AI setup UX", () => {
+  it.each(["idle", "takeover_needed"])("starts inherited Notes profiles without requiring key ownership (%s)", async status => {
+    const state = emptyRoomAiState();
+    state.assistantModel = "gpt-6.1-sol";
+    state.openai = {source: "room", ownerId: "bob"};
+    state.anthropic = {source: "room", ownerId: "bob"};
+    state.features = {questions: {model: "claude-haiku-5-5"}};
+    const controller = roomAi({state, configureFeature: vi.fn().mockResolvedValue("Permission denied")});
+    const start = vi.fn().mockResolvedValue(true), takeover = vi.fn().mockResolvedValue(true);
+    const notes = {...transcript(start), canTakeover: true, takeover, session: {...transcript().session, status}, globalProviderKeysAvailable: {}} as MeetingTranscriptController;
+    await act(async () => root.render(<TranscriptPanel transcript={notes} roomAi={controller} onClose={() => {}} />));
+    expect(container.textContent).toContain("GPT-6.1 Sol");
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
+    expect(controller.configureFeature).not.toHaveBeenCalled();
+    expect(status === "idle" ? start : takeover).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows interruption feedback alongside a preserved partial answer", async () => {
+    const notes = {...transcript(), session: {...transcript().session, status: "live"}, qaMessages: [{id: "partial", role: "assistant", content: "The incomplete answer", status: "error", error: "Response interrupted. Ask again.", createdAt: 1, updatedAt: 2}]} as MeetingTranscriptController;
+    await act(async () => root.render(<TranscriptPanel transcript={notes} onClose={() => {}} />));
+    await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent?.trim() === "ask")!.click());
+    expect(container.textContent).toContain("The incomplete answer");
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Response interrupted. Ask again.");
+  });
+  it.each([false, true])("saves a compact Chat model before retrying with an existing provider key (denied: %s)", async denied => {
+    const state = emptyRoomAiState();
+    state.openai = {source: "room", ownerId: "alice"};
+    state.features = {assistant: {model: "claude-haiku-5-5"}};
+    const configureFeature = vi.fn().mockResolvedValue(denied ? "Only a host can change this model." : null);
+    const submit = vi.fn();
+    const controller = roomAi({state, isAdmin: true, configureFeature});
+    await act(async () => root.render(<ChatPanel roomAi={controller} messages={[]} chatInput="" currentUserId="alice" onInputChange={() => {}} onSend={() => {}} onSendGif={() => {}} onSendImage={async () => false} onClose={() => {}} assistantApiKeyPrompt={{visible: true, error: null, model: "claude-haiku-5-5"}} onSubmitAssistantApiKey={submit} />));
+    const select = container.querySelector<HTMLSelectElement>('select')!;
+    await act(async () => {select.value = "gpt-6.1-sol"; select.dispatchEvent(new Event("change", {bubbles: true}));});
+    await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === "Continue")!.click());
+    expect(controller.configure).not.toHaveBeenCalled();
+    expect(configureFeature).toHaveBeenCalledWith("assistant", {model: "gpt-6.1-sol"});
+    if (denied) expect(submit).not.toHaveBeenCalled();
+    else {
+      expect(submit).toHaveBeenCalledWith("", "gpt-6.1-sol");
+      expect(configureFeature.mock.invocationCallOrder[0]).toBeLessThan(submit.mock.invocationCallOrder[0]);
+    }
+  });
+
+  it.each([false, true])("saves a changed transcription provider before Notes starts (existing Sarvam key: %s)", async existing => {
+    const state = emptyRoomAiState();
+    state.features = {transcription: {model: "gpt-live-transcribe"}, minutes: {enabled: false}, questions: {enabled: false}};
+    if (existing) state.sarvam = {source: "room", ownerId: "alice"};
+    const controller = roomAi({state, isAdmin: true});
+    const start = vi.fn().mockResolvedValue(true);
+    await act(async () => root.render(<TranscriptPanel roomAi={controller} transcript={{...transcript(start), globalProviderKeysAvailable: {}}} onClose={() => {}} />));
+    await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === "Sarvam")!.click());
+    if (!existing) {
+      const key = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+      await act(async () => {Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")!.set!.call(key,"sarvam-fixture"); key.dispatchEvent(new Event("input",{bubbles:true}));});
+    }
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event("submit",{bubbles:true,cancelable:true})));
+    expect(controller.configureFeature).toHaveBeenCalledExactlyOnceWith("transcription", {model: "saaras:v3"});
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({transcriptModel: "saaras:v3"}));
+    expect(vi.mocked(controller.configureFeature!).mock.invocationCallOrder[0]).toBeLessThan(start.mock.invocationCallOrder[0]);
+  });
+  it("lets a Sarvam contributor switch transcription from an unowned OpenAI model", async () => {
+    const state = emptyRoomAiState();
+    state.openai = {source: "room", ownerId: "bob"};
+    state.sarvam = {source: "room", ownerId: "alice"};
+    const controller = roomAi({state});
+    await act(async () => root.render(<RoomAiSettings controller={controller} onClose={() => {}} />));
+    await openFeature("Transcription");
+    const select = container.querySelector<HTMLSelectElement>('[aria-label="Model"]')!;
+    expect(select.disabled).toBe(false);
+    expect([...select.options].find(option => option.value === "gpt-live-transcribe")?.disabled).toBe(true);
+    expect([...select.options].find(option => option.value === "saaras:v3")?.disabled).toBe(false);
+    await act(async () => {select.value = "saaras:v3"; select.dispatchEvent(new Event("change", {bubbles: true}));});
+    await saveFeature();
+    expect(controller.configureFeature).toHaveBeenCalledWith("transcription", expect.objectContaining({model: "saaras:v3"}));
+  });
+  it("reflects compact Chat setup in room settings and keeps failed shares retryable", async () => {
+    const state = emptyRoomAiState();
+    let rejectShare = true;
+    const fake = {
+      connected: true,
+      on: vi.fn(),
+      off: vi.fn(),
+      timeout: () => fake,
+      emit: (event: string, ...args: unknown[]) => {
+        const ack = args.at(-1) as (
+          error: Error | null,
+          result: unknown,
+        ) => void;
+        if (event === "ai:settings") return ack(null, { state });
+        if (event === "ai:configure") {
+          if (rejectShare) return ack(null, { error: "Could not share key." });
+          const data = args[0] as { provider: "anthropic"; model?: string };
+          state[data.provider] = { source: "room", ownerId: "alice" };
+          state.assistantModel = data.model ?? state.assistantModel;
+          return ack(null, { state });
+        }
+      },
+    };
+    const submit = vi.fn();
+    function Harness() {
+      const controller = useRoomAi(
+        fake as unknown as Socket,
+        true,
+        "alice",
+        false,
+        "room",
+      );
+      return (
+        <ChatPanel
+          roomAi={controller}
+          messages={[]}
+          chatInput=""
+          currentUserId="alice"
+          onInputChange={() => {}}
+          onSend={() => {}}
+          onSendGif={() => {}}
+          onSendImage={async () => false}
+          onClose={() => {}}
+          assistantApiKeyPrompt={{
+            visible: true,
+            error: null,
+            model: "claude-haiku-5-5",
+          }}
+          onSubmitAssistantApiKey={submit}
+        />
+      );
+    }
+    await act(async () => root.render(<Harness />));
+    const input = container.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "sk-ant-room-fixture");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const connect = () =>
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent === "Share & connect")!
+        .click();
+    await act(async () => connect());
+    expect(submit).not.toHaveBeenCalled();
+    expect(input.value).toBe("sk-ant-room-fixture");
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      "Could not share key.",
+    );
+    rejectShare = false;
+    await act(async () => connect());
+    expect(submit).toHaveBeenCalledWith("", "claude-haiku-5-5");
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent?.trim() === "Room settings")!
+        .click(),
+    );
+    await openKeys();
+    expect(
+      container.querySelector('[aria-label="Anthropic settings"]')?.textContent,
+    ).toContain("Room key");
+    expect(
+      container.querySelector('[aria-label="Sarvam settings"]')?.textContent,
+    ).toContain("Not set");
+    expect(container.textContent).not.toContain("sk-ant-room-fixture");
+  });
+
+  it("stops compact setup when sharing fails, and never selects text for an audio-only key", async () => {
+    const configure = vi.fn().mockResolvedValueOnce("Disconnected");
+    const controller = roomAi({ configure });
+    expect(
+      await configureRoomAiForFeature(
+        controller,
+        { sarvam: "sarvam-fixture", anthropic: "sk-ant-fixture" },
+        "claude-haiku-5-5",
+      ),
+    ).toBe("Disconnected");
+    expect(configure).toHaveBeenCalledTimes(1);
+    configure.mockReset().mockResolvedValue(null);
+    expect(
+      await configureRoomAiForFeature(
+        controller,
+        { sarvam: "sarvam-fixture" },
+        "claude-haiku-5-5",
+      ),
+    ).toBeNull();
+    expect(configure).toHaveBeenCalledExactlyOnceWith(
+      "sarvam",
+      "sarvam-fixture",
+      null,
+    );
+  });
+  it("shares Notes credentials without selecting or replacing the Chat model", async () => {
+    const controller = roomAi();
+    await configureRoomAiForFeature(controller, {anthropic: "sk-ant-notes"}, "claude-haiku-5-5", ["minutes", "questions"]);
+    expect(controller.configure).toHaveBeenCalledExactlyOnceWith("anthropic", "sk-ant-notes", null);
+    expect(controller.configureFeature).toHaveBeenCalledWith("minutes", {model: "claude-haiku-5-5"});
+    expect(controller.configureFeature).toHaveBeenCalledWith("questions", {model: "claude-haiku-5-5"});
+    expect(controller.configureFeature).not.toHaveBeenCalledWith("assistant", expect.anything());
+  });
   it("clears a personal catalog and explains refresh when the draft key is invalid", async () => {
-    const requestModels = vi
-      .fn()
-      .mockResolvedValue([
-        {
-          provider: "anthropic",
-          source: "live",
-          models: [getTranscriptResponseModelConfig("claude-sonnet-5-6")],
-        },
-      ]);
+    const requestModels = vi.fn().mockResolvedValue([
+      {
+        provider: "anthropic",
+        source: "live",
+        models: [getTranscriptResponseModelConfig("claude-sonnet-5-6")],
+      },
+    ]);
     await act(async () =>
       root.render(
         <TranscriptPanel
@@ -119,10 +322,11 @@ describe("AI setup UX", () => {
   it("keeps a notes key when selecting another model from the same provider", async () => {
     const start = vi.fn().mockResolvedValue(true);
     const notes = transcript(start);
+    const configure = vi.fn().mockResolvedValue(null);
     await act(async () =>
       root.render(
         <TranscriptPanel
-          roomAi={roomAi()}
+          roomAi={roomAi({ configure })}
           transcript={notes}
           onClose={() => {}}
         />,
@@ -153,9 +357,14 @@ describe("AI setup UX", () => {
     );
     expect(start).toHaveBeenCalledWith(
       expect.objectContaining({
-        assistantApiKey: "sk-ant-personal-fixture",
+        assistantApiKey: undefined,
         qaModel: "claude-haiku-5-5",
       }),
+    );
+    expect(configure).toHaveBeenCalledWith(
+      "anthropic",
+      "sk-ant-personal-fixture",
+      null,
     );
   });
 
@@ -172,6 +381,7 @@ describe("AI setup UX", () => {
         />,
       ),
     );
+    await openKeys();
     const row = container.querySelector(
       '[role="group"][aria-label="OpenAI settings"]',
     )!;
@@ -255,28 +465,30 @@ describe("AI setup UX", () => {
       },
       { provider: "anthropic", source: "live", models: [] },
     ]);
-    const configure = vi.fn().mockResolvedValue(null);
+    const configureFeature = vi.fn().mockResolvedValue(null);
     await act(async () =>
       root.render(
         <RoomAiSettings
-          controller={roomAi({ isAdmin: true, requestModels, configure })}
+          controller={roomAi({ isAdmin: true, requestModels, configureFeature })}
           onClose={() => {}}
         />,
       ),
     );
+    await openFeature();
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
     const select = container.querySelector("select")!;
     expect([...select.options].map((option) => option.value)).toEqual([
-      "",
+      "gpt-6.1-sol",
       "gpt-6.2-sol",
     ]);
     await act(async () => {
       select.value = "gpt-6.2-sol";
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    expect(configure).toHaveBeenCalledWith("openai", undefined, "gpt-6.2-sol");
+    await saveFeature();
+    expect(configureFeature).toHaveBeenCalledWith("assistant", expect.objectContaining({model: "gpt-6.2-sol", maxOutputTokens: 32768, researchTokens: 16384}));
     await act(async () =>
       container
         .querySelector<HTMLButtonElement>(
@@ -311,6 +523,7 @@ describe("AI setup UX", () => {
     await act(async () =>
       root.render(<RoomAiSettings controller={first} onClose={() => {}} />),
     );
+    await openFeature();
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
@@ -349,16 +562,7 @@ describe("AI setup UX", () => {
         />,
       ),
     );
-    const select = container.querySelector("select")!;
-    await act(async () => {
-      select.value = "claude-haiku-5-5";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    expect(configure).toHaveBeenCalledWith(
-      "anthropic",
-      undefined,
-      "claude-haiku-5-5",
-    );
+    await openKeys();
     const row = container.querySelector(
       '[role="group"][aria-label="Anthropic settings"]',
     )!;
@@ -397,14 +601,64 @@ describe("AI setup UX", () => {
     expect(container.querySelector(".lucide-sparkles")).toBeNull();
   });
 
-  it("labels the inherited model without inventing a deployment selection", async () => {
-    await act(async () =>
-      root.render(<RoomAiSettings controller={roomAi()} onClose={() => {}} />),
-    );
-    expect(container.querySelector("select")?.value).toBe("");
-    expect(container.querySelector('option[value=""]')?.textContent).toBe(
-      "Deployment default",
-    );
+  it("shows independent feature defaults and keeps detailed controls collapsed", async () => {
+    await act(async () => root.render(<RoomAiSettings controller={roomAi()} onClose={() => {}} />));
+    expect(container.querySelector("select")).toBeNull();
+    expect(container.querySelector('[aria-label="Chat assistant settings"]')?.textContent).toContain("GPT-6.1 Sol");
+    expect(container.querySelector('[aria-label="Games settings"]')?.textContent).toContain("GPT-6 Luna");
+    await openFeature();
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Output tokens"]')?.value).toBe("32768");
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Research tokens"]')?.value).toBe("16384");
+  });
+
+  it("keeps an unsaved feature draft when unrelated room metadata rerenders", async () => {
+    const controller = roomAi({isAdmin: true});
+    const render = () => root.render(<RoomAiSettings controller={{...controller, state: {...controller.state}}} onClose={() => {}} />);
+    await act(async () => render());
+    await openFeature();
+    const output = container.querySelector<HTMLInputElement>('[aria-label="Output tokens"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(output, "64000");
+      output.dispatchEvent(new Event("input", {bubbles: true}));
+    });
+    await act(async () => render());
+    expect(output.value).toBe("64000");
+    await saveFeature();
+    expect(controller.configureFeature).toHaveBeenCalledWith("assistant", expect.objectContaining({maxOutputTokens: 64000}));
+  });
+
+  it.each([false, true])("starts notes with questions disabled and enabled minutes %s", async minutesEnabled => {
+    const state = emptyRoomAiState();
+    state.sarvam = {source: "room", ownerId: "alice"};
+    state.anthropic = {source: "room", ownerId: "alice"};
+    state.features = {transcription: {model: "saaras:v3"}, questions: {enabled: false, model: "gpt-6.1-sol"}, minutes: {enabled: minutesEnabled, model: "claude-haiku-5-5"}};
+    const start = vi.fn().mockResolvedValue(true);
+    const notes = {...transcript(start), globalProviderKeysAvailable: {}};
+    await act(async () => root.render(<TranscriptPanel transcript={notes} roomAi={roomAi({state})} onClose={() => {}} />));
+    const submit = container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    expect(submit.disabled).toBe(false);
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it("requests the missing minutes provider key without changing independently configured models", async () => {
+    const state = emptyRoomAiState();
+    state.sarvam = {source: "room", ownerId: "alice"};
+    state.anthropic = {source: "room", ownerId: "alice"};
+    state.features = {transcription: {model: "saaras:v3"}, minutes: {model: "gpt-6.1-sol"}, questions: {model: "claude-haiku-5-5"}};
+    const configure = vi.fn().mockResolvedValue(null), configureFeature = vi.fn().mockResolvedValue(null), start = vi.fn().mockResolvedValue(true);
+    await act(async () => root.render(<TranscriptPanel transcript={{...transcript(start), globalProviderKeysAvailable: {}}} roomAi={roomAi({state, configure, configureFeature})} onClose={() => {}} />));
+    const key = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    expect(key.parentElement?.textContent).toContain("OpenAI");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(key, "sk-minutes-fixture");
+      key.dispatchEvent(new Event("input", {bubbles: true}));
+    });
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
+    expect(configure).toHaveBeenCalledWith("openai", "sk-minutes-fixture", null);
+    expect(configureFeature).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledTimes(1);
   });
 
   it("preserves the audio draft when the shared assistant changes", async () => {
@@ -457,7 +711,7 @@ describe("AI setup UX", () => {
     expect(start).toHaveBeenCalledWith(
       expect.objectContaining({
         transcriptModel: "saaras:v3",
-        apiKey: "sarvam-draft-key",
+        apiKey: undefined,
         qaModel: "claude-haiku-5-5",
       }),
     );
@@ -502,13 +756,10 @@ describe("AI setup UX", () => {
     });
     await act(async () =>
       [...container.querySelectorAll("button")]
-        .find((button) => button.textContent === "Connect")!
+        .find((button) => button.textContent === "Share & connect")!
         .click(),
     );
-    expect(submit).toHaveBeenCalledWith(
-      "sk-ant-replacement",
-      "claude-haiku-5-5",
-    );
+    expect(submit).toHaveBeenCalledWith("", "claude-haiku-5-5");
   });
 
   it("uses the room assistant model for notes setup", async () => {
@@ -545,7 +796,7 @@ describe("AI setup UX", () => {
     );
     expect(input?.closest("label")?.textContent).toContain("Anthropic key");
     const start = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent === "Start notes",
+      (button) => button.textContent === "Share & start notes",
     )!;
     expect(start.disabled).toBe(true);
     const select = container.querySelector("select")!;
@@ -588,50 +839,20 @@ describe("AI setup UX", () => {
     );
   });
 
-  it("explains the sharing scope and restricts management of another participant's key", async () => {
-    const state = emptyRoomAiState();
-    state.openai = { source: "room", ownerId: "bob" };
-    await act(async () =>
-      root.render(
-        <RoomAiSettings controller={roomAi({ state })} onClose={() => {}} />,
-      ),
-    );
-    expect(container.querySelector("section")?.getAttribute("aria-label")).toBe(
-      "Room AI settings",
-    );
-    const openai = [...container.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("OpenAI"),
-    )!;
-    expect(openai.disabled).toBe(true);
-    expect(
-      container.querySelector<HTMLOptionElement>('option[value="gpt-6-astra"]')
-        ?.disabled,
-    ).toBe(true);
-    expect(
-      container.querySelector<HTMLOptionElement>(
-        'option[value="claude-sonnet-5-5"]',
-      )?.disabled,
-    ).toBe(true);
-    await act(async () =>
-      root.render(
-        <RoomAiSettings
-          controller={roomAi({ state, isAdmin: true })}
-          onClose={() => {}}
-        />,
-      ),
-    );
-    await act(async () => openai.click());
-    expect(
-      container.querySelector<HTMLOptionElement>('option[value="gpt-6-astra"]')
-        ?.disabled,
-    ).toBe(false);
+  it("restricts another participant's keys and feature controls, while hosts can manage them", async () => {
+    const state = emptyRoomAiState(); state.openai = {source: "room", ownerId: "bob"};
+    const render = (isAdmin: boolean) => root.render(<RoomAiSettings controller={roomAi({state, isAdmin})} onClose={() => {}} />);
+    await act(async () => render(false));
+    await openFeature();
+    expect(container.querySelector<HTMLSelectElement>('select')?.disabled).toBe(true);
+    await openKeys();
+    const row = () => container.querySelector('[role="group"][aria-label="OpenAI settings"]')!;
+    expect(row().querySelector<HTMLButtonElement>('button')?.disabled).toBe(true);
+    await act(async () => render(true));
+    await act(async () => row().querySelector<HTMLButtonElement>('button')!.click());
     expect(container.textContent).toContain("Your account is billed");
     expect(container.textContent).toContain("when the room ends");
-    expect(
-      [...container.querySelectorAll("button")].some(
-        (button) => button.textContent === "Remove",
-      ),
-    ).toBe(true);
+    expect([...container.querySelectorAll('button')].some(button => button.textContent === "Remove")).toBe(true);
   });
 
   it("discards credentials and unexpected fields from incoming public metadata", () => {

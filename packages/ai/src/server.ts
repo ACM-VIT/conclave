@@ -10,11 +10,30 @@ import {
 import { createOpenAiTextSession, generateOpenAiText } from "#openai";
 import { createAnthropicTextSession, generateAnthropicText } from "#anthropic";
 import type { AiTextOptions, AiTextSession } from "#types";
+import { resolveAiFeatureSettings } from "@conclave/ai/room-settings";
+import { AI_GENERATION_LIMITS } from "@conclave/ai/limits";
 
 export type * from "#types";
 export { createOpenAiClient } from "#openai";
 export { AiTaskLimitError, describeAiError } from "#errors";
 export { fetchAiModelCatalog };
+
+function featureOptions(options: AiTextOptions): AiTextOptions {
+  if (!options.feature) return options;
+  const settings = resolveAiFeatureSettings(options.env, options.feature);
+  if (!settings.enabled) throw new Error("This AI feature is disabled in Room AI settings.");
+  return {
+    ...options,
+    maxOutputTokens: settings.maxOutputTokens,
+    researchTokens: settings.researchTokens,
+    maxSearchUses: settings.maxSearchUses,
+    timeoutMs: settings.timeoutMs,
+    instructions: [options.instructions, settings.instructions, getResponseProvider(options.model) === "anthropic" && settings.verbosity !== "default" ? settings.verbosity === "low" ? "Keep the final answer concise." : settings.verbosity === "high" ? "Provide a thorough, detailed final answer." : "Use a moderate amount of detail in the final answer." : ""].filter(Boolean).join("\n\n"),
+    reasoningEffort: settings.reasoningEffort !== "default" ? settings.reasoningEffort : getResponseProvider(options.model) === "anthropic" ? undefined : options.reasoningEffort,
+    ...(settings.verbosity !== "default" ? { verbosity: settings.verbosity } : {}),
+    tools: settings.searchEnabled ? [...(options.tools ?? []), ...(options.tools?.some(tool => tool.type === "web_search") ? [] : [{ type: "web_search" as const }])] : options.tools?.filter(tool => tool.type !== "web_search"),
+  };
+}
 
 async function resolveDiscoveredOptions(
   options: AiTextOptions,
@@ -61,14 +80,16 @@ async function resolveDiscoveredOptions(
     ...options,
     maxOutputTokens: Math.min(
       options.maxOutputTokens,
-      Math.max(model.minutesMaxOutputTokens, model.qaMaxOutputTokens),
+      model.maxOutputTokens ?? AI_GENERATION_LIMITS.maxOutputTokens,
     ),
+    researchTokens: Math.min(options.researchTokens ?? AI_GENERATION_LIMITS.researchTokens, model.maxOutputTokens ?? AI_GENERATION_LIMITS.maxOutputTokens),
   };
 }
 
 export const generateAiText = async (
   options: AiTextOptions & { input: string },
 ): Promise<string> => {
+  options = { ...options, ...featureOptions(options) };
   const signal = options.timeoutMs
     ? AbortSignal.any([
         ...(options.signal ? [options.signal] : []),
@@ -91,6 +112,8 @@ const createProviderSession = (options: AiTextOptions): AiTextSession =>
     : createOpenAiTextSession(options);
 
 export const createAiTextSession = (options: AiTextOptions): AiTextSession => {
+  options = featureOptions(options);
+  if (options.timeoutMs) options = { ...options, signal: AbortSignal.any([...(options.signal ? [options.signal] : []), AbortSignal.timeout(options.timeoutMs)]) };
   let session: AiTextSession | undefined;
   return {
     async *stream(input) {

@@ -274,6 +274,7 @@ export const bluffModule: GameModule<BluffState> = {
     const topic = gameContentTopic(ctx.config) || "fresh obscure facts";
     const rounds = numberOption(ctx.config, "rounds", TOTAL_ROUNDS);
     return generateStructuredGameContent({
+      signal: ctx.signal,
       aiEnvironment: ctx.aiEnvironment,
       gameName: "Bluff",
       topic,
@@ -307,7 +308,7 @@ export const bluffModule: GameModule<BluffState> = {
         },
         required: ["prompts"],
       },
-      maxOutputTokens: 320 + rounds * 90,
+      maxOutputTokens: 400 + rounds * 160,
       parse: (payload) => parseGeneratedPrompts(payload, rounds),
     });
   },

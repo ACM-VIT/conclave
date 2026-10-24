@@ -39,21 +39,25 @@ export function describeAiError(
   const userMessage =
     error instanceof AiTaskLimitError
       ? error.message
-      : status === 401
-        ? `${label} rejected the API key. Update it in AI settings.`
-        : status === 403
-          ? `This ${label} key cannot access the selected model.`
-          : status === 404
-            ? `The selected ${label} model is unavailable for this account.`
-            : /credit balance|insufficient.{0,20}(credit|quota)|billing/i.test(
-                  message,
-                )
-              ? `Check the credits and billing on your ${label} account.`
-              : status === 429
-                ? `${label} is rate limited. Try again shortly.`
-                : status === 400
-                  ? `${label} rejected the request. Check the selected model and account settings.`
-                  : `Conclave could not reach ${label}. Try again shortly.`;
+      : /did not finish the response|incomplete structured response/i.test(
+            message,
+          )
+        ? "The response was incomplete. Try a smaller request or another model."
+        : status === 401
+          ? `${label} rejected the API key. Update it in AI settings.`
+          : status === 403
+            ? `This ${label} key cannot access the selected model.`
+            : status === 404
+              ? `The selected ${label} model is unavailable for this account.`
+              : /credit balance|insufficient.{0,20}(credit|quota)|billing/i.test(
+                    message,
+                  )
+                ? `Check the credits and billing on your ${label} account.`
+                : status === 429
+                  ? `${label} is rate limited. Try again shortly.`
+                  : status === 400
+                    ? `${label} rejected the request. Check the selected model and account settings.`
+                    : `Conclave could not reach ${label}. Try again shortly.`;
   return {
     provider,
     status,

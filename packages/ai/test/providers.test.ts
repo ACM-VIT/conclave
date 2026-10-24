@@ -206,6 +206,21 @@ describe("provider routing", () => {
     });
   });
 
+  it("honors a room budget above the default while respecting the discovered provider cap", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url).includes("/models")) return json({data: [{id: "claude-sonnet-5-6", max_tokens: 100000}]});
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return json(message([{type: "text", text: "OK"}]));
+    }));
+    const profile = {games: {maxOutputTokens: 64000, researchTokens: 24000, searchEnabled: false}};
+    await generateAiText({...options, feature: "games", env: {CONCLAVE_AI_SETTINGS: JSON.stringify(profile)}, model: "claude-sonnet-5-6", input: "Hello"});
+    expect(bodies[0].max_tokens).toBe(64000);
+    profile.games.maxOutputTokens = 128000;
+    await generateAiText({...options, feature: "games", env: {CONCLAVE_AI_SETTINGS: JSON.stringify(profile)}, model: "claude-sonnet-5-6", input: "Hello"});
+    expect(bodies[1].max_tokens).toBe(100000);
+  });
+
   it("refuses an unavailable discovered model before sending an inference request", async () => {
     const fetcher = vi.fn(async () => json({ data: [] }));
     vi.stubGlobal("fetch", fetcher);
@@ -362,6 +377,39 @@ describe("provider routing", () => {
     ).rejects.toThrow();
     expect(calls).toBe(2);
     expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("finishes structured output after truncated research, but rejects truncated final JSON", async () => {
+    let calls = 0;
+    const fetcher = vi.fn(async (_url: unknown, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      const research = ++calls % 2 === 1;
+      if (research) {
+        expect(body.max_tokens).toBe(16384);
+        expect(body.system).toContain("research notes sufficient");
+      }
+      return json(
+        message(
+          [
+            {
+              type: "text",
+              text: research ? "Partial research notes" : '{"ok":true}',
+            },
+          ],
+          research || calls === 4 ? "max_tokens" : "end_turn",
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const request = {
+      ...options,
+      input: "Make a game",
+      tools: [{ type: "web_search" as const }],
+      format: { name: "game", schema: { type: "object", properties: {} } },
+    };
+    expect(await generateAiText(request)).toBe('{"ok":true}');
+    await expect(generateAiText(request)).rejects.toThrow("max_tokens");
+    expect(fetcher).toHaveBeenCalledTimes(4);
   });
 
   it("preserves OpenAI web search queries in public activity events", async () => {

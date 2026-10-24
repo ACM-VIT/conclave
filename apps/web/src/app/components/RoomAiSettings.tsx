@@ -14,12 +14,10 @@ import {
 import {
   AI_RESPONSE_MODELS,
   AI_PROVIDERS,
-  getResponseProvider,
 } from "@conclave/ai/models";
 import { ROOM_AI_PROVIDERS, type RoomAiProvider } from "@conclave/ai/room";
 import type { RoomAiController } from "../hooks/useRoomAi";
-import AiModelSelect from "./AiModelSelect";
-import { useAiModels } from "../hooks/useAiModels";
+import RoomAiFeatureSettings from "./RoomAiFeatureSettings";
 
 const uses = {
   openai: [
@@ -40,7 +38,7 @@ export default function RoomAiSettings({
   controller: RoomAiController;
   onClose: () => void;
 }) {
-  const catalog = useAiModels(controller);
+  const [tab, setTab] = useState<"features" | "keys">("features");
   const [expanded, setExpanded] = useState<RoomAiProvider | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [pending, setPending] = useState(false);
@@ -109,7 +107,7 @@ export default function RoomAiSettings({
   return (
     <section
       aria-label="Room AI settings"
-      className="border-b border-white/10 bg-[#1e1e21] px-4 py-4"
+      className="max-h-[65vh] shrink-0 overflow-y-auto border-b border-white/10 bg-[#1e1e21] px-4 py-4"
     >
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-[13px] font-semibold text-[#fafafa]">
@@ -124,43 +122,13 @@ export default function RoomAiSettings({
           <X size={16} />
         </button>
       </div>
-      <div className="mt-3 border-b border-white/10 pb-4">
-        <AiModelSelect
-          label="Room assistant"
-          value={controller.state.assistantModel ?? ""}
-          placeholder="Deployment default"
-          loading={catalog.loading}
-          error={catalog.error}
-          onRefresh={catalog.refresh}
-          models={catalog.models.map((model) => ({
-            ...model,
-            disabled:
-              !controller.isAdmin &&
-              !(
-                controller.state[model.provider].source === "room" &&
-                controller.state[model.provider].ownerId ===
-                  controller.currentUserId
-              ),
-          }))}
-          disabled={pending || !controller.connected || !controller.ready}
-          onChange={async (model) => {
-            setPending(true);
-            setError(null);
-            const failure = await controller.configure(
-              getResponseProvider(model),
-              undefined,
-              model,
-            );
-            setPending(false);
-            if (failure) setError({ message: failure });
-          }}
-        />
-        {error && !error.provider ? (
-          <p role="alert" className="mt-2 text-[11px] text-red-300">
-            {error.message}
-          </p>
-        ) : null}
+      <div className="mt-3 flex items-center gap-1 rounded-lg bg-black/20 p-1" role="tablist" aria-label="AI settings sections">
+        {(["features", "keys"] as const).map(value => <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTab(value)} className={`flex-1 rounded-md py-1.5 text-[12px] font-medium transition-colors ${tab === value ? "bg-white/10 text-white" : "text-[#a1a1aa] hover:text-white"}`}>{value === "features" ? "Features" : "Keys"}</button>)}
       </div>
+      <div className="mt-3 flex flex-wrap gap-2" aria-label="Connected providers">
+        {ROOM_AI_PROVIDERS.map(provider => <button key={provider} type="button" onClick={() => {setTab("keys");setExpanded(provider);setApiKey("");}} title={`${AI_PROVIDERS[provider].label}: ${!controller.ready ? "Loading" : controller.state[provider].source === "room" ? "Room key" : controller.state[provider].source === "deployment" ? "Conclave key" : "Not set"}`} className="inline-flex items-center gap-1.5 rounded-md bg-white/[0.04] px-2 py-1 text-[10.5px] text-[#a1a1aa]">{AI_PROVIDERS[provider].label}</button>)}
+      </div>
+      {tab === "features" ? <div className="mt-2"><RoomAiFeatureSettings controller={controller} /></div> : (
       <div className="mt-4 divide-y divide-white/10">
         {ROOM_AI_PROVIDERS.map((provider) => {
           const status = controller.state[provider];
@@ -337,6 +305,7 @@ export default function RoomAiSettings({
           );
         })}
       </div>
+      )}
     </section>
   );
 }

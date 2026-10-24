@@ -80,7 +80,7 @@ import GifPicker from "./GifPicker";
 import AiModelSelect from "./AiModelSelect";
 import { useAiModels } from "../hooks/useAiModels";
 import RoomAiSettings from "./RoomAiSettings";
-import type { RoomAiController } from "../hooks/useRoomAi";
+import { configureRoomAiForFeature, type RoomAiController } from "../hooks/useRoomAi";
 
 
 interface MentionableParticipant {
@@ -425,13 +425,45 @@ function ChatPanel({
     textareaRef.current?.focus();
   }, [onInputChange]);
 
-  const submitAssistantApiKey = useCallback(() => {
-    onSubmitAssistantApiKey?.(assistantApiKeyInput, assistantModel);
-    setAssistantApiKeyInput("");
-  }, [assistantApiKeyInput, assistantModel, onSubmitAssistantApiKey]);
+  const [assistantKeyPending, setAssistantKeyPending] = useState(false);
+  const [assistantKeyError, setAssistantKeyError] = useState<string | null>(
+    null,
+  );
+  const submitAssistantApiKey = useCallback(async () => {
+    if (assistantKeyPending) return;
+    setAssistantKeyPending(true);
+    setAssistantKeyError(null);
+    try {
+      if (roomAi) {
+        const error = await configureRoomAiForFeature(
+          roomAi,
+          { [getResponseProvider(assistantModel)]: assistantApiKeyInput },
+          assistantModel,
+        );
+        if (error) {
+          setAssistantKeyError(error);
+          return;
+        }
+      }
+      onSubmitAssistantApiKey?.(
+        roomAi ? "" : assistantApiKeyInput,
+        assistantModel,
+      );
+      setAssistantApiKeyInput("");
+    } finally {
+      setAssistantKeyPending(false);
+    }
+  }, [
+    assistantKeyPending,
+    roomAi,
+    assistantApiKeyInput,
+    assistantModel,
+    onSubmitAssistantApiKey,
+  ]);
 
   const cancelAssistantApiKey = useCallback(() => {
     setAssistantApiKeyInput("");
+    setAssistantKeyError(null);
     onCancelAssistantApiKey?.();
   }, [onCancelAssistantApiKey]);
 
@@ -1296,12 +1328,14 @@ function ChatPanel({
                   error={assistantCatalog.error}
                   onRefresh={assistantCatalog.refresh}
                   label="Model"
+                  disabled={assistantKeyPending}
                 />
               </div>
               <div className="flex gap-2">
                 {roomAi?.state[getResponseProvider(assistantModel)].source && !assistantApiKeyPrompt.replacePersonalKey ? <span className="flex flex-1 items-center gap-1.5 text-[11px] text-[#91cbb0]"><CheckCircle2 size={13} />{roomAi.state[getResponseProvider(assistantModel)].source === "deployment" ? "Conclave key" : "Room key"}</span> : (
                 <input
                   type="password"
+                  disabled={assistantKeyPending}
                   value={assistantApiKeyInput}
                   onChange={(event) =>
                     setAssistantApiKeyInput(event.target.value)
@@ -1309,14 +1343,14 @@ function ChatPanel({
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
                       event.preventDefault();
-                      submitAssistantApiKey();
+                      void submitAssistantApiKey();
                     }
                     if (event.key === "Escape") {
                       event.preventDefault();
                       cancelAssistantApiKey();
                     }
                   }}
-                  aria-label={`${AI_PROVIDERS[getResponseProvider(assistantModel)].label} API key for this session`}
+                  aria-label={`${AI_PROVIDERS[getResponseProvider(assistantModel)].label} ${roomAi ? "room" : "session"} API key`}
                   placeholder={
                     getResponseProvider(assistantModel) === "anthropic"
                       ? "sk-ant-…"
@@ -1331,17 +1365,24 @@ function ChatPanel({
                 <button
                   type="button"
                   onClick={submitAssistantApiKey}
-                  disabled={
-                    !assistantApiKeyInput.trim() &&
-                    !roomAi?.state[getResponseProvider(assistantModel)].source
-                  }
-                  className="shrink-0 rounded-lg bg-[#F95F4A] px-3 py-1.5 text-[12px] font-semibold text-white transition-[background-color,opacity] hover:bg-[#ff725f] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {roomAi?.state[getResponseProvider(assistantModel)].source &&
-                  !assistantApiKeyInput.trim()
-                    ? "Continue"
-                    : "Connect"}
-                </button>
+                    disabled={
+                      assistantKeyPending ||
+                      (roomAi && (!roomAi.connected || !roomAi.ready)) ||
+                      (!assistantApiKeyInput.trim() &&
+                        !roomAi?.state[getResponseProvider(assistantModel)]
+                          .source)
+                    }
+                    className="shrink-0 rounded-lg bg-[#F95F4A] px-3 py-1.5 text-[12px] font-semibold text-white transition-[background-color,opacity] hover:bg-[#ff725f] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {roomAi?.state[getResponseProvider(assistantModel)]
+                      .source && !assistantApiKeyInput.trim()
+                      ? "Continue"
+                      : assistantKeyPending
+                        ? "Connecting…"
+                        : roomAi
+                          ? "Share & connect"
+                          : "Connect"}
+                  </button>
               </div>
 
               <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
@@ -1355,9 +1396,9 @@ function ChatPanel({
                 </button>
               ) : null}
 
-              {assistantApiKeyPrompt.error ? (
-                <p className="mt-2 text-[11.5px] text-red-300">
-                  {assistantApiKeyPrompt.error}
+              {assistantKeyError || assistantApiKeyPrompt.error ? (
+                <p role="alert" className="mt-2 text-[11.5px] text-red-300">
+                  {assistantKeyError || assistantApiKeyPrompt.error}
                 </p>
               ) : (
                 <a

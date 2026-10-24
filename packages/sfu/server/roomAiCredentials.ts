@@ -1,3 +1,4 @@
+import { roomAiFeatureDefaults } from "./roomAiSettings.js";
 import {
   AI_PROVIDERS,
   getProviderApiKey,
@@ -10,6 +11,7 @@ import {
   type AiModelCatalog,
 } from "@conclave/ai/models";
 import { fetchAiModelCatalog } from "@conclave/ai/server";
+import { featureProvider, resolveAiFeatureSettings, validateFeaturePatch, type AiFeature, type RoomAiFeatureSettings } from "@conclave/ai/room-settings";
 import {
   ROOM_AI_PROVIDERS,
   type RoomAiProvider,
@@ -20,6 +22,7 @@ export class RoomAiCredentials {
   // Private fields cannot leak through room snapshots or JSON serialization.
   #keys = new Map<RoomAiProvider, { apiKey: string; ownerId: string }>();
   #assistantModel: string | null = null;
+  #features: RoomAiFeatureSettings = {};
   #keyRevision = 0;
 
   get keyRevision(): number {
@@ -65,6 +68,27 @@ export class RoomAiCredentials {
     return this.#assistantModel;
   }
 
+  get hasAssistantModelSelection(): boolean {
+    return this.#assistantModel !== null || this.#features.assistant?.model !== undefined;
+  }
+
+  get featureSettings(): RoomAiFeatureSettings {
+    return structuredClone(this.#features);
+  }
+
+  effectiveFeatureSettings(env: AiEnvironment = {}): RoomAiFeatureSettings {
+    return roomAiFeatureDefaults({...env, ...(this.#assistantModel ? {CONCLAVE_ASSISTANT_MODEL: this.#assistantModel} : {})}, this.featureSettings);
+  }
+
+  configureFeature(feature: AiFeature, input: unknown, actorId: string, isHost: boolean, env: AiEnvironment = {}): void {
+    const patch = validateFeaturePatch(feature, input);
+    const current = resolveAiFeatureSettings({ ...env, ...(this.#assistantModel ? { CONCLAVE_ASSISTANT_MODEL: this.#assistantModel } : {}) }, feature, this.effectiveFeatureSettings(env));
+    const provider = featureProvider(feature, patch.model ?? current.model);
+    const ownsKey = !getProviderApiKey(env, provider) && provider !== "elevenlabs" && this.#keys.get(provider)?.ownerId === actorId;
+    if (!isHost && !ownsKey) throw new Error("Only a host or this provider's key contributor can change these settings.");
+    this.#features[feature] = { ...this.#features[feature], ...patch };
+  }
+
   setModel(
     model: string,
     actorId: string,
@@ -83,6 +107,7 @@ export class RoomAiCredentials {
       );
     }
     this.#assistantModel = model;
+    this.#features.assistant = { ...this.#features.assistant, model };
   }
 
   get(provider: RoomAiProvider): string | undefined {
@@ -106,7 +131,7 @@ export class RoomAiCredentials {
     if (provider !== "sarvam") this.#catalogs.delete(provider);
     // The first text-provider contribution selects its model visibly for the room.
     if (
-      !this.#assistantModel &&
+      !this.hasAssistantModelSelection &&
       options.selectDefaultModel !== false &&
       provider !== "sarvam" &&
       !getProviderApiKey(env, provider)
@@ -135,6 +160,8 @@ export class RoomAiCredentials {
   }
 
   status(env: AiEnvironment): RoomAiState {
+    const assistantModel = this.#assistantModel || (env.CONCLAVE_ASSISTANT_MODEL && isResponseModel(env.CONCLAVE_ASSISTANT_MODEL) ? env.CONCLAVE_ASSISTANT_MODEL : null);
+    const features = this.effectiveFeatureSettings(env);
     return {
       ...Object.fromEntries(
         ROOM_AI_PROVIDERS.map((provider) => [
@@ -146,7 +173,8 @@ export class RoomAiCredentials {
               : { source: null },
         ]),
       ),
-      assistantModel: this.#assistantModel,
+      assistantModel,
+      ...(Object.keys(features).length ? { features } : {}),
     } as RoomAiState;
   }
 
@@ -155,5 +183,6 @@ export class RoomAiCredentials {
     ++this.#keyRevision;
     this.#catalogs.clear();
     this.#assistantModel = null;
+    this.#features = {};
   }
 }

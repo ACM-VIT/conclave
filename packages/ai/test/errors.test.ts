@@ -35,7 +35,21 @@ describe("provider error diagnostics", () => {
 
   it("explains a local tool limit without calling it a provider outage", () => {
     const failure = describeAiError(new AiTaskLimitError(), "anthropic", "");
-    expect(failure.userMessage).toBe("Conclave reached its tool limit. Try a narrower request.");
+    expect(failure.userMessage).toBe(
+      "Conclave reached its tool limit. Try a narrower request.",
+    );
+  });
+
+  it("explains incomplete generation without reporting an outage", () => {
+    expect(
+      describeAiError(
+        new Error("Anthropic did not finish the response (max_tokens)."),
+        "anthropic",
+        "",
+      ).userMessage,
+    ).toBe(
+      "The response was incomplete. Try a smaller request or another model.",
+    );
   });
 
   it("explains billing and rate limits without showing raw provider responses", () => {
