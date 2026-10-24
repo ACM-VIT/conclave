@@ -365,6 +365,40 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
 - A failed mute fails closed on both platforms: `setAudioEnabled(false)`
   keeps the producer paused and the track silent, and the view model stays
   muted while showing the error.
+- Mic, camera and hand toggle guards (`isMuteToggleInFlight`,
+  `isCameraToggleInFlight`, `isHandRaiseToggleInFlight`) derive from a
+  per-toggle token (`muteToggleToken` and siblings). A completion clears its
+  guard only while it still owns the token, and `joinRoom` releases all
+  three for every new attempt through `releaseLocalToggleGuards()`, as
+  `cleanup()` does, because recovery rejoins skip `cleanup()` and an SFU ack
+  can take 30 s. Never clear a guard by call context: a rejoin landing
+  mid-await stranded it and turned later toggles, CallKit and notification
+  mutes into silent no-ops (F7, fixed 2026-10-24, also covered by
+  `LocalToggleGuardRecoveryTests`). After its await, an orphaned toggle
+  re-checks `isCurrentJoinedCall` before touching the attempt that replaced
+  it: the unmute confirmation (it bypasses the guard via
+  `allowCurrentMuteToggle`), the chat camera-on commit, and the
+  `enableOrStartLocalVideo` recreate fallback. A toggle that still owns
+  its token keeps suppressing the `handleLocalProducerClosed` restart.
+- A view-model check after an await cannot stop effects inside the awaited
+  media call, so both clients fence late acknowledgements themselves, as
+  `setAudioEnabled` does. `reassertLocalAudioProducerUnmuted` re-checks the
+  configuration generation, mute-intent generation and producer identity
+  after its ack and never re-enables capture for an orphaned confirmation
+  (that would be a live mic while muted). `setVideoEnabled` re-checks the
+  configuration generation, `localVideoOffIntentGeneration` (bumped by every
+  camera-off that keeps the producer: `setVideoEnabled(false)`,
+  `suspendLocalVideoForRecovery()`) and producer identity before its success
+  effects and before its rollback. Both write `localVideoEnabled` and fire
+  `onLocalVideoEnabledChanged` (iOS through the `didSet`). A newer camera-off
+  or a replacement producer keeps the camera; with no producer left the
+  error goes back so the caller can recreate one. Android re-checks the same
+  after its permission prompt and the 350 ms pre-join preview release (both
+  suspend), before restarting capture; its camera start re-checks the
+  configuration after that release and clears only camera state its own
+  session still owns. `enableOrStartLocalVideo(context:)` acts for its
+  caller's call context and checks it before any close or restart. Pinned by
+  `testLateMediaAcknowledgementsAreFencedInBothClients`.
 - Android `Main.kt` must keep `SideEffect { saveableStateHolder.removeState(...) }`
   inside the root `SaveableStateProvider` (Skip app template). Restoring SkipUI
   saved state after the PiP swap or activity recreation NPEs in

@@ -1026,7 +1026,8 @@ final class ConclaveTests: XCTestCase {
     /// must never detach inside the frame callback (remote-video ANR), iOS
     /// producers must be created off MainActor (onProduce deadlock) on one
     /// serial send-transport queue, microphone replacements must survive the
-    /// SFU's predecessor close, a failed mute fails closed, the Android root
+    /// SFU's predecessor close, a failed mute fails closed, a recovery rejoin
+    /// cannot strand the mic, camera or hand toggle guards, the Android root
     /// must drop SkipUI saved state (PresentationRoot NPE on PiP exit), calls
     /// keep the screen awake and ask for notifications, and every Gradle entry
     /// point uses the checked-in wrapper.
@@ -1224,6 +1225,96 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(viewModelSource.contains("guard webRTCClient.hasLocalAudioProducer else { return }\n            state.isMuted = false"))
         XCTAssertEqual(viewModelSource.components(separatedBy: "guard webRTCClient.isLocalAudioPublishingHealthy else { return }\n            state.isMuted = false").count - 1, 2)
 
+        // Mic, camera and hand toggle guards are token-owned: a completion
+        // releases its guard only while it still owns the token, and every
+        // join attempt releases them all (recovery rejoins skip cleanup()), so
+        // a rejoin mid-await cannot strand a guard and silently drop later
+        // toggles, CallKit and notification mutes. A genuinely in-flight
+        // toggle still suppresses the producer-closed restart. (These checks
+        // ignore commented-out copies.)
+        let viewModelCode = withoutBlockComments(viewModelSource)
+        for (token, guardName) in [
+            ("muteToggleToken", "isMuteToggleInFlight"),
+            ("cameraToggleToken", "isCameraToggleInFlight"),
+            ("handRaiseToggleToken", "isHandRaiseToggleInFlight")
+        ] {
+            XCTAssertNotNil(codeRange(of: "private var \(guardName): Bool { \(token) != nil }", in: viewModelCode))
+            XCTAssertFalse(viewModelCode.contains("\(guardName) = "), "\(guardName) must derive from \(token)")
+        }
+        XCTAssertEqual(codeCount(of: "if muteToggleToken == toggleToken {", in: viewModelCode), 2)
+        XCTAssertEqual(codeCount(of: "if cameraToggleToken == toggleToken {", in: viewModelCode), 2)
+        XCTAssertEqual(codeCount(of: "if handRaiseToggleToken == toggleToken {", in: viewModelCode), 1)
+        let releaseGuards = try body(
+            viewModelCode,
+            from: "private func releaseLocalToggleGuards() {",
+            to: "private func enableOrStartLocalAudio() async throws {"
+        )
+        for token in ["muteToggleToken", "cameraToggleToken", "handRaiseToggleToken"] {
+            XCTAssertNotNil(codeRange(of: "\(token) = nil", in: releaseGuards))
+        }
+        let joinRoom = try body(viewModelCode, from: "    func joinRoom(", to: "    func rejoinIfPossible() async {")
+        XCTAssertNotNil(codeRange(of: "activeJoinAttemptId = joinAttemptId\n        releaseLocalToggleGuards()", in: joinRoom))
+        let cleanup = try body(viewModelCode, from: "    func cleanup(", to: "    func resetError() {")
+        XCTAssertNotNil(codeRange(of: "releaseLocalToggleGuards()", in: cleanup))
+        let localCloseCode = try body(
+            viewModelCode,
+            from: "private func handleLocalProducerClosed(_ notification: ProducerClosedNotification) async -> Bool {",
+            to: "let wasCameraOff = state.isCameraOff"
+        )
+        XCTAssertNotNil(codeRange(of: "!isMuteToggleInFlight {", in: localCloseCode))
+        // An orphaned toggle re-checks its call before touching the attempt
+        // that replaced it: the unmute confirmation (which may bypass the
+        // guard), the chat camera start that would turn the camera back on,
+        // and the camera enable's recreate fallback.
+        let orphanGuard = "guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }"
+        for (start, end, awaited, next) in [
+            ("    func toggleMute() {", "    func toggleCamera() {",
+             "try await enableOrStartLocalAudio()", "await confirmLocalAudioProducerUnmutedOrRecover("),
+            ("private func setMuted(_ muted: Bool) async {", "private func setCameraOff(_ cameraOff: Bool) async {",
+             "try await enableOrStartLocalAudio()", "await confirmLocalAudioProducerUnmutedOrRecover("),
+            ("private func setCameraOff(_ cameraOff: Bool) async {", "private func sendChatContent(",
+             "try await enableOrStartLocalVideo(", "setLocalCameraOffState(false)")
+        ] {
+            let toggle = try body(viewModelCode, from: start, to: end)
+            let awaitedRange = try XCTUnwrap(codeRange(of: awaited, in: toggle), "missing \(awaited) in \(start)")
+            let nextRange = try XCTUnwrap(
+                codeRange(of: next, in: toggle, from: awaitedRange.upperBound),
+                "missing \(next) after \(awaited) in \(start)"
+            )
+            let between = String(toggle[awaitedRange.upperBound..<nextRange.lowerBound])
+            XCTAssertNotNil(codeRange(of: orphanGuard, in: between), start)
+        }
+        // The camera enable acts for the call its caller captured: it checks
+        // that context on entry and before its fallback closes or restarts a
+        // producer, and never re-derives it.
+        let videoEnable = try body(
+            viewModelCode,
+            from: "private func enableOrStartLocalVideo(context: CallActionContext) async throws {",
+            to: "private func shouldRecreateLocalProducerAfterEnableFailure("
+        )
+        XCTAssertFalse(videoEnable.contains("currentCallActionContext()"))
+        XCTAssertFalse(viewModelCode.contains("enableOrStartLocalVideo()"))
+        let videoEntryGuard = try XCTUnwrap(codeRange(of: "guard isCurrentJoinedCall(context) else { return }", in: videoEnable))
+        let videoEnableCall = try XCTUnwrap(codeRange(of: "try await webRTCClient.setVideoEnabled(true)", in: videoEnable))
+        XCTAssertLessThan(videoEntryGuard.lowerBound, videoEnableCall.lowerBound)
+        let videoRecreateGuard = try XCTUnwrap(codeRange(
+            of: "guard isCurrentJoinedCall(context),\n                      shouldRecreateLocalProducerAfterEnableFailure(error) else { throw error }",
+            in: videoEnable
+        ))
+        let videoRecreateClose = try XCTUnwrap(codeRange(of: "await webRTCClient.closeLocalVideoProducer()", in: videoEnable))
+        XCTAssertLessThan(videoRecreateGuard.lowerBound, videoRecreateClose.lowerBound)
+        let videoRestartGuard = try XCTUnwrap(codeRange(
+            of: "guard isCurrentJoinedCall(context) else { throw error }",
+            in: videoEnable,
+            from: videoRecreateClose.upperBound
+        ))
+        let videoRestart = try XCTUnwrap(codeRange(
+            of: "try await webRTCClient.startProducingVideo()",
+            in: videoEnable,
+            from: videoRecreateClose.upperBound
+        ))
+        XCTAssertLessThan(videoRestartGuard.lowerBound, videoRestart.lowerBound)
+
         XCTAssertTrue(activitySource.contains("SideEffect { saveableStateHolder.removeState(FULL_ROOT_SAVEABLE_KEY) }"))
 
         XCTAssertTrue(viewModelSource.contains("CallScreenAwake.setActive(true)"))
@@ -1261,6 +1352,259 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(xcodeProjectSource.contains("GRADLE_WRAPPER_SHIM_DIR=\\\"${DERIVED_FILE_DIR}/skip-gradle-wrapper\\\""))
         XCTAssertTrue(xcodeProjectSource.contains("${PWD}/../Android/gradlew"))
         XCTAssertTrue(xcodeProjectSource.contains("PATH=\\\"${GRADLE_WRAPPER_SHIM_DIR}:${PATH}\\\""))
+    }
+
+    /// F7 (codex review items 3 and 4): an acknowledgement that returns after a
+    /// teardown, a newer mute or camera-off, or a producer replacement must not
+    /// touch the state that replaced it. Both clients fence the late success,
+    /// and the camera rollback, by configuration generation, producer identity
+    /// and intent generation (`localAudioMuteIntentGeneration`, and
+    /// `localVideoOffIntentGeneration`, which every camera-off that keeps the
+    /// producer bumps), as setAudioEnabled already did. A replacement camera
+    /// producer keeps the camera. Host tests cannot run either client, so this
+    /// pins each fence right after its awaited acknowledgement, ahead of every
+    /// capture, track, state or callback effect. Commented-out code does not
+    /// count (codeRange, withoutBlockComments).
+    func testLateMediaAcknowledgementsAreFencedInBothClients() throws {
+        let iosSource = withoutBlockComments(try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift"))
+        let androidSource = withoutBlockComments(try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt"))
+
+        func body(_ source: String, from start: String, to end: String) throws -> String {
+            let startRange = try XCTUnwrap(codeRange(of: start, in: source), "missing \(start)")
+            let endRange = try XCTUnwrap(
+                codeRange(of: end, in: source, from: startRange.upperBound),
+                "missing \(end) after \(start)"
+            )
+            return String(source[startRange.lowerBound..<endRange.lowerBound])
+        }
+
+        // `fence` follows `awaited` with only comments between them, and the
+        // first `effect` after `awaited` comes after the fence.
+        func assertFence(
+            in function: String,
+            after awaited: String,
+            fence: String,
+            before effect: String,
+            _ label: String
+        ) throws {
+            let awaitedRange = try XCTUnwrap(codeRange(of: awaited, in: function), "\(label): missing \(awaited)")
+            let fenceRange = try XCTUnwrap(
+                codeRange(of: fence, in: function, from: awaitedRange.upperBound),
+                "\(label): no fence after \(awaited)"
+            )
+            for line in function[awaitedRange.upperBound..<fenceRange.lowerBound].split(separator: "\n") {
+                let code = line.trimmingCharacters(in: .whitespaces)
+                XCTAssertTrue(code.isEmpty || code.hasPrefix("//"), "\(label): `\(code)` runs before the fence")
+            }
+            let effectRange = try XCTUnwrap(
+                codeRange(of: effect, in: function, from: awaitedRange.upperBound),
+                "\(label): missing \(effect)"
+            )
+            XCTAssertLessThan(fenceRange.upperBound, effectRange.lowerBound, "\(label): \(effect) precedes the fence")
+        }
+
+        func assertOrder(_ function: String, _ markers: [String], _ label: String) throws {
+            var from = function.startIndex
+            for marker in markers {
+                let range = try XCTUnwrap(codeRange(of: marker, in: function, from: from), "\(label): missing \(marker) in order")
+                from = range.upperBound
+            }
+        }
+
+        // Microphone confirmation (item 4).
+        let iosReassert = try body(
+            iosSource,
+            from: "func reassertLocalAudioProducerUnmuted() async throws {",
+            to: "func setVideoEnabled(_ enabled: Bool) async throws {"
+        )
+        try assertOrder(iosReassert, [
+            "let generation = configurationGeneration\n        let muteIntentGeneration = localAudioMuteIntentGeneration",
+            "try await socket.toggleMute(producerId: producer.id, paused: false)"
+        ], "iOS microphone confirmation")
+        try assertFence(
+            in: iosReassert,
+            after: "try await socket.toggleMute(producerId: producer.id, paused: false)",
+            fence: "guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }\n"
+                + "        guard localAudioMuteIntentGeneration == muteIntentGeneration,\n"
+                + "              audioProducer === producer, !producer.closed else { return }",
+            before: "scheduleLocalAudioCaptureReassertion()",
+            "iOS microphone confirmation"
+        )
+
+        let androidReassert = try body(
+            androidSource,
+            from: "internal suspend fun reassertLocalAudioProducerUnmuted() {",
+            to: "internal suspend fun setVideoEnabled(enabled: Boolean) {"
+        )
+        try assertOrder(androidReassert, [
+            "val generation = configurationGeneration\n        val muteIntentGeneration = localAudioMuteIntentGeneration",
+            "socket.toggleMute(producer.id, paused = false)"
+        ], "Android microphone confirmation")
+        try assertFence(
+            in: androidReassert,
+            after: "socket.toggleMute(producer.id, paused = false)",
+            fence: "ensureCurrentConfiguration(generation)\n"
+                + "        if (localAudioMuteIntentGeneration != muteIntentGeneration ||\n"
+                + "            audioProducer !== producer || !hasUsableProducer(producer) ||\n"
+                + "            !localAudioTargetEnabled) return",
+            before: "applyLocalAudioCaptureState(manager, true)",
+            "Android microphone confirmation"
+        )
+
+        // Camera enable (item 3).
+        let iosVideo = try body(
+            iosSource,
+            from: "func setVideoEnabled(_ enabled: Bool) async throws {",
+            to: "func suspendLocalVideoForRecovery() async {"
+        )
+        try assertOrder(iosVideo, [
+            "if !enabled {\n            localVideoOffIntentGeneration += 1\n        }",
+            "let generation = configurationGeneration\n"
+                + "        let offIntentGeneration = localVideoOffIntentGeneration\n"
+                + "        let previous = localVideoEnabled",
+            "try await socket.toggleCamera(producerId: producer.id, paused: !enabled)"
+        ], "iOS camera enable")
+        try assertFence(
+            in: iosVideo,
+            after: "try await socket.toggleCamera(producerId: producer.id, paused: !enabled)",
+            fence: "guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }\n"
+                + "            guard localVideoOffIntentGeneration == offIntentGeneration,\n"
+                + "                  videoProducer === producer, !producer.closed else { return }",
+            before: "rtcLocalVideoTrack?.isEnabled = enabled",
+            "iOS camera success"
+        )
+        try assertFence(
+            in: iosVideo,
+            after: "} catch {",
+            fence: "guard generation == configurationGeneration else { throw error }\n"
+                + "            guard localVideoOffIntentGeneration == offIntentGeneration else { return }\n"
+                + "            guard videoProducer === producer else {\n"
+                + "                if videoProducer == nil { throw error }\n"
+                + "                return\n"
+                + "            }",
+            before: "producer.resume()",
+            "iOS camera rollback"
+        )
+        // Both stopCapture awaits use the capturer read right after the fence
+        // and come after every state write, so nothing is written after them.
+        XCTAssertFalse(iosVideo.contains("await videoCapturer?.stopCapture()"))
+        let iosRollback = try body(iosVideo, from: "} catch {", to: "debugLog(\"[WebRTC] Failed to toggle video:")
+        try assertOrder(iosRollback, [
+            "let capturer = videoCapturer",
+            "localVideoEnabled = previous",
+            "await capturer?.stopCapture()"
+        ], "iOS camera rollback")
+        let iosSuccess = try body(
+            iosVideo,
+            from: "try await socket.toggleCamera(producerId: producer.id, paused: !enabled)",
+            to: "} catch {"
+        )
+        try assertOrder(iosSuccess, [
+            "let capturer = videoCapturer",
+            "localVideoEnabled = enabled",
+            "await capturer?.stopCapture()"
+        ], "iOS camera success")
+
+        let androidVideo = try body(
+            androidSource,
+            from: "internal suspend fun setVideoEnabled(enabled: Boolean) {",
+            to: "internal suspend fun suspendLocalVideoForRecovery() {"
+        )
+        try assertOrder(androidVideo, [
+            "if (!enabled) {\n            localVideoOffIntentGeneration += 1\n        }",
+            "val generation = configurationGeneration\n"
+                + "        val offIntentGeneration = localVideoOffIntentGeneration\n"
+                + "        val previous = localVideoEnabled",
+            "socket.toggleCamera(producer.id, paused = !enabled)"
+        ], "Android camera enable")
+        // The permission prompt and the preview release both suspend before
+        // any capture restart or resume; the checks follow the last of them.
+        try assertOrder(androidVideo, [
+            "if (!ensureCameraPermission()) {",
+            "releasePreJoinCameraPreview()",
+            "startWebcamCapture(videoCapturer, \"restart\")",
+            "producer.resume()",
+            "socket.toggleCamera(producer.id, paused = !enabled)"
+        ], "Android camera enable before the ack")
+        try assertFence(
+            in: androidVideo,
+            after: "releasePreJoinCameraPreview()",
+            fence: "ensureCurrentConfiguration(generation)\n"
+                + "                if (localVideoOffIntentGeneration != offIntentGeneration) return\n"
+                + "                if (videoProducer != null && videoProducer !== producer) return",
+            before: "startWebcamCapture(videoCapturer, \"restart\")",
+            "Android camera permission and preview window"
+        )
+        let androidSuccessFence = "ensureCurrentConfiguration(generation)\n"
+            + "            if (localVideoOffIntentGeneration != offIntentGeneration ||\n"
+            + "                videoProducer !== producer || !hasUsableProducer(producer)) return"
+        try assertFence(
+            in: androidVideo,
+            after: "socket.toggleCamera(producer.id, paused = !enabled)",
+            fence: androidSuccessFence,
+            before: "localVideoTrack?.setEnabled(enabled)",
+            "Android camera success"
+        )
+        try assertFence(
+            in: androidVideo,
+            after: "socket.toggleCamera(producer.id, paused = !enabled)",
+            fence: androidSuccessFence,
+            before: "onLocalVideoEnabledChanged?.invoke(enabled)",
+            "Android camera success callback"
+        )
+        let androidRollbackFence = "if (generation != configurationGeneration) throw error\n"
+            + "            if (localVideoOffIntentGeneration != offIntentGeneration) return\n"
+            + "            if (videoProducer !== producer) {\n"
+            + "                if (videoProducer == null) throw error\n"
+            + "                return\n"
+            + "            }"
+        try assertFence(
+            in: androidVideo,
+            after: "} catch (error: Throwable) {",
+            fence: androidRollbackFence,
+            before: "producer.resume()",
+            "Android camera rollback"
+        )
+        try assertFence(
+            in: androidVideo,
+            after: "} catch (error: Throwable) {",
+            fence: androidRollbackFence,
+            before: "onLocalVideoEnabledChanged?.invoke(previous)",
+            "Android camera rollback callback"
+        )
+
+        // The Android camera start re-checks its session after the preview
+        // release, before creating capture state, and its failure path clears
+        // only camera state its session still owns.
+        let androidStart = try body(
+            androidSource,
+            from: "internal suspend fun startProducingVideo() {",
+            to: "internal suspend fun startScreenSharing() {"
+        )
+        try assertFence(
+            in: androidStart,
+            after: "releasePreJoinCameraPreview()",
+            fence: "ensureCurrentConfiguration(generation)",
+            before: "videoCapturer = createCameraCapturer(",
+            "Android camera start"
+        )
+        XCTAssertNotNil(codeRange(
+            of: "if (generation == configurationGeneration) {\n"
+                + "                clearLocalWebcamCaptureState(notifyLocalState = false)\n"
+                + "            }",
+            in: androidStart
+        ))
+        XCTAssertEqual(codeCount(of: "clearLocalWebcamCaptureState(notifyLocalState = false)", in: androidStart), 2)
+
+        // A camera-off that keeps the producer bumps the off intent first.
+        XCTAssertNotNil(codeRange(
+            of: "func suspendLocalVideoForRecovery() async {\n        localVideoOffIntentGeneration += 1",
+            in: iosSource
+        ))
+        XCTAssertNotNil(codeRange(
+            of: "internal suspend fun suspendLocalVideoForRecovery() {\n        localVideoOffIntentGeneration += 1",
+            in: androidSource
+        ))
     }
 
     func testPlannedWebcamConsumerResetEligibilityUsesAuthoritativeConsumeFacts() throws {
@@ -10960,6 +11304,63 @@ private func registeredServerEventRawValues(
     ).map { $0[0] })
 
     return Set(registeredConstants.compactMap { socketEventConstants[$0] })
+}
+
+/// `source` without its `/* ... */` comments (nested ones included); each
+/// comment's newlines stay, so line structure is kept. The guarded sources
+/// have no `/*` or `*/` inside string literals.
+private func withoutBlockComments(_ source: String) -> String {
+    let bytes = Array(source.utf8)
+    var result: [UInt8] = []
+    result.reserveCapacity(bytes.count)
+    var depth = 0
+    var index = 0
+    while index < bytes.count {
+        let hasNext = index + 1 < bytes.count
+        if hasNext, bytes[index] == UInt8(ascii: "/"), bytes[index + 1] == UInt8(ascii: "*") {
+            depth += 1
+            index += 2
+        } else if depth > 0, hasNext, bytes[index] == UInt8(ascii: "*"), bytes[index + 1] == UInt8(ascii: "/") {
+            depth -= 1
+            index += 2
+        } else {
+            if depth == 0 || bytes[index] == UInt8(ascii: "\n") {
+                result.append(bytes[index])
+            }
+            index += 1
+        }
+    }
+    return String(decoding: result, as: UTF8.self)
+}
+
+/// The first occurrence of `code` at or after `start` that begins its line
+/// (only spaces or tabs before it), so a commented-out copy never counts.
+private func codeRange(
+    of code: String,
+    in text: String,
+    from start: String.Index? = nil
+) -> Range<String.Index>? {
+    var searchStart = start ?? text.startIndex
+    while let range = text.range(of: code, range: searchStart..<text.endIndex) {
+        let lineStart = text[..<range.lowerBound].lastIndex(of: "\n").map { text.index(after: $0) }
+            ?? text.startIndex
+        if text[lineStart..<range.lowerBound].allSatisfy({ $0 == " " || $0 == "\t" }) {
+            return range
+        }
+        searchStart = range.upperBound
+    }
+    return nil
+}
+
+/// How many occurrences of `code` begin their line (see `codeRange`).
+private func codeCount(of code: String, in text: String) -> Int {
+    var count = 0
+    var searchStart = text.startIndex
+    while let range = codeRange(of: code, in: text, from: searchStart) {
+        count += 1
+        searchStart = range.upperBound
+    }
+    return count
 }
 
 private func sourceFileContents(_ relativePath: String) throws -> String {

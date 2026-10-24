@@ -553,6 +553,12 @@ final class WebRTCClient: NSObject, ObservableObject {
     private(set) var localVideoEnabled: Bool = false {
         didSet { if !suppressLocalStateCallbacks { onLocalVideoEnabledChanged?(localVideoEnabled) } }
     }
+    /// Bumped by every local camera-off that keeps the producer
+    /// (`setVideoEnabled(false)`, `suspendLocalVideoForRecovery()`). A camera
+    /// enable compares it across its acknowledgement, as the microphone
+    /// compares `localAudioMuteIntentGeneration`, so a late acknowledgement
+    /// never turns a newer camera-off back on.
+    private var localVideoOffIntentGeneration = 0
     var hasLocalVideoProducer: Bool {
         isUsableProducer(videoProducer) &&
             sendTransport?.closed == false &&
@@ -3832,17 +3838,29 @@ final class WebRTCClient: NSObject, ObservableObject {
         // has a mute awaiting its ack: never resume over that.
         guard hasLocalAudioProducer, localAudioEnabled, localAudioIntentEnabled else { return }
 
+        let generation = configurationGeneration
+        let muteIntentGeneration = localAudioMuteIntentGeneration
         try configureCallAudioSession()
         producer.resume()
         rtcLocalAudioTrack?.isEnabled = true
         try await socket.toggleMute(producerId: producer.id, paused: false)
+        // A teardown, a mute or a replacement that landed during the ack owns
+        // capture now: an orphaned confirmation reasserts nothing.
+        guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }
+        guard localAudioMuteIntentGeneration == muteIntentGeneration,
+              audioProducer === producer, !producer.closed else { return }
         scheduleLocalAudioCaptureReassertion()
     }
 
     func setVideoEnabled(_ enabled: Bool) async throws {
+        if !enabled {
+            localVideoOffIntentGeneration += 1
+        }
         guard let socket = socketManager else { throw WebRTCError.notConfigured }
         guard let producer = videoProducer else { throw WebRTCError.noTransport }
 
+        let generation = configurationGeneration
+        let offIntentGeneration = localVideoOffIntentGeneration
         let previous = localVideoEnabled
         do {
             if enabled {
@@ -3858,24 +3876,44 @@ final class WebRTCClient: NSObject, ObservableObject {
                 producer.pause()
             }
             try await socket.toggleCamera(producerId: producer.id, paused: !enabled)
+            // A teardown, a newer camera-off or a replacement producer that
+            // landed during the ack owns the camera now: a late success must
+            // not touch its state.
+            guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }
+            guard localVideoOffIntentGeneration == offIntentGeneration,
+                  videoProducer === producer, !producer.closed else { return }
+            let capturer = videoCapturer
             rtcLocalVideoTrack?.isEnabled = enabled
             localVideoEnabled = enabled
             localVideoTrack?.isEnabled = enabled
             evaluateWebcamTopologyTransition()
 
             if !enabled {
-                await videoCapturer?.stopCapture()
+                await capturer?.stopCapture()
             }
         } catch {
+            // Roll back only while this call still owns the camera. After a
+            // teardown, rethrow and touch nothing. A newer camera-off or a
+            // replacement producer owns the camera; with no producer left,
+            // rethrow so the caller can recreate one.
+            guard generation == configurationGeneration else { throw error }
+            guard localVideoOffIntentGeneration == offIntentGeneration else { return }
+            guard videoProducer === producer else {
+                if videoProducer == nil { throw error }
+                return
+            }
+            let capturer = videoCapturer
             if previous {
                 producer.resume()
             } else {
                 producer.pause()
-                await videoCapturer?.stopCapture()
             }
             rtcLocalVideoTrack?.isEnabled = previous
             localVideoTrack?.isEnabled = previous
             localVideoEnabled = previous
+            if !previous {
+                await capturer?.stopCapture()
+            }
             debugLog("[WebRTC] Failed to toggle video: \(error)")
             throw error
         }
@@ -3885,6 +3923,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     /// capturer before suspension so replacement media cannot be stopped if
     /// reconnect setup completes while `stopCapture()` is awaiting.
     func suspendLocalVideoForRecovery() async {
+        localVideoOffIntentGeneration += 1
         invalidateWebcamReceiverCapacityAuthority()
         let capturer = videoCapturer
         videoProducer?.pause()

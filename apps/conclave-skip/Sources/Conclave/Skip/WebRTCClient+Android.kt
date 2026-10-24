@@ -1759,6 +1759,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     // its suspension points so a mute that lands while it waits for the send
     // transport or the RECORD_AUDIO prompt is never overridden by a live mic.
     private var localAudioMuteIntentGeneration = 0
+    // Bumped by every local camera-off that keeps the producer
+    // (setVideoEnabled(false), suspendLocalVideoForRecovery()). A camera
+    // enable compares it across its suspension points, as the microphone
+    // compares localAudioMuteIntentGeneration, so a late acknowledgement
+    // never turns a newer camera-off back on.
+    private var localVideoOffIntentGeneration = 0
     private var bluetoothConnectAutoRequestAttempted = false
     private var bluetoothConnectPermissionRequestToken: PermissionHelper.PermissionRequestToken? = null
     private var audioStartOrEnableInFlight = false
@@ -2174,6 +2180,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         var pendingProducer: Producer? = null
         try {
             releasePreJoinCameraPreview()
+            // The preview release suspends: after a teardown, touch nothing
+            // of the session that replaced this one.
+            ensureCurrentConfiguration(generation)
 
             if (videoCapturer == null) {
                 videoCapturer = createCameraCapturer(ProcessInfo.processInfo.androidContext)
@@ -2227,7 +2236,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             onLocalVideoEnabledChanged?.invoke(true)
         } catch (t: Throwable) {
             pendingProducer?.close()
-            clearLocalWebcamCaptureState(notifyLocalState = false)
+            // Clear only camera state this session still owns.
+            if (generation == configurationGeneration) {
+                clearLocalWebcamCaptureState(notifyLocalState = false)
+            }
             throw t
         }
     }
@@ -2935,12 +2947,21 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val producer = audioProducer ?: throw ErrorException("Audio producer not ready")
         if (!hasLocalAudioProducer || !localAudioEnabled || !localAudioTargetEnabled) return
 
+        val generation = configurationGeneration
+        val muteIntentGeneration = localAudioMuteIntentGeneration
         localAudioTargetEnabled = true
         configureCallAudioMode(unmuted = true)
         forceUnmuteMicrophoneCapture()
         localAudioTrack?.setEnabled(true)
         producer.resume()
         socket.toggleMute(producer.id, paused = false)
+        // A teardown, a mute or a replacement that landed during the ack owns
+        // capture now: an orphaned confirmation must never turn the
+        // microphone back on.
+        ensureCurrentConfiguration(generation)
+        if (localAudioMuteIntentGeneration != muteIntentGeneration ||
+            audioProducer !== producer || !hasUsableProducer(producer) ||
+            !localAudioTargetEnabled) return
         audioManager()?.let { manager ->
             applyLocalAudioCaptureState(manager, true)
             scheduleLocalAudioCaptureReassertion(true)
@@ -2948,9 +2969,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun setVideoEnabled(enabled: Boolean) {
+        if (!enabled) {
+            localVideoOffIntentGeneration += 1
+        }
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val producer = videoProducer ?: throw ErrorException("Video producer not ready")
         val generation = configurationGeneration
+        val offIntentGeneration = localVideoOffIntentGeneration
         val previous = localVideoEnabled
 
         try {
@@ -2960,6 +2985,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 }
                 ensureCurrentConfiguration(generation)
                 releasePreJoinCameraPreview()
+                // The permission prompt and the preview release both suspend. A
+                // teardown, a camera-off or a replacement producer that landed
+                // meanwhile owns the camera: start no capture and resume nothing.
+                // With no producer left, the checks below fail as before.
+                ensureCurrentConfiguration(generation)
+                if (localVideoOffIntentGeneration != offIntentGeneration) return
+                if (videoProducer != null && videoProducer !== producer) return
                 if (
                     localVideoTrack == null ||
                     localVideoTrackWrapper == null ||
@@ -2977,6 +3009,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             }
 
             socket.toggleCamera(producer.id, paused = !enabled)
+            // A teardown, a newer camera-off or a replacement producer that
+            // landed during the ack owns the camera now: a late success must
+            // not touch its state.
+            ensureCurrentConfiguration(generation)
+            if (localVideoOffIntentGeneration != offIntentGeneration ||
+                videoProducer !== producer || !hasUsableProducer(producer)) return
             localVideoTrack?.setEnabled(enabled)
             localVideoEnabled = enabled
             localVideoTrackWrapper?.isEnabled = enabled
@@ -2988,6 +3026,16 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
             onLocalVideoEnabledChanged?.invoke(enabled)
         } catch (error: Throwable) {
+            // Roll back only while this call still owns the camera. After a
+            // teardown, rethrow and touch nothing. A newer camera-off or a
+            // replacement producer owns the camera; with no producer left,
+            // rethrow so the caller can recreate one.
+            if (generation != configurationGeneration) throw error
+            if (localVideoOffIntentGeneration != offIntentGeneration) return
+            if (videoProducer !== producer) {
+                if (videoProducer == null) throw error
+                return
+            }
             try {
                 if (previous) {
                     producer.resume()
@@ -3010,6 +3058,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun suspendLocalVideoForRecovery() {
+        localVideoOffIntentGeneration += 1
         invalidateWebcamReceiverCapacityAuthority()
         try {
             videoProducer?.pause()

@@ -578,13 +578,24 @@ final class MeetingViewModel {
     private var webRTCJoinAttemptId: UUID?
     private var pendingProducerRetryTask: Task<Void, Never>?
     private var ttsHighlightTask: Task<Void, Never>?
-    private var isMuteToggleInFlight = false
+    // A mic, camera or hand toggle is in flight while the token it set is
+    // current; see releaseLocalToggleGuards().
+    private var muteToggleToken: UUID?
+    private var isMuteToggleInFlight: Bool { muteToggleToken != nil }
     private var isReplacingLocalAudioProducer = false
     private var localAudioProducerReplacementToken: UUID?
-    private var isCameraToggleInFlight = false
+    private var cameraToggleToken: UUID?
+    private var isCameraToggleInFlight: Bool { cameraToggleToken != nil }
     private var isScreenShareToggleInFlight = false
     private var videoPublishingPolicyRevision = 0
-    private var isHandRaiseToggleInFlight = false
+    private var handRaiseToggleToken: UUID?
+    private var isHandRaiseToggleInFlight: Bool { handRaiseToggleToken != nil }
+    #if os(macOS) && !SKIP
+    /// Host-test seam (macOS host tests only; iOS and Android never compile
+    /// it): a mic, camera or hand toggle that took its guard reports here
+    /// when it finishes, so a test can wait for an orphaned toggle to end.
+    var testLocalToggleEnded: ((String) -> Void)?
+    #endif
     private var isDisplayNameUpdateInFlight = false
     private var isCameraSwitchInFlight = false
     private var networkMonitorReportsOffline = false
@@ -5619,6 +5630,7 @@ final class MeetingViewModel {
             || previousConnectionState == .joined
             || previousConnectionState == .joining
         activeJoinAttemptId = joinAttemptId
+        releaseLocalToggleGuards()
         lastJoinActivityAt = Date()
         clearPendingPreAckRoomEvents()
         if !reuseExistingSocket && (!isRecoveryJoin || socketManager.isConnected) {
@@ -6119,7 +6131,7 @@ final class MeetingViewModel {
 
         let actionContext = currentCallActionContext()
         do {
-            try await enableOrStartLocalVideo()
+            try await enableOrStartLocalVideo(context: actionContext)
             guard isCurrentJoinedCall(actionContext) else { return }
             setLocalCameraOffState(false)
         } catch {
@@ -7163,13 +7175,11 @@ final class MeetingViewModel {
         currentRoomAliases.removeAll()
         activeJoinAttemptId = nil
         isRejoinInFlight = false
-        isMuteToggleInFlight = false
+        releaseLocalToggleGuards()
         isReplacingLocalAudioProducer = false
         localAudioProducerReplacementToken = nil
-        isCameraToggleInFlight = false
         isCameraSwitchInFlight = false
         isScreenShareToggleInFlight = false
-        isHandRaiseToggleInFlight = false
         isDisplayNameUpdateInFlight = false
         adminActionsInFlight.removeAll()
         state.chatMessages.removeAll()
@@ -7309,6 +7319,16 @@ final class MeetingViewModel {
 
     // MARK: - Media Controls
 
+    /// A new join attempt (including a recovery rejoin, which skips cleanup())
+    /// orphans every toggle still awaiting a result, so release their guards.
+    /// A completion clears its guard only while it still owns the token, so an
+    /// orphaned one can neither strand a guard nor release a newer toggle's.
+    private func releaseLocalToggleGuards() {
+        muteToggleToken = nil
+        cameraToggleToken = nil
+        handRaiseToggleToken = nil
+    }
+
     private func enableOrStartLocalAudio() async throws {
         let context = currentCallActionContext()
         guard !state.isMuted else { return }
@@ -7339,14 +7359,22 @@ final class MeetingViewModel {
         try await webRTCClient.setAudioEnabled(false)
     }
 
-    private func enableOrStartLocalVideo() async throws {
+    /// Enables or starts the camera for the caller's call, whose context the
+    /// caller captured. Every close or restart below acts for that call only.
+    private func enableOrStartLocalVideo(context: CallActionContext) async throws {
+        guard isCurrentJoinedCall(context) else { return }
         if webRTCClient.hasLocalVideoProducer {
             do {
                 try await webRTCClient.setVideoEnabled(true)
             } catch {
-                guard shouldRecreateLocalProducerAfterEnableFailure(error) else { throw error }
+                // An enable orphaned by a rejoin must not close or restart the
+                // producer of the attempt that replaced it. (The clients never
+                // report a failure while a replacement producer owns the camera.)
+                guard isCurrentJoinedCall(context),
+                      shouldRecreateLocalProducerAfterEnableFailure(error) else { throw error }
                 debugLog("[Meeting] Recreating stale local video producer after enable failure: \(error)")
                 await webRTCClient.closeLocalVideoProducer()
+                guard isCurrentJoinedCall(context) else { throw error }
                 try await webRTCClient.startProducingVideo()
             }
         } else {
@@ -7448,7 +7476,8 @@ final class MeetingViewModel {
               !isMuteToggleInFlight else { return }
         let actionRoomId = state.roomId
         let actionJoinAttemptId = activeJoinAttemptId
-        isMuteToggleInFlight = true
+        let toggleToken = UUID()
+        muteToggleToken = toggleToken
         let newState = !state.isMuted
         state.isMuted = newState
         #if !SKIP
@@ -7457,9 +7486,12 @@ final class MeetingViewModel {
         syncCallPresenceState()
         Task { @MainActor in
             defer {
-                if isSameCallContext(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) {
-                    isMuteToggleInFlight = false
+                if muteToggleToken == toggleToken {
+                    muteToggleToken = nil
                 }
+                #if os(macOS) && !SKIP
+                testLocalToggleEnded?("toggleMute")
+                #endif
             }
             guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
             do {
@@ -7467,6 +7499,10 @@ final class MeetingViewModel {
                     try await disableLocalAudioIfNeeded()
                 } else {
                     try await enableOrStartLocalAudio()
+                    // A rejoin during the start orphaned this toggle: the new
+                    // attempt publishes from state.isMuted, and this confirm
+                    // would bypass the guard a newer toggle may hold.
+                    guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
                     await confirmLocalAudioProducerUnmutedOrRecover(
                         context: currentSocketEventContext(),
                         allowCurrentMuteToggle: true
@@ -7499,7 +7535,8 @@ final class MeetingViewModel {
         let actionRoomId = state.roomId
         let actionJoinAttemptId = activeJoinAttemptId
         let actionVideoPolicyRevision = videoPublishingPolicyRevision
-        isCameraToggleInFlight = true
+        let toggleToken = UUID()
+        cameraToggleToken = toggleToken
         let newState = !state.isCameraOff
         setLocalCameraOffState(newState, syncCallPresence: newState)
         #if !SKIP
@@ -7507,16 +7544,21 @@ final class MeetingViewModel {
         #endif
         Task { @MainActor in
             defer {
-                if isSameCallContext(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) {
-                    isCameraToggleInFlight = false
+                if cameraToggleToken == toggleToken {
+                    cameraToggleToken = nil
                 }
+                #if os(macOS) && !SKIP
+                testLocalToggleEnded?("toggleCamera")
+                #endif
             }
             guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
             do {
                 if newState {
                     await webRTCClient.closeLocalVideoProducer()
                 } else {
-                    try await enableOrStartLocalVideo()
+                    try await enableOrStartLocalVideo(
+                        context: CallActionContext(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId)
+                    )
                     guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
                     guard actionVideoPolicyRevision == videoPublishingPolicyRevision,
                           !state.isAudioOnlyMode else {
@@ -7840,11 +7882,15 @@ final class MeetingViewModel {
         guard !isHandRaiseToggleInFlight else { return false }
         guard state.isHandRaised != raised else { return false }
         let actionContext = currentCallActionContext()
-        isHandRaiseToggleInFlight = true
+        let toggleToken = UUID()
+        handRaiseToggleToken = toggleToken
         defer {
-            if isSameCallContext(actionContext) {
-                isHandRaiseToggleInFlight = false
+            if handRaiseToggleToken == toggleToken {
+                handRaiseToggleToken = nil
             }
+            #if os(macOS) && !SKIP
+            testLocalToggleEnded?("setHandRaisedState")
+            #endif
         }
         guard isCurrentJoinedCall(actionContext) else { return false }
         try await socketManager.setHandRaised(raised)
@@ -8356,13 +8402,17 @@ final class MeetingViewModel {
         let actionRoomId = state.roomId
         let actionJoinAttemptId = activeJoinAttemptId
         let previousMuted = state.isMuted
-        isMuteToggleInFlight = true
+        let toggleToken = UUID()
+        muteToggleToken = toggleToken
         state.isMuted = muted
         syncCallPresenceState()
         defer {
-            if isSameCallContext(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) {
-                isMuteToggleInFlight = false
+            if muteToggleToken == toggleToken {
+                muteToggleToken = nil
             }
+            #if os(macOS) && !SKIP
+            testLocalToggleEnded?("setMuted")
+            #endif
         }
         guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
         do {
@@ -8370,6 +8420,8 @@ final class MeetingViewModel {
                 try await disableLocalAudioIfNeeded()
             } else {
                 try await enableOrStartLocalAudio()
+                // Orphaned by a rejoin: see toggleMute().
+                guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
                 await confirmLocalAudioProducerUnmutedOrRecover(
                     context: currentSocketEventContext(),
                     allowCurrentMuteToggle: true
@@ -8391,19 +8443,27 @@ final class MeetingViewModel {
         let actionRoomId = state.roomId
         let actionJoinAttemptId = activeJoinAttemptId
         let previousCameraOff = state.isCameraOff
-        isCameraToggleInFlight = true
+        let toggleToken = UUID()
+        cameraToggleToken = toggleToken
         setLocalCameraOffState(cameraOff, syncCallPresence: cameraOff)
         defer {
-            if isSameCallContext(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) {
-                isCameraToggleInFlight = false
+            if cameraToggleToken == toggleToken {
+                cameraToggleToken = nil
             }
+            #if os(macOS) && !SKIP
+            testLocalToggleEnded?("setCameraOff")
+            #endif
         }
         guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
         do {
             if cameraOff {
                 await webRTCClient.closeLocalVideoProducer()
             } else {
-                try await enableOrStartLocalVideo()
+                try await enableOrStartLocalVideo(
+                    context: CallActionContext(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId)
+                )
+                // An orphaned start must not turn the recovered call's camera back on.
+                guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
                 setLocalCameraOffState(false)
             }
         } catch {

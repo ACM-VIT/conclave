@@ -77,6 +77,12 @@ final class SocketIOManager {
     var onAdminMediaEnforced: ((AdminMediaEnforcedNotification) -> Void)?
     var onAdminBulkMediaEnforced: ((AdminBulkMediaEnforcedNotification) -> Void)?
 
+    /// Host-test seam (this macOS stub only; iOS and Android never compile
+    /// it). Acknowledgements the local toggles await pass through this gate,
+    /// so a test can hold one, as a slow SFU acknowledgement would, and later
+    /// release or fail it.
+    var testCallGate: (@MainActor (String) async throws -> Void)?
+
     func connect(sfuURL: String, token: String) async throws {
         throw NSError(domain: "Conclave", code: -1, userInfo: [NSLocalizedDescriptionKey: "SocketIO not available on macOS"])
     }
@@ -165,7 +171,7 @@ final class SocketIOManager {
     }
     func relayConclaveAnswer(_ packet: ConclaveAssistantRelayPacket) { }
     func sendReaction(emoji: String?, kind: String?, value: String?, label: String?) async throws { }
-    func setHandRaised(_ raised: Bool) async throws { }
+    func setHandRaised(_ raised: Bool) async throws { try await testCallGate?("setHandRaised(\(raised))") }
     func updateDisplayName(_ name: String) async throws { }
 
     func lockRoom(_ locked: Bool) async throws -> RoomPolicyMutationResponse {
