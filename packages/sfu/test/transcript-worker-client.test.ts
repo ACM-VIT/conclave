@@ -57,6 +57,23 @@ afterEach(() => {
 });
 
 describe("TranscriptWorkerRelayClient recovery", () => {
+  it("reconnects after a heartbeat write failure in a silent meeting", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const client = new TranscriptWorkerRelayClient({ workerUrl: "https://worker.test", roomId: "room-a", token: "fixture" });
+    const connected = client.connect();
+    const first = FakeWebSocket.instances[0];
+    first.open();
+    await connected;
+    first.send = () => { throw new Error("write failed"); };
+    first.close = () => { first.readyState = FakeWebSocket.CLOSED; };
+    await vi.advanceTimersByTimeAsync(20250);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    FakeWebSocket.instances[1].open();
+    await Promise.resolve();
+    expect(client.sendAudioChunk("resumed", speaker)).toBe(true);
+    client.close();
+  });
   it("retries a failed replacement handshake even when error is not followed by close", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("WebSocket", FakeWebSocket);

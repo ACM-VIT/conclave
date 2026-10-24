@@ -243,6 +243,9 @@ export class TranscriptWorkerRelayClient {
         try {
           socket.close();
         } catch {}
+        // Heartbeats are not buffered audio, but a failed write must still
+        // reconnect even when the room is silent and close never fires.
+        if (this.hasConnected && !this.intentionallyClosed) this.scheduleReconnect();
         // Queue the audio below while the replacement socket connects.
       }
     }
