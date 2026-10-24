@@ -16,7 +16,7 @@ struct NativeIconGalleryDisclosure: View {
     @State private var captionsOn = false
 
     var body: some View {
-        DisclosureGroup("Icon gallery", isExpanded: $expanded) {
+        DisclosureGroup(isExpanded: $expanded) {
             if expanded {
                 Text("Inert symbols. Sample controls do not access devices or send feedback.")
                     .font(.subheadline)
@@ -28,8 +28,11 @@ struct NativeIconGalleryDisclosure: View {
                     NativeSymbolGalleryRow(specimen: specimen)
                 }
             }
+        } label: {
+            // On the label only: on the group it would replace every row and sample identifier.
+            Text("Icon Gallery")
+                .accessibilityIdentifier("icons.gallery.toggle")
         }
-        .accessibilityIdentifier("icons.gallery.toggle")
     }
 
     private var microphoneSample: some View {
@@ -104,9 +107,11 @@ private struct NativeSymbolGalleryRow: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(specimen.caption)
+                // The raw literal stays visible for reviewers but is never spoken.
                 Text(specimen.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 if let symbol = specimen.symbol {
                     Text(UIImage(systemName: symbol) == nil ? "Symbol unavailable on this OS" : "System symbol available")
                         .font(.caption)

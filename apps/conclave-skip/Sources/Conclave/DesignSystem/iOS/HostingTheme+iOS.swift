@@ -22,6 +22,11 @@ enum HostingTheme {
         return color(traits.accessibilityContrast == .high ? DesignTokens.iosAppTextSecondaryLightHighContrast : DesignTokens.iosAppTextSecondaryLight)
     })
 
+    /// A fixed generated token as a SwiftUI color. This file stays the single token-to-color adapter.
+    static func token(_ argb: Int64) -> Color {
+        Color(uiColor: color(argb))
+    }
+
     private static func color(_ argb: Int64) -> UIColor {
         UIColor(
             red: CGFloat((argb >> 16) & 0xFF) / 255,

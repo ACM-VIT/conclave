@@ -2,6 +2,7 @@ package conclave.module
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +29,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -60,7 +62,13 @@ fun NativeHostingPreviewRoot(fixtureEligible: Boolean = false, onClose: () -> Un
     val lifetime = remember(presenter) { NativePanelOverlayLifetime(presenter.panels) }
     val stageLifetime = remember { NativeHostingStageLifetime() }
     var mount by remember { mutableIntStateOf(0) }
+    val exporter = remember(iconContext) { NativeSemanticsExporter(iconContext) }
     val panelState = presenter.panels.snapshot
+    // The one system-bar owner here: a system-themed root and no overlay input yet (3b1 adds the panel inputs).
+    val systemDark = isSystemInDarkTheme()
+    ConclaveSystemBars(SystemBarPolicy.resolve(rootDark = systemDark, overlayVisible = false, overlayInCall = false,
+        bottomStripInCall = false, systemDark = systemDark))
+    NativeSemanticsExportReceiver(exporter)
     NativeIconRasterBinding(icons, fixtureEligible && panelState.current == null)
     key(mount) { NativeFeedbackConsumer(presenter, delivery, mount) }
     BackHandler {
@@ -68,7 +76,8 @@ fun NativeHostingPreviewRoot(fixtureEligible: Boolean = false, onClose: () -> Un
     }
     Box(Modifier.fillMaxSize()) {
         NativeHostingStage(presenter, delivery, stageLifetime, panelState.current != null,
-            onRemount = { mount++ }, onClose = { icons.cancel("preview Close"); onClose() }, icons = icons)
+            onRemount = { mount++ }, onClose = { icons.cancel("preview Close"); onClose() }, icons = icons,
+            exporter = exporter)
         val request = panelState.current
         if (request != null && !panelState.isDismissing) {
             key(panelState.session, request.presentationID) {
@@ -86,9 +95,11 @@ fun NativeHostingPreviewRoot(fixtureEligible: Boolean = false, onClose: () -> Un
 private fun NativeHostingStage(
     presenter: NativeHostingPresenter, delivery: NativeFeedbackDelivery,
     lifetime: NativeHostingStageLifetime, covered: Boolean, onRemount: () -> Unit, onClose: () -> Unit,
-    icons: NativeIconRasterController,
+    icons: NativeIconRasterController, exporter: NativeSemanticsExporter,
 ) {
     val instance = remember { lifetime.create() }
+    var componentsExpanded by rememberSaveable { mutableStateOf(false) }
+    val gallery = rememberNativeComponentGalleryState()
     val cache = remember(presenter) { NativeHostingRowsCache(presenter) }
     val rows = cache.current()
     val showsDetails = presenter.showsDetails
@@ -154,6 +165,11 @@ private fun NativeHostingStage(
                     }
                 }
                 item(key = "icons") { NativeHostingIconSection(icons) }
+                item(key = "components.toggle") {
+                    NativeComponentGalleryToggle(componentsExpanded) { componentsExpanded = it }
+                }
+                nativeComponentGalleryItems(componentsExpanded, gallery)
+                item(key = "semantics.export") { NativeSemanticsExportControls(exporter) }
                 item(key = "details") {
                     Row(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)

@@ -10,37 +10,42 @@ enum ConclaveFeedback {
         defaults.object(forKey: preferenceKey) as? Bool ?? true
     }
 
+    /// `SensoryFeedback.start` and `.stop` only play on watchOS, so share and transcription starts use
+    /// impact(medium) and stops impact(light) (owner decision Q11). `FeedbackHapticContract` is the oracle.
     static func sensory(_ kind: FeedbackKind) -> SensoryFeedback? {
+        sensoryMapping(kind).feedback
+    }
+
+    /// The feedback for a kind and its token in the contract's spelling, from one switch. Self-checks compare
+    /// the tokens, because `SensoryFeedback` equality does not tell impact weights apart on iOS 27.1.
+    static func sensoryMapping(_ kind: FeedbackKind) -> (token: String, feedback: SensoryFeedback?) {
         switch kind {
-        case .micOn, .micOff, .cameraOn, .cameraOff, .handLowered, .pieceMoved, .revealHeld:
-            return .impact(weight: .light)
-        case .handRaised, .swipeThresholdCrossed:
-            return .impact(weight: .medium)
+        case .micOn, .micOff, .cameraOn, .cameraOff, .handLowered, .pieceMoved, .revealHeld,
+             .shareStopped, .transcriptionStopped:
+            return ("impact.light", .impact(weight: .light))
+        case .handRaised, .swipeThresholdCrossed, .shareStarted, .transcriptionStarted:
+            return ("impact.medium", .impact(weight: .medium))
         case .tapValid:
-            return .impact(weight: .heavy)
+            return ("impact.heavy", .impact(weight: .heavy))
         case .reactionSent:
-            return .impact(flexibility: .soft)
+            return ("impact.soft", .impact(flexibility: .soft))
         case .selectionChanged, .upvoteChanged, .answerLocked, .voteCast, .bluffSubmitted:
-            return .selection
+            return ("selection", .selection)
         case .selfViewSnapped:
-            return .alignment
+            return ("alignment", .alignment)
         case .signInSucceeded, .meetingOpened, .joined, .admitted, .linkCopied, .gameCorrect,
              .wordSolved, .gameStarted, .hostAdmitted, .hostAdmittedAll, .hostMadeHost,
              .hostBulkApplied, .hostInvitedToStage, .hostMovedToAudience, .questionSent, .becameHost:
-            return .success
+            return ("success", .success)
         case .validationFailed, .actionRejected, .routeSwitchFailed, .joinFailed, .denied,
              .removed, .connectionLost, .gameWrong, .liveNotesFailed, .tapEarly, .guessInvalid,
              .moveRejected, .hostActionFailed, .questionFailed:
-            return .error
+            return ("error", .error)
         case .cameraOffByHost, .hostMutedYou, .sessionExpired, .stillConnecting, .endForEveryonePrompted:
-            return .warning
-        case .shareStarted, .transcriptionStarted:
-            return .start
-        case .shareStopped, .transcriptionStopped:
-            return .stop
+            return ("warning", .warning)
         case .none, .longPress, .handLoweredByHost, .shareStoppedBySystem, .recapPostingStarted,
              .connectionRestored, .hostDenied, .hostRemoved, .hostPolicyChanged, .lostHost:
-            return nil
+            return ("none", nil)
         }
     }
 }

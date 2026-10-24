@@ -44,7 +44,9 @@ struct NativeIconContractsTests {
         // SwiftUI images only; the UIImage availability lookup draws nothing.
         let images = iconMatches(#"(?<![A-Za-z])Image\(systemName:"#, in: gallery).count
         #expect(images == 4)
-        #expect(gallery.components(separatedBy: ".accessibilityHidden(true)").count - 1 == images)
+        // Every image is hidden, plus the raw literal detail line (owner disposition, 2026-10-24).
+        #expect(gallery.components(separatedBy: ".accessibilityHidden(true)").count - 1 == images + 1)
+        #expect(gallery.contains("Text(specimen.detail)\n                    .font(.caption)\n                    .foregroundStyle(.secondary)\n                    .accessibilityHidden(true)"))
         #expect(gallery.components(separatedBy: "if #available(iOS 26.0, *)").count - 1 == 2)
         // The only system close role sits directly inside its iOS 26 availability branch.
         #expect(gallery.contains("if #available(iOS 26.0, *) {\n                Button(role: .close)"))

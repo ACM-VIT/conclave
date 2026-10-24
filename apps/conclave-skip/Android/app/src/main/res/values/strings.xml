@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Strings for new handwritten Compose screens (owner decision Q14), in Material sentence case (Q13).
+    The Skip-generated Conclave library module has no resource source set, so its Kotlin resolves these by name
+    at run time through conclaveString() in Sources/Conclave/Skip/ui/theme/ConclaveStrings.kt. Rename a string
+    only together with its call sites; a Swift source test checks that every referenced name exists here.
+    Numbers in visible text follow the device locale, except counts that scripts parse (the clipped text, match
+    and tap readouts): those arrive as ASCII strings (%1$s), so they read the same in every locale (TG 4.1).
+-->
+<resources>
+    <!-- Debug component gallery in the hosting preview. -->
+    <string name="native_gallery_show">Show component gallery</string>
+    <string name="native_gallery_hide">Hide component gallery</string>
+    <string name="native_gallery_expanded">Expanded</string>
+    <string name="native_gallery_collapsed">Collapsed</string>
+    <string name="native_gallery_title">Component gallery</string>
+    <string name="native_gallery_intro">Inert self-checks for type, haptics and contrast. Nothing here plays, records or connects.</string>
+    <string name="native_gallery_on">On</string>
+    <string name="native_gallery_off">Off</string>
+    <string name="native_gallery_api">API %1$d</string>
+    <string name="native_gallery_appearance">Appearance: %1$s</string>
+    <string name="native_gallery_dark">dark</string>
+    <string name="native_gallery_light">light</string>
+    <string name="native_gallery_font">Font scale %1$.2f, density %2$.2f, width %3$d dp</string>
+    <string name="native_gallery_direction">Layout direction: %1$s</string>
+    <string name="native_gallery_ltr">left to right</string>
+    <string name="native_gallery_rtl">right to left</string>
+    <string name="native_gallery_motion">Remove animations: %1$s</string>
+    <string name="native_gallery_contrast_level">Contrast level: %1$s</string>
+    <string name="native_gallery_contrast_level_unavailable">not available below API 34</string>
+    <string name="native_gallery_text_contrast">High contrast text: %1$s</string>
+    <string name="native_gallery_clipped">Clipped text: %1$s, measured %2$s of %3$s specimens</string>
+    <string name="native_gallery_long_text">Long text</string>
+    <string name="native_gallery_typography">Typography</string>
+    <string name="native_gallery_haptics">Haptics</string>
+    <string name="native_gallery_contrast">Contrast</string>
+    <string name="native_gallery_section_show">Show</string>
+    <string name="native_gallery_section_hide">Hide</string>
+    <string name="native_gallery_type_sample">Sample text in this style</string>
+    <string name="native_gallery_type_caption">%1$s %2$s, %3$.0f sp, %4$.1f px</string>
+    <string name="native_gallery_verify">Verify table</string>
+    <string name="native_gallery_not_run">Contract match: not run</string>
+    <string name="native_gallery_match">%1$s of %2$s match at API %3$s</string>
+    <string name="native_gallery_taps">Recorded %1$s, outcome route %2$s, silent %3$s</string>
+    <string name="native_gallery_last_none">Last tap: none</string>
+    <string name="native_gallery_last">Last tap: %1$s, %2$s</string>
+    <string name="native_gallery_played">played</string>
+    <string name="native_gallery_recorded">recorded</string>
+    <string name="native_gallery_outcome_only">outcome route only</string>
+    <string name="native_gallery_silent_word">silent</string>
+    <string name="native_gallery_gesture_route">Gesture route</string>
+    <string name="native_gallery_outcome_route">Outcome route</string>
+    <string name="native_gallery_haptic_row">Constant %1$s, contract %2$s</string>
+    <string name="native_gallery_silent">Silent on this platform</string>
+    <string name="native_gallery_class_text">text, needs 4.5</string>
+    <string name="native_gallery_class_large">large text, needs 3</string>
+    <string name="native_gallery_class_non_text">non-text, needs 3</string>
+    <string name="native_gallery_class_decorative">decorative</string>
+    <string name="native_gallery_class_forbidden">not for text</string>
+    <string name="native_gallery_verdict">Ratio %1$.2f against %2$s: %3$s</string>
+    <string name="native_gallery_passes">passes</string>
+    <string name="native_gallery_fails">fails</string>
+    <string name="native_gallery_decorative_only">decorative only</string>
+    <string name="native_gallery_swatch" translatable="false">Aa</string>
+    <string name="native_gallery_live_app">Live, app</string>
+    <string name="native_gallery_live_in_call">Live, in call</string>
+    <string name="native_gallery_live_on_primary">On primary text on primary</string>
+    <string name="native_gallery_live_on_primary_container">On primary container text on primary container</string>
+    <string name="native_gallery_live_primary">Primary text on surface</string>
+    <string name="native_gallery_live_on_surface">On surface text on surface</string>
+    <string name="native_gallery_live_on_surface_variant">On surface variant text on surface</string>
+    <string name="native_gallery_live_on_secondary_container">On secondary container text on secondary container</string>
+    <string name="native_gallery_live_error">Error text on surface</string>
+    <string name="native_gallery_expected">Appendix C %1$.3f</string>
+
+    <!-- Debug semantics exporter in the hosting preview. -->
+    <string name="native_semantics_title">Semantics export</string>
+    <string name="native_semantics_export">Export semantics</string>
+    <string name="native_semantics_idle">No export yet. Exports go to cache/wp1-semantics, newest in latest.json.</string>
+    <string name="native_semantics_status">Wrote %1$s: %2$d merged and %3$d unmerged nodes</string>
+    <string name="native_semantics_failed">Export failed: %1$s</string>
+</resources>

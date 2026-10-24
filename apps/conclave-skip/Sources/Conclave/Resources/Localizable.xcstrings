@@ -1,6 +1,50 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@ %@, %@ pt by default, %@ pt now, Android %@" : {
+      "comment" : "Debug component gallery: type specimen caption: style name, weight name, default point size, current point size, Android role",
+      "extractionState" : "manual"
+    },
+    "%@ tapped, %@" : {
+      "comment" : "Debug component gallery: last haptic tap: feedback kind identifier, then its result",
+      "extractionState" : "manual"
+    },
+    "%lld of %lld match" : {
+      "comment" : "Debug component gallery: haptic verification result: matching rows, then all rows. Scripts read it, so the numbers stay ASCII digits in every language",
+      "extractionState" : "manual"
+    },
+    "%lld truncated, %lld of %lld specimens measured" : {
+      "comment" : "Debug component gallery: truncation readout: truncated specimens, measured specimens, all specimens. Scripts read it, so the numbers stay ASCII digits in every language",
+      "extractionState" : "manual"
+    },
+    "App" : {
+      "comment" : "Debug component gallery: header for specimens in the system appearance",
+      "extractionState" : "manual"
+    },
+    "Appearance" : {
+      "comment" : "Debug component gallery: readout name for light or dark appearance",
+      "extractionState" : "manual"
+    },
+    "Appendix C %@" : {
+      "comment" : "Debug component gallery: archived design contrast value for a token pair",
+      "extractionState" : "manual"
+    },
+    "Assumed white system label on the accent: %@" : {
+      "comment" : "Debug component gallery: specimen readout with a contrast verdict",
+      "extractionState" : "manual"
+    },
+    "Bold Text" : {
+      "comment" : "Debug component gallery: readout name for the Bold Text setting",
+      "extractionState" : "manual"
+    },
+    "Bordered Prominent" : {
+      "comment" : "Debug component gallery: inert specimen button in the bordered prominent style",
+      "extractionState" : "manual"
+    },
+    "Bordered Prominent, On Coral" : {
+      "comment" : "Debug component gallery: inert specimen button in the bordered prominent style with the coral fill and its label color",
+      "extractionState" : "manual"
+    },
     "Cancel" : {
       "comment" : "Button title for cancelling a pending native app action",
       "localizations" : {
@@ -29,6 +73,190 @@
           }
         }
       }
+    },
+    "Component Gallery" : {
+      "comment" : "Debug component gallery: disclosure title that shows the gallery",
+      "extractionState" : "manual"
+    },
+    "Components" : {
+      "comment" : "Debug hosting preview section title for the component gallery",
+      "extractionState" : "manual"
+    },
+    "Confirmation Action" : {
+      "comment" : "Debug component gallery: row and page title for the confirmation action toolbar specimen",
+      "extractionState" : "manual"
+    },
+    "Contract Match" : {
+      "comment" : "Debug component gallery: readout name for the haptic mapper comparison",
+      "extractionState" : "manual"
+    },
+    "Contrast" : {
+      "comment" : "Debug component gallery: section title for contrast specimens; also the readout name for the system contrast setting",
+      "extractionState" : "manual"
+    },
+    "Coral text on the call stage" : {
+      "comment" : "Debug component gallery: contrast pair caption",
+      "extractionState" : "manual"
+    },
+    "Coral text on the row background" : {
+      "comment" : "Debug component gallery: contrast pair caption",
+      "extractionState" : "manual"
+    },
+    "Dark" : {
+      "comment" : "Debug component gallery: readout value for dark appearance",
+      "extractionState" : "manual"
+    },
+    "Decorative" : {
+      "comment" : "Debug component gallery: contrast class with no requirement",
+      "extractionState" : "manual"
+    },
+    "Decorative Only" : {
+      "comment" : "Debug component gallery: contrast verdict for a pair labeled not for text while it stays below 4.5",
+      "extractionState" : "manual"
+    },
+    "Done" : {
+      "comment" : "Debug component gallery: inert toolbar button on the confirmation action specimen page",
+      "extractionState" : "manual"
+    },
+    "Fails" : {
+      "comment" : "Debug component gallery: contrast verdict when the ratio misses its class",
+      "extractionState" : "manual"
+    },
+    "Gesture Route" : {
+      "comment" : "Debug component gallery: header above haptic kinds played by the touched control",
+      "extractionState" : "manual"
+    },
+    "Glass Prominent" : {
+      "comment" : "Debug component gallery: inert specimen button in the glass prominent style",
+      "extractionState" : "manual"
+    },
+    "Glass Prominent, On Coral" : {
+      "comment" : "Debug component gallery: inert specimen button in the glass prominent style with the coral fill and its label color",
+      "extractionState" : "manual"
+    },
+    "Glass specimens need iOS 26 or later." : {
+      "comment" : "Debug component gallery: shown instead of glass specimens on older iOS versions",
+      "extractionState" : "manual"
+    },
+    "Haptics" : {
+      "comment" : "Debug component gallery: section title for haptic mapping specimens",
+      "extractionState" : "manual"
+    },
+    "In Call" : {
+      "comment" : "Debug component gallery: header for specimens in the always-dark call appearance",
+      "extractionState" : "manual"
+    },
+    "Increased" : {
+      "comment" : "Debug component gallery: readout value for increased contrast",
+      "extractionState" : "manual"
+    },
+    "Inert self-checks for type, haptics and contrast. Nothing here plays, records or connects." : {
+      "comment" : "Debug component gallery: introduction under the title",
+      "extractionState" : "manual"
+    },
+    "Large text, needs 3" : {
+      "comment" : "Debug component gallery: contrast class for large text",
+      "extractionState" : "manual"
+    },
+    "Last Tap" : {
+      "comment" : "Debug component gallery: readout name for the most recent haptic tap",
+      "extractionState" : "manual"
+    },
+    "Layout Direction" : {
+      "comment" : "Debug component gallery: readout name for the layout direction",
+      "extractionState" : "manual"
+    },
+    "Left to Right" : {
+      "comment" : "Debug component gallery: readout value for left-to-right layout",
+      "extractionState" : "manual"
+    },
+    "Light" : {
+      "comment" : "Debug component gallery: readout value for light appearance",
+      "extractionState" : "manual"
+    },
+    "Live, App" : {
+      "comment" : "Debug component gallery: header above contrast pairs resolved in the system appearance",
+      "extractionState" : "manual"
+    },
+    "Live, In Call" : {
+      "comment" : "Debug component gallery: header above contrast pairs resolved in the always-dark call appearance",
+      "extractionState" : "manual"
+    },
+    "Long Text" : {
+      "comment" : "Debug component gallery: switch that doubles every specimen string to check clipping",
+      "extractionState" : "manual"
+    },
+    "Mapper %@, contract %@" : {
+      "comment" : "Debug component gallery: haptic row detail: the mapper token, then the contract token",
+      "extractionState" : "manual"
+    },
+    "Non-text, needs 3" : {
+      "comment" : "Debug component gallery: contrast class for glyphs and component boundaries",
+      "extractionState" : "manual"
+    },
+    "None" : {
+      "comment" : "Debug component gallery: readout value when nothing was tapped yet",
+      "extractionState" : "manual"
+    },
+    "Not Run" : {
+      "comment" : "Debug component gallery: readout value before the haptic table was verified",
+      "extractionState" : "manual"
+    },
+    "Not for text" : {
+      "comment" : "Debug component gallery: contrast class for pairs deliberately below the text threshold",
+      "extractionState" : "manual"
+    },
+    "Off" : {
+      "comment" : "Debug component gallery: readout value for a setting that is off",
+      "extractionState" : "manual"
+    },
+    "On" : {
+      "comment" : "Debug component gallery: readout value for a setting that is on",
+      "extractionState" : "manual"
+    },
+    "On coral label on coral fill" : {
+      "comment" : "Debug component gallery: contrast pair caption",
+      "extractionState" : "manual"
+    },
+    "On coral label on coral fill: %@" : {
+      "comment" : "Debug component gallery: specimen readout with a contrast verdict",
+      "extractionState" : "manual"
+    },
+    "Outcome Route" : {
+      "comment" : "Debug component gallery: header above haptic kinds played only as session outcomes",
+      "extractionState" : "manual"
+    },
+    "Outside sRGB, no ratio" : {
+      "comment" : "Debug component gallery: shown instead of a contrast verdict when a resolved color lies outside sRGB",
+      "extractionState" : "manual"
+    },
+    "Passes" : {
+      "comment" : "Debug component gallery: contrast verdict when the ratio meets its class",
+      "extractionState" : "manual"
+    },
+    "Ratio %@ against %@: %@" : {
+      "comment" : "Debug component gallery: contrast verdict: ratio, contrast class, then Passes or Fails",
+      "extractionState" : "manual"
+    },
+    "Recorded %lld, suppressed %lld, outcome route %lld, silent %lld" : {
+      "comment" : "Debug component gallery: haptic tap counts by result. Scripts read it, so the numbers stay ASCII digits in every language",
+      "extractionState" : "manual"
+    },
+    "Reduce Motion" : {
+      "comment" : "Debug component gallery: readout name for the Reduce Motion setting",
+      "extractionState" : "manual"
+    },
+    "Reduce Transparency" : {
+      "comment" : "Debug component gallery: readout name for the Reduce Transparency setting",
+      "extractionState" : "manual"
+    },
+    "Right to Left" : {
+      "comment" : "Debug component gallery: readout value for right-to-left layout",
+      "extractionState" : "manual"
+    },
+    "Sample text in this style" : {
+      "comment" : "Debug component gallery: sample line drawn in each text style",
+      "extractionState" : "manual"
     },
     "Save" : {
       "comment" : "Button title for saving native meeting settings",
@@ -59,6 +287,18 @@
         }
       }
     },
+    "Secondary text on the call stage" : {
+      "comment" : "Debug component gallery: contrast pair caption",
+      "extractionState" : "manual"
+    },
+    "Secondary text on the row background" : {
+      "comment" : "Debug component gallery: contrast pair caption",
+      "extractionState" : "manual"
+    },
+    "Secondary text on the system grouped background" : {
+      "comment" : "Debug component gallery: live contrast pair caption. The live system grouped background, which Increase Contrast darkens, not the fixed launch color of the token pair",
+      "extractionState" : "manual"
+    },
     "Settings" : {
       "comment" : "Meeting settings entry point title",
       "localizations" : {
@@ -87,6 +327,74 @@
           }
         }
       }
+    },
+    "Silent on this platform" : {
+      "comment" : "Debug component gallery: haptic row detail for kinds that play nothing on iPhone",
+      "extractionState" : "manual"
+    },
+    "Smart Invert" : {
+      "comment" : "Debug component gallery: readout name for the Smart Invert setting",
+      "extractionState" : "manual"
+    },
+    "Standard" : {
+      "comment" : "Debug component gallery: readout value for standard contrast",
+      "extractionState" : "manual"
+    },
+    "System Prominent Chrome" : {
+      "comment" : "Debug component gallery: section title for iOS prominent button and toolbar specimens",
+      "extractionState" : "manual"
+    },
+    "Taps" : {
+      "comment" : "Debug component gallery: readout name for haptic tap counts",
+      "extractionState" : "manual"
+    },
+    "Text Size" : {
+      "comment" : "Debug component gallery: readout name for the Dynamic Type size",
+      "extractionState" : "manual"
+    },
+    "Text, needs 4.5" : {
+      "comment" : "Debug component gallery: contrast class for normal text",
+      "extractionState" : "manual"
+    },
+    "The Done button uses the confirmation action placement, which iOS 26 can draw as a white label on the accent fill. It does nothing." : {
+      "comment" : "Debug component gallery: explanation on the confirmation action specimen page",
+      "extractionState" : "manual"
+    },
+    "Token Pairs" : {
+      "comment" : "Debug component gallery: header above contrast pairs computed from design tokens",
+      "extractionState" : "manual"
+    },
+    "Truncated Text" : {
+      "comment" : "Debug component gallery: readout name for the number of specimens whose text is cut off",
+      "extractionState" : "manual"
+    },
+    "Typography" : {
+      "comment" : "Debug component gallery: section title for text style specimens",
+      "extractionState" : "manual"
+    },
+    "Verify Table" : {
+      "comment" : "Debug component gallery: button that compares the haptic mapper with the contract table",
+      "extractionState" : "manual"
+    },
+    "White label on the accent color" : {
+      "comment" : "Debug component gallery: contrast pair caption",
+      "extractionState" : "manual"
+    },
+    "outcome route only" : {
+      "comment" : "Debug component gallery: haptic tap result: this kind only plays as a session outcome",
+      "extractionState" : "manual"
+    },
+    "recorded" : {
+      "comment" : "Debug component gallery: haptic tap result: the gesture route would play this feedback; nothing plays in the gallery",
+      "extractionState" : "manual"
+    },
+    "silent" : {
+      "comment" : "Debug component gallery: haptic tap result: this kind has no haptic on iPhone",
+      "extractionState" : "manual"
+    },
+    "suppressed" : {
+      "comment" : "Debug component gallery: haptic tap result: the haptics preference or app state blocks feedback",
+      "extractionState" : "manual"
     }
   },
   "version" : "1.0"

@@ -1,18 +1,11 @@
 package conclave.module
 
-import android.graphics.Color as AndroidColor
-import androidx.activity.ComponentActivity
-import androidx.activity.SystemBarStyle
-import androidx.activity.compose.LocalActivity
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
-import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.graphics.Color
 
 // F00 section 5.1. All roles come from generated shared constants.
@@ -170,26 +163,20 @@ private val HostingInCallColors = darkColorScheme(
     onTertiaryFixedVariant = Color(DesignTokens.androidInCallOnTertiaryFixedVariant),
 )
 
-private val HostingTypography = Typography()
 private val HostingShapes = Shapes()
 
+/** Colors, type and shapes only. System bars belong to ConclaveSystemBars at the native root (PS 8.7), so an
+ *  in-call surface nested anywhere stays bar-neutral. */
 @Composable
 internal fun HostingTheme(inCall: Boolean = false, content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme() || inCall
-    val activity = LocalActivity.current as? ComponentActivity
-    DisposableEffect(activity, dark) {
-        val style = if (dark) SystemBarStyle.dark(AndroidColor.TRANSPARENT)
-            else SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT)
-        activity?.enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
-        onDispose { }
-    }
     MaterialTheme(
         colorScheme = when {
             inCall -> HostingInCallColors
             dark -> HostingDarkColors
             else -> HostingLightColors
         },
-        typography = HostingTypography,
+        typography = ConclaveTypography,
         shapes = HostingShapes,
         content = content,
     )

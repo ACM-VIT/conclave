@@ -11,6 +11,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -487,6 +488,41 @@ class ValidationAndDrift(unittest.TestCase):
         generated = b''.join(v for k, v in a.items() if k not in (g.IOS_LICENSE, g.ANDROID_LICENSE)).decode()
         for forbidden in ['/Users/', '/tmp/', chr(0x2013), chr(0x2014), '\r']:
             self.assertNotIn(forbidden, generated)
+
+
+class FinderMetadata(unittest.TestCase):
+    """Review D3: a Finder .DS_Store is never an input or an output, so it cannot fail validation or drift."""
+
+    def sandbox(self, td):
+        root = Path(td)
+        for rel in [g.ICON, g.ANDROID, g.IOS]:
+            shutil.copytree(g.ROOT / rel, root / rel)
+        for rel in [g.IOS_LICENSE, g.ANDROID_LICENSE]:
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(g.ROOT / rel, root / rel)
+        return root
+
+    def test_ds_store_in_inputs_evidence_and_outputs_is_ignored(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = self.sandbox(td)
+            folders = [g.VENDOR, g.VENDOR / 'assets/symbols/web/send', g.EVIDENCE, g.ANDROID, g.IOS]
+            for folder in folders:
+                (root / folder / '.DS_Store').write_bytes(b'\x00\x00\x00\x01Bud1')
+            outputs = g.generate(root)
+            self.assertEqual(outputs, g.generate(g.ROOT))
+            self.assertEqual(g.publish(root, outputs, check=True), [])
+            self.assertEqual(g.publish(root, outputs), [])
+            for folder in folders:
+                self.assertTrue((root / folder / '.DS_Store').is_file())
+
+    def test_other_stray_files_still_fail(self):
+        for folder, name in [(g.VENDOR, 'stray.svg'), (g.EVIDENCE, 'stray.json'), (g.ANDROID, 'Stray.kt'),
+                             (g.IOS, '.DS_Store.swift')]:
+            with self.subTest(folder=str(folder), name=name), tempfile.TemporaryDirectory() as td:
+                root = self.sandbox(td)
+                (root / folder / name).write_bytes(b'x')
+                with self.assertRaises(g.IconError):
+                    g.publish(root, g.generate(root), check=True)
 
 
 if __name__ == '__main__':

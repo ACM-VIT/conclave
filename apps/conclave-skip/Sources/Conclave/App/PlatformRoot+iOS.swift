@@ -68,6 +68,9 @@ struct NativeHostingPreview: View {
                     Section("Icons") {
                         NativeIconGalleryDisclosure()
                     }
+                    Section(ConclaveStrings.text("Components")) {
+                        NativeComponentGalleryDisclosure()
+                    }
                     Section("People") {
                         ForEach(presenter.rowsState.rows) { row in
                             NativeHostingPersonRow(
@@ -99,7 +102,8 @@ struct NativeHostingPreview: View {
             }
             .navigationTitle("Hosting Preview")
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
+                // Q12: not .confirmationAction, which iOS 26 can draw as a white label on the accent fill.
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("Done", action: onClose)
                         .tint(HostingTheme.coralText)
                         .accessibilityIdentifier("hosting.close")

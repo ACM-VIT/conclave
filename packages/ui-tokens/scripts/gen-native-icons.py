@@ -119,8 +119,14 @@ def safe(root, relative):
     return current
 
 
+# Finder writes these into any folder it opens. They can never be an input or an output, so they never
+# count as one (review D3); every other stray file still fails validation and the drift check.
+IGNORED_NAMES = {'.DS_Store'}
+
+
 def listed(directory):
-    return {str(p.relative_to(directory)) for p in directory.rglob('*') if p.is_file() or p.is_symlink()}
+    return {str(p.relative_to(directory)) for p in directory.rglob('*')
+            if (p.is_file() or p.is_symlink()) and p.name not in IGNORED_NAMES}
 
 
 # ---------------------------------------------------------------- strict SVG profile
@@ -607,7 +613,8 @@ def publish(root, outputs, check=False):
         path = safe(root, folder)
         if path.exists():
             extras += [str(p.relative_to(root)) for p in path.rglob('*')
-                       if (p.is_file() or p.is_symlink()) and p.relative_to(root) not in outputs]
+                       if (p.is_file() or p.is_symlink()) and p.name not in IGNORED_NAMES
+                       and p.relative_to(root) not in outputs]
     require(not extras, 'extra generated outputs: ' + str(extras), 'E_OUTPUT_DRIFT')
     changed = []
     for rel, data in outputs.items():
