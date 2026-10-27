@@ -440,6 +440,11 @@ final class MeetingViewModel {
     private static func makeShared() -> MeetingViewModel {
         let viewModel = MeetingViewModel()
         viewModel.installPlatformCallPresenceAdapters()
+        // SYS-2 R4 (S20 SC18): automatic route changes reach the stage as events (STG-5 turns them into toasts); a
+        // person's own choice posts nothing. Only the process-wide view model owns the route owner's callback.
+        AudioRouteOwner.shared.onRouteEvent = { [weak viewModel] event in
+            viewModel?.stage.post(StageEvent.make(kind: event.kind, name: event.name, detail: event.routeKind.rawValue))
+        }
         return viewModel
     }
 
@@ -448,6 +453,11 @@ final class MeetingViewModel {
             // Tests replace the state wholesale (S1C F11): rebind the one shell hook, never accumulate.
             oldValue.onShellInputChanged = nil
             bindShellInputs()
+            oldValue.onStageInputChanged = nil
+            oldValue.onStageSpeakerChanged = nil
+            oldValue.onStageReactionsChanged = nil
+            oldValue.onStageGameChanged = nil
+            bindStageInputs()
         }
     }
 
@@ -455,19 +465,37 @@ final class MeetingViewModel {
 
     /// The meeting shell presenter every native screen reads (session, controls and entry snapshots, typed outcomes,
     /// the action ledger and the per-session panel coordinator). Fed only through `requestShellRefresh()`.
-    let shell = MeetingShellPresenter()
+    let shell: MeetingShellPresenter
+    /// S20 0.5: the session-owned stage presenter, created with the shell and reset with each call session. Fed only
+    /// through `requestStageRefresh()` and the hot hooks (SC1).
+    let stage: StagePresenter
     /// S70 0.5 system call presence: the one snapshot CallKit, the Android call notification and the Debug readout
     /// read, and the one entry for system commands.
     let callPresence = CallPresence()
+    /// ENT-1 (S10 0.5): the app-scoped premeeting presenter, owned here so it survives calls. Fed by the same refresh
+    /// as the shell (`requestShellRefresh()`, S10 0.8 C8); the native roots take it as a parameter.
+    let premeeting = PremeetingPresenter()
+    /// S10 0.8 C8: identity and app activity, pushed by the native root wiring (AppState, ConclaveAppDelegate).
+    private var premeetingIsSignedIn = false
+    private var premeetingAccountName = ""
+    private var premeetingAccountSeed = ""
+    private var premeetingIsAppActive = true
     /// S1C ID: bumps for a new meeting intent only (`MeetingCallSessionPolicy`), never for a recovery or admission.
     private(set) var callSessionSerial = 0 {
-        didSet { requestShellRefresh() }
+        didSet { state.resetParticipantJoinSerials(); requestShellRefresh(); requestStageRefresh() }
     }
     private var terminalOutcomeSerial = 0
     /// S70 5 c (O2): the camera is paused by a CallKit hold; never written to `isCameraOff` or the camera intent.
     private var isCameraSuspendedForHold = false
     /// While above zero, hooked writes do not refresh; the batch end refreshes once (S1C ID, A19).
     private var shellRefreshBatchDepth = 0
+    /// S20 SC1 E3: while above zero, stage hooks do not refresh; the batch end refreshes once.
+    private var stageRefreshBatchDepth = 0
+    /// Test seam and diagnostic: how many times stage inputs were built and applied.
+    private(set) var stageRefreshCount = 0
+    private var lastStageShellPhase: MeetingPhaseKind = .home
+    /// SC1 E4: the last game presence the stage saw.
+    private var stageGamePresence = false
     /// R70-11: set by the redirect path before the new call session starts, so the system call keeps its presence
     /// session (and CallKit UUID); cleared once the redirected join is admitted, ends or fails.
     private var redirectContinuationPending = false {
@@ -475,7 +503,7 @@ final class MeetingViewModel {
     }
     /// S20 SC15 interim: when this call was first live, stable across recovery rejoins and redirects of one call.
     private var presenceJoinedAtMillis: Double = 0 {
-        didSet { requestShellRefresh() }
+        didSet { requestShellRefresh(); requestStageRefresh() }
     }
     private var cachedScreenShareSupport: Bool? = nil
 
@@ -519,9 +547,13 @@ final class MeetingViewModel {
     private var webcamReceiverCapacityAuthorityGeneration = 0
     private var participantLeaveTokens: [String: UUID] = [:]
     private var departedParticipantUserIds: Set<String> = []
-    private var pendingProducers: [String: ProducerInfo] = [:]
+    private var pendingProducers: [String: ProducerInfo] = [:] {
+        didSet { requestStageRefresh() }
+    }
     private var pendingProducerContexts: [String: SocketEventContext] = [:]
-    private var producerInfosById: [String: ProducerInfo] = [:]
+    private var producerInfosById: [String: ProducerInfo] = [:] {
+        didSet { requestStageRefresh() }
+    }
     private var consumingProducerIds: Set<String> = []
     private var deferredProducerConsumes: [String: PendingProducerRetryItem] = [:]
     private var pendingProducerRetryAttempts: [String: Int] = [:]
@@ -569,7 +601,7 @@ final class MeetingViewModel {
     // A mic, camera, screen-share, hand or camera-switch toggle is in flight
     // while the token it set is current; see releaseLocalToggleGuards().
     private var muteToggleToken: UUID? = nil {
-        didSet { requestShellRefresh() }
+        didSet { requestShellRefresh(); requestStageRefresh() }
     }
     private var isMuteToggleInFlight: Bool { muteToggleToken != nil }
     /// Bumped by every mute applyLocalMuteNow() applies (a server mute, or one
@@ -579,7 +611,7 @@ final class MeetingViewModel {
     private var isReplacingLocalAudioProducer = false
     private var localAudioProducerReplacementToken: UUID?
     private var cameraToggleToken: UUID? = nil {
-        didSet { requestShellRefresh() }
+        didSet { requestShellRefresh(); requestStageRefresh() }
     }
     private var isCameraToggleInFlight: Bool { cameraToggleToken != nil }
     private var screenShareToggleToken: UUID? = nil {
@@ -596,7 +628,7 @@ final class MeetingViewModel {
     /// the newest intent wins.
     private var localCameraIntentRevision = 0
     private var handRaiseToggleToken: UUID? = nil {
-        didSet { requestShellRefresh() }
+        didSet { requestShellRefresh(); requestStageRefresh() }
     }
     private var isHandRaiseToggleInFlight: Bool { handRaiseToggleToken != nil }
     #if os(macOS) && !SKIP
@@ -609,7 +641,9 @@ final class MeetingViewModel {
     var testLocalMediaReportHandled: (() -> Void)?
     #endif
     private var isDisplayNameUpdateInFlight = false
-    private var cameraSwitchToken: UUID?
+    private var cameraSwitchToken: UUID? {
+        didSet { requestStageRefresh() }
+    }
     private var isCameraSwitchInFlight: Bool { cameraSwitchToken != nil }
     private var networkMonitorReportsOffline = false
     private var networkQualityHint: ConnectionQuality = .unknown
@@ -756,22 +790,22 @@ final class MeetingViewModel {
         state.displayName(for: id)
     }
 
-    var shouldShowSoloWaitingTile: Bool {
+    /// S20 SC9: one confirmed "alone" input for the stage, so join-time producer churn never flickers the solo card;
+    /// the legacy solo tile and invite pill derive from it unchanged.
+    var isAloneConfirmed: Bool {
         guard state.connectionState == .joined,
               state.hasInitialPresenceSnapshot,
               state.participantCount <= 1,
-              state.isCameraOff,
               pendingProducers.isEmpty else { return false }
         return !hasRemoteParticipantPresenceEvidence
     }
 
+    var shouldShowSoloWaitingTile: Bool {
+        isAloneConfirmed && state.isCameraOff
+    }
+
     var shouldShowSoloInvitePill: Bool {
-        guard state.connectionState == .joined,
-              state.hasInitialPresenceSnapshot,
-              state.participantCount <= 1,
-              !state.isCameraOff,
-              pendingProducers.isEmpty else { return false }
-        return !hasRemoteParticipantPresenceEvidence
+        isAloneConfirmed && !state.isCameraOff
     }
 
     private var hasRemoteParticipantPresenceEvidence: Bool {
@@ -1026,6 +1060,9 @@ final class MeetingViewModel {
     // MARK: - Init
 
     init() {
+        let shellPresenter = MeetingShellPresenter()
+        shell = shellPresenter
+        stage = StagePresenter(shell: shellPresenter)
         MeetingViewPreferences.apply(to: state)
         #if SKIP
         webRTCClient.prewarmMediaStack()
@@ -1041,7 +1078,26 @@ final class MeetingViewModel {
         callPresence.onCommand = { [weak self] command in
             self?.performSystemCallCommand(command)
         }
+        premeeting.onCommand = { [weak self] command in
+            self?.performPremeetingCommand(command)
+        }
         bindShellInputs()
+        // S20 SC1, SC6, SC7: the stage's own hooks and commands.
+        stage.onCommand = { [weak self] command in
+            self?.performStageCommand(command)
+        }
+        stage.onVisibilityChanged = { [weak self] report in
+            guard let self else { return }
+            self.setStageObscuredByOverlay(report.coverage == StageVisibilityPolicy.coverageFull)
+            self.scheduleRemoteConsumerBandwidthPolicyUpdate()
+        }
+        // CTL-1 (S30 CC18) adds `requestControlsRefresh()` to this same closure.
+        shell.panels.onSnapshotChanged = { [weak self] in
+            guard let self else { return }
+            self.stage.panelSnapshotChanged()
+            self.requestStageRefresh()
+        }
+        bindStageInputs()
     }
 
     // MARK: - Transcription
@@ -2064,6 +2120,7 @@ final class MeetingViewModel {
             Task { @MainActor in
                 guard let self else { return }
                 self.normalizeSelectedAudioDeviceState()
+                self.requestStageRefresh()
                 await self.reassertLocalAudioPublishingIfNeeded(
                     context: self.currentSocketEventContext(),
                     confirmServerUnmuted: true
@@ -3346,6 +3403,8 @@ final class MeetingViewModel {
         guard state.isRemoteParticipantUserId(userId) else { return false }
         let stateId = participantStateId(for: userId)
         if state.participants[stateId] == nil {
+            // S50 PH19: the serial exists before either presenter sees the participant.
+            state.assignParticipantJoinSerial(stateId)
             state.participants[stateId] = Participant(id: stateId)
         }
         clearParticipantLeaveToken(userId)
@@ -7011,16 +7070,27 @@ final class MeetingViewModel {
         guard shellRefreshBatchDepth == 0 else { return }
         shell.apply(makeShellInputs())
         callPresence.apply(makeCallPresenceInputs())
+        // S10 0.8 C8: the premeeting presenter reads the snapshot the shell just published (equality-guarded).
+        premeeting.apply(makePremeetingInputs())
+        // The stage's `isInCall` follows the shell phase (connectionState is S1-only): refresh the stage only when the
+        // published phase changes.
+        if shell.session.phase != lastStageShellPhase {
+            lastStageShellPhase = shell.session.phase
+            requestStageRefresh()
+        }
     }
 
     private func beginShellRefreshBatch() {
         shellRefreshBatchDepth += 1
+        stageRefreshBatchDepth += 1
     }
 
     private func endShellRefreshBatch() {
         shellRefreshBatchDepth = max(0, shellRefreshBatchDepth - 1)
+        stageRefreshBatchDepth = max(0, stageRefreshBatchDepth - 1)
         guard shellRefreshBatchDepth == 0 else { return }
         requestShellRefresh()
+        requestStageRefresh()
     }
 
     /// S1C 3.2 inputs table. Never errorMessage, the active speaker, connection quality, audio levels or chat arrays.
@@ -7065,6 +7135,154 @@ final class MeetingViewModel {
             cameraPermission: MeetingMediaPermissionStatus.granted,
             audioInterruption: callPresence.snapshot.interruption
         )
+    }
+
+    // MARK: - Stage (S20 SC1, STG-1)
+
+    /// S20 SC1 E3, E5: the stage's own hooks on the current state (never S1's), then one publish.
+    private func bindStageInputs() {
+        state.onStageInputChanged = { [weak self] in
+            self?.requestStageRefresh()
+        }
+        state.onStageSpeakerChanged = { [weak self] in
+            guard let self else { return }
+            self.stage.speakerChanged(self.state.canonicalStageUserId(self.state.effectiveActiveSpeakerId),
+                                      atMillis: Date().timeIntervalSince1970 * 1000)
+        }
+        state.onStageReactionsChanged = { [weak self] in
+            guard let self else { return }
+            self.stage.reactionsChanged(self.makeStageReactionInputs())
+        }
+        state.onStageGameChanged = { [weak self] in
+            self?.refreshStageGamePresence()
+        }
+        requestStageRefresh()
+    }
+
+    /// S20 SC1 E3: fresh stage inputs, suppressed inside a refresh batch (the batch end flushes once).
+    private func requestStageRefresh() {
+        guard stageRefreshBatchDepth == 0 else { return }
+        stageRefreshCount += 1
+        stage.apply(makeStageInputs())
+    }
+
+    /// SC1 E4: game pushes refresh the stage only when presence changes.
+    private func refreshStageGamePresence() {
+        let present = state.gamePublicState != nil
+        guard present != stageGamePresence else { return }
+        stageGamePresence = present
+        requestStageRefresh()
+    }
+
+    /// S20 0.5 `StageInputs`: every id through `canonicalStageUserId` (E6), join order from `participantJoinSerials`
+    /// (PH19), renderer keys from the media client (SC10).
+    func makeStageInputs() -> StageInputs {
+        let localId = state.userId
+        var rows: [StageParticipantInput] = []
+        rows.append(StageParticipantInput.make(
+            userId: localId,
+            displayName: displayNameForUser(localId),
+            isLocal: true,
+            isMuted: state.isMuted,
+            isCameraOff: state.isCameraOff,
+            isHandRaised: state.isHandRaised,
+            isScreenSharing: state.isScreenSharing,
+            isHost: state.isAdmin,
+            videoKey: state.isCameraOff ? "" : "local"
+        ))
+        for rawId in state.participants.keys.sorted() {
+            guard let participant = state.participants[rawId], !participant.isLeaving,
+                  let id = state.canonicalStageUserId(rawId), id != localId else { continue }
+            rows.append(StageParticipantInput.make(
+                userId: id,
+                displayName: displayNameForUser(id),
+                isMuted: participant.isMuted,
+                isCameraOff: participant.isCameraOff,
+                isHandRaised: participant.isHandRaised,
+                isScreenSharing: participant.isScreenSharing,
+                isReconnecting: participant.connectionStatus?.state == .reconnecting,
+                isHost: state.hostUserIds.contains(id),
+                joinSerial: state.participantJoinSerials[id] ?? 0,
+                videoKey: participant.isCameraOff ? "" : (webRTCClient.remoteVideoTrack(forUserId: id)?.id ?? ""),
+                shareVideoKey: webRTCClient.remoteVideoTrack(forUserId: id + "-screen")?.id ?? ""
+            ))
+        }
+        let route = AudioRouteOwner.shared.route
+        var routeKind = "unknown"
+        var routeName = ""
+        for option in route.options where option.id == route.currentId {
+            routeKind = option.kind.rawValue
+            routeName = option.name
+        }
+        let phase = shell.session.phase
+        let inCall = phase == .inCall || phase == .leaving || (phase == .recovering && shell.session.hasBeenAdmittedThisSession)
+        let presenter = state.isScreenSharing ? localId : (state.canonicalStageUserId(state.activeScreenShareUserId) ?? "")
+        return StageInputs.make(
+            callSession: callSessionSerial,
+            isInCall: inCall,
+            localUserId: localId,
+            roomLabel: shell.session.roomLabel,
+            meetingLink: state.roomId.isEmpty ? "" : MeetingState.meetingLink(for: state.roomId),
+            participants: rows,
+            viewMode: state.viewMode.rawValue,
+            viewMaxTiles: state.viewMaxTiles,
+            hideTilesWithoutVideo: state.hideTilesWithoutVideo,
+            selfViewMode: state.selfViewMode.rawValue,
+            selfViewCorner: state.selfViewCorner.rawValue,
+            pinnedUserId: state.canonicalStageUserId(state.pinnedUserId) ?? "",
+            activeAppId: state.activeAppId ?? "",
+            isBrowserActive: state.isBrowserActive,
+            isGameActive: stageGamePresence,
+            screenShareUserId: presenter,
+            isLocalScreenSharing: state.isScreenSharing,
+            isWebinarAttendee: state.isWebinarAttendee,
+            webinarSpeakerUserId: state.canonicalStageUserId(state.webinarSpeakerUserId) ?? "",
+            isRoomLocked: state.isRoomLocked,
+            isAloneConfirmed: isAloneConfirmed,
+            canFlipCamera: canSwitchLocalCamera(),
+            isFrontCamera: localCameraFacing == .front,
+            routeKind: routeKind,
+            routeName: routeName,
+            isHandRaised: state.isHandRaised,
+            handToggleInFlight: isHandRaiseToggleInFlight,
+            isRecovering: state.isRecoveringConnection,
+            isMediaPending: isMuteToggleInFlight || isCameraToggleInFlight,
+            joinedAtMillis: presenceJoinedAtMillis,
+            isEffectsOpen: shell.panels.snapshot.current?.panel == .effects
+        )
+    }
+
+    /// Hot hook: the active reactions as stage inputs (the presenter maps source ids to stable bubble ids).
+    private func makeStageReactionInputs() -> [StageReactionInput] {
+        var result: [StageReactionInput] = []
+        for reaction in state.activeReactions {
+            let isLocal = state.isLocalIdentityUserId(reaction.userId)
+            result.append(StageReactionInput(
+                sourceId: reaction.id,
+                senderName: isLocal ? "" : displayNameForUser(reaction.userId),
+                isLocal: isLocal,
+                kind: reaction.kind.rawValue,
+                value: reaction.value,
+                label: reaction.label ?? ""
+            ))
+        }
+        return result
+    }
+
+    /// The stage's actions (the S1 `onCommand` pattern); SC2 (STG-2) later makes the pin transient.
+    private func performStageCommand(_ command: StageCommand) {
+        switch command.kind {
+        case .togglePin:
+            togglePin(command.userId)
+        case .clearPin:
+            clearPin()
+        case .setSelfViewMode:
+            if let mode = MeetingSelfViewMode(rawValue: command.value) { setSelfViewMode(mode) }
+        case .moveSelfView:
+            if let corner = MeetingSelfViewCorner(rawValue: command.value) { setSelfViewCorner(corner) }
+        case .flipCamera:
+            switchLocalCamera()
+        }
     }
 
     /// SY1: the presence inputs from the S1 session snapshot plus the media fields (S70 0.5 inputs table).
@@ -7187,6 +7405,7 @@ final class MeetingViewModel {
         case .resume:
             // O2: the microphone stays muted; the camera restarts only while camera-on is still the intent.
             setCameraSuspendedForHold(false)
+            stage.post(StageEvent.make(kind: "resumedMuted"))
             requestShellRefresh()
         case .returnToCall:
             break
@@ -7270,6 +7489,50 @@ final class MeetingViewModel {
             targetKind: targetKind,
             targetJoinMode: targetJoinMode
         )
+    }
+
+    // MARK: - Premeeting (ENT-1, S10 0.8 C8)
+
+    /// S10 0.5 inputs table: the S1 session subset plus the same-room rule, identity, network and app activity. The
+    /// resume (C7) and version gate (C20) fields stay at their defaults until their core slices land.
+    func makePremeetingInputs() -> PremeetingInputs {
+        PremeetingInputs.from(session: shell.session, base: PremeetingInputs.make(
+            currentRoomId: state.roomId,
+            roomAliases: currentRoomAliases.sorted(),
+            currentJoinMode: currentJoinMode,
+            isSignedIn: premeetingIsSignedIn,
+            accountName: premeetingAccountName,
+            accountSeed: premeetingAccountSeed,
+            isNetworkOffline: state.isNetworkOffline,
+            isAppActive: premeetingIsAppActive
+        ))
+    }
+
+    /// S10 0.8 C8: AppState's identity `didSet` pushes the user (the native root installs the hook).
+    func setPremeetingIdentity(isSignedIn: Bool, accountName: String, accountSeed: String) {
+        guard isSignedIn != premeetingIsSignedIn || accountName != premeetingAccountName
+                || accountSeed != premeetingAccountSeed else { return }
+        premeetingIsSignedIn = isSignedIn
+        premeetingAccountName = accountName
+        premeetingAccountSeed = accountSeed
+        premeeting.apply(makePremeetingInputs())
+    }
+
+    /// S10 0.8 C8: `ConclaveAppDelegate.onResume` and `onStop` push app activity.
+    func setPremeetingAppActive(_ isActive: Bool) {
+        guard isActive != premeetingIsAppActive else { return }
+        premeetingIsAppActive = isActive
+        premeeting.apply(makePremeetingInputs())
+    }
+
+    /// The premeeting presenter's core-only commands, forwarded to the S1 shell (no haptic, Q11).
+    private func performPremeetingCommand(_ command: PremeetingCommand) {
+        switch command {
+        case .leave:
+            shell.leave()
+        case .dismissOutcome:
+            shell.dismissOutcome()
+        }
     }
 
     /// Interim S10 0.8 C1 for a system mute before admission (ENT-1 adds `setEntryMediaIntent`): the join publishes
@@ -7730,6 +7993,8 @@ final class MeetingViewModel {
         state.displayNames.removeAll()
         state.pendingUsers.removeAll()
         state.hasInitialPresenceSnapshot = false
+        state.resetParticipantJoinSerials()
+        stage.reset()
         participantLeaveTokens.removeAll()
         departedParticipantUserIds.removeAll()
         clearAllParticipantConnectionStatusTimers()
@@ -8729,6 +8994,15 @@ final class MeetingViewModel {
     }
 
     private func remoteVisibleConsumerUserIds() -> Set<String> {
+        // S20 SC6: while the native stage reports, its visible set (laid-out frames, coverage, PiP) is the truth.
+        // Only webcam video follows it; audio consumers are never paused by visibility (RR4, the #177 class).
+        if stage.hasVisibilityReport {
+            var visible = Set<String>()
+            for userId in StageConsumerVisibilityPolicy.visibleVideoUserIds(stage.visibility) {
+                insertPresentRemoteConsumerUserId(userId, into: &visible)
+            }
+            return visible
+        }
         var ids = Set<String>()
 
         #if SKIP
@@ -8758,6 +9032,7 @@ final class MeetingViewModel {
     }
 
     private func scheduleRemoteConsumerBandwidthPolicyUpdate() {
+        requestStageRefresh()
         guard state.connectionState == .joined else { return }
         let context = currentSocketEventContext()
         remoteConsumerBandwidthPolicyTask?.cancel()

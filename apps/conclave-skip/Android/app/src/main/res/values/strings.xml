@@ -195,6 +195,19 @@
     <string name="ds_state_raised">Raised</string>
     <string name="ds_state_not_raised">Not raised</string>
     <string name="ds_reactions_off">Reactions are off</string>
+    <!-- Content components (FND-3) and the stage share and presenting strings (STG-1): ds_ -->
+    <string name="ds_share_invite">Share invite</string>
+    <string name="ds_share_subject">Join my Conclave meeting</string>
+    <string name="ds_share_text">Join me in this Conclave meeting.\n%1$s</string>
+    <string name="ds_is_presenting">%1$s is presenting</string>
+    <string name="ds_search">Search</string>
+    <string name="ds_clear_search">Clear search</string>
+    <string name="ds_no_results">No results</string>
+    <plurals name="ds_result_count">
+        <item quantity="one">%1$d result</item>
+        <item quantity="other">%1$d results</item>
+    </plurals>
+    <string name="ds_dismiss_tip">Dismiss tip</string>
 
     <!-- Call notification, notification channel and system fixture (SYS-1): sys_ -->
     <string name="sys_call_fallback_title">Conclave meeting</string>
@@ -216,4 +229,89 @@
     <string name="ctl_route_wired">Wired headset</string>
     <string name="ctl_route_usb">USB audio</string>
     <string name="ctl_route_hearing_aid">Hearing aid</string>
+
+    <!-- Premeeting Home, join sheet, switch prompt, lobby and outcome stand-ins (ENT-1, ENT-2): pm_ -->
+    <string name="pm_app_title">Conclave</string>
+    <string name="pm_new_meeting">New meeting</string>
+    <string name="pm_join">Join</string>
+    <string name="pm_join_with_code">Join with a code</string>
+    <string name="pm_account">Account</string>
+    <string name="pm_account_named">Account, %1$s</string>
+    <string name="pm_recent">Recent</string>
+    <string name="pm_left_at">Left at %1$s</string>
+    <string name="pm_connection_lost_at">Connection lost at %1$s</string>
+    <string name="pm_rejoin">Rejoin</string>
+    <string name="pm_rejoin_named">Rejoin %1$s</string>
+    <string name="pm_tag_webinar">Webinar</string>
+    <string name="pm_copy_link">Copy link</string>
+    <string name="pm_share_invite">Share invite</string>
+    <string name="pm_remove_from_recents">Remove from recents</string>
+    <string name="pm_more_options_for">More options for %1$s</string>
+    <string name="pm_empty_title">No recent meetings</string>
+    <string name="pm_empty_body">Start a meeting, or join one with a code or link.</string>
+    <string name="pm_notice_ended_by_host">The host ended the meeting.</string>
+    <string name="pm_notice_room_closed">This meeting has ended.</string>
+    <string name="pm_notice_invalid_link">This link can’t be opened in Conclave.</string>
+    <string name="pm_notice_moved_to_audience">A host moved you to the audience.</string>
+    <string name="pm_notice_session_expired">Your sign-in expired. Sign in again, or keep going as a guest.</string>
+    <string name="pm_sign_in">Sign in</string>
+    <string name="pm_update_title">Update Conclave</string>
+    <string name="pm_update_body">This version of Conclave can no longer join meetings. Update to continue.</string>
+    <string name="pm_update_action">Update</string>
+    <string name="pm_join_meeting">Join meeting</string>
+    <string name="pm_code_or_link_label">Meeting code or link</string>
+    <string name="pm_code_help">Enter the code from your invite, or paste the link.</string>
+    <string name="pm_code_invalid">This isn’t a Conclave code or link.</string>
+    <string name="pm_paste">Paste</string>
+    <string name="pm_cancel">Cancel</string>
+    <string name="pm_switch_title">Join another meeting?</string>
+    <string name="pm_switch_body">You’re in %1$s. Leave it and join %2$s?</string>
+    <string name="pm_current_meeting_fallback">your current meeting</string>
+    <string name="pm_other_meeting_fallback">another meeting</string>
+    <string name="pm_switch_stay">Stay</string>
+    <string name="pm_switch_leave_and_join">Leave and join</string>
+    <string name="pm_subtitle_joining">Joining</string>
+    <string name="pm_subtitle_reconnecting">Reconnecting</string>
+    <string name="pm_asking_to_join">Asking to join</string>
+    <string name="pm_couldnt_join">Couldn’t join</string>
+    <string name="pm_couldnt_start">Couldn’t start</string>
+    <string name="pm_removed_title">Removed from meeting</string>
+    <string name="pm_removed_body">The host removed you from this meeting.</string>
+    <string name="pm_denied_title">Request declined</string>
+    <string name="pm_denied_body">Someone in the meeting declined your request to join.</string>
+    <string name="pm_lost_title">Connection lost</string>
+    <string name="pm_lost_body">Check your connection, then rejoin.</string>
+    <string name="pm_disconnected_title">You were disconnected</string>
+    <string name="pm_disconnected_body">The meeting server ended your connection. You can rejoin.</string>
+    <string name="pm_couldnt_rejoin">Couldn’t rejoin</string>
+    <string name="pm_back_home">Back to home</string>
+
+    <!-- Call stage, chrome chips and panel titles (STG-1, STG-4): stg_ -->
+    <string name="stg_panel_transcript">Transcript</string>
+    <string name="stg_panel_activities">Activities</string>
+    <string name="stg_panel_effects">Effects</string>
+    <string name="stg_panel_host_controls">Host controls</string>
+    <string name="stg_panel_qa">Q&amp;A</string>
+    <string name="stg_panel_meeting_details">Meeting details</string>
+    <string name="stg_panel_chat">Chat</string>
+    <string name="stg_solo_title">You’re the only one here</string>
+    <string name="stg_solo_body">Share the link to invite people.</string>
+    <string name="stg_copy_link">Copy link</string>
+    <string name="stg_announce_joined">Joined %1$s</string>
+    <string name="stg_pane_call">Call, %1$s</string>
+    <plurals name="stg_participants_count">
+        <item quantity="one">%1$d participant</item>
+        <item quantity="other">%1$d participants</item>
+    </plurals>
+    <string name="stg_just_you">Just you</string>
+    <string name="stg_you_presenting">You’re presenting</string>
+    <string name="stg_raising_hand">Raising hand…</string>
+    <string name="stg_lower">Lower</string>
+    <string name="stg_lower_hand">Lower hand</string>
+    <string name="stg_hand_raised">Hand raised</string>
+    <string name="stg_activity_running">%1$s is running</string>
+    <string name="stg_show">Show</string>
+    <string name="stg_show_activity">Show %1$s</string>
+    <string name="stg_activity">Activity</string>
+    <string name="stg_someone">Someone</string>
 </resources>

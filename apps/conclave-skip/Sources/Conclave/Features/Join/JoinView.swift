@@ -2554,46 +2554,13 @@ struct JoinView: View {
         return true
     }
     
+    // ENT-1 (S10 0.5): the generator and the sanitizer moved to EntryPolicies, shared with the native premeeting route.
     private func generateRoomCode() -> String {
-        var words: [String] = []
-        for _ in 0..<roomWordsPerCode {
-            if let word = roomWords.randomElement() {
-                words.append(word)
-            }
-        }
-        return words.joined(separator: roomWordSeparator)
-    }
-
-    private func sanitizeRoomCode(_ value: String) -> String {
-        let normalized = normalizeRoomCharacters(in: value, trimTrailingSeparator: true)
-        return String(normalized.prefix(roomCodeMaxLength))
+        EntryPolicies.generateRoomCode()
     }
 
     private func sanitizeRoomCodeInput(_ value: String) -> String {
-        String(normalizeRoomCharacters(in: value, trimTrailingSeparator: false).prefix(roomCodeMaxLength))
-    }
-
-    private func normalizeRoomCharacters(in input: String, trimTrailingSeparator: Bool = true) -> String {
-        let separator: Character = "-"
-        var normalized = ""
-        var previousWasSeparator = false
-
-        let allowed = "abcdefghijklmnopqrstuvwxyz0123456789"
-        for character in input.lowercased() {
-            if allowed.contains(character) {
-                normalized += String(character)
-                previousWasSeparator = false
-            } else if !normalized.isEmpty && !previousWasSeparator {
-                normalized += String(separator)
-                previousWasSeparator = true
-            }
-        }
-
-        if trimTrailingSeparator && previousWasSeparator && !normalized.isEmpty {
-            normalized = String(normalized.dropLast())
-        }
-
-        return normalized
+        EntryPolicies.sanitizeRoomCodeInput(value)
     }
 
     private func parseJoinTarget(from input: String) -> ParsedJoinTarget {
@@ -2706,18 +2673,6 @@ struct JoinView: View {
         return normalized
     }
 
-    private let roomWords = [
-        "aloe", "aster", "bloom", "canna", "cedar", "clove", "dahl", "daisy", "erica", "flora",
-        "hazel", "iris", "lilac", "lily", "lotus", "maple", "myrrh", "olive", "pansy", "peony",
-        "poppy", "rose", "sorel", "tansy", "thyme", "tulip", "yucca", "zinn", "akane", "akira",
-        "asuna", "eren", "gohan", "goku", "gojo", "kanao", "kira", "levi", "luffy", "maki",
-        "misa", "nami", "riku", "sokka", "saber", "senku", "shoto", "soma", "sora", "tanji",
-        "taki", "toji", "todo", "toph", "yami", "yuki", "yato", "zoro"
-    ]
-
-    private let roomWordsPerCode = 3
-    private let roomWordSeparator = "-"
-    private let roomCodeMaxLength = 64
     private let cameraPermissionMessage = "Allow camera access in Settings, then try again."
     private let microphonePermissionMessage = "Allow microphone access in Settings, then try again."
     private let noCameraMessage = "No camera is available on this device."

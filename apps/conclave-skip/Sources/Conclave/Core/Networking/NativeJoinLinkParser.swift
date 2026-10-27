@@ -41,6 +41,20 @@ struct NativeJoinLinkTarget: Equatable {
     )
 }
 
+/// The intake classes of an incoming URL (S10 0.8 C9, S70 9). String raw values only (S1C 3.6).
+enum NativeJoinLinkKind: String, CaseIterable, Equatable {
+    /// A meeting code or link: lobby, or the switch prompt while busy (S10 4).
+    case meeting
+    /// A webinar attendee link: the webinar landing (S10 12).
+    case webinar
+    /// A Conclave web page that is not a meeting (`/book`, `/schedule`, `/privacy` and the rest of the list): browser.
+    case webOnly
+    /// A `conclave://` link or a Conclave host whose path does not parse: the Home notice `invalidLink`.
+    case invalidConclave
+    /// Any other URL: not handled by the app.
+    case notConclave
+}
+
 enum NativeJoinLinkParser {
     static func parse(_ input: String, allowRoomCreationForURLs: Bool = false) -> NativeJoinLinkTarget {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -109,6 +123,40 @@ enum NativeJoinLinkParser {
             clientId: clientIdValue(from: queryItems),
             allowRoomCreation: false
         )
+    }
+
+    /// S10 0.8 C9 and S70 9 j: what an incoming URL is, before the native route decides anything. The parse rules
+    /// above are unchanged (PRE 3.3); this only tells a Conclave link that fails them (`invalidConclave`, the Home
+    /// notice) from a Conclave web page that belongs in the browser (`webOnly`) and from any other URL
+    /// (`notConclave`, which the app does not handle).
+    static func classify(_ input: String) -> NativeJoinLinkKind {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .notConclave }
+        let target = parse(trimmed, allowRoomCreationForURLs: true)
+        let normalizedURLInput = normalizeJoinURLString(trimmed)
+        guard hasURLScheme(normalizedURLInput) else {
+            // A bare code is never an incoming OS link; it is a meeting when it parses.
+            guard !target.roomId.isEmpty else { return .notConclave }
+            return target.joinMode == JoinMode.webinarAttendee ? NativeJoinLinkKind.webinar : NativeJoinLinkKind.meeting
+        }
+        let lowercased = normalizedURLInput.lowercased()
+        guard let components = URLComponents(string: normalizedURLInput) else {
+            return lowercased.hasPrefix("conclave:") ? NativeJoinLinkKind.invalidConclave : NativeJoinLinkKind.notConclave
+        }
+        let scheme = components.scheme?.lowercased() ?? ""
+        let isConclaveScheme = scheme == "conclave"
+        let isConclaveWeb = (scheme == "http" || scheme == "https") && isConclaveWebHost(components.host)
+        guard isConclaveScheme || isConclaveWeb else { return .notConclave }
+        if !target.roomId.isEmpty {
+            return target.joinMode == JoinMode.webinarAttendee ? NativeJoinLinkKind.webinar : NativeJoinLinkKind.meeting
+        }
+        if isConclaveWeb {
+            let segments = joinPathSegments(from: components)
+            if !segments.isEmpty && isWebOnlyConclavePath(components: components, segments: segments) {
+                return .webOnly
+            }
+        }
+        return .invalidConclave
     }
 
     private static func redirectedJoinTarget(
@@ -452,7 +500,10 @@ enum NativeJoinLinkParser {
         "delete-account",
         "privacy",
         "sfu-admin",
-        "sign-in"
+        "sign-in",
+        // S10 0.8 C16 (RECONCILE R42): scheduling stays a labelled browser hand-off (Owner OQ8), matching the S70 9
+        // AASA exclusion, so a pasted `/schedule` link never creates a room. `sched-` host rooms are not this segment.
+        "schedule"
     ]
     private static let localConclaveWebHosts: Set<String> = {
         var hosts: Set<String> = [

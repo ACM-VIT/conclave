@@ -1,0 +1,327 @@
+#if os(iOS) && !SKIP
+import SwiftUI
+import UIKit
+
+/// The premeeting icon concepts (S10 0.6 R1). The pending ones (`account`, `recent`) use catalog stand-ins until the
+/// icon manifest lane adds them (HD request B3-T1 R2); every Home and join sheet glyph goes through here, so the
+/// swap is one line each.
+enum PremeetingSymbols {
+    /// Pending `account` (`person.crop.circle`): stand-in `person.2`.
+    static let account = ConclaveSymbols.person2
+    /// Pending `recent` (`clock.arrow.circlepath`): stand-in `video.fill`.
+    static let recent = ConclaveSymbols.videoFill
+    static let info = ConclaveSymbols.infoCircle
+    static let close = ConclaveSymbols.xmark
+    static let copyLink = ConclaveSymbols.docOnDoc
+    static let invite = ConclaveSymbols.squareAndArrowUp
+    static let delete = ConclaveSymbols.trash
+    static let error = ConclaveSymbols.exclamationmarkOctagonFill
+}
+
+/// S10 2 Home on iOS (system appearance): a grouped list with the update banner, the notice, the Rejoin card and the
+/// recents, the large title "Meetings", the account button and the bottom bar with Join and the one coral New
+/// Meeting. It observes `premeeting.home` only; rows are leaf views with plain values.
+struct HomeView: View {
+    let premeeting: PremeetingPresenter
+
+    var body: some View {
+        let home = premeeting.home
+        List {
+            if home.updateRequired {
+                Section {
+                    HomeUpdateBanner(storeURL: home.storeURL, onOpen: { premeeting.openStoreListing() })
+                }
+            }
+            if home.noticeKind != .none {
+                Section {
+                    HomeNoticeRow(kind: home.noticeKind, onDismiss: { premeeting.dismissHomeNotice() },
+                                  onSignIn: { premeeting.openAccount() })
+                }
+            }
+            if let card = home.rejoin {
+                Section {
+                    RejoinCardRow(card: card, onRejoin: { premeeting.rejoin() })
+                }
+            }
+            if !home.recents.isEmpty {
+                Section {
+                    ForEach(home.recents) { row in
+                        RecentMeetingRowView(
+                            row: row,
+                            onJoin: { premeeting.openRecent(id: row.id) },
+                            onRemove: { premeeting.removeRecent(id: row.id) }
+                        )
+                    }
+                } header: {
+                    ConclaveSectionHeader(ConclaveStrings.text("Recent"), identifier: "home.recent.header")
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .overlay {
+            if home.recents.isEmpty && home.rejoin == nil {
+                ConclaveEmptyStatus(
+                    title: ConclaveStrings.text("No Recent Meetings"),
+                    message: ConclaveStrings.text("Start a meeting, or join one with a code or link."),
+                    systemImage: PremeetingSymbols.recent,
+                    identifier: "home.empty"
+                )
+            }
+        }
+        .navigationTitle(ConclaveStrings.text("Meetings"))
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                HomeAccountButton(isSignedIn: home.isSignedIn, name: home.accountName, seed: home.accountSeed,
+                                  action: { premeeting.openAccount() })
+            }
+            // One group with a flexible Spacer on every supported iOS: ToolbarSpacer (iOS 26) would need an
+            // availability branch, and ToolbarContentBuilder accepts one only from iOS 17.5.
+            ToolbarItemGroup(placement: .bottomBar) {
+                Button(ConclaveStrings.text("Join")) { premeeting.openJoinSheet() }
+                    .keyboardShortcut("j", modifiers: .command)
+                    .accessibilityIdentifier("home.join")
+                Spacer()
+                Button {
+                    premeeting.newMeeting()
+                } label: {
+                    Text(ConclaveStrings.text("New Meeting"))
+                        .foregroundStyle(HostingTheme.onCoral)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(HostingTheme.coralFill)
+                .keyboardShortcut("n", modifiers: .command)
+                .accessibilityIdentifier("home.newMeeting")
+            }
+        }
+    }
+}
+
+/// Signed out: the account glyph; signed in: the C07 avatar (28 pt). Label "Account" or "Account, <name>".
+private struct HomeAccountButton: View {
+    let isSignedIn: Bool
+    let name: String
+    let seed: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            if isSignedIn {
+                ConclaveAvatar(identity: ConclaveAvatarIdentity.make(name: name, id: seed), size: .chat, diameter: 28)
+            } else {
+                Image(systemName: PremeetingSymbols.account)
+            }
+        }
+        .frame(minWidth: 44, minHeight: 44)
+        .contentShape(Rectangle())
+        .accessibilityLabel(isSignedIn && !name.isEmpty ? ConclaveStrings.format("Account, %@", name) : ConclaveStrings.text("Account"))
+        .accessibilityIdentifier("home.account")
+    }
+}
+
+/// F00 C12 app banner as a row (S10 1 f, 2 f; RECONCILE R51): "Update Conclave" with Update opening the store.
+private struct HomeUpdateBanner: View {
+    let storeURL: String
+    let onOpen: () -> Void
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        ConclaveBanner(
+            kind: .info,
+            text: ConclaveStrings.text("This version of Conclave can no longer join meetings. Update to continue."),
+            surface: .app,
+            actions: [ConclaveBannerAction(title: ConclaveStrings.text("Update"), identifier: "home.update.action", action: open)],
+            identifier: "home.update"
+        )
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
+    }
+
+    private func open() {
+        onOpen()
+        if let url = URL(string: storeURL), !storeURL.isEmpty {
+            openURL(url)
+        }
+    }
+}
+
+/// S10 2 c `HomeNoticeRow`: info glyph, the notice text, Dismiss (44 pt); `sessionExpired` adds Sign In.
+private struct HomeNoticeRow: View {
+    let kind: HomeNoticeKind
+    let onDismiss: () -> Void
+    let onSignIn: () -> Void
+    /// A reference box, never observed view state, so a re-fired appearance callback neither loops nor repeats it.
+    @State private var announced = HomeNoticeAnnouncementLatch()
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: PremeetingSymbols.info)
+                .foregroundStyle(HostingTheme.secondaryText)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(HomeNoticeCopy.text(kind))
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+                if kind == .sessionExpired {
+                    Button(ConclaveStrings.text("Sign In"), action: onSignIn)
+                        .buttonStyle(.borderless)
+                        .tint(HostingTheme.coralText)
+                        .accessibilityIdentifier("home.notice.signIn")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: onDismiss) {
+                Image(systemName: PremeetingSymbols.close)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(HostingTheme.secondaryText)
+            .accessibilityLabel(ConclaveStrings.text("Dismiss"))
+            .accessibilityIdentifier("home.notice.dismiss")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("home.notice")
+        .onAppear { announce() }
+        .onChange(of: kind) { announce() }
+    }
+
+    private func announce() {
+        guard announced.kind != kind else { return }
+        announced.kind = kind
+        HomeNoticeCopy.announce(kind)
+    }
+}
+
+private final class HomeNoticeAnnouncementLatch {
+    var kind: HomeNoticeKind = .none
+}
+
+enum HomeNoticeCopy {
+    static func text(_ kind: HomeNoticeKind) -> String {
+        switch kind {
+        case .endedByHost:
+            return ConclaveStrings.text("The host ended the meeting.")
+        case .roomClosed:
+            return ConclaveStrings.text("This meeting has ended.")
+        case .invalidLink:
+            return ConclaveStrings.text("This link can\u{2019}t be opened in Conclave.")
+        case .sessionExpired:
+            return ConclaveStrings.text("Your sign-in expired. Sign in again, or keep going as a guest.")
+        case .movedToAudience:
+            return ConclaveStrings.text("A host moved you to the audience.")
+        case .none:
+            return ""
+        }
+    }
+
+    /// Announced once when it appears (S10 2 i). The appearance callback writes no view state.
+    static func announce(_ kind: HomeNoticeKind) {
+        let value = text(kind)
+        guard !value.isEmpty else { return }
+        AccessibilityNotification.Announcement(value).post()
+    }
+}
+
+/// S10 2 c `RejoinCardRow`: title and end time, then the tonal Rejoin (New Meeting stays the single prominent action).
+private struct RejoinCardRow: View {
+    let card: RejoinCard
+    let onRejoin: () -> Void
+
+    private var subtitle: String {
+        card.end == .connectionLost
+            ? ConclaveStrings.format("Connection lost at %@", card.endedAtText)
+            : ConclaveStrings.format("Left at %@", card.endedAtText)
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(card.title)
+                    .font(.headline)
+                    .lineLimit(2)
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(HostingTheme.secondaryText)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            Button(ConclaveStrings.text("Rejoin"), action: onRejoin)
+                .buttonStyle(.bordered)
+                .tint(Color.primary)
+                .accessibilityLabel(ConclaveStrings.format("Rejoin %@", card.title))
+                .accessibilityIdentifier("home.rejoin")
+        }
+        .accessibilityIdentifier("home.rejoin.card")
+    }
+}
+
+/// S10 2 c recent row: a `NavigationLink(value:)` (system chevron, button trait, highlight), a context menu, a
+/// trailing swipe to remove and named accessibility actions. Copy Link plays `linkCopied` through the gesture route
+/// with a view-local counter (F00 8).
+private struct RecentMeetingRowView: View {
+    let row: RecentMeetingRow
+    let onJoin: () -> Void
+    let onRemove: () -> Void
+    @State private var copyCount = 0
+
+    private var link: String {
+        EntryPolicies.recentLink(roomId: row.roomId, isWebinar: row.routeKind == .webinarLanding)
+    }
+
+    private var subtitle: String {
+        switch row.role {
+        case .host:
+            return row.relativeTime + " \u{00B7} " + ConclaveStrings.text("Host")
+        case .attendee:
+            return row.relativeTime + " \u{00B7} " + ConclaveStrings.text("Webinar")
+        case .participant:
+            return row.relativeTime
+        }
+    }
+
+    var body: some View {
+        NavigationLink(value: PremeetingRoute(id: row.routeId, kind: row.routeKind, roomId: row.roomId)) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.title)
+                    .font(.body)
+                    .lineLimit(2)
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(HostingTheme.secondaryText)
+            }
+            .accessibilityElement(children: .combine)
+        }
+        .contextMenu {
+            Button(ConclaveStrings.text("Join"), action: onJoin)
+            Button(action: copyLink) {
+                Label(ConclaveStrings.text("Copy Link"), systemImage: PremeetingSymbols.copyLink)
+            }
+            if let url = URL(string: link) {
+                ShareLink(item: url) {
+                    Label(ConclaveStrings.text("Share Invite"), systemImage: PremeetingSymbols.invite)
+                }
+            }
+            Divider()
+            Button(role: .destructive, action: onRemove) {
+                Label(ConclaveStrings.text("Remove From Recents"), systemImage: PremeetingSymbols.delete)
+            }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive, action: onRemove) {
+                Label(ConclaveStrings.text("Remove"), systemImage: PremeetingSymbols.delete)
+            }
+        }
+        .accessibilityAction(named: Text(ConclaveStrings.text("Join")), onJoin)
+        .accessibilityAction(named: Text(ConclaveStrings.text("Copy Link")), copyLink)
+        .accessibilityAction(named: Text(ConclaveStrings.text("Remove From Recents")), onRemove)
+        .conclaveGestureFeedback(.linkCopied, trigger: copyCount)
+        .accessibilityIdentifier("home.recent." + row.id)
+    }
+
+    private func copyLink() {
+        UIPasteboard.general.string = link
+        copyCount += 1
+    }
+}
+#endif

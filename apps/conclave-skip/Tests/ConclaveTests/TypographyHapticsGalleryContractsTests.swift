@@ -313,8 +313,9 @@ struct TypographyHapticsGalleryContractsTests {
 
     @Test func galleryCatalogPairsMeetDeclaredClass() {
         let pairs = ComponentGalleryCatalog.contrastPairs
-        // WP1-2b adds the five F00 C12 i banner pairs (56 to 61); FND-1 and FND-2 add 19 (62 to 80).
-        #expect(pairs.count == 80)
+        // WP1-2b adds the five F00 C12 i banner pairs (56 to 61); FND-1 and FND-2 add 19 (62 to 80); FND-3 adds 14
+        // (81 to 94: Android bubbles, chips, tips and Send, and the S60 R6-7 board tokens).
+        #expect(pairs.count == 94)
         for pair in pairs {
             let ratio = pair.ratio
             #expect(abs(ratio - pair.expectedRatio) < 0.001, "\(pair.id): \(ratio) against \(pair.expectedRatio)")
@@ -324,7 +325,9 @@ struct TypographyHapticsGalleryContractsTests {
         let forbidden = pairs.filter { $0.requirement == .forbiddenText }.map { $0.id }
         #expect(forbidden == ["contrast.coral.white", "contrast.accentDark.white", "contrast.accentDarkHighContrast.white",
                               "contrast.coralBright.zinc700"])
-        #expect(pairs.filter { $0.requirement == .decorative }.count == 2)
+        // The two in-call borders and the board squares, which the grid position tells apart (S60 11 e).
+        #expect(pairs.filter { $0.requirement == .decorative }.map { $0.id } == ["contrast.inCallBorder.ink", "contrast.inCallBorderHighContrast.ink",
+                                                                                  "contrast.gameBoard.squares"])
     }
 
     /// Runtime A7: a pair labeled not for text read "passes". It now reads decorative only while its label
@@ -351,7 +354,8 @@ struct TypographyHapticsGalleryContractsTests {
         let ids = ComponentGalleryCatalog.contrastPairs.map { $0.id }
         #expect(Set(ids).count == ids.count)
         #expect(ids.prefix(4) == ["contrast.onCoral.ink", "contrast.onCoral.black", "contrast.coral.white", "contrast.accentDark.white"])
-        #expect(ids.last == "contrast.lobbyCaption.android")
+        #expect(ids.last == "contrast.gameBoard.coralPath")
+        #expect(ids.contains("contrast.lobbyCaption.android") && ids.contains("contrast.bubbleOwn.android"))
         #expect(ids.contains("contrast.warningLight.groupedLight") && ids.contains("contrast.leaveHighContrast.white"))
         #expect(ids.contains("contrast.inCallBorderHighContrast.ink"))
         var specimens = ids + ComponentGalleryCatalog.systemProminentSpecimenIDs + [ComponentGalleryCatalog.galleryToggleID]
@@ -361,7 +365,7 @@ struct TypographyHapticsGalleryContractsTests {
         for kind in FeedbackKind.allCases { specimens.append(ComponentGalleryCatalog.hapticSpecimenID(kind)) }
         // WP1-2b: every component specimen in its columns, spinner specimens included.
         specimens += ComponentGalleryCatalog.componentSpecimenIDs(showLoading: true)
-        #expect(specimens.count == 80 + 5 + 1 + 44 + 66 + 46)
+        #expect(specimens.count == 94 + 5 + 1 + 44 + 66 + 46)
         #expect(Set(specimens).count == specimens.count)
         for id in specimens {
             #expect(id.unicodeScalars.allSatisfy { ($0.value >= 0x30 && $0.value <= 0x39) || ($0.value >= 0x41 && $0.value <= 0x5A) || ($0.value >= 0x61 && $0.value <= 0x7A) || $0 == "." }, "\(id) is not a plain ASCII key")
@@ -522,13 +526,20 @@ struct TypographyHapticsGalleryContractsTests {
         var files = try sourceFiles(under: "Sources/Conclave/DesignSystem", extensions: ["swift"])
         files += try sourceFiles(under: "Sources/Conclave/Features/Meeting/Panels", extensions: ["swift"])
         files += try sourceFiles(under: "Sources/Conclave/App/Hosting", extensions: ["swift"])
+        // FND-3 (S40 R40-10, F00 4 "Single entry"): the composer hosts join the scope as soon as they exist.
+        files += try sourceFiles(under: "Sources/Conclave/Features/Meeting/Chat", extensions: ["swift"])
+        files += try sourceFiles(under: "Sources/Conclave/Features/Meeting/Webinar", extensions: ["swift"])
+        files += try sourceFiles(under: "Sources/Conclave/Features/Meeting/Transcript", extensions: ["swift"])
         files.append("Sources/Conclave/App/PlatformRoot+iOS.swift")
         let galleryFile = "Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"
-        // WP1-2b (PN 3.5 A1): the R02 control surface is the single glass entry; its internals are checked by
-        // controlSurfaceShimIsTheOnlyGlassEntry. The scope stays every WP1-owned Swift path.
-        let entryFile = Self.callControlFile
-        #expect(files.contains(entryFile))
-        for file in files where file != entryFile {
+        // WP1-2b (PN 3.5 A1) made the R02 control surface the single glass entry; owner OQ2 (2026-10-26) sanctions
+        // exactly one more file, the composer cluster (RECONCILE R32). Their internals are checked by
+        // controlSurfaceShimIsTheOnlyGlassEntry and FND3ContentComponentsTests.composerGlassStaysInsideItsBranch.
+        let entries = Self.sanctionedGlassFiles
+        #expect(entries == [Self.callControlFile, Self.composerGlassFile])
+        for entry in entries { #expect(files.contains(entry), "\(entry) is outside the scanned scope") }
+        var glassFiles: [String] = []
+        for file in files where !entries.contains(file) {
             var text = try source(file)
             if file == galleryFile {
                 // The only allowed block: the iOS 26 system-prominent specimens (A17).
@@ -543,8 +554,14 @@ struct TypographyHapticsGalleryContractsTests {
                     text.removeSubrange(lower.lowerBound..<upper.upperBound)
                 }
             }
-            for pattern in glass { #expect(!text.contains(pattern), "\(file) uses \(pattern)") }
+            for pattern in glass where text.contains(pattern) {
+                glassFiles.append(file)
+                Issue.record("\(file) uses \(pattern)")
+            }
         }
+        #expect(glassFiles.isEmpty)
+        // Both sanctioned files really are glass entries, so neither can be dropped from the list silently.
+        for entry in entries { #expect(try source(entry).contains(".glassEffect("), "\(entry)") }
     }
 
     @Test func labelCasingFollowsOwnerRule() throws {
@@ -633,7 +650,12 @@ struct TypographyHapticsGalleryContractsTests {
         // component strings (ds_, F00 11) and the five component files.
         for file in ["Sources/Conclave/Skip/ui/hosting/NativeComponentGallery.kt", "Sources/Conclave/Skip/ui/hosting/NativeSemanticsExport.kt",
                      "Sources/Conclave/Skip/ui/AppRoot.kt", "Sources/Conclave/Skip/ui/call/panels/InCallPage.kt",
-                     "Sources/Conclave/Skip/ui/call/panels/CallMiniTile.kt", "Sources/Conclave/Skip/ui/call/panels/NativePanelHost.kt"]
+                     "Sources/Conclave/Skip/ui/call/panels/CallMiniTile.kt", "Sources/Conclave/Skip/ui/call/panels/NativePanelHost.kt",
+                     // STG-1 and STG-4 (batch 3, HD request B3-T2 R7): the stage Compose files name the F00 ds_ share and
+                     // presenting strings. StageFixtureRoot.kt stays out (Debug fixture labels are literal).
+                     "Sources/Conclave/Skip/ui/call/stage/CallRoot.kt", "Sources/Conclave/Skip/ui/call/stage/StageCanvas.kt",
+                     "Sources/Conclave/Skip/ui/call/stage/SlotView.kt", "Sources/Conclave/Skip/ui/call/stage/StageChrome.kt",
+                     "Sources/Conclave/Skip/ui/call/stage/Reactions.kt"]
             + Self.androidComponentFiles {
             let text = try source(file)
             // Names appear at call sites or in tables such as the live role list.
@@ -656,12 +678,18 @@ struct TypographyHapticsGalleryContractsTests {
         }
         // SYS-1 owns the sys_ resources (the call notification and the system fixture); T/CallPresenceTests.swift pins
         // the names its builder asks for. SYS-2 owns the ctl_route_ audio route names; T/SYS2AudioRoutingTests.swift
-        // and T/Skip/SYS2AudioRouteBridgeTests.kt pin them (batch 2 integrator).
-        let galleryNames = Set(resources.keys.filter { !$0.hasPrefix("sys_") && !$0.hasPrefix("ctl_route_") })
+        // and T/Skip/SYS2AudioRouteBridgeTests.kt pin them (batch 2 integrator). ENT-1 and ENT-2 own the pm_
+        // premeeting names (S10 copy tables); T/ENT2JoinCodeTests.swift pins them (batch 3, HD request B3-T1 R1).
+        // STG-1 and STG-4 own the stg_ stage names; T/StagePoliciesTests.swift and T/Skip/StageBridgeTests.kt use
+        // them (batch 3, HD request B3-T2 R7).
+        let galleryNames = Set(resources.keys.filter {
+            !$0.hasPrefix("sys_") && !$0.hasPrefix("ctl_route_") && !$0.hasPrefix("pm_") && !$0.hasPrefix("stg_")
+        })
         #expect(used == galleryNames, "unused or missing resources: \(used.symmetricDifference(galleryNames).sorted())")
         for (name, value) in resources {
             #expect(name.hasPrefix("native_gallery_") || name.hasPrefix("native_semantics_") || name.hasPrefix("native_panel_")
-                    || name.hasPrefix("ds_") || name.hasPrefix("sys_") || name.hasPrefix("ctl_route_"), "\(name)")
+                    || name.hasPrefix("ds_") || name.hasPrefix("sys_") || name.hasPrefix("ctl_route_") || name.hasPrefix("pm_")
+                    || name.hasPrefix("stg_"), "\(name)")
             #expect(!containsDash(value), "\(name)")
             #expect(!value.contains("'"), "\(name) needs an escaped apostrophe")
             // Positional format arguments only, so translations can reorder them.
@@ -764,6 +792,9 @@ struct TypographyHapticsGalleryContractsTests {
     // MARK: WP1-2b components, the R02 control surface and the compact fit (PN 3.5)
 
     static let callControlFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveCallControl+iOS.swift"
+    /// FND-3 (owner OQ2, S40 R40-10): the second and last sanctioned glass file.
+    static let composerGlassFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveComposerGlass+iOS.swift"
+    static let sanctionedGlassFiles = [callControlFile, composerGlassFile]
     static let iosComponentFiles = [
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveButtons+iOS.swift",
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveRows+iOS.swift",
@@ -779,6 +810,11 @@ struct TypographyHapticsGalleryContractsTests {
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveTileChrome+iOS.swift",
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveToast+iOS.swift",
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveMenus+iOS.swift",
+        // FND-3 (the shared ConclaveContentModels.swift is transpiled and scanned by FND3ContentComponentsTests).
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveComposerGlass+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveChatBubble+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveReactionChip+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveTip+iOS.swift",
     ]
     static let androidComponentFiles = [
         "Sources/Conclave/Skip/ui/components/ConclaveButtons.kt",
@@ -797,6 +833,10 @@ struct TypographyHapticsGalleryContractsTests {
         "Sources/Conclave/Skip/ui/components/ConclaveMenus.kt",
         "Sources/Conclave/Skip/ui/components/ConclaveActionSheet.kt",
         "Sources/Conclave/Skip/ui/components/AudioRouteList.kt",
+        // FND-3.
+        "Sources/Conclave/Skip/ui/components/ConclaveChatBubble.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveReactionChip.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveTipCard.kt",
     ]
     static let glassBranchCondition = "if #available(iOS 26.0, *), !reduceTransparency, !forceOpaque {"
 
@@ -813,7 +853,8 @@ struct TypographyHapticsGalleryContractsTests {
         files.append("Sources/Conclave/App/PlatformRoot+iOS.swift")
         #expect(files.contains(Self.callControlFile) && files.contains(galleryFile))
         var entries: [String] = []
-        for file in files where file != Self.callControlFile && file != galleryFile {
+        // The composer cluster is the second sanctioned entry (owner OQ2); FND3ContentComponentsTests checks it.
+        for file in files where file != Self.callControlFile && file != galleryFile && file != Self.composerGlassFile {
             let text = try source(file)
             if glass.contains(where: { text.contains($0) }) { entries.append(file) }
         }
@@ -946,11 +987,18 @@ struct TypographyHapticsGalleryContractsTests {
         for file in try sourceFiles(under: "Sources/Conclave", extensions: ["swift"]) where try source(file).contains(key) {
             holders.append(file)
         }
-        #expect(holders == [Self.callControlFile, galleryFile].sorted())
-        // Outside #if DEBUG the entry never names the key; Release reads a constant false in the surface and the bar.
+        // FND-3: the composer cluster reads the same Debug key (F00 C19 c: the Debug force shows the opaque field).
+        #expect(holders == [Self.callControlFile, Self.composerGlassFile, galleryFile].sorted())
+        // Outside #if DEBUG the entries never name the key; Release reads a constant false in the surface and the bar.
         let text = try source(Self.callControlFile)
         let release = withoutDebugBlocks(text)
         for name in [key, "forceOpaqueSetting", "ConclaveForceOpaqueControlsKey"] { #expect(!release.contains(name), "\(name) in Release") }
+        let composer = try source(Self.composerGlassFile)
+        let composerRelease = withoutDebugBlocks(composer)
+        for name in [key, "forceOpaqueSetting", "ConclaveForceOpaqueControlsKey"] { #expect(!composerRelease.contains(name), "\(name) in the composer Release") }
+        #expect(normalized(composer).components(separatedBy: "#if DEBUG return forceOpaqueSetting #else return false #endif").count - 1 == 1)
+        #expect(!composer.contains("ConclaveForceOpaqueControlsKey"), "the key is declared once, in the call control file")
+        #expect(!composer.contains(".environment(\\.\(key)"))
         // The surface, the bar and the FND-2 top chrome cluster.
         #expect(normalized(text).components(separatedBy: "#if DEBUG return forceOpaqueSetting #else return false #endif").count - 1 == 3)
         #expect(!text.contains(".environment(\\.\(key)"))

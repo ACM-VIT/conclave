@@ -32,6 +32,8 @@ const iosInCallKeys = ["stage", "tile", "surface", "surfaceRaised", "surfaceHigh
   "coralFill", "onCoral", "onCoralHighContrast", "coralText", "coralTextHighContrast",
   "controlOff", "onControlOff", "controlFallback", "success", "warning", "live",
   "leaveHighContrast"];
+// S60 R6-7 (F00 2.6 A9): the board square fills, emitted as iosGameBoardLight and iosGameBoardDark.
+const iosGameKeys = ["boardLight", "boardDark"];
 export const androidRoles = Object.freeze([
   "primary", "onPrimary", "primaryContainer", "onPrimaryContainer", "inversePrimary",
   "secondary", "onSecondary", "secondaryContainer", "onSecondaryContainer",
@@ -50,7 +52,8 @@ const extendedKeys = ["successLight", "successDark", "warningLight", "warningDar
   "handRaisedLight", "handRaisedDark", "speaking", "callEnd", "onCallEnd", "stage", "tile",
   "labelScrim", "labelScrimHighContrast", "toolbarContainer", "toggleOnContainer",
   "onToggleOn", "toggleOffContainer", "onToggleOff", "toggleEngagedContainer",
-  "onToggleEngaged", "borderLight", "borderDark", "borderLightHighContrast", "borderDarkHighContrast"];
+  "onToggleEngaged", "borderLight", "borderDark", "borderLightHighContrast", "borderDarkHighContrast",
+  "gameBoardLight", "gameBoardDark"];
 const spaceKeys = ["space2", "space4", "space8", "space12", "space16", "space20",
   "space24", "space32", "space40", "space48"];
 const radiusKeys = ["small", "medium", "tile", "bubble", "sheet", "bubbleAndroid",
@@ -99,7 +102,7 @@ function colorSet(appearances) {
 export function renderNativeTokens(tokens = native) {
   expectKeys(tokens, ["brand", "neutral", "status", "ios", "android", "space", "radius", "avatar"], "native");
   expectKeys(tokens.status, ["light", "dark"], "native.status");
-  expectKeys(tokens.ios, ["app", "inCall"], "native.ios");
+  expectKeys(tokens.ios, ["app", "inCall", "game"], "native.ios");
   expectKeys(tokens.android, ["light", "dark", "inCall", "extended"], "native.android");
   expectKeys(tokens.avatar, ["palette", "ring", "tongue"], "native.avatar");
   const lines = [`// ${generatedNotice}`, "import Foundation", "", "enum DesignTokens {"];
@@ -122,6 +125,7 @@ export function renderNativeTokens(tokens = native) {
   }
   colors("ios.app", tokens.ios.app, iosAppKeys, (key) => `iosApp${capitalized(key)}`);
   colors("ios.inCall", tokens.ios.inCall, iosInCallKeys, (key) => `iosInCall${capitalized(key)}`);
+  colors("ios.game", tokens.ios.game, iosGameKeys, (key) => `iosGame${capitalized(key)}`);
   for (const mode of ["light", "dark", "inCall"]) {
     colors(`android.${mode}`, tokens.android[mode], androidRoles, (key) => `android${capitalized(mode)}${capitalized(key)}`);
   }

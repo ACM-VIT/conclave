@@ -1,0 +1,153 @@
+#if !SKIP
+import Foundation
+import Testing
+@testable import Conclave
+
+/// ENT-2 (S10 3, 4): the join sheet flow on the presenter (submit, push after dismissal, invite codes kept, the
+/// validation token, the Rejoin suggestion), the sheet sources on both platforms (detents, PasteButton, no iOS
+/// autofocus, the confirm button branches, the Android focus and clipboard rules), and the strings both platforms
+/// resolve (present after the HD/strings/B3-T1.json merge).
+@MainActor
+struct ENT2JoinCodeTests {
+    @Test func submittingALinkPushesItsLobbyOnlyAfterTheSheetIsGoneWithTheInviteCode() {
+        let presenter = PremeetingPresenter()
+        presenter.openJoinSheet()
+        #expect(presenter.isJoinSheetPresented)
+        presenter.submitJoinInput("https://conclave.acmvit.in/rose-sora-luffy?meetingInviteCode=abc")
+        #expect(!presenter.isJoinSheetPresented)
+        #expect(presenter.path.isEmpty, "never pushed while the sheet is dismissing")
+        presenter.joinSheetDidDismiss()
+        #expect(presenter.path.count == 1)
+        let target = presenter.target(forRoute: presenter.path[0].id)
+        #expect(target?.roomId == "rose-sora-luffy")
+        #expect(target?.meetingInviteCode == "abc")
+        #expect(target?.allowRoomCreation == true)
+        #expect(target?.intent == .join)
+        // A second dismissal callback pushes nothing more.
+        presenter.joinSheetDidDismiss()
+        #expect(presenter.path.count == 1)
+        #expect(presenter.feedbackState.token.kind == .none)
+    }
+
+    @Test func aTypedCodeAndAWebinarLinkOpenTheirPages() {
+        let presenter = PremeetingPresenter()
+        presenter.openJoinSheet()
+        presenter.submitJoinInput(EntryPolicies.sanitizeRoomInput("Rose Sora Luffy"))
+        presenter.joinSheetDidDismiss()
+        #expect(presenter.path.map { $0.roomId } == ["rose-sora-luffy"])
+        presenter.setPath([])
+        presenter.openJoinSheet()
+        presenter.submitJoinInput("https://conclave.acmvit.in/w/yuki-haz")
+        presenter.joinSheetDidDismiss()
+        #expect(presenter.path.map { $0.kind } == [.webinarLanding])
+    }
+
+    @Test func aRejectedSubmitKeepsTheSheetAndPublishesValidationFailed() {
+        let presenter = PremeetingPresenter()
+        presenter.openJoinSheet()
+        presenter.submitJoinInput("https://example.com/rose")
+        #expect(presenter.isJoinSheetPresented)
+        #expect(presenter.feedbackState.token == FeedbackToken(sequence: 1, kind: .validationFailed))
+        presenter.submitJoinInput("")
+        #expect(presenter.feedbackState.token.sequence == 2)
+        // Swipe, Cancel, Back or scrim: no pending route, nothing pushed.
+        presenter.dismissJoinSheet()
+        presenter.joinSheetDidDismiss()
+        #expect(presenter.path.isEmpty)
+    }
+
+    @Test func theRejoinSuggestionLeavesTheSheetBeforeOpeningTheLobby() {
+        let presenter = PremeetingPresenter()
+        let now: Double = 1793102400000.0
+        presenter.nowMillis = { now }
+        presenter.bootstrap(user: nil, recents: PremeetingFixtureScript.recents(for: .home, nowMillis: now))
+        presenter.openJoinSheet()
+        presenter.rejoin()
+        #expect(!presenter.isJoinSheetPresented)
+        #expect(presenter.path.isEmpty)
+        presenter.joinSheetDidDismiss()
+        #expect(presenter.path.first?.roomId == "rose-sora-luffy")
+        #expect(presenter.lobbyStatus?.intent == .rejoin)
+    }
+
+    @Test func theIOSSheetFollowsTheS10Layout() throws {
+        let ios = try ent2Source("Sources/Conclave/Features/Join/JoinCodeSheet+iOS.swift")
+        let flat = ent2Flat(ios)
+        #expect(ios.hasPrefix("#if os(iOS) && !SKIP\n"))
+        #expect(flat.contains(".presentationDetents([.medium, .large], selection: $detent)"))
+        #expect(flat.contains(".presentationDragIndicator(.visible)"))
+        #expect(flat.contains(".onChange(of: isFocused) { if isFocused { detent = .large } }"))
+        #expect(flat.contains("PasteButton(payloadType: String.self)"))
+        #expect(flat.contains(".keyboardType(.URL) .textContentType(.URL) .textInputAutocapitalization(.never) .autocorrectionDisabled() .submitLabel(.join)"))
+        // No autofocus on iOS (S10 3 c).
+        #expect(!ios.contains("isFocused = true"))
+        #expect(!ios.contains("defaultFocus"))
+        // Commit flow: Cancel leading, one confirm trailing, no Close role.
+        #expect(flat.contains("ToolbarItem(placement: .cancellationAction) { Button(ConclaveStrings.text(\"Cancel\"), role: .cancel)"))
+        #expect(flat.contains("ToolbarItem(placement: .confirmationAction) { JoinConfirmButton(isValid: isValid, action: submit) }"))
+        #expect(!ios.contains("role: .close"))
+        // iOS 26: the prominent coral fill with the onCoral label and 0.4 when disabled; 17 to 25: coralText text.
+        #expect(flat.contains("if #available(iOS 26.0, *) { Button(action: action) { Text(ConclaveStrings.text(\"Join\")) .foregroundStyle(HostingTheme.onCoral) } .buttonStyle(.borderedProminent) .tint(HostingTheme.coralFill) .opacity(isValid ? 1 : HostingTheme.disabledOpacity) .disabled(!isValid)"))
+        #expect(flat.contains("} else { Button(ConclaveStrings.text(\"Join\"), action: action) .tint(HostingTheme.coralText) .disabled(!isValid)"))
+        #expect(!ios.contains("Color.white") && !ios.contains(".foregroundStyle(.white)"))
+        #expect(flat.contains("input = EntryPolicies.sanitizeRoomInput(newValue)"))
+        // The root presents it with the dismissal callback that pushes the pending route.
+        let root = ent2Flat(try ent2Source("Sources/Conclave/Features/Home/PremeetingRoot+iOS.swift"))
+        #expect(root.contains(".sheet(isPresented: joinSheetBinding, onDismiss: { premeeting.joinSheetDidDismiss() }) { JoinCodeSheet(premeeting: premeeting) }"))
+        #expect(root.contains("Binding(get: { premeeting.isJoinSheetPresented }, set: { if !$0 { premeeting.dismissJoinSheet() } })"))
+    }
+
+    @Test func theAndroidSheetFollowsTheS10Layout() throws {
+        let android = try ent2Source("Sources/Conclave/Skip/ui/join/JoinCodeSheet.kt")
+        let flat = ent2Flat(android)
+        #expect(flat.contains("rememberModalBottomSheetState(skipPartiallyExpanded = true)"))
+        #expect(flat.contains("ModalBottomSheet( onDismissRequest = { premeeting.dismissJoinSheet() },"))
+        // Focus is requested inside the sheet content, once the sheet is visible (no uninitialized requester).
+        #expect(flat.contains("LaunchedEffect(Unit) { snapshotFlow { sheetState.isVisible }.first { it } focus.requestFocus() }"))
+        // The clip description is read without the content; the content only on a tap.
+        #expect(android.contains("primaryClipDescription?.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN)"))
+        #expect(flat.contains("keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go,"))
+        #expect(flat.contains("scope.launch { sheetState.hide() }.invokeOnCompletion { premeeting.submitJoinInput(raw) }"))
+        #expect(flat.contains("DisposableEffect(premeeting) { onDispose { premeeting.joinSheetDidDismiss() } }"))
+        #expect(flat.contains("containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer"))
+        #expect(!android.contains("FlexibleBottomSheet"), "a handwritten M3 sheet, not the legacy bridge")
+    }
+
+    @Test func theSwitchPromptUsesTheSystemAlertOnIOSAndAnAlertDialogOnAndroid() throws {
+        let ios = ent2Flat(try ent2Source("Sources/Conclave/Features/Home/PremeetingRoot+iOS.swift"))
+        #expect(ios.contains("content.alert(ConclaveStrings.text(\"Join Another Meeting?\"), isPresented: isPresented, presenting: premeeting.switchPrompt) { prompt in Button(ConclaveStrings.text(\"Stay\"), role: .cancel) { premeeting.stay(id: prompt.id) } Button(ConclaveStrings.text(\"Leave and Join\")) { premeeting.confirmSwitch(id: prompt.id) }"))
+        let android = ent2Flat(try ent2Source("Sources/Conclave/Skip/ui/home/PremeetingHost.kt"))
+        #expect(android.contains("AlertDialog( onDismissRequest = { premeeting.stay(id = prompt.id) },"))
+        #expect(android.contains("HostingTheme(inCall = inCall) { PremeetingSwitchDialog(premeeting, prompt) }"))
+    }
+
+    @Test func entryStringsAreInBothCatalogs() throws {
+        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent2Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
+        let strings = try #require(catalog["strings"] as? [String: Any])
+        for key in ["Meetings", "New Meeting", "Join", "Recent", "Join Meeting", "Meeting Code or Link", "Code or Link",
+                    "Enter the code from your invite, or paste the link.", "This isn\u{2019}t a Conclave code or link.",
+                    "Join Another Meeting?", "You\u{2019}re in %@. Leave it and join %@?", "Stay", "Leave and Join",
+                    "This link can\u{2019}t be opened in Conclave.", "Update Conclave", "No Recent Meetings"] {
+            let entry = strings[key] as? [String: Any]
+            #expect(entry != nil, "missing \(key)")
+            #expect(entry?["extractionState"] as? String == "manual", "\(key)")
+        }
+        let xml = try ent2Source("Android/app/src/main/res/values/strings.xml")
+        for name in ["pm_app_title", "pm_new_meeting", "pm_join_with_code", "pm_join_meeting", "pm_code_or_link_label",
+                     "pm_code_help", "pm_code_invalid", "pm_paste", "pm_join", "pm_switch_title", "pm_switch_body",
+                     "pm_switch_stay", "pm_switch_leave_and_join", "pm_notice_invalid_link", "pm_update_title", "pm_empty_title"] {
+            #expect(xml.contains("<string name=\"\(name)\">"), "missing \(name)")
+        }
+        #expect(xml.contains("<string name=\"pm_switch_body\">You\u{2019}re in %1$s. Leave it and join %2$s?</string>"))
+    }
+}
+
+private func ent2Source(_ packageRelativePath: String) throws -> String {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
+}
+
+private func ent2Flat(_ text: String) -> String {
+    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+}
+#endif

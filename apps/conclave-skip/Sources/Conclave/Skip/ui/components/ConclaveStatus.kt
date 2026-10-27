@@ -73,8 +73,11 @@ private fun StatusColumn(
         Icon(icon, contentDescription = null, modifier = Modifier.size(48.dp), tint = scheme.onSurfaceVariant)
         ConclaveText(title, line = "$identifier.title", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center,
             modifier = Modifier.semantics { heading() })
-        ConclaveText(body, line = "$identifier.body", style = MaterialTheme.typography.bodyMedium,
-            color = scheme.onSurfaceVariant, textAlign = TextAlign.Center)
+        // An empty body (search no results, F00 C20) draws no blank line.
+        if (body.isNotEmpty()) {
+            ConclaveText(body, line = "$identifier.body", style = MaterialTheme.typography.bodyMedium,
+                color = scheme.onSurfaceVariant, textAlign = TextAlign.Center)
+        }
         if (retryTitle != null && onRetry != null) {
             FilledTonalButton(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp).testTag("$identifier.retry")) {
                 ConclaveText(retryTitle, line = "$identifier.retry")

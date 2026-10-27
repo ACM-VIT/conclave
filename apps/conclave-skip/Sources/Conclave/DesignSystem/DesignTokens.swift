@@ -90,6 +90,10 @@ enum DesignTokens {
     static let iosInCallLive: Int64 = 0xFF60A5FA
     static let iosInCallLeaveHighContrast: Int64 = 0xFFE9152D
 
+    // ios.game
+    static let iosGameBoardLight: Int64 = 0xFF71717A
+    static let iosGameBoardDark: Int64 = 0xFF3F3F46
+
     // android.light
     static let androidLightPrimary: Int64 = 0xFFB94333
     static let androidLightOnPrimary: Int64 = 0xFFFFFFFF
@@ -271,6 +275,8 @@ enum DesignTokens {
     static let androidExtendedBorderDark: Int64 = 0x24FAFAFA
     static let androidExtendedBorderLightHighContrast: Int64 = 0x52000000
     static let androidExtendedBorderDarkHighContrast: Int64 = 0x52FAFAFA
+    static let androidExtendedGameBoardLight: Int64 = 0xFF71717A
+    static let androidExtendedGameBoardDark: Int64 = 0xFF3F3F46
 
     // space
     static let space2: Double = 2

@@ -1,0 +1,169 @@
+package conclave.module
+
+import android.content.ClipDescription
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+
+/*
+ * ENT-2 (S10 3 d): join by code or link on Android, a ModalBottomSheet that opens expanded with the field focused (the
+ * IME and its clipboard suggestion are the fast path; the Paste chip reads the clip only on tap, so Android 12+ shows
+ * its access toast only after a deliberate paste). Keystrokes stay in view state; on a valid submit the sheet hides
+ * first and then hands the input to the presenter, and the lobby is pushed from `joinSheetDidDismiss()` when the
+ * sheet leaves composition, never while it is still dismissing (F00 C15). Swipe, Back and scrim tap are a dismissal.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+internal fun JoinCodeSheet(premeeting: PremeetingPresenter) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val focus = remember { FocusRequester() }
+    var text by remember { mutableStateOf("") }
+    var showsInvalid by remember { mutableStateOf(false) }
+    val clipboardHasText = remember { joinClipboardHasText(context) }
+    val suggestion = premeeting.home.rejoin?.title
+    val isValid = EntryPolicies.isValidJoinInput(text)
+    val scheme = MaterialTheme.colorScheme
+
+    // Leaving composition (a submit, a dismissal, a link that replaces the sheet) flushes the pending route.
+    DisposableEffect(premeeting) {
+        onDispose { premeeting.joinSheetDidDismiss() }
+    }
+
+    fun submit() {
+        val raw = text
+        if (!EntryPolicies.isValidJoinInput(raw)) {
+            showsInvalid = raw.isNotBlank()
+            premeeting.submitJoinInput(raw)
+            return
+        }
+        scope.launch { sheetState.hide() }.invokeOnCompletion { premeeting.submitJoinInput(raw) }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = { premeeting.dismissJoinSheet() },
+        sheetState = sheetState,
+        modifier = Modifier.testTag("join.sheet"),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 24.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                text = conclaveString("pm_join_meeting"),
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.semantics { heading() },
+            )
+            OutlinedTextField(
+                value = text,
+                onValueChange = { value ->
+                    text = EntryPolicies.sanitizeRoomInput(value)
+                    showsInvalid = false
+                },
+                label = { Text(conclaveString("pm_code_or_link_label")) },
+                supportingText = {
+                    Text(if (showsInvalid) conclaveString("pm_code_invalid") else conclaveString("pm_code_help"))
+                },
+                isError = showsInvalid,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = ImeAction.Go,
+                ),
+                keyboardActions = KeyboardActions(onGo = { submit() }),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus).testTag("join.field"),
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (clipboardHasText) {
+                    AssistChip(
+                        onClick = {
+                            val pasted = joinClipboardText(context)
+                            if (pasted.isNotEmpty()) {
+                                text = EntryPolicies.sanitizeRoomInput(pasted)
+                                showsInvalid = EntryPolicies.showsInvalidJoinInput(text)
+                            }
+                        },
+                        label = { Text(conclaveString("pm_paste")) },
+                        modifier = Modifier.testTag("join.paste"),
+                    )
+                }
+                if (suggestion != null) {
+                    SuggestionChip(
+                        onClick = { premeeting.rejoin() },
+                        label = { Text(conclaveString("pm_rejoin_named", suggestion)) },
+                        modifier = Modifier.testTag("join.rejoinSuggestion"),
+                    )
+                }
+            }
+            Button(
+                onClick = { submit() },
+                enabled = isValid,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("join.confirm"),
+                colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
+            ) {
+                Text(conclaveString("pm_join"))
+            }
+            // Inside the sheet content: the sheet composes in its own window, so the requester attaches only here.
+            LaunchedEffect(Unit) {
+                snapshotFlow { sheetState.isVisible }.first { it }
+                focus.requestFocus()
+            }
+        }
+    }
+}
+
+/** Whether the clip is plain text, without reading it (no access toast). */
+internal fun joinClipboardHasText(context: Context): Boolean {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return false
+    return clipboard.primaryClipDescription?.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) == true
+}
+
+/** Reads the clip on a deliberate tap only. */
+internal fun joinClipboardText(context: Context): String {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return ""
+    val item = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0) ?: return ""
+    return item.coerceToText(context)?.toString()?.trim() ?: ""
+}

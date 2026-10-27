@@ -105,6 +105,15 @@ final class MeetingState {
     /// connection quality and other high-frequency fields never do. The view model installs exactly one closure and
     /// rebinds it when `state` is replaced.
     @ObservationIgnored var onShellInputChanged: (() -> Void)? = nil
+    /// S20 SC1 E1: the stage's own refresh hooks, separate from S1, so an S1-only change never builds stage inputs
+    /// and a stage-only change is never missed. The view model installs one closure each (`bindStageInputs()`).
+    @ObservationIgnored var onStageInputChanged: (() -> Void)? = nil
+    /// SC1 E5: the active or TTS speaker changed (hot; writes only the speaking store and the order policy).
+    @ObservationIgnored var onStageSpeakerChanged: (() -> Void)? = nil
+    /// Hot: the active reactions changed (writes only the reaction layer).
+    @ObservationIgnored var onStageReactionsChanged: (() -> Void)? = nil
+    /// SC1 E4: a game push; the view model refreshes the stage only when presence changes.
+    @ObservationIgnored var onStageGameChanged: (() -> Void)? = nil
 
     // Connection State
     var connectionState: ConnectionState = .disconnected {
@@ -126,13 +135,14 @@ final class MeetingState {
                 new: "\(isRecoveringConnection)"
             )
             onShellInputChanged?()
+            onStageInputChanged?()
         }
     }
     /// True while a connected call is moving through an expected app
     /// background/foreground transition. Transport recovery may briefly run,
     /// but it should not be presented as a user-facing outage.
     var isResumingFromBackground: Bool = false {
-        didSet { onShellInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
     var errorMessage: String?
     var joinFormErrorMessage: String? = nil {
@@ -142,12 +152,16 @@ final class MeetingState {
         didSet { onShellInputChanged?() }
     }
     var serverRestartNotice: String? = nil {
-        didSet { onShellInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
-    var adminNoticeMessage: String?
-    var adminNoticeLevel: AdminNoticeLevel = .info
+    var adminNoticeMessage: String? {
+        didSet { onStageInputChanged?() }
+    }
+    var adminNoticeLevel: AdminNoticeLevel = .info {
+        didSet { onStageInputChanged?() }
+    }
     var isNetworkOffline: Bool = false {
-        didSet { onShellInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
     var waitingMessage: String? = nil {
         didSet { onShellInputChanged?() }
@@ -176,9 +190,11 @@ final class MeetingState {
 
     // Room State
     var roomId: String = "" {
-        didSet { onShellInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
-    var isRoomLocked: Bool = false
+    var isRoomLocked: Bool = false {
+        didSet { onStageInputChanged?() }
+    }
     var isChatLocked: Bool = false
     var isNoGuests: Bool = false
     var isDmEnabled: Bool = true
@@ -189,7 +205,9 @@ final class MeetingState {
     var isReactionsDisabled: Bool = false {
         didSet { onShellInputChanged?() }
     }
-    var meetingRequiresInviteCode: Bool = false
+    var meetingRequiresInviteCode: Bool = false {
+        didSet { onStageInputChanged?() }
+    }
     var adminAllowedUserKeys: [String] = []
     var adminLockedAllowedUserKeys: [String] = []
     var adminBlockedUserKeys: [String] = []
@@ -197,31 +215,49 @@ final class MeetingState {
 
     // Webinar State
     var webinarRole: String? = nil {
-        didSet { onShellInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
-    var isWebinarEnabled: Bool = false
-    var isWebinarPublicAccess: Bool = false
+    var isWebinarEnabled: Bool = false {
+        didSet { onStageInputChanged?() }
+    }
+    var isWebinarPublicAccess: Bool = false {
+        didSet { onStageInputChanged?() }
+    }
     var isWebinarLocked: Bool = false
     var webinarRequiresInviteCode: Bool = false
-    var webinarAttendeeCount: Int = 0
+    var webinarAttendeeCount: Int = 0 {
+        didSet { onStageInputChanged?() }
+    }
     var webinarMaxAttendees: Int = 500
     var webinarLinkSlug: String?
-    var webinarLinkURL: String?
-    var webinarFeedMode: String = "active-speaker"
-    var webinarSpeakerUserId: String?
+    var webinarLinkURL: String? {
+        didSet { onStageInputChanged?() }
+    }
+    var webinarFeedMode: String = "active-speaker" {
+        didSet { onStageInputChanged?() }
+    }
+    var webinarSpeakerUserId: String? {
+        didSet { onStageInputChanged?() }
+    }
 
     // User State
-    var userId: String
-    var sfuUserId: String?
+    var userId: String {
+        didSet { onStageInputChanged?() }
+    }
+    var sfuUserId: String? {
+        didSet { onStageInputChanged?() }
+    }
     var sessionId: String
     var displayName: String = "" {
-        didSet { onShellInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
     var isAdmin: Bool = false {
-        didSet { onShellInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
     var hostUserId: String?
-    var hostUserIds: [String] = []
+    var hostUserIds: [String] = [] {
+        didSet { onStageInputChanged?() }
+    }
 
     // Participants
     var participants: [String: Participant] = [:] {
@@ -230,43 +266,70 @@ final class MeetingState {
                 PerformanceDiagnostics.state("participants.count", old: "\(oldValue.count)", new: "\(participants.count)")
             }
             onShellInputChanged?()
+            onStageInputChanged?()
         }
     }
-    var displayNames: [String: String] = [:]
+    /// S50 PH19 (RECONCILE R20): join order keyed by canonical id, assigned at first presence, kept across recovery
+    /// rejoins, reset per call session and on leave; read by the stage (`makeStageInputs()`) and People. The stage
+    /// assigns no serials of its own.
+    var participantJoinSerials: [String: Int] = [:]
+    private var nextParticipantJoinSerial = 0
+
+    /// Assigns the next serial the first time `canonicalId` is present; later calls keep it.
+    func assignParticipantJoinSerial(_ canonicalId: String) {
+        guard !canonicalId.isEmpty, participantJoinSerials[canonicalId] == nil else { return }
+        nextParticipantJoinSerial += 1
+        participantJoinSerials[canonicalId] = nextParticipantJoinSerial
+    }
+
+    func resetParticipantJoinSerials() {
+        participantJoinSerials = [:]
+        nextParticipantJoinSerial = 0
+    }
+    var displayNames: [String: String] = [:] {
+        didSet { onStageInputChanged?() }
+    }
     var pendingUsers: [String: String] = [:] {
         didSet {
             pendingUserRows = PendingUserRowsPolicy.sortedRows(from: pendingUsers)
             onShellInputChanged?()
+            onStageInputChanged?()
         }
     }
     private(set) var pendingUserRows: [PendingUserRow] = []
-    var hasInitialPresenceSnapshot: Bool = false
+    var hasInitialPresenceSnapshot: Bool = false {
+        didSet { onStageInputChanged?() }
+    }
 
     // Media State
     var isMuted: Bool = true {
-        didSet { onShellInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
     var isCameraOff: Bool = true {
-        didSet { onShellInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
     var isAudioOnlyMode: Bool = false {
-        didSet { onShellInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
     var isScreenSharing: Bool = false {
-        didSet { onShellInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
     var isHandRaised: Bool = false {
-        didSet { onShellInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
     var videoQuality: VideoQuality = .standard
-    var connectionQuality: ConnectionQuality = .unknown
+    var connectionQuality: ConnectionQuality = .unknown {
+        didSet { onStageInputChanged?() }
+    }
     // Selected audio routes (mic input / speaker output). nil = follow the
     // platform default. Mirrors the web client's device pickers.
     var selectedAudioInputId: String?
     var selectedAudioOutputId: String?
 
     // Shared Browser
-    var isBrowserActive: Bool = false
+    var isBrowserActive: Bool = false {
+        didSet { onStageInputChanged?() }
+    }
     var isBrowserLaunching: Bool = false
     var hasBrowserAudio: Bool = false
     var isBrowserAudioMuted: Bool = false
@@ -277,7 +340,9 @@ final class MeetingState {
     var browserProvider: String?
 
     // Apps Runtime
-    var activeAppId: String?
+    var activeAppId: String? {
+        didSet { onStageInputChanged?() }
+    }
     var isAppsLocked: Bool = false
     var isAppsActionInFlight: Bool = false
     var latestAppYjsUpdate: ActiveAppBinaryMessage?
@@ -287,7 +352,9 @@ final class MeetingState {
 
     // Games
     var gameCatalog: [GameCatalogEntry] = []
-    var gamePublicState: GamePublicState?
+    var gamePublicState: GamePublicState? {
+        didSet { onStageGameChanged?() }
+    }
     var gamePlayerView: GamePlayerViewNotification?
     var gameVote: GameVoteState?
     var isGameActionInFlight: Bool = false
@@ -299,22 +366,37 @@ final class MeetingState {
 
     // Active States
     var activeScreenShareUserId: String? = nil {
-        didSet { onShellInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
     var activeSpeakerId: String? {
         didSet {
             PerformanceDiagnostics.state("activeSpeakerId", old: oldValue ?? "nil", new: activeSpeakerId ?? "nil")
+            onStageSpeakerChanged?()
         }
     }
-    var ttsSpeakerId: String?
+    var ttsSpeakerId: String? {
+        didSet { onStageSpeakerChanged?() }
+    }
     // Locally-pinned participant → spotlight stage (not synced; mirrors web's
     // per-tile pin). nil = grid.
-    var pinnedUserId: String?
-    var viewMode: MeetingViewMode = .auto
-    var viewMaxTiles: Int = MeetingViewConstants.defaultMaxTiles
-    var hideTilesWithoutVideo: Bool = false
-    var selfViewMode: MeetingSelfViewMode = .auto
-    var selfViewCorner: MeetingSelfViewCorner = .bottomRight
+    var pinnedUserId: String? {
+        didSet { onStageInputChanged?() }
+    }
+    var viewMode: MeetingViewMode = .auto {
+        didSet { onStageInputChanged?() }
+    }
+    var viewMaxTiles: Int = MeetingViewConstants.defaultMaxTiles {
+        didSet { onStageInputChanged?() }
+    }
+    var hideTilesWithoutVideo: Bool = false {
+        didSet { onStageInputChanged?() }
+    }
+    var selfViewMode: MeetingSelfViewMode = .auto {
+        didSet { onStageInputChanged?() }
+    }
+    var selfViewCorner: MeetingSelfViewCorner = .bottomRight {
+        didSet { onStageInputChanged?() }
+    }
 
     // Chat
     var chatMessages: [ChatMessage] = [] {
@@ -359,6 +441,7 @@ final class MeetingState {
             if oldValue.count != activeReactions.count {
                 PerformanceDiagnostics.state("activeReactions.count", old: "\(oldValue.count)", new: "\(activeReactions.count)")
             }
+            onStageReactionsChanged?()
         }
     }
 
@@ -701,6 +784,22 @@ final class MeetingState {
               isRemoteParticipantUserId(participant.id),
               !participant.isLeaving else { return nil }
         return participant.id
+    }
+
+    /// S20 SC1 E6 (0.5 identity rule): every id the stage receives is canonical. A local identity (`userId` or
+    /// `sfuUserId`, with or without a session suffix) maps to `userId`; a remote id maps through
+    /// `presentRemoteParticipantId(for:)` (suffixed and SFU ids resolve to the participant id); anything else is
+    /// dropped, so slot ids, the tile stores and the visibility report always agree.
+    func canonicalStageUserId(_ raw: String?) -> String? {
+        let normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalized.isEmpty else { return nil }
+        if isLocalIdentityUserId(normalized) { return userId }
+        if let remote = presentRemoteParticipantId(for: normalized) { return remote }
+        if Self.hasSessionSuffix(normalized) {
+            let localKeys = [userId, sfuUserId].compactMap { $0 }.map { Self.userKeyPart(for: $0) }
+            if localKeys.contains(Self.userKeyPart(for: normalized)) { return userId }
+        }
+        return nil
     }
 
     private func participant(_ participant: Participant, matches resolvedId: String?) -> Bool {

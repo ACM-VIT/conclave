@@ -206,6 +206,29 @@ enum ComponentGalleryCatalog {
         sheetRouteID,
     ]
 
+    // FND-3 specimens (C19 composer cluster and accessories, C20, C21, C23, C24, C25, S50 PL10, S60 R6-7 board
+    // tokens). Catalogued for both galleries; drawing them is the gallery follow-up shared with FND-1 and FND-2.
+    static let fieldComposerGlassID = "field.composer.glass"
+    static let fieldComposerAccessoriesID = "field.composer.accessories"
+    static let fieldSearchID = "field.search"
+    static let segmentedSingleID = "segmented.single"
+    static let segmentedMenuID = "segmented.menu"
+    static let chatBubbleOwnID = "chat.bubble.own"
+    static let chatBubblePeerID = "chat.bubble.peer"
+    static let chatBubblePrivateID = "chat.bubble.private"
+    static let chatBubbleAnswerID = "chat.bubble.answer"
+    static let chipReactionID = "chip.reaction"
+    static let tipInlineID = "tip.inline"
+    static let dialogTextEntryID = "dialog.textEntry"
+    static let gameBoardTokensID = "game.board.tokens"
+
+    /// FND-3 specimens, in drawing order.
+    static let contentSpecimenIDs: [String] = [
+        fieldComposerGlassID, fieldComposerAccessoriesID, fieldSearchID, segmentedSingleID, segmentedMenuID,
+        chatBubbleOwnID, chatBubblePeerID, chatBubblePrivateID, chatBubbleAnswerID, chipReactionID, tipInlineID,
+        dialogTextEntryID, gameBoardTokensID,
+    ]
+
     /// A sample room code for the value row; data, not copy.
     static let sampleRoomCode = "abc-defg-hij"
 
@@ -353,6 +376,24 @@ enum ComponentGalleryCatalog {
         pair("contrast.routeRadio", "Android route radio on the in-call sheet", DesignTokens.androidInCallPrimary, DesignTokens.androidInCallSurfaceContainerLow, .nonText, 7.398),
         pair("contrast.lobbyCaption.ios", "iOS lobby toggle caption on the card strip", DesignTokens.iosInCallTextSecondary, DesignTokens.iosInCallSurface, .text, 9.738),
         pair("contrast.lobbyCaption.android", "Android lobby toggle caption on the card strip", DesignTokens.androidInCallOnSurfaceVariant, DesignTokens.androidInCallSurfaceContainer, .text, 6.913),
+        // FND-3 pairs (F00 C19 e, C23, C24, C25 e; S40 3 e, 6 e; S60 R6-7 with 11 e and 12 e). The iOS own bubble is the
+        // existing onCoral pairs (6.374, 6.764 increased contrast); iOS neutral bubbles, chips and tips sit on system
+        // fills and stay live-only.
+        pair("contrast.bubbleOwn.android", "Own chat bubble text, Android", DesignTokens.androidLightOnPrimaryContainer, DesignTokens.androidLightPrimaryContainer, .text, 6.374),
+        pair("contrast.bubblePeer.androidLight", "Peer chat bubble text, Android light", DesignTokens.androidLightOnSurface, DesignTokens.androidLightSurfaceContainerHigh, .text, 15.566),
+        pair("contrast.bubblePeer.androidDark", "Peer chat bubble text, Android dark", DesignTokens.androidDarkOnSurface, DesignTokens.androidDarkSurfaceContainerHigh, .text, 15.001),
+        pair("contrast.bubbleLink.androidDark", "Link in a peer chat bubble, Android dark", DesignTokens.androidDarkPrimary, DesignTokens.androidDarkSurfaceContainerHigh, .text, 6.246),
+        pair("contrast.reactionChip.androidLight", "Reaction chip, Android light", DesignTokens.androidLightOnSurface, DesignTokens.androidLightSurfaceContainerHighest, .text, 15.026),
+        pair("contrast.reactionChip.androidDark", "Reaction chip, Android dark", DesignTokens.androidDarkOnSurface, DesignTokens.androidDarkSurfaceContainerHighest, .text, 12.940),
+        pair("contrast.tipBody.androidLight", "Tip body, Android light", DesignTokens.androidLightOnSurfaceVariant, DesignTokens.androidLightSurfaceContainerHigh, .text, 6.792),
+        pair("contrast.tipBody.androidDark", "Tip body, Android dark", DesignTokens.androidDarkOnSurfaceVariant, DesignTokens.androidDarkSurfaceContainerHigh, .text, 6.109),
+        pair("contrast.composerSend.androidLight", "Composer Send glyph, Android light", DesignTokens.androidLightPrimary, DesignTokens.androidLightSurfaceContainerHighest, .nonText, 4.551),
+        pair("contrast.composerSend.androidDark", "Composer Send glyph, Android dark", DesignTokens.androidDarkPrimary, DesignTokens.androidDarkSurfaceContainerHighest, .nonText, 5.388),
+        pair("contrast.gameBoard.paperOnLight", "Paper text on the light board square", DesignTokens.paper, DesignTokens.iosGameBoardLight, .text, 4.630),
+        pair("contrast.gameBoard.paperOnDark", "Paper text on the dark board square", DesignTokens.paper, DesignTokens.iosGameBoardDark, .text, 10.006),
+        // The two squares are told apart by position on the grid, never by this ratio alone (S60 11 e).
+        pair("contrast.gameBoard.squares", "Light board square against the dark square", DesignTokens.iosGameBoardLight, DesignTokens.iosGameBoardDark, .decorative, 2.161),
+        pair("contrast.gameBoard.coralPath", "Coral path on the dark board square (graphic)", DesignTokens.coral, DesignTokens.iosGameBoardDark, .nonText, 3.364),
     ]
 
     private static func pair(_ id: String, _ caption: String, _ foreground: Int64, _ background: Int64,

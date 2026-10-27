@@ -72,6 +72,13 @@ test("renders all 48 roles per scheme as unsigned ARGB Int64, plus typed metrics
   // FND-1: the approved iOS Leave fill under Increase Contrast (owner OQ4) and the avatar tongue (F00 C07).
   assert.equal(constants.get("iosInCallLeaveHighContrast"), 0xFFE9152D);
   assert.equal(constants.get("avatarTongue"), 0xFFFF8FB1);
+  // FND-3 (S60 R6-7, F00 2.6 A9): the board squares from the zinc ramp, the same pair on both platforms.
+  assert.equal(constants.get("iosGameBoardLight"), 0xFF71717A);
+  assert.equal(constants.get("iosGameBoardDark"), 0xFF3F3F46);
+  assert.equal(constants.get("androidExtendedGameBoardLight"), constants.get("iosGameBoardLight"));
+  assert.equal(constants.get("androidExtendedGameBoardDark"), constants.get("iosGameBoardDark"));
+  assert.equal(native.ios.game.boardLight, native.neutral.zinc500);
+  assert.equal(native.ios.game.boardDark, native.neutral.zinc700);
   assert.doesNotMatch(swift, /accentSecondary|PolySans|SwiftUI|UIKit/);
 });
 
@@ -198,6 +205,9 @@ test("malformed token input fails before changing any output", async (t) => {
     ["invalid ring", (x) => { x.avatar.ring = undefined; }, /native.avatar.ring.*ARGB integer/],
     ["missing leave high contrast", (x) => { delete x.ios.inCall.leaveHighContrast; }, /native.ios.inCall.*missing \[leaveHighContrast\]/],
     ["missing tongue", (x) => { delete x.avatar.tongue; }, /native.avatar: missing \[tongue\]/],
+    ["missing game group", (x) => { delete x.ios.game; }, /native.ios: missing \[game\]/],
+    ["missing board light", (x) => { delete x.ios.game.boardLight; }, /native.ios.game.*missing \[boardLight\]/],
+    ["missing android board dark", (x) => { delete x.android.extended.gameBoardDark; }, /native.android.extended.*missing \[gameBoardDark\]/],
   ];
   for (const [name, mutate, error] of cases) {
     await t.test(name, async () => {

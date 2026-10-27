@@ -326,6 +326,12 @@ export const native = {
       // adapter switches to this fixed fill: the white glyph reads 4.555:1 (owner OQ4, 2026-10-26).
       leaveHighContrast: 0xFFE9152D,
     },
+    // Game boards (S60 R6-7, F00 2.6 A9): the two square or cell fills of the always-dark board card, taken
+    // from the in-call zinc ramp (2.161:1 apart; paper reads 4.630 on the light square and 10.006 on the dark).
+    game: {
+      boardLight: nativeNeutral.zinc500,
+      boardDark: nativeNeutral.zinc700,
+    },
   },
   android: {
     light: nativeAndroidLight,
@@ -363,6 +369,9 @@ export const native = {
       borderDark: 0x24FAFAFA, // 14%
       borderLightHighContrast: 0x52000000, // 32%
       borderDarkHighContrast: 0x52FAFAFA, // 32%
+      // Game boards (S60 R6-7): the same fixed pair as native.ios.game; boards are always dark.
+      gameBoardLight: nativeNeutral.zinc500,
+      gameBoardDark: nativeNeutral.zinc700,
     },
   },
   // Points on iOS, dp on Android. Typography stays in platform text styles.

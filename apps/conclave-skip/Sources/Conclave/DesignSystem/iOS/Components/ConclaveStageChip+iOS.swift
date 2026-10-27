@@ -13,15 +13,18 @@ struct ConclaveStageChip: View {
     let identifier: String
     let onTap: (() -> Void)?
     let onAction: (() -> Void)?
+    /// The action's full label and first Voice Control name (S20 7 i); nil reads the visible title.
+    let actionAccessibilityLabel: String?
 
     init(title: String, systemImage: String? = nil, actionTitle: String? = nil, identifier: String,
-         onTap: (() -> Void)? = nil, onAction: (() -> Void)? = nil) {
+         onTap: (() -> Void)? = nil, onAction: (() -> Void)? = nil, actionAccessibilityLabel: String? = nil) {
         self.title = title
         self.systemImage = systemImage
         self.actionTitle = actionTitle
         self.identifier = identifier
         self.onTap = onTap
         self.onAction = onAction
+        self.actionAccessibilityLabel = actionAccessibilityLabel
     }
 
     var body: some View {
@@ -33,6 +36,8 @@ struct ConclaveStageChip: View {
                     .font(.subheadline.weight(.semibold))
                     .tint(HostingTheme.inCallCoralText)
                     .frame(minHeight: ConclaveStageChipMetrics.targetHeight)
+                    .accessibilityLabel(actionAccessibilityLabel ?? actionTitle)
+                    .accessibilityInputLabels([actionAccessibilityLabel ?? actionTitle, actionTitle])
                     .accessibilityIdentifier(identifier + ".action")
             }
         }

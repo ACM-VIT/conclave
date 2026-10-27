@@ -61,9 +61,13 @@ private fun TextureVideoTrackView(
     val context = LocalContext.current
     val eglBase = VideoRendererShared.eglBase
     val rendererLifecycleKey = rendererKey ?: track?.id() ?: "floating"
+    // Tier B identity counts (PS 10.2, S20 14 j): only where a root provides the ledger (the native call root's
+    // fixture); the legacy call root provides none, so production counts nothing.
+    val ledger = LocalRendererLedger.current
     val renderer = remember(context, rendererLifecycleKey) {
         TextureEglVideoRenderer(context).apply {
             init(eglBase.eglBaseContext)
+            attachIdentity(ledger, rendererLifecycleKey.toString())
         }
     }
 
@@ -79,6 +83,7 @@ private fun TextureVideoTrackView(
 
     DisposableEffect(renderer) {
         onDispose {
+            renderer.releaseIdentity()
             renderer.clearImage()
             renderer.release()
         }
@@ -117,6 +122,11 @@ private class TextureEglVideoRenderer(
     private var surfaceReleaseInFlight = false
     private var pendingSurfaceTexture: SurfaceTexture? = null
     private val textureTransform = Matrix()
+    private var identityLedger: RendererIdentityLedger? = null
+    private var identityKey = ""
+    private var identitySerial = 0
+    private var identitySlot = RendererSlot.stage
+    private var identitySurfaceLost = false
 
     init {
         isOpaque = true
@@ -130,6 +140,20 @@ private class TextureEglVideoRenderer(
         eglRenderer.init(sharedContext, EglBase.CONFIG_PLAIN, GlRectDrawer())
         surfaceTexture?.let { createEglSurfaceIfNeeded(it) }
         updateLayoutAspectRatio()
+    }
+
+    /** Main thread only (the remember factory). A `pip:` key counts in the pip slot (PipContent.kt), others in stage. */
+    fun attachIdentity(ledger: RendererIdentityLedger?, key: String) {
+        if (ledger == null || identityLedger != null) return
+        identityLedger = ledger
+        identityKey = key
+        identitySlot = if (key.startsWith("pip:")) RendererSlot.pip else RendererSlot.stage
+        identitySerial = ledger.created(key = key, slot = identitySlot)
+    }
+
+    fun releaseIdentity() {
+        identityLedger?.released(key = identityKey, serial = identitySerial, slot = identitySlot)
+        identityLedger = null
     }
 
     fun release() {
@@ -174,6 +198,10 @@ private class TextureEglVideoRenderer(
     }
 
     override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+        if (identitySurfaceLost) {
+            identitySurfaceLost = false
+            identityLedger?.surfaceRestored(key = identityKey, serial = identitySerial, slot = identitySlot)
+        }
         if (released || !initialized) return
         createEglSurfaceIfNeeded(surface)
         updateLayoutAspectRatio(width, height)
@@ -184,6 +212,10 @@ private class TextureEglVideoRenderer(
     }
 
     override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+        if (!identitySurfaceLost && identityLedger != null) {
+            identitySurfaceLost = true
+            identityLedger?.surfaceLost(key = identityKey, serial = identitySerial, slot = identitySlot)
+        }
         if (pendingSurfaceTexture === surface) {
             pendingSurfaceTexture = null
             return true

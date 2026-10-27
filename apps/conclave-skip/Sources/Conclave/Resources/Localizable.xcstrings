@@ -5,6 +5,14 @@
       "comment" : "Debug component gallery: type specimen caption: style name, weight name, default point size, current point size, Android role",
       "extractionState" : "manual"
     },
+    "%@ Is Running" : {
+      "comment" : "Status chip: an activity keeps running while the video is shown; the argument is the activity name, for example Trivia",
+      "extractionState" : "manual"
+    },
+    "%@ is presenting" : {
+      "comment" : "Meeting capsule: subtitle while someone shares their screen; the argument is their name",
+      "extractionState" : "manual"
+    },
     "%@ tapped, %@" : {
       "comment" : "Debug component gallery: last haptic tap: feedback kind identifier, then its result",
       "extractionState" : "manual"
@@ -33,6 +41,30 @@
         }
       }
     },
+    "%lld Results" : {
+      "comment" : "Search field (iOS): announced politely after typing pauses; the count is the matching rows",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Result"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Results"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "%lld of %lld Characters" : {
       "comment" : "Text field: spoken value of the character counter, for example 38 of 40 characters",
       "extractionState" : "manual"
@@ -47,6 +79,26 @@
     },
     "%lld unread" : {
       "comment" : "Call controls: value of the Chat control with the unread message count; the count badge itself is hidden from accessibility. Plural forms arrive with FND-1",
+      "extractionState" : "manual"
+    },
+    "A host moved you to the audience." : {
+      "comment" : "Premeeting Home notice after a host demoted the person and no webinar link was sent",
+      "extractionState" : "manual"
+    },
+    "Account" : {
+      "comment" : "Premeeting: accessibility label of the account button on Home, and the Account page title",
+      "extractionState" : "manual"
+    },
+    "Account, %@" : {
+      "comment" : "Premeeting Home: accessibility label of the account button when signed in; the argument is the account name",
+      "extractionState" : "manual"
+    },
+    "Activities" : {
+      "comment" : "In-call panel title: games, apps and the shared browser",
+      "extractionState" : "manual"
+    },
+    "Activity" : {
+      "comment" : "Status chip: activity name used when the running activity has no name",
       "extractionState" : "manual"
     },
     "Admit" : {
@@ -69,12 +121,20 @@
       "comment" : "Debug component gallery: archived design contrast value for a token pair",
       "extractionState" : "manual"
     },
+    "Asking to Join" : {
+      "comment" : "Lobby status while waiting for someone in the meeting to let the person in",
+      "extractionState" : "manual"
+    },
     "Assumed white system label on the accent: %@" : {
       "comment" : "Debug component gallery: specimen readout with a contrast verdict",
       "extractionState" : "manual"
     },
     "Avery" : {
       "comment" : "Debug component gallery: sample person name in the person row",
+      "extractionState" : "manual"
+    },
+    "Back to Home" : {
+      "comment" : "Outcome screen button that returns to Home",
       "extractionState" : "manual"
     },
     "Banners" : {
@@ -113,12 +173,36 @@
       "comment" : "Call controls: constant accessibility label of the camera toggle; its state is the value",
       "extractionState" : "manual"
     },
+    "Camera Back" : {
+      "comment" : "Call stage (iOS): value of the flip camera button while the back camera is used",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Back"
+          }
+        }
+      }
+    },
+    "Camera Front" : {
+      "comment" : "Call stage (iOS): value of the flip camera button while the front camera is used",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Front"
+          }
+        }
+      }
+    },
     "Camera Off" : {
       "comment" : "Video tile: state read with a participant tile while their camera is off",
       "extractionState" : "manual"
     },
     "Cancel" : {
-      "comment" : "Button title for cancelling a pending native app action",
+      "comment" : "Button title for cancelling a pending native app action: the join sheet, the lobby while joining or waiting, and the update explanation (ENT-1, ENT-2)",
       "extractionState" : "manual"
     },
     "Character Counter %lld %lld" : {
@@ -141,6 +225,10 @@
       "comment" : "Debug component gallery: sample body of the error state",
       "extractionState" : "manual"
     },
+    "Check your connection, then rejoin." : {
+      "comment" : "Outcome screen body after the connection to the meeting was lost",
+      "extractionState" : "manual"
+    },
     "Close" : {
       "comment" : "Component: label of a sheet or panel Close button that names no title (the Account sheet, S10 R10), so it cannot be heard as deleting the account",
       "extractionState" : "manual"
@@ -151,6 +239,10 @@
     },
     "Co-Host" : {
       "comment" : "Role tag shown beside a person name for a co-host (iOS title case capitalizes both parts, S50 R50-5)",
+      "extractionState" : "manual"
+    },
+    "Code or Link" : {
+      "comment" : "Join sheet (iOS): placeholder of the field for a meeting code or link",
       "extractionState" : "manual"
     },
     "Commands" : {
@@ -177,6 +269,14 @@
       "comment" : "Debug component gallery: row and page title for the confirmation action toolbar specimen",
       "extractionState" : "manual"
     },
+    "Connection Lost" : {
+      "comment" : "Outcome screen title after the connection to the meeting was lost",
+      "extractionState" : "manual"
+    },
+    "Connection lost at %@" : {
+      "comment" : "Premeeting Home Rejoin card: when the connection was lost; the argument is a time in the device locale",
+      "extractionState" : "manual"
+    },
     "Contract Match" : {
       "comment" : "Debug component gallery: readout name for the haptic mapper comparison",
       "extractionState" : "manual"
@@ -193,8 +293,12 @@
       "comment" : "Debug session readout row: the state of each call control (microphone, camera, hand and so on)",
       "extractionState" : "manual"
     },
+    "Copied" : {
+      "comment" : "Call stage (iOS): the Copy Link button reads this for 2 seconds after the link was copied",
+      "extractionState" : "manual"
+    },
     "Copy Link" : {
-      "comment" : "Debug component gallery: sample title of the text button",
+      "comment" : "Copies the meeting link: premeeting Home recent row menu item (ENT-1) and the call stage solo card button (STG-1); also the sample title of the text button in the Debug component gallery",
       "extractionState" : "manual"
     },
     "Coral text on the call stage" : {
@@ -211,6 +315,18 @@
     },
     "Could not share your screen." : {
       "comment" : "Debug component gallery: sample text of the error banner",
+      "extractionState" : "manual"
+    },
+    "Couldn’t Join" : {
+      "comment" : "Lobby failure title when joining a meeting failed",
+      "extractionState" : "manual"
+    },
+    "Couldn’t Rejoin" : {
+      "comment" : "Outcome screen title after a rejoin attempt failed",
+      "extractionState" : "manual"
+    },
+    "Couldn’t Start" : {
+      "comment" : "Lobby failure title when starting a new meeting failed",
       "extractionState" : "manual"
     },
     "Dark" : {
@@ -245,6 +361,14 @@
       "comment" : "Debug component gallery: inert toolbar button on the confirmation action specimen page",
       "extractionState" : "manual"
     },
+    "Effects" : {
+      "comment" : "In-call panel title: camera effects",
+      "extractionState" : "manual"
+    },
+    "Enter the code from your invite, or paste the link." : {
+      "comment" : "Join sheet: help text below the field",
+      "extractionState" : "manual"
+    },
     "Fails" : {
       "comment" : "Debug component gallery: contrast verdict when the ratio misses its class",
       "extractionState" : "manual"
@@ -255,6 +379,10 @@
     },
     "Feedback Records" : {
       "comment" : "Debug session readout row: how many haptic effects the app played since the readout opened",
+      "extractionState" : "manual"
+    },
+    "Flip Camera" : {
+      "comment" : "Call stage (iOS): accessibility label of the flip camera button on your own floating video (Android uses ds_flip_camera)",
       "extractionState" : "manual"
     },
     "Force Opaque Controls" : {
@@ -305,6 +433,10 @@
       "comment" : "Role tag shown beside a person name for the meeting host",
       "extractionState" : "manual"
     },
+    "Host Controls" : {
+      "comment" : "In-call panel title: meeting controls for hosts",
+      "extractionState" : "manual"
+    },
     "Identity" : {
       "comment" : "Debug session readout row: the call session, attempt and revision numbers",
       "extractionState" : "manual"
@@ -325,12 +457,36 @@
       "comment" : "Debug component gallery: introduction under the title",
       "extractionState" : "manual"
     },
+    "Join" : {
+      "comment" : "Premeeting: join action (iOS Home bottom bar and the recent row menu; the join sheet confirm button on both platforms)",
+      "extractionState" : "manual"
+    },
+    "Join Another Meeting?" : {
+      "comment" : "Prompt title when a meeting link arrives while you are joining or in a meeting",
+      "extractionState" : "manual"
+    },
     "Join Meeting" : {
-      "comment" : "Debug component gallery: sample title of the primary button",
+      "comment" : "Join sheet title (ENT-2); also the sample title of the primary button in the Debug component gallery",
+      "extractionState" : "manual"
+    },
+    "Join My Conclave Meeting" : {
+      "comment" : "Share sheet: subject of the meeting invitation (F00 11, RECONCILE R14)",
+      "extractionState" : "manual"
+    },
+    "Join me in this Conclave meeting." : {
+      "comment" : "Share sheet (iOS): message sent with the meeting link",
+      "extractionState" : "manual"
+    },
+    "Joined %@" : {
+      "comment" : "Call stage: spoken announcement when the call stage appears; the argument is the room name",
       "extractionState" : "manual"
     },
     "Joining" : {
-      "comment" : "Debug component gallery: sample title of the pending primary button",
+      "comment" : "Lobby status while connecting to the meeting (ENT-1); also the sample title of the pending primary button in the Debug component gallery",
+      "extractionState" : "manual"
+    },
+    "Just you" : {
+      "comment" : "Meeting capsule: subtitle while you are the only person in the meeting",
       "extractionState" : "manual"
     },
     "Large text, needs 3" : {
@@ -357,8 +513,16 @@
       "comment" : "Call controls: accessibility label of the glyph-only red Leave control; no visible text (owner OQ3)",
       "extractionState" : "manual"
     },
+    "Leave and Join" : {
+      "comment" : "Prompt button that leaves the current meeting and opens the new one",
+      "extractionState" : "manual"
+    },
     "Ledger" : {
       "comment" : "Debug session readout row: actions waiting for the server and the last finished one",
+      "extractionState" : "manual"
+    },
+    "Left at %@" : {
+      "comment" : "Premeeting Home Rejoin card: when the person left; the argument is a time in the device locale (for example 3:42 PM)",
       "extractionState" : "manual"
     },
     "Left to Right" : {
@@ -367,6 +531,10 @@
     },
     "Light" : {
       "comment" : "Debug component gallery: readout value for light appearance",
+      "extractionState" : "manual"
+    },
+    "Link copied" : {
+      "comment" : "Call stage (iOS): spoken confirmation after the meeting link was copied",
       "extractionState" : "manual"
     },
     "Live captions are on." : {
@@ -397,8 +565,28 @@
       "comment" : "Debug component gallery: switch that doubles every specimen string to check clipping",
       "extractionState" : "manual"
     },
+    "Lower" : {
+      "comment" : "Status chip: visible short action that lowers your raised hand",
+      "extractionState" : "manual"
+    },
+    "Lower Hand" : {
+      "comment" : "Status chip: full accessibility label of the Lower action",
+      "extractionState" : "manual"
+    },
     "Mapper %@, contract %@" : {
       "comment" : "Debug component gallery: haptic row detail: the mapper token, then the contract token",
+      "extractionState" : "manual"
+    },
+    "Meeting Code or Link" : {
+      "comment" : "Join sheet: label of the field for a meeting code or link",
+      "extractionState" : "manual"
+    },
+    "Meeting Details" : {
+      "comment" : "In-call panel title: room name, link and details, opened from the meeting capsule",
+      "extractionState" : "manual"
+    },
+    "Meetings" : {
+      "comment" : "Premeeting Home (iOS): large navigation title of the start screen (HIG: not the app name)",
       "extractionState" : "manual"
     },
     "Messages are visible to everyone in this call." : {
@@ -429,8 +617,20 @@
       "comment" : "Debug component gallery: spoken status of the sample person row",
       "extractionState" : "manual"
     },
+    "New Meeting" : {
+      "comment" : "Premeeting Home: the one coral action that starts a new meeting (iOS bottom bar, Android floating action button)",
+      "extractionState" : "manual"
+    },
     "No Messages Yet" : {
       "comment" : "Debug component gallery: sample title of the empty state",
+      "extractionState" : "manual"
+    },
+    "No Recent Meetings" : {
+      "comment" : "Premeeting Home: empty state title on first run",
+      "extractionState" : "manual"
+    },
+    "No Results" : {
+      "comment" : "Search field: spoken when a search matches nothing; on Android also the title of the empty result list (iOS shows the system no-results view)",
       "extractionState" : "manual"
     },
     "Noise Suppression" : {
@@ -505,6 +705,30 @@
       "comment" : "Panel title: the people in the meeting",
       "extractionState" : "manual"
     },
+    "Participants Count %lld" : {
+      "comment" : "Meeting capsule (iOS): subtitle with the number of people in the meeting, you included",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld participant"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld participants"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Passes" : {
       "comment" : "Debug component gallery: contrast verdict when the ratio meets its class",
       "extractionState" : "manual"
@@ -525,6 +749,18 @@
       "comment" : "Video tile: state read with the tile of the person sharing their screen (FND-2); also the sample detail line under the person name in the Debug component gallery",
       "extractionState" : "manual"
     },
+    "Q&A" : {
+      "comment" : "In-call panel title: webinar questions and answers",
+      "extractionState" : "manual"
+    },
+    "Raised Hands" : {
+      "comment" : "Call stage (iOS): VoiceOver rotor that lists the tiles of people with a raised hand",
+      "extractionState" : "manual"
+    },
+    "Raising Hand…" : {
+      "comment" : "Status chip: shown while your raise-hand request is on its way to the server",
+      "extractionState" : "manual"
+    },
     "Ratio %@ against %@: %@" : {
       "comment" : "Debug component gallery: contrast verdict: ratio, contrast class, then Passes or Fails",
       "extractionState" : "manual"
@@ -533,8 +769,12 @@
       "comment" : "Reaction palette: reason read on each emoji while the host turned reactions off; the row stays, disabled",
       "extractionState" : "manual"
     },
+    "Recent" : {
+      "comment" : "Premeeting Home: section header above the recent meetings list",
+      "extractionState" : "manual"
+    },
     "Reconnecting" : {
-      "comment" : "Video tile: centered pill and state while a participant reconnects",
+      "comment" : "Video tile: centered pill and state while a participant reconnects; also the lobby status while reconnecting before the person was let in (ENT-1)",
       "extractionState" : "manual"
     },
     "Reconnecting to the call." : {
@@ -558,11 +798,31 @@
       "extractionState" : "manual"
     },
     "Rejoin" : {
-      "comment" : "Debug component gallery: sample title of the tonal button",
+      "comment" : "Premeeting Home: tonal button on the Rejoin card that reopens the last meeting (ENT-1); also the sample title of the tonal button in the Debug component gallery",
+      "extractionState" : "manual"
+    },
+    "Rejoin %@" : {
+      "comment" : "Premeeting: accessibility label of the Rejoin button and the join sheet suggestion; the argument is the meeting code",
+      "extractionState" : "manual"
+    },
+    "Remove" : {
+      "comment" : "Premeeting Home (iOS): trailing swipe action that removes a recent meeting",
       "extractionState" : "manual"
     },
     "Remove From Meeting" : {
       "comment" : "Debug component gallery: sample title of the destructive button",
+      "extractionState" : "manual"
+    },
+    "Remove From Recents" : {
+      "comment" : "Premeeting Home: destructive recent row menu item that removes the meeting from the local list",
+      "extractionState" : "manual"
+    },
+    "Removed From Meeting" : {
+      "comment" : "Outcome screen title after a host removed the person",
+      "extractionState" : "manual"
+    },
+    "Request Declined" : {
+      "comment" : "Outcome screen title after the request to join was declined",
       "extractionState" : "manual"
     },
     "Resume" : {
@@ -593,6 +853,10 @@
       "comment" : "Button title for saving native meeting settings",
       "extractionState" : "manual"
     },
+    "Search" : {
+      "comment" : "Search field: placeholder of the search field above a long list (participants, activities, GIFs, settings)",
+      "extractionState" : "manual"
+    },
     "Secondary text on the call stage" : {
       "comment" : "Debug component gallery: contrast pair caption",
       "extractionState" : "manual"
@@ -617,12 +881,28 @@
       "comment" : "Meeting settings entry point title",
       "extractionState" : "manual"
     },
+    "Share Invite" : {
+      "comment" : "Opens the share sheet with the meeting link (F00 11, RECONCILE R14): the call stage chip and solo card button (STG-1) and the premeeting Home recent row menu item (ENT-1)",
+      "extractionState" : "manual"
+    },
     "Share Screen" : {
       "comment" : "Call controls: constant accessibility label of the screen sharing toggle",
       "extractionState" : "manual"
     },
+    "Share the link to invite people." : {
+      "comment" : "Call stage: body of the card shown while you are alone in the meeting",
+      "extractionState" : "manual"
+    },
     "Sharing" : {
       "comment" : "Call controls: state of the screen sharing toggle while a share runs",
+      "extractionState" : "manual"
+    },
+    "Show" : {
+      "comment" : "Status chip: visible short action that shows the hidden activity again",
+      "extractionState" : "manual"
+    },
+    "Show %@" : {
+      "comment" : "Status chip: full accessibility label of the Show action; the argument is the activity name",
       "extractionState" : "manual"
     },
     "Show Banner" : {
@@ -633,8 +913,16 @@
       "comment" : "Debug component gallery: switch that shows the spinner specimens; off at every launch",
       "extractionState" : "manual"
     },
+    "Shows meeting details." : {
+      "comment" : "Meeting capsule (iOS): VoiceOver hint of the capsule button",
+      "extractionState" : "manual"
+    },
     "Sidebar" : {
       "comment" : "Layout panel option: one large tile with the others in a side strip",
+      "extractionState" : "manual"
+    },
+    "Sign In" : {
+      "comment" : "Premeeting Home: action on the sign-in expired notice",
       "extractionState" : "manual"
     },
     "Silent on this platform" : {
@@ -643,6 +931,14 @@
     },
     "Smart Invert" : {
       "comment" : "Debug component gallery: readout name for the Smart Invert setting",
+      "extractionState" : "manual"
+    },
+    "Someone" : {
+      "comment" : "Reaction bubble: sender name when the sender is unknown",
+      "extractionState" : "manual"
+    },
+    "Someone in the meeting declined your request to join." : {
+      "comment" : "Outcome screen body after the request to join was declined",
       "extractionState" : "manual"
     },
     "Speaker" : {
@@ -665,8 +961,16 @@
       "comment" : "Debug component gallery: readout value for standard contrast",
       "extractionState" : "manual"
     },
+    "Start a meeting, or join one with a code or link." : {
+      "comment" : "Premeeting Home: empty state body on first run",
+      "extractionState" : "manual"
+    },
     "Status Views" : {
       "comment" : "Debug component gallery: section title for loading, empty, error and offline states",
+      "extractionState" : "manual"
+    },
+    "Stay" : {
+      "comment" : "Prompt button that keeps the current meeting and ignores the new link",
       "extractionState" : "manual"
     },
     "System Commands" : {
@@ -697,8 +1001,36 @@
       "comment" : "Debug component gallery: explanation on the confirmation action specimen page",
       "extractionState" : "manual"
     },
+    "The host ended the meeting." : {
+      "comment" : "Premeeting Home notice after the host ended the meeting",
+      "extractionState" : "manual"
+    },
+    "The host removed you from this meeting." : {
+      "comment" : "Outcome screen body after a host removed the person",
+      "extractionState" : "manual"
+    },
+    "The meeting server ended your connection. You can rejoin." : {
+      "comment" : "Outcome screen body after the meeting server ended the connection",
+      "extractionState" : "manual"
+    },
+    "This isn’t a Conclave code or link." : {
+      "comment" : "Join sheet: error after pasted or submitted text the app cannot open",
+      "extractionState" : "manual"
+    },
+    "This link can’t be opened in Conclave." : {
+      "comment" : "Premeeting Home notice after a Conclave link that cannot be parsed",
+      "extractionState" : "manual"
+    },
+    "This meeting has ended." : {
+      "comment" : "Premeeting Home notice after the room closed",
+      "extractionState" : "manual"
+    },
     "This page is a specimen. It does nothing." : {
       "comment" : "Debug component gallery: body of the page the sample navigation row opens",
+      "extractionState" : "manual"
+    },
+    "This version of Conclave can no longer join meetings. Update to continue." : {
+      "comment" : "Premeeting: the update banner and explanation body",
       "extractionState" : "manual"
     },
     "This will load when you’re back online." : {
@@ -707,6 +1039,10 @@
     },
     "Token Pairs" : {
       "comment" : "Debug component gallery: header above contrast pairs computed from design tokens",
+      "extractionState" : "manual"
+    },
+    "Transcript" : {
+      "comment" : "In-call panel title: live captions and meeting notes",
       "extractionState" : "manual"
     },
     "Truncated Text" : {
@@ -725,6 +1061,14 @@
       "comment" : "Call controls: Voice Control input label of the microphone toggle while it is muted",
       "extractionState" : "manual"
     },
+    "Update" : {
+      "comment" : "Premeeting: button that opens the App Store or Play listing to update Conclave",
+      "extractionState" : "manual"
+    },
+    "Update Conclave" : {
+      "comment" : "Premeeting: title of the explanation shown when this app version can no longer join meetings",
+      "extractionState" : "manual"
+    },
     "Use Audio Only" : {
       "comment" : "Debug component gallery: sample action on the warning banner",
       "extractionState" : "manual"
@@ -739,6 +1083,10 @@
     },
     "Weak Connection" : {
       "comment" : "Video tile: state read with a participant tile whose connection is weak",
+      "extractionState" : "manual"
+    },
+    "Webinar" : {
+      "comment" : "Premeeting Home: role tag after the time of a recent webinar you attended",
       "extractionState" : "manual"
     },
     "White glyph on the Leave red" : {
@@ -757,12 +1105,36 @@
       "comment" : "Role tag beside your own name in lists; on iOS also the name pill and label of your own video tile",
       "extractionState" : "manual"
     },
+    "You Were Disconnected" : {
+      "comment" : "Outcome screen title after the meeting server ended the connection",
+      "extractionState" : "manual"
+    },
     "Your notes were saved." : {
       "comment" : "Debug component gallery: sample text of the success banner",
       "extractionState" : "manual"
     },
+    "Your sign-in expired. Sign in again, or keep going as a guest." : {
+      "comment" : "Premeeting Home notice after the stored sign-in expired",
+      "extractionState" : "manual"
+    },
     "You’re Offline" : {
       "comment" : "Status view: title of the offline state",
+      "extractionState" : "manual"
+    },
+    "You’re in %@. Leave it and join %@?" : {
+      "comment" : "Prompt body when another meeting link arrives; the first argument is the current meeting code, the second the new one",
+      "extractionState" : "manual"
+    },
+    "You’re presenting" : {
+      "comment" : "Meeting capsule: subtitle while you share your screen",
+      "extractionState" : "manual"
+    },
+    "You’re the Only One Here" : {
+      "comment" : "Call stage: heading of the card shown while you are alone in the meeting with your camera off",
+      "extractionState" : "manual"
+    },
+    "another meeting" : {
+      "comment" : "Prompt body fallback when the new meeting code is unknown (lower case: it sits mid sentence)",
       "extractionState" : "manual"
     },
     "iPhone" : {
@@ -783,6 +1155,10 @@
     },
     "suppressed" : {
       "comment" : "Debug component gallery: haptic tap result: the haptics preference or app state blocks feedback",
+      "extractionState" : "manual"
+    },
+    "your current meeting" : {
+      "comment" : "Prompt body fallback when the current meeting code is unknown (lower case: it sits mid sentence)",
       "extractionState" : "manual"
     }
   },

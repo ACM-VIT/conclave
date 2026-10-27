@@ -40,6 +40,7 @@ import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
@@ -84,11 +85,14 @@ internal fun ConclaveActionSheet(
         val paneTitle = conclaveString("ds_more_options")
         ModalBottomSheet(
             onDismissRequest = onDismiss,
+            modifier = Modifier.semantics { testTagsAsResourceId = true },
             sheetState = sheetState,
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             tonalElevation = 0.dp,
             dragHandle = { BottomSheetDefaults.DragHandle() },
         ) {
+            // The sheet's own window registers with the Debug semantics exporter (S40 R40-11).
+            NativeSemanticsPopupRoot(identifier)
             Column(
                 Modifier.fillMaxWidth().widthIn(max = ConclaveActionSheetMetrics.MAX_WIDTH_DP.dp).align(Alignment.CenterHorizontally)
                     .padding(horizontal = 16.dp).padding(bottom = 16.dp).testTag(identifier).semantics { this.paneTitle = paneTitle },

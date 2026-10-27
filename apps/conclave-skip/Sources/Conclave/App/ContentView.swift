@@ -20,6 +20,15 @@ struct ContentView: View {
     @State private var pendingJoinPromptRequestID: Int?
     @State private var acceptedPendingJoinURLString: String?
 
+    /// ENT-1 and ENT-2 (PLAN-screens 2): behind the Debug `premeeting` route flag the native root owns the S10 0.4
+    /// phase table (`PremeetingRootPolicy`) and mounts this view only as the interim call content of its call branch
+    /// (in call, leaving, recovering after admission). Then the non-call states draw a plain backdrop instead of the
+    /// legacy JoinView, waiting room and error screen, and links go to the premeeting presenter's switch prompt
+    /// instead of the AppState queue and the glass prompt below. Off (every Release build), nothing here changes.
+    private var nativeRoutes: Bool {
+        NativeRouteFlags.shared.routesPremeetingNatively
+    }
+
     private var shouldShowMeetingEntryOverlay: Bool {
         MeetingEntryOverlayPolicy.shouldShow(
             isEnteringMeeting: meetingViewModel.state.isEnteringMeeting,
@@ -36,23 +45,35 @@ struct ContentView: View {
         Group {
             switch meetingViewModel.state.connectionState {
             case .disconnected, .connecting, .connected:
-                JoinView(viewModel: meetingViewModel, appState: appState)
-                    .transition(.opacity)
+                if nativeRoutes {
+                    nativeInterimBackdrop
+                } else {
+                    JoinView(viewModel: meetingViewModel, appState: appState)
+                        .transition(.opacity)
+                }
 
             case .joining, .joined, .reconnecting:
                 MeetingView(viewModel: meetingViewModel)
                     .transition(.opacity)
 
             case .waiting:
-                WaitingRoomView(viewModel: meetingViewModel)
-                    .transition(.opacity)
+                if nativeRoutes {
+                    nativeInterimBackdrop
+                } else {
+                    WaitingRoomView(viewModel: meetingViewModel)
+                        .transition(.opacity)
+                }
 
             case .error:
-                ErrorView(
-                    message: meetingViewModel.state.errorMessage ?? "An error occurred",
-                    onRetry: { meetingViewModel.resetError() }
-                )
-                .transition(.opacity)
+                if nativeRoutes {
+                    nativeInterimBackdrop
+                } else {
+                    ErrorView(
+                        message: meetingViewModel.state.errorMessage ?? "An error occurred",
+                        onRetry: { meetingViewModel.resetError() }
+                    )
+                    .transition(.opacity)
+                }
             }
         }
         .overlay {
@@ -161,9 +182,19 @@ struct ContentView: View {
         meetingViewModel.clearMeetingEntry()
     }
 
+    /// The native route's interim call content outside a call phase: the call surface's flat backdrop for the frame
+    /// before the native root swaps back to the premeeting stack.
+    private var nativeInterimBackdrop: some View {
+        ACMColors.dark
+            .ignoresSafeArea()
+    }
+
+    /// The legacy route's glass prompt; behind the native route flag the premeeting presenter's system alert
+    /// (`RoomSwitchPrompt`, S10 4 c) replaces it, so it never shows there.
     @ViewBuilder
     private var pendingJoinPromptOverlay: some View {
-        if pendingJoinPromptRequestID != nil,
+        if !nativeRoutes,
+           pendingJoinPromptRequestID != nil,
            appState.pendingJoinURLString != nil,
            isInMeetingSession {
             ZStack {
@@ -248,6 +279,10 @@ struct ContentView: View {
     }
 
     private func handlePendingJoinURLIfNeeded() {
+        guard !nativeRoutes else {
+            pendingJoinPromptRequestID = nil
+            return
+        }
         guard let pendingURL = appState.pendingJoinURLString else {
             pendingJoinPromptRequestID = nil
             return

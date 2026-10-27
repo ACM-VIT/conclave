@@ -16,6 +16,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
@@ -27,7 +28,7 @@ import androidx.compose.ui.unit.dp
  * last (the model's order); a toggle item is a Checkbox node with a trailing check while on; an unavailable item
  * stays, disabled, with its reason as a second line and in its state description (R10). The anchor's owner opens
  * it (by tap or by long press through combinedClickable, which plays `longPress`). Content composes only while
- * expanded.
+ * expanded. The menu window registers with the Debug semantics exporter and exposes test tags as resource ids.
  */
 
 /** The Material glyph for a manifest concept used in menus, null for none. Screens may pass their own. */
@@ -67,13 +68,15 @@ internal fun ConclaveDropdownMenu(
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismissRequest,
-        modifier = modifier.testTag(identifier),
+        modifier = modifier.testTag(identifier).semantics { testTagsAsResourceId = true },
         shape = MaterialTheme.shapes.extraSmall,
         containerColor = scheme.surfaceContainer,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
         border = BorderStroke(1.dp, scheme.outlineVariant),
     ) {
+        // The menu's own window registers with the Debug semantics exporter (S40 R40-11).
+        NativeSemanticsPopupRoot(identifier)
         for ((index, section) in sections.withIndex()) {
             if (index > 0) HorizontalDivider(color = scheme.outlineVariant)
             for (item in section.items) {

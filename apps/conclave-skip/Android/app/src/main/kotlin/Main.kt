@@ -68,6 +68,20 @@ open class MainActivity: AppCompatActivity {
         // before the Activity reaches STARTED) so screen-share can request it.
         ScreenCaptureManager.register(this)
         enableEdgeToEdge()
+        // PLAN-screens 2 route switches and S10 L9: Debug-only intent extras, like conclave.hostingPreview. Release
+        // builds never configure the registry, so the legacy root stays the default (ENT-FLIP is a later slice).
+        val routesDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        NativeRouteLaunch.configure(
+            routes = intent?.getStringExtra(NativeRouteLaunch.ROUTES_EXTRA),
+            premeetingFixture = intent?.getStringExtra(NativeRouteLaunch.PREMEETING_FIXTURE_EXTRA),
+            debugEligible = BuildConfig.DEBUG && routesDebuggable,
+        )
+        val premeetingFixture = NativeRouteLaunch.premeetingFixture
+        val nativePremeeting = NativeRouteLaunch.usesNativePremeeting
+        if (nativePremeeting) {
+            // S10 1 c and 0.8 C8, C9: identity, recents and the link target before the first frame.
+            NativeRouteLaunch.installProductionWiring()
+        }
 
         setContent {
             // Launch-only proof route. Release and ordinary launches keep the working root.
@@ -79,20 +93,17 @@ open class MainActivity: AppCompatActivity {
                 val debuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
                 if (BuildConfig.DEBUG && debuggable) intent?.getStringExtra("conclave.systemFixture") else null
             }
-            val saveableStateHolder = rememberSaveableStateHolder()
-            // WP2-S2b (S70 12 d): the single production feedback root, outside the PiP swap and the route switch,
-            // so neither remounts it (a rotation recreates it with a baselined cursor). Never for the system fixture.
-            if (systemFixture == null) {
-                ConclaveRootFeedback()
+            // S20 SL14: Debug-only stage fixture (standalone presenters; never WebRTC, audio, capture or network).
+            val stageFixture = remember {
+                val debuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                if (BuildConfig.DEBUG && debuggable) intent?.getStringExtra("conclave.stageFixture") else null
             }
-            if (PipController.inPipMode && PipController.isInCall) {
-                PipContent()
-            } else if (systemFixture != null && !PipController.isInCall) {
-                SystemFixtureRoot(systemFixture)
-            } else if (showsHostingPreview && !PipController.isInCall) {
-                // The library cannot see the app build type; it also checks FLAG_DEBUGGABLE at run time.
-                NativeHostingPreviewRoot(fixtureEligible = BuildConfig.DEBUG, onClose = { showsHostingPreview = false })
-            } else {
+            val stageFixturePattern = remember { if (stageFixture != null) intent?.getStringExtra("conclave.stageFixturePattern") else null }
+            val stageForceScreenReader = remember {
+                stageFixture != null && intent?.getBooleanExtra("conclave.stageForceScreenReader", false) == true
+            }
+            val saveableStateHolder = rememberSaveableStateHolder()
+            val legacyRoot: @Composable () -> Unit = {
                 saveableStateHolder.SaveableStateProvider(FULL_ROOT_SAVEABLE_KEY) {
                     PresentationRootView(ComposeContext())
                     // Skip app template: never save or restore SkipUI state.
@@ -105,6 +116,33 @@ open class MainActivity: AppCompatActivity {
                     // state lives in MeetingViewModel, not in view state.
                     SideEffect { saveableStateHolder.removeState(FULL_ROOT_SAVEABLE_KEY) }
                 }
+            }
+            // WP2-S2b (S70 12 d): the single production feedback root, outside the PiP swap and the route switch,
+            // so neither remounts it (a rotation recreates it with a baselined cursor). Never for a fixture.
+            if (systemFixture == null && stageFixture == null && premeetingFixture.isEmpty()) {
+                ConclaveRootFeedback()
+            }
+            if (nativePremeeting && systemFixture == null && stageFixture == null) {
+                // ENT-1: the premeeting stream, the second production delivery (launch-time route, never remounted).
+                NativePremeetingRootFeedback()
+            }
+            if (PipController.inPipMode && PipController.isInCall) {
+                PipContent()
+            } else if (systemFixture != null && !PipController.isInCall) {
+                SystemFixtureRoot(systemFixture)
+            } else if (stageFixture != null && !PipController.isInCall) {
+                StageFixtureRoot(stageFixture, stageFixturePattern, stageForceScreenReader)
+            } else if (premeetingFixture.isNotEmpty() && !PipController.isInCall) {
+                // S10 L9: standalone presenters; never the view model, a call, media or the network.
+                PremeetingFixtureHost(premeetingFixture)
+            } else if (showsHostingPreview && !PipController.isInCall) {
+                // The library cannot see the app build type; it also checks FLAG_DEBUGGABLE at run time.
+                NativeHostingPreviewRoot(fixtureEligible = BuildConfig.DEBUG, onClose = { showsHostingPreview = false })
+            } else if (nativePremeeting) {
+                // PLAN-screens 2: the native premeeting root (S10 0.4); the legacy root is the interim call content.
+                NativePremeetingHost(callContent = legacyRoot)
+            } else {
+                legacyRoot()
             }
         }
 

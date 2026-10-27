@@ -36,6 +36,9 @@ internal data class ConclaveExtendedColors(
     val onToggleEngaged: Color,
     /** 1 dp decorative borders: 8% black light, 14% paper dark (32% each under high contrast). */
     val border: Color,
+    /** S60 R6-7: the light and dark board squares of the always-dark game card (the same pair in every set). */
+    val gameBoardLight: Color,
+    val gameBoardDark: Color,
 )
 
 /** The resolved set for one appearance. In-call surfaces pass dark = true. */
@@ -66,6 +69,8 @@ internal fun conclaveExtendedColors(dark: Boolean, highContrast: Boolean = false
             highContrast -> DesignTokens.androidExtendedBorderLightHighContrast
             else -> DesignTokens.androidExtendedBorderLight
         }),
+        gameBoardLight = Color(DesignTokens.androidExtendedGameBoardLight),
+        gameBoardDark = Color(DesignTokens.androidExtendedGameBoardDark),
     )
 
 internal val ConclaveExtendedColorsLight = conclaveExtendedColors(dark = false)

@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
@@ -156,7 +157,7 @@ internal fun conclaveRouteIcon(kind: String): ImageVector = when (kind) {
 @Composable
 internal fun ConclaveStageChip(
     title: String, identifier: String, modifier: Modifier = Modifier, icon: ImageVector? = null, onClick: (() -> Unit)? = null,
-    actionTitle: String? = null, onAction: (() -> Unit)? = null,
+    actionTitle: String? = null, onAction: (() -> Unit)? = null, actionDescription: String? = null,
 ) {
     val ext = LocalConclaveExtendedColors.current
     val scheme = MaterialTheme.colorScheme
@@ -180,7 +181,11 @@ internal fun ConclaveStageChip(
                     overflow = TextOverflow.Ellipsis)
             }
             if (actionTitle != null && onAction != null) {
-                TextButton(onClick = onAction, modifier = Modifier.heightIn(min = ConclaveChromeMetrics.HEIGHT_DP.dp).testTag("$identifier.action")) {
+                // S20 7 i: the short visible action keeps its full label for TalkBack and Voice Access. `this.onClick`
+                // names the semantics action explicitly, so the chip's own `onClick` parameter never shadows it.
+                val description = actionDescription ?: actionTitle
+                TextButton(onClick = onAction, modifier = Modifier.heightIn(min = ConclaveChromeMetrics.HEIGHT_DP.dp).testTag("$identifier.action")
+                    .semantics { contentDescription = description; this.onClick(label = description) { onAction(); true } }) {
                     ConclaveText(actionTitle, line = "$identifier.action", color = scheme.primary)
                 }
             }

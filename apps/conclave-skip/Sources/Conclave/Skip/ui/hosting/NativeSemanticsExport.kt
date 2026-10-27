@@ -57,6 +57,11 @@ import java.util.Locale
  * kept; older ones are deleted after each write. Node order is the
  * semantics tree order, not TalkBack's sorted traversal; bounds, traversal groups and indices are exported so
  * the order can be derived, and TalkBack stays the spoken check.
+ *
+ * S40 R40-11 (FND-3): nodes also carry their custom accessibility action labels and the long-click label, and every
+ * sheet, dialog and dropdown popup root registers its own window through NativeSemanticsPopupRoot (popups are
+ * separate Compose roots that the hosting LocalView walk cannot reach). Each registered root is exported as its own
+ * merged and unmerged trees; the popup content sets testTagsAsResourceId, which the activity root does not reach.
  */
 
 internal const val NATIVE_SEMANTICS_EXPORT_ACTION = "conclave.debug.EXPORT_SEMANTICS"
@@ -93,6 +98,10 @@ internal data class SemanticsExportNode(
     val top: Float,
     val right: Float,
     val bottom: Float,
+    /** Labels of SemanticsActions.CustomActions, in order (S40 R40-11). */
+    val customActions: List<String> = emptyList(),
+    /** The OnLongClick action's label, null without a long click or a label. */
+    val onLongClickLabel: String? = null,
 )
 
 /** A deterministic writer: fixed key order, Locale.ROOT numbers, and every non-ASCII character escaped, so
@@ -144,6 +153,7 @@ internal object NativeSemanticsJson {
         "focusable" to flag(n.focusable), "focused" to flag(n.focused), "clickable" to flag(n.clickable),
         "disabled" to flag(n.disabled), "selected" to flag(n.selected), "toggleState" to string(n.toggleState),
         "hidden" to flag(n.hidden),
+        "customActions" to strings(n.customActions), "onLongClickLabel" to string(n.onLongClickLabel),
         "bounds" to listOf(n.left, n.top, n.right, n.bottom).joinToString(",", "[", "]") { number(it) },
     ).joinToString(",", "{", "}") { (key, value) -> string(key) + ":" + value }
 
@@ -196,6 +206,8 @@ private fun semanticsExportNode(node: SemanticsNode, parent: Int, depth: Int): S
         top = bounds.top,
         right = bounds.right,
         bottom = bounds.bottom,
+        customActions = config.getOrNull(SemanticsActions.CustomActions)?.map { it.label } ?: emptyList(),
+        onLongClickLabel = config.getOrNull(SemanticsActions.OnLongClick)?.label,
     )
 }
 
@@ -220,6 +232,7 @@ internal class NativeSemanticsExporter(context: Context) {
         val owner = (view as? ViewRootForTest)?.semanticsOwner ?: error("no Compose root")
         val merged = semanticsExportNodes(owner.rootSemanticsNode)
         val unmerged = semanticsExportNodes(owner.unmergedRootSemanticsNode)
+        val popups = NativeSemanticsPopupRoots.trees()
         val configuration = app.resources.configuration
         val window = activity?.window
         val bars = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
@@ -241,8 +254,9 @@ internal class NativeSemanticsExporter(context: Context) {
             "nodeLimit" to NativeSemanticsJson.number(SEMANTICS_EXPORT_MAX_NODES),
             "mergedCount" to NativeSemanticsJson.number(merged.size),
             "unmergedCount" to NativeSemanticsJson.number(unmerged.size),
+            "popupRootCount" to NativeSemanticsJson.number(popups.size / 2),
         )
-        val bytes = NativeSemanticsJson.document(header, listOf("merged" to merged, "unmerged" to unmerged))
+        val bytes = NativeSemanticsJson.document(header, listOf("merged" to merged, "unmerged" to unmerged) + popups)
             .toByteArray(Charsets.US_ASCII)
         check(bytes.size <= SEMANTICS_EXPORT_MAX_BYTES) { "export larger than the bound" }
         // Canonicalize first: /data/user/0 is itself a symlink to /data/data on Android.
@@ -254,6 +268,66 @@ internal class NativeSemanticsExporter(context: Context) {
         NativeSemanticsExportFiles.write(base, name, bytes)
         return conclaveStringOf(app, "native_semantics_status",
             "cache/$NATIVE_SEMANTICS_EXPORT_DIRECTORY/$name", merged.size, unmerged.size)
+    }
+}
+
+/**
+ * Popup roots (sheets, dialogs, dropdown menus) composed in their own windows, in registration order (S40 R40-11).
+ * Main thread only; entries exist only in debuggable apps (NativeSemanticsPopupRoot checks) and leave on dispose.
+ */
+internal object NativeSemanticsPopupRoots {
+    private class Entry(val name: String, var count: Int)
+
+    private val roots = LinkedHashMap<View, Entry>()
+
+    fun register(view: View, name: String) {
+        check(Looper.myLooper() == Looper.getMainLooper()) { "popup roots register on the main thread" }
+        val entry = roots[view]
+        if (entry == null) roots[view] = Entry(name, 1) else entry.count += 1
+    }
+
+    fun unregister(view: View) {
+        check(Looper.myLooper() == Looper.getMainLooper()) { "popup roots unregister on the main thread" }
+        val entry = roots[view] ?: return
+        entry.count -= 1
+        if (entry.count <= 0) roots.remove(view)
+    }
+
+    /** The registered root names, in order. */
+    fun names(): List<String> = roots.values.map { it.name }
+
+    /** Two trees per root that has a Compose semantics owner: `popup.<index>.<name>.merged` and `.unmerged`. */
+    fun trees(): List<Pair<String, List<SemanticsExportNode>>> {
+        val out = ArrayList<Pair<String, List<SemanticsExportNode>>>()
+        var index = 0
+        for ((view, entry) in roots) {
+            val owner = (view as? ViewRootForTest)?.semanticsOwner ?: continue
+            val prefix = "popup." + NativeSemanticsJson.number(index) + "." + entry.name
+            out.add("$prefix.merged" to semanticsExportNodes(owner.rootSemanticsNode))
+            out.add("$prefix.unmerged" to semanticsExportNodes(owner.unmergedRootSemanticsNode))
+            index += 1
+        }
+        return out
+    }
+
+    /** Tests only. */
+    fun clear() {
+        roots.clear()
+    }
+}
+
+/**
+ * Registers the window this composable runs in as a popup root while it is composed. Call it once inside each
+ * sheet, dialog and dropdown content (it draws nothing). Release builds never register.
+ */
+@Composable
+internal fun NativeSemanticsPopupRoot(name: String) {
+    val view = LocalView.current
+    val context = LocalContext.current
+    DisposableEffect(view, name) {
+        val registered = isDebuggableApp(context)
+        if (registered) NativeSemanticsPopupRoots.register(view, name)
+        onDispose { if (registered) NativeSemanticsPopupRoots.unregister(view) }
     }
 }
 
