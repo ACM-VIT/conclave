@@ -1,5 +1,6 @@
 package conclave.module
 
+import android.content.res.Configuration
 import android.graphics.SurfaceTexture
 import android.os.Looper
 import android.os.SystemClock
@@ -13,12 +14,14 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
@@ -37,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -75,9 +79,11 @@ class PanelStageBridgeTests {
         val androidPortrait = PanelPresentationPolicy.androidWindow(width = 411.0, height = 891.0)
         val androidLandscape = PanelPresentationPolicy.androidWindow(width = 891.0, height = 411.0)
         val tablet = PanelPresentationPolicy.androidWindow(width = 1280.0, height = 800.0)
-        // The Swift detent table (PS 6.2): composer, detents, initial detent, appearance from the call.
+        // The Swift detent table (PS 6.2 as PNL-1 amends it, RECONCILE R9): composer, detents, initial detent,
+        // appearance.
         data class Row(val panel: MeetingPanel, val composer: Boolean, val detents: List<PanelDetent>,
                        val initial: PanelDetent, val appearance: PanelAppearance)
+        val short = PanelDetent.short
         val medium = PanelDetent.medium
         val large = PanelDetent.large
         val table = listOf(
@@ -85,7 +91,7 @@ class PanelStageBridgeTests {
             Row(MeetingPanel.participants, false, listOf(medium, large), medium, PanelAppearance.system),
             Row(MeetingPanel.transcript, true, listOf(large), large, PanelAppearance.system),
             Row(MeetingPanel.activities, false, listOf(medium, large), medium, PanelAppearance.system),
-            Row(MeetingPanel.effects, false, listOf(medium, large), medium, PanelAppearance.inCall),
+            Row(MeetingPanel.effects, false, listOf(short, large), short, PanelAppearance.inCall),
             Row(MeetingPanel.hostControls, false, listOf(medium, large), large, PanelAppearance.system),
             Row(MeetingPanel.settings, false, listOf(medium, large), large, PanelAppearance.system),
             Row(MeetingPanel.webinarQA, true, listOf(large), large, PanelAppearance.system),
@@ -100,14 +106,17 @@ class PanelStageBridgeTests {
             assertEquals("${row.panel}", row.initial, sheet.initialDetent)
             assertEquals("${row.panel}", row.appearance, sheet.appearance)
             assertEquals("${row.panel}", row.composer, sheet.hasBottomComposer)
-            assertEquals("${row.panel}", !row.composer, PanelPresentationPolicy.stageInteractiveUpThroughMedium(sheet))
+            val interactive = if (row.composer) null else if (row.panel == MeetingPanel.effects) short else medium
+            assertEquals("${row.panel}", interactive, PanelPresentationPolicy.stageInteractiveDetent(sheet))
+            assertTrue("${row.panel}", PanelPresentationPolicy.keepsSheetInCompactHeight(sheet))
             val overlay = PanelPresentationPolicy.resolve(request(row.panel), window = androidPortrait, platform = PanelPlatform.android)
             assertEquals("${row.panel}", PanelHostStyle.overlay, overlay.style)
             assertTrue("${row.panel}", overlay.showsMiniTile && overlay.detents.isEmpty && overlay.initialDetent == null)
             assertEquals("${row.panel}", PanelStageCoverage.full, PanelPresentationPolicy.coverage(overlay, detent = null))
-            // Appearance is invoker-scoped: only the call makes Layout and Effects dark.
-            for (invoker in listOf(PanelInvoker.more, PanelInvoker.settings)) {
-                assertEquals(PanelAppearance.system, PanelPresentationPolicy.appearance(row.panel, invoker = invoker))
+            assertFalse("${row.panel}", PanelPresentationPolicy.keepsSheetInCompactHeight(overlay))
+            // S60 R6-10: Layout and Effects are dark for every invoker; content panels follow the system.
+            for (invoker in listOf(PanelInvoker.call, PanelInvoker.more, PanelInvoker.settings)) {
+                assertEquals(row.appearance, PanelPresentationPolicy.appearance(row.panel, invoker = invoker))
             }
         }
         // Both values of the defaulted side-style parameter, always passed explicitly (amendment A2), so this test
@@ -540,7 +549,8 @@ class PanelStageBridgeTests {
      * every composition check lives here. Beyond retention it checks review ISSUE 1 (AND-9: a tap on a blank area of
      * the open overlay never reaches the stage control beneath it, with control taps before and after) and review
      * ISSUE 3 (PS 8.10, AND-2: in touch mode Close returns focus to the invoking control, and `restore` reports
-     * whether focus really moved).
+     * whether focus really moved). PNL-1 adds a last phase (S40 R40-3, R40-12, S50 R50-1): a lazyList InCallPage gets
+     * the mini-tile reservation for its list, and system Back pops an inner page of the side pane before it closes.
      */
     @Test fun hostCompositionRetainsStageAcrossPanelOpenClose() {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
@@ -556,6 +566,11 @@ class PanelStageBridgeTests {
         var stageTaps = 0
         var invokerFocused = false
         var plainFocused = false
+        // PNL-1 phase: the panel becomes a real lazyList page.
+        var pageMode by mutableStateOf(false)
+        var pageMounts = 0
+        var reservation: PaddingValues? = null
+        var pageStack: PanelPageStack? = null
         activity.setContent {
             CompositionLocalProvider(LocalRendererLedger provides presenter.renderers) {
               Box(if (wide) Modifier.requiredSize(1280.dp, 800.dp) else Modifier.fillMaxSize()) {
@@ -585,12 +600,33 @@ class PanelStageBridgeTests {
                             Box(Modifier.fillMaxWidth().weight(1f).clickable { stageTaps++ })
                         }
                     },
-                    // The panel draws nothing, so the whole overlay is blank.
-                    panel = { session, request, _, _ ->
-                        DisposableEffect(Unit) {
-                            panelMounts++
-                            lifetime.mounted(session, request.presentationID)
-                            onDispose { lifetime.disposed(session, request.presentationID) }
+                    // The panel draws nothing, so the whole overlay is blank (until the PNL-1 phase).
+                    panel = { session, request, decision, variant ->
+                        if (pageMode) {
+                            InCallPage(
+                                title = "Fixture page",
+                                variant = variant,
+                                hasComposer = false,
+                                miniTile = if (decision.showsMiniTile) {
+                                    CallMiniTileModel(displayName = "Avery", cameraOff = true, isLocal = false, speaking = false)
+                                } else null,
+                                onClose = { presenter.panels.dismiss(cancelPending = true) },
+                                onMounted = { pageMounts++; lifetime.mounted(session, request.presentationID) },
+                                onDisposed = { lifetime.disposed(session, request.presentationID) },
+                                contentMode = InCallPageContent.lazyList,
+                            ) { padding ->
+                                reservation = padding
+                                pageStack = LocalPanelPageStack.current
+                                LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
+                                    item(key = "row") { Text("Row") }
+                                }
+                            }
+                        } else {
+                            DisposableEffect(Unit) {
+                                panelMounts++
+                                lifetime.mounted(session, request.presentationID)
+                                onDispose { lifetime.disposed(session, request.presentationID) }
+                            }
                         }
                     },
                 )
@@ -661,6 +697,42 @@ class PanelStageBridgeTests {
         assertEquals(3, stageFactories)
         assertEquals(0, stageReleases)
         assertEquals(launch, presenter.renderers.summary())
+        // PNL-1: a lazyList page in the side pane gets an unscrolled body and its reservation (no tile there: the top
+        // is 0 and the bottom at least 16 dp plus the navigation inset); its page stack comes from the host.
+        pageMode = true
+        wide = true
+        settleHost()
+        presenter.panels.present(MeetingPanel.participants, from = PanelInvoker.call)
+        settleHost()
+        assertEquals(1, pageMounts)
+        assertEquals("style=sidePane coverage=none", readout.style)
+        val stack = pageStack
+        assertNotNull("the host provides the page stack", stack)
+        assertEquals(0.dp, reservation!!.calculateTopPadding())
+        assertTrue(reservation!!.calculateBottomPadding() >= 16.dp)
+        // System Back pops the inner page first; the panel stays open.
+        stack!!.push("inner")
+        settleHost()
+        assertTrue(stack.isNested)
+        activity.onBackPressedDispatcher.onBackPressed()
+        settleHost()
+        assertFalse("Back pops the inner page first", stack.isNested)
+        assertNotNull(presenter.panels.snapshot.current)
+        assertFalse(presenter.panels.snapshot.isDismissing)
+        // The overlay: the same page and stack move over (no remount), and the list clears the mini tile.
+        wide = false
+        settleHost()
+        assertEquals("a move never remounts the page", 1, pageMounts)
+        assertSame("the page stack survives the move", stack, pageStack)
+        assertEquals("style=overlay coverage=full", readout.style)
+        val landscape = activity.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        assertTrue(reservation!!.calculateBottomPadding() >= miniTileReservationDp(landscape, tileVisible = true).dp)
+        // At the root, Back closes the panel.
+        activity.onBackPressedDispatcher.onBackPressed()
+        settleHost()
+        assertNull("at the root Back closes the panel", presenter.panels.snapshot.current)
+        assertEquals(3, stageFactories)
+        assertEquals(0, stageReleases)
     }
 
     private fun settleHost() {

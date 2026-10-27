@@ -118,6 +118,8 @@ struct NativeHostingPreview: View {
                         Button("Reset Session") { presenter.resetFixtureSession() }
                             .accessibilityIdentifier("fixture.resetSession")
                     }
+                    // WP2-S2b Debug session readout (S1C Q8, OWNER-DEFAULTS Q16).
+                    SessionReadoutSection(shell: MeetingViewModel.shared.shell, records: FeedbackDeliveryRecords.shared)
                     Section("Icons") {
                         NativeIconGalleryDisclosure()
                     }
@@ -212,8 +214,13 @@ private struct NativeHostingPersonRow: View {
     }
 }
 
-private final class HostingStageLifetime {
-    var creations = 0
+/// The stage lifetime probe (S10 R12): counts stage creations so Debug tests and a stand-in call root can prove a
+/// renderer host survives panel, theme and route changes (S10 10 l4). Internal, not private, so other Debug roots
+/// reuse it; plain storage, never observed, so counting never redraws anything.
+final class HostingStageLifetime {
+    private(set) var creations = 0
+
+    /// Records one stage creation and returns a short instance identity for the readout.
     func create() -> String {
         creations += 1
         return String(UUID().uuidString.prefix(8))

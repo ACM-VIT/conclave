@@ -1,23 +1,48 @@
-//  iOS audio-session lifecycle for an in-progress call: keeps .playAndRecord
-//  active in the background and RE-ACTIVATES it after an interruption (an
-//  incoming phone call, Siri, an alarm, another app grabbing audio). Without
-//  this, audio stays dead after a competing interruption ends.
+//  iOS audio-session owner for an in-progress call (S70 5 c, SYS-2). It runs the `AudioActivationPolicy` plans:
+//  while CallKit owns the call every site is configure-only and `setActive(true)` happens only through CallKit's
+//  `provider(_:didActivate:)`; the refused fallback (CallKit refused or unavailable, S70 1 c, O9) and the media
+//  services rebuild are the only self-activations. It drives WebRTC manual audio (`RTCAudioSession`), reports
+//  interruptions to the route owner (never changing mute intent) and hands real route changes to
+//  `AudioRouteOwner`, which follows explicit intent instead of re-applying the app's own selection on a timer.
 #if os(iOS) && !SKIP
 import Foundation
 import AVFoundation
+#if canImport(WebRTC)
+import WebRTC
+#endif
 
 @MainActor
 final class CallAudioSession {
     static let shared = CallAudioSession()
 
     private var isObserving = false
-    /// Set while a call is active so we only re-activate audio when in a call.
+    /// Set while a call is active (from `begin()` to `end()`).
     private var isCallActive = false
     private var routeReassertionHandler: (() -> Void)?
     private var categoryOptionsProvider: (() -> AVAudioSession.CategoryOptions)?
-    private var reactivationTask: Task<Void, Never>?
+    /// The routes present now (installed by the iOS `WebRTCClient`).
+    var routeStateProvider: (() -> AudioRoutePlatformState?)?
+    /// Applies the route owner's current target (preferred input, output override) without activating anything.
+    var routeApplier: (() -> Void)?
+    /// The call's system surface, from the `CallPresence` fan-out (`makePresenceAdapter()`).
+    private(set) var surface: CallSystemSurfaceKind = .none
+    private(set) var surfaceStatus: CallSurfaceStatus = .inactive
+    /// CallKit activated the session and has not deactivated it.
+    private(set) var isCallKitSessionActive = false
+    /// `sys.selfActivations` (S70 SX1 readout): every `setActive(true)` this app made. 0 in a CallKit-owned call.
+    private(set) var selfActivationCount = 0
+    /// The last plan run (Debug readout).
+    private(set) var lastPlan: [AudioSessionStep] = []
+    private var isSelfActivated = false
+    /// A configure-only decision was made while CallKit's start transaction was pending: if CallKit then refuses,
+    /// the fallback activates once.
+    private var activationWanted = false
+    private var servicesResetTask: Task<Void, Never>?
+    private var activationRetryTask: Task<Void, Never>?
 
-    private init() {}
+    private init() {
+        prepareWebRTCManualAudio()
+    }
 
     nonisolated static func voiceCallCategoryOptions(defaultToSpeaker: Bool = true) -> AVAudioSession.CategoryOptions {
         var options: AVAudioSession.CategoryOptions = [
@@ -52,39 +77,89 @@ final class CallAudioSession {
         return session.currentRoute.outputs.contains { externalOutputPorts.contains($0.portType) }
     }
 
+    /// The call category on `session` (configure only, never activation): `.playAndRecord`, `.voiceChat`, the call
+    /// options, then haptics and system sounds allowed while recording (TG 3.7 R-H1; without it iOS suppresses
+    /// in-call haptics while the microphone records). CallKit's `perform CXStartCallAction` uses it too.
+    nonisolated static func configureCallCategory(on session: AVAudioSession, options: AVAudioSession.CategoryOptions) throws {
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
+        try? session.setAllowHapticsAndSystemSoundsDuringRecording(true)
+    }
+
+    /// The route owner's id for a route: the device's own speaker and receiver are "speaker" and "receiver" (the
+    /// ids the legacy picker already uses), anything else is its port UID.
+    nonisolated static func routeId(for route: AVAudioSessionRouteDescription) -> String {
+        guard let output = route.outputs.first else { return "" }
+        switch output.portType {
+        case .builtInSpeaker:
+            return "speaker"
+        case .builtInReceiver:
+            return "receiver"
+        default:
+            return output.uid
+        }
+    }
+
     // MARK: - Lifecycle
 
-    /// Begin a call's audio lifecycle: ensure the session is configured + active
-    /// and start observing interruptions.
+    /// Begin a call's audio lifecycle: configure (activate only in the fallback) and start observing.
     func begin() {
         isCallActive = true
-        activateSession()
+        perform(AudioActivationPolicy.steps(site: .callBegin, surface: surface, status: surfaceStatus), label: "begin")
         startObserving()
+        AudioRouteOwner.shared.callAudioDidStart()
     }
 
     /// End the call's audio lifecycle.
     func end() {
         isCallActive = false
-        reactivationTask?.cancel()
-        reactivationTask = nil
+        activationWanted = false
+        servicesResetTask?.cancel()
+        servicesResetTask = nil
+        activationRetryTask?.cancel()
+        activationRetryTask = nil
         categoryOptionsProvider = nil
         routeReassertionHandler = nil
         stopObserving()
-        deactivateSession()
+        perform(AudioActivationPolicy.endSteps(), label: "end")
+        AudioRouteOwner.shared.callAudioDidEnd()
     }
 
-    /// Called by CallKit's didActivate - re-assert our configuration so the
-    /// WebRTC audio unit runs against the right category/mode.
+    /// CallKit's `provider(_:didActivate:)`: the system activated the shared session for the call. Re-assert the
+    /// configuration, then tell WebRTC before allowing its audio unit (manual audio). Runs even before the call is
+    /// joined: CallKit starts at connecting (S70 O3), and WebRTC must learn about that activation.
     func handleCallKitActivation() {
-        guard isCallActive else { return }
-        activateSession()
+        isCallKitSessionActive = true
+        activationWanted = false
+        prepareWebRTCManualAudio()
+        perform(AudioActivationPolicy.callKitDidActivateSteps(), label: "callKitDidActivate")
     }
 
-    /// Keep the active WebRTC audio session armed while SwiftUI moves the app
-    /// into the background. This is intentionally a no-op outside a call.
+    /// CallKit's `provider(_:didDeactivate:)` (wired by request R6 in HD/requests/B2-T4.md).
+    func handleCallKitDeactivation() {
+        isCallKitSessionActive = false
+        perform(AudioActivationPolicy.callKitDidDeactivateSteps(), label: "callKitDidDeactivate")
+    }
+
+    /// Keep the call audio armed while the app moves to the background. Dropped while CallKit owns the call
+    /// (CallKit keeps the session active in the background); the fallback re-activates as before. No-op outside a
+    /// call.
     func maintainBackgroundCall() {
         guard isCallActive else { return }
-        activateSession()
+        perform(AudioActivationPolicy.steps(site: .background, surface: surface, status: surfaceStatus), label: "background")
+    }
+
+    /// `WebRTCClient.configureCallAudioSession()`: the caller sets the category and applies the route itself; this
+    /// runs only the activation part of the plan (none while CallKit owns the call). Throws like the activation it
+    /// replaces, so a failed fallback activation still fails a microphone start.
+    func activateIfAllowed(site: AudioActivationSite) throws {
+        let plan = AudioActivationPolicy.activationSteps(site: site, surface: surface, status: surfaceStatus)
+        if plan.isEmpty {
+            if surface == .callKit && surfaceStatus == .starting {
+                activationWanted = true
+            }
+            return
+        }
+        try run(plan)
     }
 
     func setRouteReassertionHandler(_ handler: (() -> Void)?) {
@@ -95,34 +170,144 @@ final class CallAudioSession {
         categoryOptionsProvider = provider
     }
 
-    // MARK: - Session
+    /// WebRTC manual audio (S70 5 c revision 2): set before the first peer connection, so WebRTC starts its audio
+    /// unit only once the session is active (CallKit's activation or the fallback's).
+    func prepareWebRTCManualAudio() {
+        guard AudioActivationPolicy.usesManualWebRTCAudio else { return }
+        #if canImport(WebRTC)
+        let rtc = RTCAudioSession.sharedInstance()
+        guard !rtc.useManualAudio else { return }
+        rtc.useManualAudio = true
+        rtc.isAudioEnabled = isCallKitSessionActive || isSelfActivated
+        #endif
+    }
 
-    private func activateSession() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(
-                .playAndRecord,
-                mode: .voiceChat,
-                options: categoryOptionsProvider?() ?? Self.voiceCallCategoryOptions()
-            )
-            try session.setActive(true)
-            routeReassertionHandler?()
-        } catch {
-            debugLog("[CallAudio] activate failed: \(error.localizedDescription)")
+    // MARK: - CallPresence adapter
+
+    /// The adapter the platform installs in the iOS `CallPresence` set (request R2): it tracks the surface for the
+    /// activation policy and hands the call to the fallback when CallKit refuses it.
+    func makePresenceAdapter() -> CallPresenceAdapter {
+        CallPresenceAdapter(name: "audioSession") { [weak self] old, new in
+            self?.presenceDidChange(from: old, to: new)
         }
     }
 
-    private func deactivateSession() {
-        reactivationTask?.cancel()
-        reactivationTask = nil
+    func presenceDidChange(from old: CallPresenceSnapshot, to new: CallPresenceSnapshot) {
+        surface = new.surface
+        surfaceStatus = new.surfaceStatus
+        guard new.surface == .callKit,
+              new.surfaceStatus == .refused,
+              old.surfaceStatus != .refused,
+              CallPresencePhasePolicy.isCallInProgress(new.phase),
+              isCallActive || activationWanted else { return }
+        activationWanted = false
+        // CallKit refused the call after the session was configured for it: the fallback activates (S70 1 c).
+        perform(AudioActivationPolicy.steps(site: .surfaceRefused, surface: new.surface, status: new.surfaceStatus), label: "surfaceRefused")
+    }
+
+    // MARK: - Plans
+
+    private func perform(_ steps: [AudioSessionStep], label: String) {
         do {
-            try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+            try run(steps)
+        } catch {
+            debugLog("[CallAudio] \(label) failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func run(_ steps: [AudioSessionStep]) throws {
+        lastPlan = steps
+        let session = AVAudioSession.sharedInstance()
+        for step in steps {
+            switch step {
+            case .setCategory:
+                try Self.configureCallCategory(
+                    on: session,
+                    options: categoryOptionsProvider?() ?? Self.voiceCallCategoryOptions(for: session)
+                )
+            case .applyRoute:
+                routeApplier?()
+            case .setActive:
+                try performFallbackActivation(session)
+            case .enableWebRTCAudio:
+                setWebRTCAudioEnabled(true)
+            case .notifyWebRTCActivated:
+                notifyWebRTC(activated: true, session: session)
+            case .notifyWebRTCDeactivated:
+                notifyWebRTC(activated: false, session: session)
+            case .disableWebRTCAudio:
+                setWebRTCAudioEnabled(false)
+            case .setInactive:
+                deactivateSession(session)
+            }
+        }
+    }
+
+    /// The refused fallback (and the media services rebuild): the only `setActive(true)` in the app (S70 5 l6).
+    private func performFallbackActivation(_ session: AVAudioSession) throws {
+        try session.setActive(true)
+        isSelfActivated = true
+        selfActivationCount += 1
+    }
+
+    private func deactivateSession(_ session: AVAudioSession) {
+        isSelfActivated = false
+        do {
+            try session.setActive(false, options: [.notifyOthersOnDeactivation])
         } catch {
             debugLog("[CallAudio] deactivate failed: \(error.localizedDescription)")
         }
     }
 
-    // MARK: - Interruption handling
+    private func setWebRTCAudioEnabled(_ enabled: Bool) {
+        guard AudioActivationPolicy.usesManualWebRTCAudio else { return }
+        #if canImport(WebRTC)
+        let rtc = RTCAudioSession.sharedInstance()
+        if !rtc.useManualAudio {
+            prepareWebRTCManualAudio()
+        }
+        rtc.isAudioEnabled = enabled
+        #endif
+    }
+
+    private func notifyWebRTC(activated: Bool, session: AVAudioSession) {
+        guard AudioActivationPolicy.usesManualWebRTCAudio else { return }
+        #if canImport(WebRTC)
+        let rtc = RTCAudioSession.sharedInstance()
+        if activated {
+            rtc.audioSessionDidActivate(session)
+        } else {
+            rtc.audioSessionDidDeactivate(session)
+        }
+        #endif
+    }
+
+    /// Runs `site`'s plan; a failed fallback activation is retried at 250 ms and 1 s (an activation right after an
+    /// interruption can fail while the other audio winds down). This retries activation only; it never re-selects
+    /// a route.
+    private func performWithActivationRetry(_ site: AudioActivationSite) {
+        activationRetryTask?.cancel()
+        activationRetryTask = nil
+        do {
+            try run(AudioActivationPolicy.steps(site: site, surface: surface, status: surfaceStatus))
+        } catch {
+            debugLog("[CallAudio] \(site.rawValue) failed: \(error.localizedDescription)")
+            activationRetryTask = Task { @MainActor [weak self] in
+                for delay in [250_000_000, 1_000_000_000] as [UInt64] {
+                    try? await Task.sleep(nanoseconds: delay)
+                    guard let self, self.isCallActive, !Task.isCancelled else { return }
+                    do {
+                        try self.run(AudioActivationPolicy.steps(site: site, surface: self.surface, status: self.surfaceStatus))
+                        return
+                    } catch {
+                        debugLog("[CallAudio] \(site.rawValue) retry failed: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Notifications
 
     private func startObserving() {
         guard !isObserving else { return }
@@ -157,60 +342,97 @@ final class CallAudioSession {
         center.removeObserver(self, name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
     }
 
-    @objc private func handleInterruption(_ notification: Notification) {
+    // AVAudioSession posts these on a secondary thread: read the payload there, then hop to the main actor.
+
+    @objc nonisolated private func handleInterruption(_ notification: Notification) {
         guard let info = notification.userInfo,
-              let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
-              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+              let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt else {
             return
         }
+        let reasonValue = Int((info[AVAudioSessionInterruptionReasonKey] as? UInt) ?? 0)
+        Task { @MainActor in
+            self.processInterruption(typeValue: typeValue, reasonValue: reasonValue)
+        }
+    }
 
+    @objc nonisolated private func handleRouteChange(_ notification: Notification) {
+        let rawReason = Int((notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 0)
+        var previousId = ""
+        if let previous = notification.userInfo?[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription {
+            previousId = Self.routeId(for: previous)
+        }
+        let previousRouteId = previousId
+        Task { @MainActor in
+            self.processRouteChange(rawReason: rawReason, previousId: previousRouteId)
+        }
+    }
+
+    @objc nonisolated private func handleMediaServicesReset(_ notification: Notification) {
+        Task { @MainActor in
+            self.processMediaServicesReset()
+        }
+    }
+
+    private func processInterruption(typeValue: UInt, reasonValue: Int) {
+        guard isCallActive, let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
         switch type {
         case .began:
-            debugLog("[CallAudio] interruption began")
+            // `.default` is another call, Siri or an alarm; `.builtInMicMuted` is an iPad cover. During a CallKit
+            // hold the owner keeps `.held`. Mute intent is never touched.
+            AudioRouteOwner.shared.reportInterruptionEvent(AudioInterruptionPolicy.beganEvent(reasonRawValue: reasonValue))
         case .ended:
-            // For an established call, always reclaim the audio session after
-            // the interruption ends. `shouldResume` is advisory and is often
-            // absent (or false) after Siri, alarms and route transitions even
-            // though the call itself is still live.
-            debugLog("[CallAudio] interruption ended")
-            scheduleActivationReassertion()
+            // Reclaim the call audio (`shouldResume` is advisory and often absent after Siri and alarms): configure
+            // only while CallKit owns the call (CallKit reactivates), the fallback activates. Capture recovery is kept.
+            performWithActivationRetry(.interruptionEnded)
+            routeReassertionHandler?()
+            AudioRouteOwner.shared.reportInterruptionEvent(.ended)
         @unknown default:
             break
         }
     }
 
-    @objc private func handleRouteChange(_ notification: Notification) {
+    private func processRouteChange(rawReason: Int, previousId: String) {
         guard isCallActive else { return }
-        if let reason = routeChangeReason(from: notification),
-           reason == .categoryChange {
+        let reason = AudioRouteChangeReason.fromIOSRawValue(rawReason)
+        // S70 5 c: a category change is ignored (kept).
+        guard reason != .categoryChange else { return }
+        guard let state = routeStateProvider?() else { return }
+        let action = AudioRouteOwner.shared.handleRouteChange(reason, previousId: previousId, state: state)
+        if action.restartsCapture {
+            // Capture recovery after a real change (CE B16, B21), once; the route is the owner's decision.
+            routeReassertionHandler?()
+        }
+    }
+
+    /// The media server restarted: rebuild the session and WebRTC's audio unit, keep intent, and show nothing
+    /// unless it is still broken after 2 s (S70 5 c).
+    private func processMediaServicesReset() {
+        guard isCallActive else { return }
+        servicesResetTask?.cancel()
+        servicesResetTask = nil
+        if rebuildAfterMediaServicesReset() {
+            AudioRouteOwner.shared.reportInterruptionEvent(.servicesRecovered)
             return
         }
-        scheduleActivationReassertion()
-    }
-
-    @objc private func handleMediaServicesReset(_ notification: Notification) {
-        // The media server crashed and restarted - everything needs re-arming.
-        guard isCallActive else { return }
-        scheduleActivationReassertion()
-    }
-
-    private func scheduleActivationReassertion() {
-        reactivationTask?.cancel()
-        handleCallKitActivation()
-        reactivationTask = Task { @MainActor [weak self] in
-            for delay in [250_000_000, 1_000_000_000, 2_500_000_000] as [UInt64] {
-                try? await Task.sleep(nanoseconds: delay)
-                guard let self, self.isCallActive, !Task.isCancelled else { return }
-                self.handleCallKitActivation()
+        servicesResetTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self, !Task.isCancelled, self.isCallActive else { return }
+            AudioRouteOwner.shared.reportInterruptionEvent(.servicesReset)
+            if self.rebuildAfterMediaServicesReset() {
+                AudioRouteOwner.shared.reportInterruptionEvent(.servicesRecovered)
             }
         }
     }
 
-    private func routeChangeReason(from notification: Notification) -> AVAudioSession.RouteChangeReason? {
-        guard let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt else {
-            return nil
+    private func rebuildAfterMediaServicesReset() -> Bool {
+        do {
+            try run(AudioActivationPolicy.steps(site: .mediaServicesReset, surface: surface, status: surfaceStatus))
+            routeReassertionHandler?()
+            return true
+        } catch {
+            debugLog("[CallAudio] media services rebuild failed: \(error.localizedDescription)")
+            return false
         }
-        return AVAudioSession.RouteChangeReason(rawValue: reasonValue)
     }
 }
 #endif

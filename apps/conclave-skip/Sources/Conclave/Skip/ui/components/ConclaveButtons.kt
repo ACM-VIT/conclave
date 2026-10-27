@@ -9,6 +9,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
@@ -19,11 +22,13 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /*
@@ -52,9 +57,10 @@ internal val LocalConclaveTextReporter = staticCompositionLocalOf<ConclaveTextRe
 internal fun ConclaveText(
     text: String, line: String, modifier: Modifier = Modifier, style: TextStyle = LocalTextStyle.current,
     color: Color = Color.Unspecified, textAlign: TextAlign? = null, maxLines: Int = Int.MAX_VALUE,
+    overflow: TextOverflow = TextOverflow.Clip,
 ) {
     val reporter = LocalConclaveTextReporter.current
-    Text(text, modifier = modifier, color = color, textAlign = textAlign, maxLines = maxLines, style = style,
+    Text(text, modifier = modifier, color = color, textAlign = textAlign, overflow = overflow, maxLines = maxLines, style = style,
         onTextLayout = { reporter?.report(line, it.hasVisualOverflow) })
 }
 
@@ -99,5 +105,53 @@ private fun ButtonLabel(title: String, identifier: String, pending: Boolean, max
             Spacer(Modifier.width(8.dp))
         }
         ConclaveText(title, line = "$identifier.title", textAlign = TextAlign.Center, maxLines = maxLines)
+    }
+}
+
+// MARK: Icon buttons, Close and Back (F00 C02)
+
+/**
+ * An icon-only action in system-appearance chrome or content (app bar actions, a row's trailing More, a field
+ * clear): an M3 IconButton (48 dp target) whose description names the action, not the glyph. [tint] defaults to
+ * the content color the app bar or row provides (onSurface navigation, onSurfaceVariant actions). No tooltip in
+ * this push (OQ-2b-9; TooltipBox needs an experimental opt-in the component files do not take).
+ */
+@Composable
+internal fun ConclaveIconButton(
+    description: String, icon: ImageVector, identifier: String, onClick: () -> Unit, modifier: Modifier = Modifier,
+    enabled: Boolean = true, tint: Color = LocalContentColor.current,
+) {
+    IconButton(onClick = onClick, enabled = enabled, modifier = modifier.testTag(identifier)) {
+        Icon(icon, contentDescription = description, tint = tint)
+    }
+}
+
+/** Panel Close (side pane) and sheet Close: "Close {title}", or plain "Close" when [title] is null (S10 R10). */
+@Composable
+internal fun ConclaveCloseButton(title: String?, onClick: () -> Unit, modifier: Modifier = Modifier, identifier: String = "panel.close") {
+    val description = if (title != null) conclaveString("ds_close_title", title) else conclaveString("ds_close")
+    ConclaveIconButton(description, ConclaveIcons.CloseFill0, identifier, onClick, modifier)
+}
+
+/**
+ * Back: the auto-mirrored ArrowBackFill0 (callers never mirror it again). Panel overlays say "Back to call";
+ * pushed premeeting pages say "Back" (F00 C02 d).
+ */
+@Composable
+internal fun ConclaveBackButton(toCall: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, identifier: String = "panel.close") {
+    val description = if (toCall) conclaveString("ds_back_to_call") else conclaveString("ds_back")
+    ConclaveIconButton(description, ConclaveIcons.ArrowBackFill0, identifier, onClick, modifier)
+}
+
+/** A two-state icon button (Q&A upvote): IconToggleButton with a constant description and the state in its state
+ *  description; [checkedIcon] is the FILL 1 glyph. */
+@Composable
+internal fun ConclaveIconToggleButton(
+    description: String, stateText: String, icon: ImageVector, checkedIcon: ImageVector, checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit, identifier: String, modifier: Modifier = Modifier, enabled: Boolean = true,
+) {
+    IconToggleButton(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled,
+        modifier = modifier.testTag(identifier).semantics { stateDescription = stateText }) {
+        Icon(if (checked) checkedIcon else icon, contentDescription = description)
     }
 }

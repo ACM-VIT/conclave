@@ -164,7 +164,8 @@ class TypographyHapticsGalleryBridgeTests {
         assertEquals(2.507, ratio(DesignTokens.neutralWhite, DesignTokens.coralBright), 0.001)
         assertEquals(2.268, ratio(DesignTokens.neutralWhite, DesignTokens.coralBrightHighContrast), 0.001)
         // WP1-2b adds the five F00 C12 i banner pairs.
-        assertEquals(61, ComponentGalleryCatalog.contrastPairs.count)
+        // FND-1 and FND-2 add 19 pairs (62 to 80).
+        assertEquals(80, ComponentGalleryCatalog.contrastPairs.count)
         for (pair in ComponentGalleryCatalog.contrastPairs) {
             assertEquals(pair.id, pair.expectedRatio, pair.ratio, 0.001)
             assertTrue(pair.id, ContrastRatio.meets(pair.ratio, pair.requirement))
@@ -194,7 +195,7 @@ class TypographyHapticsGalleryBridgeTests {
         assertNotSame(first, NativeComponentGalleryRowsCache(api = 34).current())
         assertEquals(44, first.type.size)
         assertEquals(66, first.haptics.size)
-        assertEquals(61, first.contrast.size)
+        assertEquals(80, first.contrast.size)
         assertEquals(40, first.components.size)
         assertEquals(46, first.componentsWithLoading.size)
         val ids = first.type.map { it.id } + first.haptics.map { it.id } + first.contrast.map { it.id } + first.componentsWithLoading.map { it.id }
@@ -247,13 +248,13 @@ class TypographyHapticsGalleryBridgeTests {
         state.hapticsExpanded = true
         state.contrastExpanded = true
         val twoA = RecordingListScope().apply { nativeComponentGalleryItems(expanded = true, state = state) }
-        assertEquals(6 + 44 + 1 + 66 + 2 + 61 + 5, twoA.keys.size)
+        assertEquals(6 + 44 + 1 + 66 + 2 + 80 + 5, twoA.keys.size)
         for (section in nativeGalleryComponentSections) state.toggle(section)
         val open = RecordingListScope().apply { nativeComponentGalleryItems(expanded = true, state = state) }
         // Per component section: one header per column, then the specimens; the call controls add the taps
         // readout and the banners add the motion switch and the animated banner.
         val components = (2 + 8) + (1 + 1 + 4) + (2 + 14) + (2 + 8 + 2) + (2 + 6)
-        assertEquals(6 + 44 + 1 + 66 + 2 + 61 + 5 + components, open.keys.size)
+        assertEquals(6 + 44 + 1 + 66 + 2 + 80 + 5 + components, open.keys.size)
         assertTrue(open.keys.contains(ComponentGalleryCatalog.controlRecordID))
         assertTrue(open.keys.contains(ComponentGalleryCatalog.bannerMotionID))
         assertFalse(open.keys.contains("button.primary.pending.app"))
@@ -297,8 +298,9 @@ class TypographyHapticsGalleryBridgeTests {
         assertEquals(1, overflow.count(standard, specimens))
         assertEquals(2, overflow.measuredCount(standard, specimens))
         val rows = NativeComponentGalleryRows(api = 36)
-        // WP1-2b: 61 pairs and 40 component specimens; the six spinner specimens count only with Show loading on.
-        assertEquals(44 + 66 + 61 + 2 * nativeGalleryLiveRoles.size + 40, rows.specimenIDs.size)
+        // WP1-2b: 40 component specimens (pairs: 80 since FND-1 and FND-2); the six spinner specimens count only with
+        // Show loading on.
+        assertEquals(44 + 66 + 80 + 2 * nativeGalleryLiveRoles.size + 40, rows.specimenIDs.size)
         assertEquals(rows.specimenIDs.size + 6, rows.specimens(showLoading = true).size)
         assertSame(rows.specimenIDs, rows.specimens(showLoading = false))
         assertEquals(7, nativeGalleryLiveRoles.size)

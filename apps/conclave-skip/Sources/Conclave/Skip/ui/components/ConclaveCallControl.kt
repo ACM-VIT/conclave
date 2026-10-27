@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.height
@@ -38,9 +39,10 @@ import androidx.compose.ui.unit.dp
 import java.util.Locale
 
 /*
- * In-call controls (F00 C04, C05; R01): call toggles, panel invokers, Leave and the compact toolbar. Colors are the
- * generated extended tokens, read as Color(DesignTokens.androidExtended...) here until FND-1's
- * ConclaveExtendedColors exists; no high-contrast token is adopted (owner Q10). Every target is at least 48 dp.
+ * In-call controls (F00 C04, C05; R01): call toggles (plain and labelled), panel invokers, Leave and the compact
+ * toolbar. The R01 colors stay pure functions over the generated tokens so callToggleColorsMatchR01 checks them
+ * without Compose; they equal the in-call ConclaveExtendedColors roles. No high-contrast token is adopted (owner
+ * Q10). Every target is at least 48 dp.
  */
 
 /** The R01 visual states. Off is a muted microphone or a camera that is off; Engaged is a raised hand, a running
@@ -183,5 +185,33 @@ internal fun ConclaveCallControlBar(
                 color = MaterialTheme.colorScheme.outlineVariant)
             leave()
         }
+    }
+}
+
+/**
+ * The lobby preview card toggle (F00 C04 f labelled variant; S10 L2): the call toggle with its state caption below.
+ * Android draws R01 everywhere, so [context] only styles the caption: over the lobby video it sits on the label
+ * scrim, on the card strip it is onSurfaceVariant. The caption repeats the state description, so it is cleared from
+ * semantics. The toggle plays its own gesture kind (C04 e), like the plain toggle.
+ */
+@Composable
+internal fun ConclaveLabelledCallToggle(
+    label: String, stateText: String, icon: ImageVector, visual: ConclaveCallControlVisual, checked: Boolean,
+    identifier: String, onToggle: (Boolean) -> Unit, modifier: Modifier = Modifier,
+    context: ConclaveSurfaceContext = ConclaveSurfaceContext.onSurface, width: Dp = 48.dp, enabled: Boolean = true,
+    feedback: FeedbackKind? = null, haptics: ConclaveGestureHaptics = rememberConclaveHaptics(),
+    onGesture: (FeedbackKind, GestureHapticDecision) -> Unit = { _, _ -> },
+) {
+    val scheme = MaterialTheme.colorScheme
+    val ext = LocalConclaveExtendedColors.current
+    val overVideo = context == ConclaveSurfaceContext.overVideo
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        ConclaveCallToggle(label = label, stateText = stateText, icon = icon, visual = visual, checked = checked,
+            identifier = identifier, onToggle = onToggle, width = width, enabled = enabled, feedback = feedback,
+            haptics = haptics, onGesture = onGesture)
+        val caption = Modifier.clearAndSetSemantics { }.alpha(if (enabled) 1f else CONCLAVE_CALL_DISABLED_ALPHA)
+        ConclaveText(stateText, line = "$identifier.caption", style = MaterialTheme.typography.labelSmall,
+            color = if (overVideo) scheme.onSurface else scheme.onSurfaceVariant,
+            modifier = if (overVideo) caption.clip(CircleShape).background(ext.labelScrim).padding(horizontal = 6.dp) else caption)
     }
 }

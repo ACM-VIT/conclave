@@ -29,12 +29,13 @@ struct WP1H1bHapticDeliveryTests {
             #expect(Self.legacyIOSTokens.contains(FeedbackHapticContract.ios(kind)), "\(kind) has no legacy iOS token")
             #expect(ConclaveHapticFeedback.iosLegacyHaptic(kind) != .none || FeedbackHapticContract.ios(kind) == "none", "\(kind)")
         }
-        #expect(Set(LegacyHapticRoutes.outcomeKinds) == [.joined, .joinFailed, .validationFailed, .actionRejected, .denied, .removed, .connectionLost])
+        // WP2-S2b moved the shell kinds to the token route (DeliveredTokenKinds) in the same change.
+        #expect(Set(LegacyHapticRoutes.outcomeKinds) == [.validationFailed])
     }
 
     @Test func deliveredTokenKindsNeverOverlapTheLegacyRoute() {
-        // Empty until WP2-S2b wires the production consumer; the patch that adds a kind removes it from the legacy set.
-        #expect(DeliveredTokenKinds.kinds.isEmpty)
+        // WP2-S2b wired the production consumer; the kinds it delivers left the legacy set in the same change.
+        #expect(Set(DeliveredTokenKinds.kinds) == [.joined, .admitted, .joinFailed, .denied, .removed, .connectionLost, .connectionRestored, .actionRejected])
         let overlap = Set(DeliveredTokenKinds.kinds).intersection(Set(LegacyHapticRoutes.outcomeKinds))
         #expect(overlap.isEmpty, "single-path invariant broken for \(overlap)")
         for kind in DeliveredTokenKinds.kinds {

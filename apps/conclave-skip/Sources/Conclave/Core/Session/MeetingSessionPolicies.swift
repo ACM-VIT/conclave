@@ -25,6 +25,10 @@ struct MeetingPhaseResolution: Equatable {
 
 /// S1C PHASE, the R08 table. Room closed goes to a Home notice, denied and the other losses to the outcome screen
 /// (OWNER-DEFAULTS Q16), even though the legacy app shows its error screen for both.
+///
+/// WP2-S2a (S10 R6): a recovery before the first admission stays `recovering`, and the root shows the lobby for it
+/// because `hasBeenAdmittedThisSession` is false (S10 0.4); a server redirect continuation connects as `recovering`
+/// so the stage never flashes the lobby; `serverDisconnected` is an outcome; a CallKit hold is the `onHold` notice.
 enum MeetingPhasePolicy {
     static func resolve(_ inputs: MeetingShellInputs) -> MeetingPhaseResolution {
         let outcome = inputs.currentOutcome
@@ -40,16 +44,14 @@ enum MeetingPhasePolicy {
             if let restart = inputs.serverRestartNotice {
                 return MeetingPhaseResolution(phase: .inCall, notice: .serverRestarting, noticeText: restart)
             }
+            if inputs.audioInterruption == .held {
+                return MeetingPhaseResolution(phase: .inCall, notice: .onHold, noticeText: nil)
+            }
             return MeetingPhaseResolution(phase: .inCall, notice: .none, noticeText: nil)
         case .reconnecting:
             return recovering(inputs)
-        case .joining:
-            if inputs.isRecoveringConnection {
-                return recovering(inputs)
-            }
-            return MeetingPhaseResolution(phase: .entering, notice: .none, noticeText: nil)
-        case .connecting, .connected:
-            if inputs.isRecoveringConnection {
+        case .connecting, .connected, .joining:
+            if inputs.isRecoveringConnection || inputs.isRedirectContinuation {
                 return recovering(inputs)
             }
             return MeetingPhaseResolution(phase: .entering, notice: .none, noticeText: nil)
@@ -77,6 +79,9 @@ enum MeetingPhasePolicy {
                 if inputs.connectionState == .error {
                     return MeetingPhaseResolution(phase: .outcome, notice: .none, noticeText: nil)
                 }
+            case .serverDisconnected:
+                // S10 0.8 C4: the legacy route goes home (disconnected); the native root shows the outcome.
+                return MeetingPhaseResolution(phase: .outcome, notice: .none, noticeText: nil)
             case .left, .endedByYou:
                 break
             }
@@ -103,6 +108,11 @@ struct MeetingControlRowContext: Equatable {
     let handFailure: MeetingActionFailure
     let leaveFailure: MeetingActionFailure
     let endFailure: MeetingActionFailure
+    /// WP2-S2a: typed microphone, camera and screen share failures, and the hand failure's direction (S30 CC3).
+    let micFailure: MeetingActionFailure
+    let cameraFailure: MeetingActionFailure
+    let screenShareFailure: MeetingActionFailure
+    let handFailureDirection: MeetingActionDirection
 
     static func make(
         phase: MeetingPhaseKind = .home,
@@ -111,7 +121,11 @@ struct MeetingControlRowContext: Equatable {
         endTicketPending: Bool = false,
         handFailure: MeetingActionFailure = .none,
         leaveFailure: MeetingActionFailure = .none,
-        endFailure: MeetingActionFailure = .none
+        endFailure: MeetingActionFailure = .none,
+        micFailure: MeetingActionFailure = .none,
+        cameraFailure: MeetingActionFailure = .none,
+        screenShareFailure: MeetingActionFailure = .none,
+        handFailureDirection: MeetingActionDirection = .none
     ) -> MeetingControlRowContext {
         MeetingControlRowContext(
             phase: phase,
@@ -120,7 +134,11 @@ struct MeetingControlRowContext: Equatable {
             endTicketPending: endTicketPending,
             handFailure: handFailure,
             leaveFailure: leaveFailure,
-            endFailure: endFailure
+            endFailure: endFailure,
+            micFailure: micFailure,
+            cameraFailure: cameraFailure,
+            screenShareFailure: screenShareFailure,
+            handFailureDirection: handFailureDirection
         )
     }
 }
@@ -146,7 +164,9 @@ enum MeetingControlAvailabilityPolicy {
             mediaPublishingDisabled: isAttendee
         )
         let isLeaving = context.phase == .leaving
-        let mediaHint: MeetingControlHint = inputs.isRecoveringConnection ? .appliesAfterReconnect : .none
+        // S30 CC2 and the 7 matrix: offline blocks socket mutations like recovery; media intent stays live.
+        let isOfflineInCall = isJoined && inputs.isNetworkOffline && !inputs.isRecoveringConnection
+        let mediaHint: MeetingControlHint = (inputs.isRecoveringConnection || isOfflineInCall) ? .appliesAfterReconnect : .none
         let liveOnlyReason: MeetingBlockedReason = inputs.isRecoveringConnection ? .reconnecting : .notJoined
 
         switch id {
@@ -158,11 +178,22 @@ enum MeetingControlAvailabilityPolicy {
                 reason = .leaving
             } else if !canChangeMedia {
                 reason = .notJoined
+            } else if inputs.microphonePermission == .denied {
+                reason = .permissionDenied
+            } else if inputs.microphonePermission == .undetermined {
+                reason = .permissionUndetermined
+            } else if inputs.audioInterruption == .held {
+                reason = .onHold
+            } else if inputs.audioInterruption == .otherAudio {
+                reason = .audioInterrupted
             }
+            // RECONCILE R29: these block only toward live; a tap toward muted still applies.
+            let enabled = reason == .none || (blocksOnlyTowardOn(reason) && !inputs.isMuted)
             return MeetingControlRow(
                 id: id.rawValue, isVisible: !isAttendee, isOn: !inputs.isMuted,
-                isEnabled: reason == .none, isPending: inputs.micToggleInFlight,
-                blockedReason: reason, hint: reason == .none ? mediaHint : .none, badgeCount: 0, failure: .none
+                isEnabled: enabled, isPending: inputs.micToggleInFlight,
+                blockedReason: reason, hint: reason == .none ? mediaHint : .none, badgeCount: 0,
+                failure: context.micFailure, failureDirection: .none
             )
         case .camera:
             var reason = MeetingBlockedReason.none
@@ -174,11 +205,17 @@ enum MeetingControlAvailabilityPolicy {
                 reason = .notJoined
             } else if inputs.isAudioOnlyMode {
                 reason = .audioOnly
+            } else if inputs.cameraPermission == .denied {
+                reason = .permissionDenied
+            } else if inputs.cameraPermission == .undetermined {
+                reason = .permissionUndetermined
             }
+            let enabled = reason == .none || (blocksOnlyTowardOn(reason) && !inputs.isCameraOff)
             return MeetingControlRow(
                 id: id.rawValue, isVisible: !isAttendee, isOn: !inputs.isCameraOff,
-                isEnabled: reason == .none, isPending: inputs.cameraToggleInFlight,
-                blockedReason: reason, hint: reason == .none ? mediaHint : .none, badgeCount: 0, failure: .none
+                isEnabled: enabled, isPending: inputs.cameraToggleInFlight,
+                blockedReason: reason, hint: reason == .none ? mediaHint : .none, badgeCount: 0,
+                failure: context.cameraFailure, failureDirection: .none
             )
         case .screenShare:
             var reason = MeetingBlockedReason.none
@@ -190,6 +227,8 @@ enum MeetingControlAvailabilityPolicy {
                 reason = .leaving
             } else if !isJoined {
                 reason = liveOnlyReason
+            } else if isOfflineInCall {
+                reason = .offline
             } else if inputs.hasActiveRemoteScreenShare {
                 reason = .remoteShareActive
             } else if inputs.isAudioOnlyMode && !inputs.isScreenSharing {
@@ -198,7 +237,8 @@ enum MeetingControlAvailabilityPolicy {
             return MeetingControlRow(
                 id: id.rawValue, isVisible: inputs.isScreenShareSupported && !isAttendee, isOn: inputs.isScreenSharing,
                 isEnabled: reason == .none, isPending: inputs.screenShareToggleInFlight,
-                blockedReason: reason, hint: .none, badgeCount: 0, failure: .none
+                blockedReason: reason, hint: .none, badgeCount: 0,
+                failure: context.screenShareFailure, failureDirection: .none
             )
         case .hand:
             var reason = MeetingBlockedReason.none
@@ -208,11 +248,14 @@ enum MeetingControlAvailabilityPolicy {
                 reason = .leaving
             } else if !isJoined {
                 reason = liveOnlyReason
+            } else if isOfflineInCall {
+                reason = .offline
             }
             return MeetingControlRow(
                 id: id.rawValue, isVisible: !isAttendee, isOn: inputs.isHandRaised,
                 isEnabled: reason == .none, isPending: context.handTicketPending || inputs.handToggleInFlight,
-                blockedReason: reason, hint: .none, badgeCount: 0, failure: context.handFailure
+                blockedReason: reason, hint: .none, badgeCount: 0,
+                failure: context.handFailure, failureDirection: context.handFailure == .none ? .none : context.handFailureDirection
             )
         case .reactions:
             var reason = MeetingBlockedReason.none
@@ -224,19 +267,22 @@ enum MeetingControlAvailabilityPolicy {
                 reason = .leaving
             } else if !isJoined {
                 reason = liveOnlyReason
+            } else if isOfflineInCall {
+                reason = .offline
             }
             let visible = !isAttendee && (!inputs.isReactionsDisabled || inputs.isAdmin)
             return MeetingControlRow(
                 id: id.rawValue, isVisible: visible, isOn: false,
                 isEnabled: reason == .none, isPending: false,
-                blockedReason: reason, hint: .none, badgeCount: 0, failure: .none
+                blockedReason: reason, hint: .none, badgeCount: 0, failure: .none, failureDirection: .none
             )
         case .chat:
             let reason: MeetingBlockedReason = isLeaving ? .leaving : .none
             return MeetingControlRow(
                 id: id.rawValue, isVisible: true, isOn: inputs.isChatOpen,
                 isEnabled: reason == .none, isPending: false,
-                blockedReason: reason, hint: .none, badgeCount: max(0, inputs.unreadChatCount), failure: .none
+                blockedReason: reason, hint: .none, badgeCount: max(0, inputs.unreadChatCount),
+                failure: .none, failureDirection: .none
             )
         case .participants:
             var reason = MeetingBlockedReason.none
@@ -248,7 +294,8 @@ enum MeetingControlAvailabilityPolicy {
             return MeetingControlRow(
                 id: id.rawValue, isVisible: !isAttendee, isOn: false,
                 isEnabled: reason == .none, isPending: false,
-                blockedReason: reason, hint: .none, badgeCount: max(0, inputs.pendingUsersCount), failure: .none
+                blockedReason: reason, hint: .none, badgeCount: max(0, inputs.pendingUsersCount),
+                failure: .none, failureDirection: .none
             )
         case .leave:
             var reason = MeetingBlockedReason.none
@@ -257,11 +304,12 @@ enum MeetingControlAvailabilityPolicy {
             } else if !isCallPhase(context.phase) {
                 reason = .notJoined
             }
-            // R09: Leave stays enabled while End for everyone is pending or failed.
+            // R09: Leave stays enabled while End for everyone is pending or failed, and offline.
             return MeetingControlRow(
                 id: id.rawValue, isVisible: true, isOn: false,
                 isEnabled: reason == .none, isPending: context.leaveTicketPending,
-                blockedReason: reason, hint: .none, badgeCount: 0, failure: context.leaveFailure
+                blockedReason: reason, hint: .none, badgeCount: 0,
+                failure: context.leaveFailure, failureDirection: .none
             )
         case .endForEveryone:
             var reason = MeetingBlockedReason.none
@@ -271,16 +319,32 @@ enum MeetingControlAvailabilityPolicy {
                 reason = .hostOnly
             } else if isLeaving {
                 reason = .leaving
+            } else if context.endTicketPending {
+                // S30 CC2 (R09): `ending` on the End row only, never on Leave.
+                reason = .ending
             } else if inputs.isRecoveringConnection {
                 reason = .reconnecting
             } else if !isJoined {
                 reason = .notJoined
+            } else if isOfflineInCall {
+                reason = .offline
             }
             return MeetingControlRow(
                 id: id.rawValue, isVisible: inputs.isAdmin && !isAttendee, isOn: false,
                 isEnabled: reason == .none, isPending: context.endTicketPending,
-                blockedReason: reason, hint: .none, badgeCount: 0, failure: context.endFailure
+                blockedReason: reason, hint: .none, badgeCount: 0,
+                failure: context.endFailure, failureDirection: .none
             )
+        }
+    }
+
+    /// RECONCILE R29 and S30 7: reasons that block only a tap toward live or on (permission, interruption, hold).
+    static func blocksOnlyTowardOn(_ reason: MeetingBlockedReason) -> Bool {
+        switch reason {
+        case .permissionDenied, .permissionUndetermined, .audioInterrupted, .onHold:
+            return true
+        default:
+            return false
         }
     }
 
@@ -301,35 +365,21 @@ enum MeetingControlAvailabilityPolicy {
     }
 }
 
-/// S1C F6: one classification of action failures for both platforms. iOS throws `SocketError.timeout` ("Timed out
-/// waiting for the SFU"); Kotlin throws `ErrorException("Timed out waiting for <event> acknowledgement")` and
-/// "Socket changed before <event> acknowledgement"; SkipLib's `localizedDescription` is the description.
+/// S1C F6, now fed by the one classifier (WP2-S2a, S70 SY11): iOS throws `SocketError.timeout` ("Timed out waiting
+/// for the SFU"); Kotlin throws `ErrorException("Timed out waiting for <event> acknowledgement")` and "Socket changed
+/// before <event> acknowledgement"; SkipLib's `localizedDescription` is the description. Call actions (hand, end for
+/// everyone) classify in the `hostAction` context; results carry only clean server text.
 enum MeetingActionFailurePolicy {
     static func classify(_ error: Error) -> MeetingActionFailure {
-        classify(message: error.localizedDescription)
+        MeetingErrorClassifier.actionFailure(MeetingErrorClassifier.classify(error, context: .hostAction))
     }
 
     static func classify(message: String) -> MeetingActionFailure {
-        let text = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if text.isEmpty { return .unknown }
-        if text.contains("timed out") || text.contains("timeout") { return .ackTimedOut }
-        if text.contains("socket changed before") { return .socketReplaced }
-        if text.contains("not connected") || text.contains("socket disconnected") { return .notConnected }
-        if text.contains("permission") { return .permissionDenied }
-        if text.contains("only the host") || text.contains("only hosts") || text.contains("not authorized")
-            || text.contains("unauthorized") || text.contains("admin only") || text.contains("host only") {
-            return .roleRequired
-        }
-        if text.contains("no camera") || text.contains("no microphone") || text.contains("device unavailable") {
-            return .deviceUnavailable
-        }
-        return .rejectedByServer
+        MeetingErrorClassifier.actionFailure(MeetingErrorClassifier.classify(serverMessage: message, context: .hostAction))
     }
 
-    static func result(for error: Error) -> MeetingActionResult {
-        let failure = classify(error)
-        let text = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-        return MeetingActionResult.failed(failure, serverText: text.isEmpty ? nil : text)
+    static func result(for error: Error, direction: MeetingActionDirection = .none) -> MeetingActionResult {
+        MeetingErrorClassifier.actionResult(MeetingErrorClassifier.classify(error, context: .hostAction), direction: direction)
     }
 }
 
@@ -346,7 +396,12 @@ enum MeetingFeedbackTokenPolicy {
             if admittedThisSession || joinedThisSession { return .none }
             return .joined
         }
-        if previous == .recovering && next == .inCall { return .connectionRestored }
+        if previous == .recovering && next == .inCall {
+            // S10 R6 a: a recovery before the first admission ends in the first join, not a restore.
+            if joinedThisSession { return .connectionRestored }
+            if admittedThisSession { return .none }
+            return .joined
+        }
         return .none
     }
 
@@ -355,7 +410,8 @@ enum MeetingFeedbackTokenPolicy {
         case .removed: return .removed
         case .denied: return .denied
         case .joinFailed: return .joinFailed
-        case .connectionLost: return .connectionLost
+        // S10 R6 d: a server disconnect plays the connection-lost outcome.
+        case .connectionLost, .serverDisconnected: return .connectionLost
         case .left, .endedByYou, .endedByHost, .roomClosed: return .none
         }
     }
@@ -387,5 +443,21 @@ enum MeetingHandToggleTokenPolicy {
     static func ticketResult(applied: Bool, stillCurrentAttempt: Bool) -> MeetingActionResult {
         guard stillCurrentAttempt else { return MeetingActionResult.interrupted }
         return applied ? MeetingActionResult.completed : MeetingActionResult.cancelled
+    }
+}
+
+/// WP2-H2 (PLAN-next A6, TG 3.6 rows 16 and 17): the one legacy haptic of a terminal outcome, derived from the typed
+/// kind instead of a second per-caller parameter. `roomClosed` and `endedByHost` are Home notices and `left` and
+/// `endedByYou` are the person's own leave (Q11), so they play nothing. The facade then refuses any kind the token route
+/// already delivers (`DeliveredTokenKinds`).
+enum MeetingLegacyHapticPolicy {
+    static func feedbackKind(for outcome: MeetingTerminalOutcomeKind) -> FeedbackKind {
+        switch outcome {
+        case .denied: return .denied
+        case .removed: return .removed
+        case .joinFailed: return .joinFailed
+        case .connectionLost, .serverDisconnected: return .connectionLost
+        case .left, .endedByYou, .endedByHost, .roomClosed: return .none
+        }
     }
 }

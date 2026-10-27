@@ -18,11 +18,13 @@ internal data class MeetingControlRowUi(
     val hint: MeetingControlHint,
     val badgeCount: Int,
     val failure: MeetingActionFailure,
+    /** WP2-S2a (S30 CC3): raise or lower for a hand failure, none otherwise. */
+    val failureDirection: MeetingActionDirection,
 ) {
     fun matches(row: MeetingControlRow): Boolean =
         id == row.id && isVisible == row.isVisible && isOn == row.isOn && isEnabled == row.isEnabled &&
             isPending == row.isPending && blockedReason == row.blockedReason && hint == row.hint &&
-            badgeCount == row.badgeCount && failure == row.failure
+            badgeCount == row.badgeCount && failure == row.failure && failureDirection == row.failureDirection
 
     companion object {
         fun from(row: MeetingControlRow): MeetingControlRowUi = MeetingControlRowUi(
@@ -35,6 +37,7 @@ internal data class MeetingControlRowUi(
             hint = row.hint,
             badgeCount = row.badgeCount,
             failure = row.failure,
+            failureDirection = row.failureDirection,
         )
     }
 }
@@ -91,7 +94,11 @@ internal data class MeetingSessionUi(
     val isWebinarAttendee: Boolean,
     val canEndForEveryone: Boolean,
     val confirmationId: Int,
-    val confirmationInvoker: PanelInvoker?,
+    /** A MeetingConfirmationInvoker value (S50 PH17): "call", "more" or "hostControls"; null without a dialog. */
+    val confirmationInvoker: String?,
+    /** WP2-S2a (S10 R6 c): the root keeps the call root for recovering only while this is true. */
+    val hasBeenAdmittedThisSession: Boolean,
+    val entryOrigin: MeetingEntryOrigin,
 ) {
     companion object {
         fun from(snapshot: MeetingSessionSnapshot): MeetingSessionUi = MeetingSessionUi(
@@ -109,6 +116,8 @@ internal data class MeetingSessionUi(
             canEndForEveryone = snapshot.canEndForEveryone,
             confirmationId = snapshot.confirmation?.id ?: 0,
             confirmationInvoker = snapshot.confirmation?.invoker,
+            hasBeenAdmittedThisSession = snapshot.hasBeenAdmittedThisSession,
+            entryOrigin = snapshot.entryOrigin,
         )
     }
 }

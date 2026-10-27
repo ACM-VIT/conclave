@@ -322,7 +322,9 @@ export const native = {
       success: nativeStatus.dark.success,
       warning: nativeStatus.dark.warning,
       live: nativeStatus.dark.live,
-      // Leave remains systemRed under the dark scheme in the iOS adapter.
+      // Leave stays dynamic systemRed in the iOS adapter at standard contrast. Under Increase Contrast the
+      // adapter switches to this fixed fill: the white glyph reads 4.555:1 (owner OQ4, 2026-10-26).
+      leaveHighContrast: 0xFFE9152D,
     },
   },
   android: {
@@ -395,5 +397,7 @@ export const native = {
       0xFFC084FC, 0xFF6366F1, 0xFF10B981, 0xFFFF5EAE,
     ],
     ring: 0x2EFFFFFF, // White at 18%.
+    // The cheeky mouth's tongue (web #FF8FB1); identity art, never a UI accent.
+    tongue: 0xFFFF8FB1,
   },
 } as const;

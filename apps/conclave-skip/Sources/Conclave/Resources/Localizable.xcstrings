@@ -9,6 +9,34 @@
       "comment" : "Debug component gallery: last haptic tap: feedback kind identifier, then its result",
       "extractionState" : "manual"
     },
+    "%lld More Participants" : {
+      "comment" : "Overflow tile (iOS): accessibility label of the tile that opens People; the count is the hidden participants",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld More Participant"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld More Participants"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld of %lld Characters" : {
+      "comment" : "Text field: spoken value of the character counter, for example 38 of 40 characters",
+      "extractionState" : "manual"
+    },
     "%lld of %lld match" : {
       "comment" : "Debug component gallery: haptic verification result: matching rows, then all rows. Scripts read it, so the numbers stay ASCII digits in every language",
       "extractionState" : "manual"
@@ -85,9 +113,25 @@
       "comment" : "Call controls: constant accessibility label of the camera toggle; its state is the value",
       "extractionState" : "manual"
     },
+    "Camera Off" : {
+      "comment" : "Video tile: state read with a participant tile while their camera is off",
+      "extractionState" : "manual"
+    },
     "Cancel" : {
       "comment" : "Button title for cancelling a pending native app action",
       "extractionState" : "manual"
+    },
+    "Character Counter %lld %lld" : {
+      "comment" : "Text field: visible near-limit character counter, count then limit, for example 38/40",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld/%lld"
+          }
+        }
+      }
     },
     "Chat" : {
       "comment" : "Call controls: accessibility label of the control that opens the chat panel",
@@ -97,8 +141,16 @@
       "comment" : "Debug component gallery: sample body of the error state",
       "extractionState" : "manual"
     },
+    "Close" : {
+      "comment" : "Component: label of a sheet or panel Close button that names no title (the Account sheet, S10 R10), so it cannot be heard as deleting the account",
+      "extractionState" : "manual"
+    },
     "Close %@" : {
       "comment" : "Panel shell: accessibility label of the Close button, with the panel title",
+      "extractionState" : "manual"
+    },
+    "Co-Host" : {
+      "comment" : "Role tag shown beside a person name for a co-host (iOS title case capitalizes both parts, S50 R50-5)",
       "extractionState" : "manual"
     },
     "Commands" : {
@@ -135,6 +187,10 @@
     },
     "Control Taps" : {
       "comment" : "Debug component gallery: label of the readout that counts what the call controls’ gesture route recorded",
+      "extractionState" : "manual"
+    },
+    "Controls" : {
+      "comment" : "Debug session readout row: the state of each call control (microphone, camera, hand and so on)",
       "extractionState" : "manual"
     },
     "Copy Link" : {
@@ -193,6 +249,14 @@
       "comment" : "Debug component gallery: contrast verdict when the ratio misses its class",
       "extractionState" : "manual"
     },
+    "Feedback" : {
+      "comment" : "Debug session readout row: the last haptic feedback event the session published",
+      "extractionState" : "manual"
+    },
+    "Feedback Records" : {
+      "comment" : "Debug session readout row: how many haptic effects the app played since the readout opened",
+      "extractionState" : "manual"
+    },
     "Force Opaque Controls" : {
       "comment" : "Debug component gallery: switch that forces the opaque call control surface instead of Liquid Glass; off at every launch",
       "extractionState" : "manual"
@@ -221,6 +285,10 @@
       "comment" : "Layout panel option: every tile in an equal grid",
       "extractionState" : "manual"
     },
+    "Hand Raised" : {
+      "comment" : "Video tile: state read with a participant tile while their hand is raised",
+      "extractionState" : "manual"
+    },
     "Haptics" : {
       "comment" : "Debug component gallery: section title for haptic mapping specimens",
       "extractionState" : "manual"
@@ -231,6 +299,14 @@
     },
     "Hold" : {
       "comment" : "Debug system fixture: button that sends a system hold command (as CallKit does for Hold and Accept)",
+      "extractionState" : "manual"
+    },
+    "Host" : {
+      "comment" : "Role tag shown beside a person name for the meeting host",
+      "extractionState" : "manual"
+    },
+    "Identity" : {
+      "comment" : "Debug session readout row: the call session, attempt and revision numbers",
       "extractionState" : "manual"
     },
     "In Call" : {
@@ -281,6 +357,10 @@
       "comment" : "Call controls: accessibility label of the glyph-only red Leave control; no visible text (owner OQ3)",
       "extractionState" : "manual"
     },
+    "Ledger" : {
+      "comment" : "Debug session readout row: actions waiting for the server and the last finished one",
+      "extractionState" : "manual"
+    },
     "Left to Right" : {
       "comment" : "Debug component gallery: readout value for left-to-right layout",
       "extractionState" : "manual"
@@ -307,6 +387,10 @@
     },
     "Loading Participants" : {
       "comment" : "Debug component gallery: sample label of the loading state",
+      "extractionState" : "manual"
+    },
+    "Locked" : {
+      "comment" : "Meeting capsule: added to the capsule value when the host locked the meeting",
       "extractionState" : "manual"
     },
     "Long Text" : {
@@ -361,6 +445,10 @@
       "comment" : "Debug component gallery: readout value when nothing was tapped yet",
       "extractionState" : "manual"
     },
+    "Not Now" : {
+      "comment" : "Dialog: dismiss button of an alert that explains a decision, for example a permission alert with Open Settings",
+      "extractionState" : "manual"
+    },
     "Not Run" : {
       "comment" : "Debug component gallery: readout value before the haptic table was verified",
       "extractionState" : "manual"
@@ -389,6 +477,10 @@
       "comment" : "Debug component gallery: specimen readout with a contrast verdict",
       "extractionState" : "manual"
     },
+    "Outcome" : {
+      "comment" : "Debug session readout row: how the last meeting ended (for example removed, connection lost)",
+      "extractionState" : "manual"
+    },
     "Outcome Route" : {
       "comment" : "Debug component gallery: header above haptic kinds played only as session outcomes",
       "extractionState" : "manual"
@@ -396,6 +488,18 @@
     "Outside sRGB, no ratio" : {
       "comment" : "Debug component gallery: shown instead of a contrast verdict when a resolved color lies outside sRGB",
       "extractionState" : "manual"
+    },
+    "Overflow Count %lld" : {
+      "comment" : "Overflow tile: visible count of participants not shown on the stage, for example +5",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "+%lld"
+          }
+        }
+      }
     },
     "Participants" : {
       "comment" : "Panel title: the people in the meeting",
@@ -405,16 +509,32 @@
       "comment" : "Debug component gallery: contrast verdict when the ratio meets its class",
       "extractionState" : "manual"
     },
+    "Phase" : {
+      "comment" : "Debug session readout row: the meeting phase and notice (for example in call, reconnecting)",
+      "extractionState" : "manual"
+    },
+    "Pinned" : {
+      "comment" : "Video tile: state read with a pinned participant tile",
+      "extractionState" : "manual"
+    },
     "Presence" : {
       "comment" : "Debug system fixture: label of the call presence readout (phase, surface, status, session)",
       "extractionState" : "manual"
     },
     "Presenting" : {
-      "comment" : "Debug component gallery: sample detail line under the person name",
+      "comment" : "Video tile: state read with the tile of the person sharing their screen (FND-2); also the sample detail line under the person name in the Debug component gallery",
       "extractionState" : "manual"
     },
     "Ratio %@ against %@: %@" : {
       "comment" : "Debug component gallery: contrast verdict: ratio, contrast class, then Passes or Fails",
+      "extractionState" : "manual"
+    },
+    "Reactions are off" : {
+      "comment" : "Reaction palette: reason read on each emoji while the host turned reactions off; the row stays, disabled",
+      "extractionState" : "manual"
+    },
+    "Reconnecting" : {
+      "comment" : "Video tile: centered pill and state while a participant reconnects",
       "extractionState" : "manual"
     },
     "Reconnecting to the call." : {
@@ -485,6 +605,14 @@
       "comment" : "Debug component gallery: live contrast pair caption. The live system grouped background, which Increase Contrast darkens, not the fixed launch color of the token pair",
       "extractionState" : "manual"
     },
+    "Send" : {
+      "comment" : "Composer: accessibility label of the send glyph",
+      "extractionState" : "manual"
+    },
+    "Session Readout" : {
+      "comment" : "Debug hosting preview: section title of the meeting session readout (WP2-S2b); developer only, the values are machine-readable codes",
+      "extractionState" : "manual"
+    },
     "Settings" : {
       "comment" : "Meeting settings entry point title",
       "extractionState" : "manual"
@@ -518,7 +646,11 @@
       "extractionState" : "manual"
     },
     "Speaker" : {
-      "comment" : "Debug component gallery: first choice of the sample single choice rows",
+      "comment" : "Audio route name for the device loudspeaker in the route list, the Mic shortcut and route toasts (S30 3 g, SYS-2); also the first choice of the Debug component gallery sample single choice rows",
+      "extractionState" : "manual"
+    },
+    "Speaking" : {
+      "comment" : "Video tile (iOS): state read with a participant tile while they speak",
       "extractionState" : "manual"
     },
     "Spotlight" : {
@@ -605,6 +737,10 @@
       "comment" : "Debug component gallery: sample text of the warning banner",
       "extractionState" : "manual"
     },
+    "Weak Connection" : {
+      "comment" : "Video tile: state read with a participant tile whose connection is weak",
+      "extractionState" : "manual"
+    },
     "White glyph on the Leave red" : {
       "comment" : "Debug component gallery: caption of the live contrast row for the white Leave glyph on the system red fill",
       "extractionState" : "manual"
@@ -617,12 +753,20 @@
       "comment" : "Debug component gallery: the announcement a production banner would post; the silent gallery never posts it",
       "extractionState" : "manual"
     },
+    "You" : {
+      "comment" : "Role tag beside your own name in lists; on iOS also the name pill and label of your own video tile",
+      "extractionState" : "manual"
+    },
     "Your notes were saved." : {
       "comment" : "Debug component gallery: sample text of the success banner",
       "extractionState" : "manual"
     },
     "You’re Offline" : {
       "comment" : "Status view: title of the offline state",
+      "extractionState" : "manual"
+    },
+    "iPhone" : {
+      "comment" : "Audio route name for the iPhone's own receiver (the earpiece), as the system route list names it; shown in the Mic shortcut and route toasts (S30 3 g, SYS-2)",
       "extractionState" : "manual"
     },
     "outcome route only" : {

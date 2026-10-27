@@ -131,6 +131,7 @@ struct MoreSheetView: View {
                         : "faint",
                     isDisabled: !canUseParticipantActions
                 ) {
+                    ConclaveHapticFeedback.gesture(viewModel.state.isHandRaised ? FeedbackKind.handLowered : FeedbackKind.handRaised)
                     viewModel.toggleHandRaise()
                     closeSheet()
                 }
@@ -188,6 +189,7 @@ struct MoreSheetView: View {
             HStack(spacing: 0) {
                 ForEach(emojiReactions) { option in
                     Button {
+                        ConclaveHapticFeedback.gesture(FeedbackKind.reactionSent)
                         viewModel.sendReaction(option)
                         closeSheet()
                     } label: {
@@ -206,6 +208,7 @@ struct MoreSheetView: View {
             HStack(spacing: ACMSpacing.xs) {
                 ForEach(assetReactions) { option in
                     Button {
+                        ConclaveHapticFeedback.gesture(FeedbackKind.reactionSent)
                         viewModel.sendReaction(option)
                         closeSheet()
                     } label: {

@@ -12,69 +12,8 @@ private struct MeetingActionResponseError: LocalizedError {
     }
 }
 
-enum MeetingMediaErrorPresentation {
-    static func message(for error: Error) -> String {
-        friendlyMessage(
-            for: error,
-            permissionMessage: "Camera/microphone permission denied",
-            missingDeviceMessage: "Camera or microphone not found",
-            fallbackMessage: "Media action failed."
-        )
-    }
-
-    static func screenShareMessage(for error: Error) -> String {
-        let message = friendlyMessage(
-            for: error,
-            permissionMessage: "Screen sharing permission denied",
-            missingDeviceMessage: "Screen sharing is unavailable on this device",
-            fallbackMessage: "Screen sharing failed."
-        )
-        return "Failed to toggle screen sharing: \(message)"
-    }
-
-    private static func friendlyMessage(
-        for error: Error,
-        permissionMessage: String,
-        missingDeviceMessage: String,
-        fallbackMessage: String
-    ) -> String {
-        let rawMessage = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-        let message = rawMessage.lowercased()
-
-        if containsAny(message, ["permission denied", "notallowederror", "permission not granted", "not granted", "denied", "no screen capture permission"]) {
-            return permissionMessage
-        }
-        if containsAny(message, ["notfounderror", "devicesnotfounderror", "no camera available", "no camera capturer", "no video track", "no audio track"]) {
-            return missingDeviceMessage
-        }
-        if containsAny(message, ["connection", "socket", "transport"]) {
-            return "Failed to connect to server"
-        }
-
-        return rawMessage.isEmpty ? fallbackMessage : rawMessage
-    }
-
-    private static func containsAny(_ message: String, _ needles: [String]) -> Bool {
-        needles.contains { message.contains($0) }
-    }
-}
-
-enum MeetingChatErrorPresentation {
-    static func message(for error: Error) -> String {
-        let rawMessage = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-        let message = rawMessage.lowercased()
-
-        if containsAny(message, ["socket is not connected", "not connected", "timed out", "connection"]) {
-            return "Reconnect before sending chat."
-        }
-
-        return rawMessage.isEmpty ? "Could not send chat." : rawMessage
-    }
-
-    private static func containsAny(_ message: String, _ needles: [String]) -> Bool {
-        needles.contains { message.contains($0) }
-    }
-}
+// WP2-S2a (S70 SY11): `MeetingErrorClassifier` (S/Core/Session) replaced the media and chat error presentation
+// enums; legacy banner copy comes from `MeetingErrorLegacyCopy`.
 
 private enum MeetingViewPreferences {
     private static let keyPrefix = "conclave.meetView."
@@ -525,6 +464,8 @@ final class MeetingViewModel {
         didSet { requestShellRefresh() }
     }
     private var terminalOutcomeSerial = 0
+    /// S70 5 c (O2): the camera is paused by a CallKit hold; never written to `isCameraOff` or the camera intent.
+    private var isCameraSuspendedForHold = false
     /// While above zero, hooked writes do not refresh; the batch end refreshes once (S1C ID, A19).
     private var shellRefreshBatchDepth = 0
     /// R70-11: set by the redirect path before the new call session starts, so the system call keeps its presence
@@ -1254,9 +1195,9 @@ final class MeetingViewModel {
                         await self.forceRejoinWithFreshToken()
                         return
                     }
-                    self.clearConnectionRecovery()
-                    self.state.connectionState = ConnectionState.disconnected
-                    self.shouldRejoinAfterReconnect = false
+                    // S10 0.8 C4 (INM H3.13): no restart notice, no kick and no room end, so the server ended the
+                    // connection: record the typed outcome and tear down (the legacy route still goes home).
+                    await self.finishServerDisconnect()
                     return
                 }
                 self.beginConnectionRecovery()
@@ -1269,10 +1210,10 @@ final class MeetingViewModel {
             let eventContext = self.currentSocketEventContext()
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext) else { return }
-                self.state.errorMessage = error.localizedDescription
-                #if !SKIP
-                HapticManager.shared.trigger(.error)
-                #endif
+                // S70 7 f: a raw socket error goes to diagnostics only; the recovery banner carries the state and no
+                // haptic plays (WP2-H2, TG 3.6 row 14).
+                let classified = MeetingErrorClassifier.classify(error, context: .join, isNetworkOffline: self.state.isNetworkOffline)
+                debugLog("[Meeting] Socket error \(classified.diagnosticCode): \(error.localizedDescription)")
             }
         }
 
@@ -3370,16 +3311,22 @@ final class MeetingViewModel {
         isCurrentJoinedCall(roomId: context.roomId, joinAttemptId: context.joinAttemptId)
     }
 
+    /// S70 7 f: `applyActionError` feeds the classifier; the legacy banner gets owned copy or a clean server sentence,
+    /// never raw transport text.
     private func applyActionError(_ error: Error, context: CallActionContext) {
         guard isSameCallContext(context) else { return }
-        state.errorMessage = error.localizedDescription
+        let classified = MeetingErrorClassifier.classify(error, context: .hostAction, isNetworkOffline: state.isNetworkOffline)
+        debugLog("[Meeting] Action error \(classified.diagnosticCode): \(error.localizedDescription)")
+        guard let message = MeetingErrorLegacyCopy.message(classified) else { return }
+        state.errorMessage = message
     }
 
     private func applyChatSendError(_ error: Error, context: CallActionContext) {
         guard isSameCallContext(context) else { return }
-        let message = MeetingChatErrorPresentation.message(for: error)
+        let classified = MeetingErrorClassifier.classify(error, context: .chat, isNetworkOffline: state.isNetworkOffline)
+        debugLog("[Meeting] Chat send error \(classified.diagnosticCode): \(error.localizedDescription)")
+        guard let message = MeetingErrorLegacyCopy.message(classified) else { return }
         addSystemMessage(.info(message))
-        debugLog("[Meeting] Chat send error: \(error.localizedDescription)")
     }
 
     private func removeStalePendingUserIfNeeded(userId: String, error: Error, context: CallActionContext) -> Bool {
@@ -6002,9 +5949,20 @@ final class MeetingViewModel {
                     return
                 }
                 if isRecoveryJoin {
+                    let classified = MeetingErrorClassifier.classify(error, context: .rejoin, isNetworkOffline: state.isNetworkOffline)
+                    if classified.category == .roomEnded {
+                        // S10 0.8 C5 (10 f): a rejoin answer that says the room ended is a host end, a Home notice.
+                        await finishMeetingEnded(
+                            showNotice: true,
+                            message: classified.serverText.isEmpty ? nil : classified.serverText,
+                            outcome: .endedByHost
+                        )
+                        return
+                    }
                     await scheduleRejoinRetry(after: error, joinAttemptId: joinAttemptId)
                 } else {
-                    await finishJoinFailure(error.localizedDescription)
+                    let classified = MeetingErrorClassifier.classify(error, context: .join, isNetworkOffline: state.isNetworkOffline)
+                    await finishJoinFailure(error.localizedDescription, classified: classified)
                 }
             }
         }
@@ -6340,7 +6298,7 @@ final class MeetingViewModel {
               !isMuteToggleInFlight else { return }
         state.isMuted = true
         syncCallPresenceState()
-        state.errorMessage = MeetingMediaErrorPresentation.message(for: error)
+        reportMediaFailure(error, kind: .microphone)
     }
 
     private func reassertLocalVideoPublishingIfNeeded(context: SocketEventContext? = nil) async {
@@ -6379,7 +6337,7 @@ final class MeetingViewModel {
             debugLog("[Meeting] Failed to reassert camera publishing: \(error)")
             if shouldDisableCameraIntentAfterPublishingFailure(error) {
                 setLocalCameraOffState(true)
-                state.errorMessage = MeetingMediaErrorPresentation.message(for: error)
+                reportMediaFailure(error, kind: .camera)
             }
         }
     }
@@ -6794,7 +6752,7 @@ final class MeetingViewModel {
                 debugLog("[Meeting] Failed to start audio: \(error)")
                 state.isMuted = true
                 syncCallPresenceState()
-                state.errorMessage = MeetingMediaErrorPresentation.message(for: error)
+                reportMediaFailure(error, kind: .microphone)
             }
         }
 
@@ -6822,7 +6780,7 @@ final class MeetingViewModel {
                 guard isCurrentJoinAttempt(joinAttemptId) else { return false }
                 debugLog("[Meeting] Failed to start video: \(error)")
                 setLocalCameraOffState(true)
-                state.errorMessage = MeetingMediaErrorPresentation.message(for: error)
+                reportMediaFailure(error, kind: .camera)
             }
         }
 
@@ -6845,9 +6803,6 @@ final class MeetingViewModel {
     }
 
     func leaveRoom() {
-        #if !SKIP
-        HapticManager.shared.trigger(.light)
-        #endif
         let leavingGeneration = meetingLifecycleGeneration
         recordTerminalOutcome(.left, serverText: "")
         activeJoinAttemptId = nil
@@ -6888,10 +6843,31 @@ final class MeetingViewModel {
         state.meetingEndedNoticeMessage = nil
         state.serverRestartNotice = nil
         socketManager.disconnect()
-        #if !SKIP
-        HapticManager.shared.trigger(.error)
-        #endif
         await cleanup()
+    }
+
+    /// S10 0.8 C4 (INM H3.13): the server ended the connection without a restart notice. The typed outcome
+    /// (`serverDisconnected`, the outcome phase and the `connectionLost` token) is recorded before the phase write; the
+    /// legacy route goes home as before, now with the call torn down.
+    private func finishServerDisconnect() async {
+        guard !isIntentionalTeardownInProgress else { return }
+        let disconnectGeneration = meetingLifecycleGeneration
+        isIntentionalLeave = true
+        isIntentionalTeardownInProgress = true
+        shouldRejoinAfterReconnect = false
+        isRejoinInFlight = false
+        clearConnectionRecovery()
+        resetReconnectRetryState()
+        clearMeetingResumeSnapshot()
+        clearMeetingEntry()
+        recordTerminalOutcome(.serverDisconnected, serverText: "")
+        state.connectionState = ConnectionState.disconnected
+        state.waitingMessage = nil
+        state.serverRestartNotice = nil
+        socketManager.disconnect()
+        await cleanup(lifecycleGeneration: disconnectGeneration)
+        guard meetingLifecycleGeneration == disconnectGeneration else { return }
+        isIntentionalTeardownInProgress = false
     }
 
     private func finishRoomEnded(_ message: String, endedBy: String?) async {
@@ -6951,9 +6927,20 @@ final class MeetingViewModel {
         return trimmed.isEmpty ? "The host ended this meeting. You are back on the home screen." : trimmed
     }
 
-    private func finishJoinFailure(_ message: String, outcome: MeetingTerminalOutcomeKind = .joinFailed) async {
+    private func finishJoinFailure(
+        _ message: String,
+        outcome: MeetingTerminalOutcomeKind = .joinFailed,
+        classified: ClassifiedError? = nil
+    ) async {
         let failureGeneration = meetingLifecycleGeneration
         let resolvedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        // S70 7: the legacy error screen shows owned copy or a clean server sentence, never transport text; the
+        // outcome keeps only clean server text (S10 10 j `serverDetail`).
+        let classification = classified ?? MeetingErrorClassifier.classify(
+            serverMessage: resolvedMessage,
+            context: outcome == .joinFailed ? .join : .rejoin
+        )
+        debugLog("[Meeting] Join failure \(classification.diagnosticCode): \(resolvedMessage)")
         let preservedRoomId = state.roomId
         let preservedDisplayName = state.displayName
         let preservedIsMuted = state.isMuted
@@ -6974,12 +6961,9 @@ final class MeetingViewModel {
         state.displayName = preservedDisplayName
         state.isMuted = preservedIsMuted
         state.isCameraOff = preservedIsCameraOff
-        recordTerminalOutcome(outcome, serverText: resolvedMessage)
+        recordTerminalOutcome(outcome, serverText: classification.serverText)
         state.connectionState = ConnectionState.error
-        state.errorMessage = resolvedMessage.isEmpty ? "Failed to join the meeting." : resolvedMessage
-        #if !SKIP
-        HapticManager.shared.trigger(.error)
-        #endif
+        state.errorMessage = MeetingErrorLegacyCopy.message(classification) ?? "Failed to join the meeting."
     }
 
     private func finishRecoverableJoinFormFailure(_ message: String) {
@@ -6998,9 +6982,8 @@ final class MeetingViewModel {
         state.connectionState = ConnectionState.disconnected
         state.errorMessage = nil
         state.joinFormErrorMessage = message
-        #if !SKIP
-        HapticManager.shared.trigger(.error)
-        #endif
+        // TG 3.6 row 18: the legacy outcome route (the premeeting presenter publishes validationFailed with ENT-1).
+        ConclaveHapticFeedback.legacyOutcome(.validationFailed)
     }
 
     // MARK: - Session Shell (WP2-S1) and Call Presence Inputs (SYS-1)
@@ -7074,7 +7057,13 @@ final class MeetingViewModel {
             cameraToggleInFlight: isCameraToggleInFlight,
             screenShareToggleInFlight: isScreenShareToggleInFlight,
             handToggleInFlight: isHandRaiseToggleInFlight,
-            isTearingDown: isIntentionalTeardownInProgress
+            isTearingDown: isIntentionalTeardownInProgress,
+            // R70-11: a redirect of a call that was already live keeps the stage and its admission.
+            isRedirectContinuation: redirectContinuationPending && presenceJoinedAtMillis > 0,
+            // No permission provider yet (WP3): rows stay as the legacy bar until it reports.
+            microphonePermission: MeetingMediaPermissionStatus.granted,
+            cameraPermission: MeetingMediaPermissionStatus.granted,
+            audioInterruption: callPresence.snapshot.interruption
         )
     }
 
@@ -7118,6 +7107,10 @@ final class MeetingViewModel {
             kind: kind,
             serverText: serverText
         )
+        // WP2-H2 (PLAN-next A6): one legacy haptic derived from the typed outcome, no per-caller parameter. The facade
+        // refuses every kind the root consumer delivers as a token (WP2-S2b: denied, removed, joinFailed and
+        // connectionLost), so each outcome plays through exactly one route.
+        ConclaveHapticFeedback.legacyOutcome(MeetingLegacyHapticPolicy.feedbackKind(for: kind))
     }
 
     /// S1C E8: each shell intent reaches the existing implementation; the presenter never owns media state.
@@ -7187,9 +7180,96 @@ final class MeetingViewModel {
             if !state.isMuted {
                 shell.toggleMicrophone()
             }
-        case .resume, .returnToCall:
+            // S70 5 c (O2): the camera pauses for the hold over the recovery suspend path.
+            setCameraSuspendedForHold(true)
+            // R70-6: the microphone row and the notice read the hold from CallPresence.
+            requestShellRefresh()
+        case .resume:
+            // O2: the microphone stays muted; the camera restarts only while camera-on is still the intent.
+            setCameraSuspendedForHold(false)
+            requestShellRefresh()
+        case .returnToCall:
             break
         }
+    }
+
+    /// S70 5 c (O2): a CallKit hold pauses the camera over the recovery suspend path (`suspendLocalVideoForRecovery`,
+    /// which never writes `isCameraOff` or the camera intent); resume restarts it only while camera-on is still the
+    /// intent (`reassertLocalVideoPublishingIfNeeded` checks `isCameraOff` and the intent revisions).
+    func setCameraSuspendedForHold(_ suspended: Bool) {
+        guard suspended != isCameraSuspendedForHold else { return }
+        isCameraSuspendedForHold = suspended
+        if suspended {
+            Task { @MainActor [weak self] in
+                await self?.webRTCClient.suspendLocalVideoForRecovery()
+            }
+        } else {
+            let context = currentSocketEventContext()
+            Task { @MainActor [weak self] in
+                await self?.reassertLocalVideoPublishingIfNeeded(context: context)
+            }
+        }
+    }
+
+    /// S70 5 j: the on-hold banner's Resume. CallKit's echo dispatches `.resume`; Android Phase A has no hold.
+    func resumeFromHold() {
+        #if os(iOS) && !SKIP
+        CallKitPresenceAdapter.shared.requestResumeFromHold()
+        #endif
+    }
+
+    /// S70 5 (R70-6, RECONCILE R29): the audio route owner reports interruptions here, so CallPresence and the
+    /// microphone row (`audioInterrupted`, `onHold`) change in one refresh.
+    func reportAudioInterruption(_ kind: AudioInterruptionKind) {
+        callPresence.reportInterruption(kind)
+        requestShellRefresh()
+    }
+
+    /// WP2-S2a (PLAN-next 7 item 4, S70 SY11): one classifier for every media failure. The S1 row gets the typed
+    /// failure (`kind` nil for a failure that belongs to no row, such as a camera flip); the legacy banner gets owned
+    /// copy, never raw transport text; a cancel shows nothing.
+    private func reportMediaFailure(_ error: Error, kind: MeetingActionKind?) {
+        let context: MeetingErrorContext = kind == .screenShare ? .screenShare : .media
+        let classified = MeetingErrorClassifier.classify(error, context: context, isNetworkOffline: state.isNetworkOffline)
+        debugLog("[Meeting] Media failure \(classified.diagnosticCode): \(error.localizedDescription)")
+        if let kind {
+            shell.reportFailure(kind, MeetingErrorClassifier.actionResult(classified))
+        }
+        let device: MeetingMediaDevice = kind == .microphone
+            ? MeetingMediaDevice.microphone
+            : (kind == .screenShare ? MeetingMediaDevice.screen : MeetingMediaDevice.camera)
+        guard let message = MeetingErrorLegacyCopy.message(classified, device: device) else { return }
+        state.errorMessage = message
+    }
+
+    // MARK: - Room switch (WP2-S2b)
+
+    /// S10 4: the join mode of the current call, for the same-room rule (`lastJoinContext.joinMode`).
+    var currentJoinMode: JoinMode {
+        if let context = lastJoinContext {
+            return context.joinMode
+        }
+        return state.isWebinarAttendee ? JoinMode.webinarAttendee : JoinMode.meeting
+    }
+
+    /// S10 4 (WP2-S2b): the inputs of `MeetingRoomSwitchPolicy` for a parsed link target. The premeeting presenter
+    /// (ENT-2) adds its lobby mode and sign-in state; the same-room check keeps today's rule (ids and aliases).
+    func makeRoomSwitchInputs(
+        targetRoomId: String,
+        targetJoinMode: JoinMode,
+        targetKind: MeetingRoomSwitchTargetKind,
+        lobby: MeetingRoomSwitchLobby = MeetingRoomSwitchLobby.none,
+        isSigningIn: Bool = false
+    ) -> MeetingRoomSwitchInputs {
+        MeetingRoomSwitchInputs.make(
+            phase: shell.session.phase,
+            lobby: lobby,
+            isSigningIn: isSigningIn,
+            isSameRoom: isCurrentRoomDeepLinkTarget(targetRoomId),
+            currentJoinMode: currentJoinMode,
+            targetKind: targetKind,
+            targetJoinMode: targetJoinMode
+        )
     }
 
     /// Interim S10 0.8 C1 for a system mute before admission (ENT-1 adds `setEntryMediaIntent`): the join publishes
@@ -7205,10 +7285,21 @@ final class MeetingViewModel {
     /// Only `MeetingViewModel.shared` drives the system surfaces (S70 0.5: the platform installs its set once).
     private func installPlatformCallPresenceAdapters() {
         #if os(iOS) && !SKIP
-        callPresence.adapters = CallPresenceAdapters([CallKitPresenceAdapter.shared.makeAdapter(for: callPresence)])
+        // CallKit first (it reports the surface), then the audio session owner, which follows the surface for
+        // AudioActivationPolicy and hands a refused call to the fallback activation (S70 5 c).
+        callPresence.adapters = CallPresenceAdapters([
+            CallKitPresenceAdapter.shared.makeAdapter(for: callPresence),
+            CallAudioSession.shared.makePresenceAdapter()
+        ])
         #elseif SKIP
         callPresence.adapters = CallNotificationBridge.presenceAdapters(presence: callPresence)
         #endif
+        // SYS-2: the route owner is the only interruption reporter (S70 0.5); it reads holds from the presence and
+        // reports through the VM so the S1 microphone row refreshes with it (R29).
+        AudioRouteOwner.shared.presence = callPresence
+        AudioRouteOwner.shared.onInterruption = { [weak self] kind in
+            self?.reportAudioInterruption(kind)
+        }
     }
 
     // MARK: - System Call Presence
@@ -7394,6 +7485,7 @@ final class MeetingViewModel {
     func deactivateCallPresence() {
         CallSessionCoordinator.shared.unregister(self)
         CallScreenAwake.setActive(false)
+        isCameraSuspendedForHold = false
         #if os(iOS) && !SKIP
         CallAudioSession.shared.setCategoryOptionsProvider(nil)
         CallAudioSession.shared.setRouteReassertionHandler(nil)
@@ -7939,9 +8031,6 @@ final class MeetingViewModel {
         let newState = !state.isMuted
         state.isMuted = newState
         syncCallPresenceState()
-        #if !SKIP
-        HapticManager.shared.trigger(.light)
-        #endif
 
         guard newState else { return }
         // Mute now, not on a later hop: the recovered attempt can join (and
@@ -7957,9 +8046,6 @@ final class MeetingViewModel {
         localCameraIntentRevision += 1
         let intentRevision = localCameraIntentRevision
         setLocalCameraOffState(newState)
-        #if !SKIP
-        HapticManager.shared.trigger(.light)
-        #endif
 
         guard newState else { return }
         let lifecycleGeneration = meetingLifecycleGeneration
@@ -8004,9 +8090,6 @@ final class MeetingViewModel {
                 syncCallPresenceState()
                 return
             }
-            #if !SKIP
-            HapticManager.shared.trigger(.light)
-            #endif
             applyLocalMuteNow(context: currentSocketEventContext())
             return
         }
@@ -8017,9 +8100,6 @@ final class MeetingViewModel {
         muteToggleToken = toggleToken
         let newState = !state.isMuted
         state.isMuted = newState
-        #if !SKIP
-        HapticManager.shared.trigger(.light)
-        #endif
         syncCallPresenceState()
         Task { @MainActor in
             defer {
@@ -8056,7 +8136,7 @@ final class MeetingViewModel {
                 // (the client kept the local mute), so it stays muted too.
                 state.isMuted = true
                 syncCallPresenceState()
-                state.errorMessage = MeetingMediaErrorPresentation.message(for: error)
+                reportMediaFailure(error, kind: .microphone)
             }
         }
     }
@@ -8078,9 +8158,6 @@ final class MeetingViewModel {
             // camera-on awaits its acknowledgement applies now. A camera-on
             // while a toggle is in flight stays ignored.
             guard !state.isCameraOff else { return }
-            #if !SKIP
-            HapticManager.shared.trigger(.light)
-            #endif
             applyLocalCameraOffNow(context: currentCallActionContext())
             return
         }
@@ -8093,9 +8170,6 @@ final class MeetingViewModel {
         localCameraIntentRevision += 1
         let actionCameraIntentRevision = localCameraIntentRevision
         setLocalCameraOffState(newState, syncCallPresence: newState)
-        #if !SKIP
-        HapticManager.shared.trigger(.light)
-        #endif
         Task { @MainActor in
             defer {
                 if cameraToggleToken == toggleToken {
@@ -8131,7 +8205,7 @@ final class MeetingViewModel {
                 // A superseded camera-on reports no error: the camera-off stands.
                 guard newState || localCameraIntentRevision == actionCameraIntentRevision else { return }
                 setLocalCameraOffState(!newState)
-                state.errorMessage = MeetingMediaErrorPresentation.message(for: error)
+                reportMediaFailure(error, kind: .camera)
             }
         }
     }
@@ -8174,9 +8248,6 @@ final class MeetingViewModel {
         let actionContext = currentCallActionContext()
         let switchToken = UUID()
         cameraSwitchToken = switchToken
-        #if !SKIP
-        HapticManager.shared.trigger(.light)
-        #endif
         Task { @MainActor in
             defer {
                 if cameraSwitchToken == switchToken {
@@ -8197,7 +8268,8 @@ final class MeetingViewModel {
                 #endif
             } catch {
                 guard isCurrentJoinedCall(actionContext) else { return }
-                state.errorMessage = MeetingMediaErrorPresentation.message(for: error)
+                // A camera flip failure is copy only: the camera row keeps its state and failure.
+                reportMediaFailure(error, kind: nil)
             }
         }
     }
@@ -8296,7 +8368,7 @@ final class MeetingViewModel {
                     state.isScreenSharing = false
                     clearLocalActiveScreenShareIfNeeded()
                     if !isCaptureCancelled {
-                        state.errorMessage = MeetingMediaErrorPresentation.screenShareMessage(for: error)
+                        reportMediaFailure(error, kind: .screenShare)
                     }
                 }
                 debugLog(isCaptureCancelled ? "[Meeting] Screen sharing cancelled" : "[Meeting] Screen sharing error: \(error)")
@@ -8380,7 +8452,7 @@ final class MeetingViewModel {
                             await webRTCClient.closeLocalScreenProducer()
                             state.isScreenSharing = false
                             clearLocalActiveScreenShareIfNeeded()
-                            state.errorMessage = MeetingMediaErrorPresentation.screenShareMessage(for: error)
+                            reportMediaFailure(error, kind: .screenShare)
                         }
                         debugLog("[Meeting] Screen sharing error: \(error)")
                     }
@@ -8457,15 +8529,17 @@ final class MeetingViewModel {
     /// S1 hand ticket binds to the F7 token release: `setHandRaisedState` frees its guard only while it owns
     /// `handRaiseToggleToken`, and the result is reported after that release, so a ticket never outlives its guard.
     func toggleHandRaise(onResult: ((MeetingActionResult) -> Void)? = nil) {
+        // S30 CC3: every failure says which way the hand was going.
+        let direction: MeetingActionDirection = state.isHandRaised ? .lower : .raise
         guard state.connectionState == .joined else {
             let failure: MeetingActionFailure = state.connectionState == .disconnected || state.connectionState == .error
                 ? .notConnected
                 : .notJoined
-            onResult?(MeetingActionResult.failed(failure))
+            onResult?(MeetingActionResult.failed(failure, direction: direction))
             return
         }
         guard !state.isWebinarAttendee else {
-            onResult?(MeetingActionResult.failed(.roleRequired))
+            onResult?(MeetingActionResult.failed(.roleRequired, direction: direction))
             return
         }
         guard !isHandRaiseToggleInFlight else {
@@ -8474,9 +8548,6 @@ final class MeetingViewModel {
         }
         let newState = !state.isHandRaised
         let actionContext = currentCallActionContext()
-        #if !SKIP
-        HapticManager.shared.trigger(.medium)
-        #endif
         Task { @MainActor in
             guard isCurrentJoinedCall(actionContext) else {
                 onResult?(MeetingActionResult.interrupted)
@@ -8490,7 +8561,7 @@ final class MeetingViewModel {
                 ))
             } catch {
                 applyActionError(error, context: actionContext)
-                onResult?(MeetingActionFailurePolicy.result(for: error))
+                onResult?(MeetingActionFailurePolicy.result(for: error, direction: newState ? .raise : .lower))
             }
         }
     }
@@ -8816,24 +8887,24 @@ final class MeetingViewModel {
         }
     }
 
+    /// SYS-2 (S30 CC4): the route owner keeps the explicit choice through device loss and adopts choices made in
+    /// system UI; the legacy selection mirrors it and is never cleared because a device left (CE G8).
     private func normalizeSelectedAudioDeviceState() {
-        if state.selectedAudioInputId != nil,
-           validAudioDeviceId(state.selectedAudioInputId, in: availableAudioInputs()) == nil {
-            state.selectedAudioInputId = nil
+        let output = AudioRouteOwner.shared.preferredRouteIntent
+        let input = AudioRouteOwner.shared.preferredInputIntent
+        let nextOutput: String? = output.isEmpty ? nil : output
+        let nextInput: String? = input.isEmpty ? nil : input
+        if state.selectedAudioOutputId != nextOutput {
+            state.selectedAudioOutputId = nextOutput
         }
-        if state.selectedAudioOutputId != nil,
-           validAudioDeviceId(state.selectedAudioOutputId, in: availableAudioOutputs()) == nil {
-            state.selectedAudioOutputId = nil
+        if state.selectedAudioInputId != nextInput {
+            state.selectedAudioInputId = nextInput
         }
     }
 
     // MARK: - Chat Commands
 
     func executeChatCommand(_ parsedCommand: ParsedCommand) {
-        #if !SKIP
-        HapticManager.shared.trigger(.medium)
-        #endif
-
         let commandContext = currentCallActionContext()
         Task {
             guard isCurrentJoinedCall(commandContext) else { return }
@@ -9068,7 +9139,7 @@ final class MeetingViewModel {
             // A failed mute fails closed (the client kept the local mute).
             state.isMuted = muted ? true : previousMuted
             syncCallPresenceState()
-            state.errorMessage = MeetingMediaErrorPresentation.message(for: error)
+            reportMediaFailure(error, kind: .microphone)
         }
     }
 
@@ -9119,7 +9190,7 @@ final class MeetingViewModel {
             // A superseded camera-on reports no error: the camera-off stands.
             guard cameraOff || localCameraIntentRevision == actionCameraIntentRevision else { return }
             setLocalCameraOffState(previousCameraOff)
-            state.errorMessage = MeetingMediaErrorPresentation.message(for: error)
+            reportMediaFailure(error, kind: .camera)
         }
     }
 
@@ -9692,10 +9763,6 @@ final class MeetingViewModel {
             return
         }
 
-        #if !SKIP
-        HapticManager.shared.trigger(.light)
-        #endif
-
         let actionContext = currentCallActionContext()
         let optimisticMessage = appendOptimisticChatMessage(content: trimmed, gif: gif, replyTo: replyTo)
         Task {
@@ -9727,10 +9794,6 @@ final class MeetingViewModel {
         question: String,
         replyTo: ChatReplyPreview?
     ) {
-        #if !SKIP
-        HapticManager.shared.trigger(.light)
-        #endif
-
         let actionContext = currentCallActionContext()
         Task {
             do {
@@ -9946,9 +10009,6 @@ final class MeetingViewModel {
         let now = Date()
         guard now.timeIntervalSince(lastReactionSentAt) >= reactionCooldownSeconds else { return }
         lastReactionSentAt = now
-        #if !SKIP
-        HapticManager.shared.trigger(.medium)
-        #endif
         let reaction = Reaction(
             userId: state.userId,
             kind: option.kind,

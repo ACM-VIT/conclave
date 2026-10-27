@@ -4,25 +4,60 @@ import Observation
 @Observable
 final class PanelCoordinator {
     private(set) var snapshot: PanelSnapshot
+    /// The latest destination for the panel that was already current (SR7, S40 R40-2), published for every panel
+    /// without a new presentation; nil until the first one and after a reset. A separate property, so the hosts
+    /// and the controls that read `snapshot` never invalidate for it.
+    private(set) var destinationRequest: PanelDestinationRequest? = nil
+    /// Called after every snapshot change, exactly once per change, never for an equal snapshot or for a
+    /// destination request (S30 CC18: the controls refresh path derives Engaged invokers from `snapshot`).
+    @ObservationIgnored var onSnapshotChanged: (() -> Void)? = nil
     private var nextID = 0
+    private var nextDestinationSequence = 0
 
     init(session: Int) {
         snapshot = PanelSnapshot(session: session, current: nil, pending: nil, isDismissing: false)
     }
 
-    func present(_ panel: MeetingPanel, from invoker: PanelInvoker) {
+    /// Opens `panel` at `destination` (SR7). A replacement keeps its own destination. A request for the panel
+    /// that is already current opens nothing new: a non-`none` destination publishes `destinationRequest`, and
+    /// `none` is quiet. A request for the panel that is already queued behind a dismissal updates the queued
+    /// request's destination, which it reads when it opens.
+    func present(_ panel: MeetingPanel, from invoker: PanelInvoker,
+                 destination: PanelDestination = PanelDestination.none, targetId: String = "") {
         if snapshot.isDismissing {
-            guard snapshot.pending?.panel != panel else { return }
-        } else {
-            guard snapshot.current?.panel != panel else { return }
+            if let pending = snapshot.pending, pending.panel == panel {
+                if destination != PanelDestination.none && (pending.destination != destination || pending.targetId != targetId) {
+                    let updated = PanelRequest(presentationID: pending.presentationID, panel: panel, invoker: invoker,
+                                               destination: destination, targetId: targetId)
+                    publish(PanelSnapshot(session: snapshot.session, current: snapshot.current, pending: updated, isDismissing: true))
+                }
+                return
+            }
+        } else if let current = snapshot.current, current.panel == panel {
+            if destination != PanelDestination.none {
+                nextDestinationSequence += 1
+                destinationRequest = PanelDestinationRequest(sequence: nextDestinationSequence, session: snapshot.session,
+                                                             presentationID: current.presentationID, panel: panel,
+                                                             invoker: invoker, destination: destination, targetId: targetId)
+            }
+            return
         }
         nextID += 1
-        let request = PanelRequest(presentationID: nextID, panel: panel, invoker: invoker)
+        let request = PanelRequest(presentationID: nextID, panel: panel, invoker: invoker,
+                                   destination: destination, targetId: targetId)
         if let current = snapshot.current {
             publish(PanelSnapshot(session: snapshot.session, current: current, pending: request, isDismissing: true))
         } else {
             publish(PanelSnapshot(session: snapshot.session, current: request, pending: nil, isDismissing: false))
         }
+    }
+
+    /// The latest destination request when it names `presentationID` in the current session, else nil, so a
+    /// panel never acts on a request meant for an earlier presentation of the same panel.
+    func latestDestination(for presentationID: Int) -> PanelDestinationRequest? {
+        guard let request = destinationRequest, request.session == snapshot.session,
+              request.presentationID == presentationID else { return nil }
+        return request
     }
 
     /// Binding loss keeps replacement intent; explicit Close and Back cancel it.
@@ -39,12 +74,14 @@ final class PanelCoordinator {
     }
 
     func reset(session: Int) {
-        // Presentation IDs never reset, including when the owner reuses a session number.
+        // Presentation IDs and destination sequences never reset, including when the owner reuses a session number.
+        if destinationRequest != nil { destinationRequest = nil }
         publish(PanelSnapshot(session: session, current: nil, pending: nil, isDismissing: false))
     }
 
     private func publish(_ next: PanelSnapshot) {
         guard next != snapshot else { return }
         snapshot = next
+        onSnapshotChanged?()
     }
 }

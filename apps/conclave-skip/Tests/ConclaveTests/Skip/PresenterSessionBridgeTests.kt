@@ -119,7 +119,7 @@ class PresenterSessionBridgeTests {
         val recorder = Recorder()
         val shell = presenter(recorder, joined(isAdmin = true))
         assertEquals(MeetingDispatch.dispatched, shell.toggleHand())
-        shell.requestEndForEveryone(from = PanelInvoker.more)
+        shell.requestEndForEveryone(from = MeetingConfirmationInvoker.more)
         shell.panels.present(MeetingPanel.chat, from = PanelInvoker.call)
         assertNotNull(shell.session.confirmation)
         var publishes = 0
@@ -198,7 +198,7 @@ class PresenterSessionBridgeTests {
         assertEquals(listOf(MeetingShellCommand.toggleHand), recorder.commands)
 
         // S1-DUP-02: a double confirm dispatches end once.
-        shell.requestEndForEveryone(from = PanelInvoker.more)
+        shell.requestEndForEveryone(from = MeetingConfirmationInvoker.more)
         val confirmation = shell.session.confirmation!!
         assertEquals(MeetingDispatch.dispatched, shell.confirmEndForEveryone(id = confirmation.id))
         assertEquals(MeetingDispatch.duplicate, shell.confirmEndForEveryone(id = confirmation.id))
@@ -220,7 +220,7 @@ class PresenterSessionBridgeTests {
         // S1-ROLE-01: host loss clears the end confirmation and hides host rows.
         val recorder = Recorder()
         val shell = presenter(recorder, joined(isAdmin = true))
-        shell.requestEndForEveryone(from = PanelInvoker.call)
+        shell.requestEndForEveryone(from = MeetingConfirmationInvoker.call)
         assertNotNull(shell.session.confirmation)
         shell.apply(joined(isAdmin = false))
         assertNull(shell.session.confirmation)
@@ -238,7 +238,7 @@ class PresenterSessionBridgeTests {
         // S1-ROLE-03: a pending end survives host loss until its result.
         val ending = Recorder()
         val host = presenter(ending, joined(isAdmin = true))
-        host.requestEndForEveryone(from = PanelInvoker.more)
+        host.requestEndForEveryone(from = MeetingConfirmationInvoker.more)
         assertEquals(MeetingDispatch.dispatched, host.confirmEndForEveryone(id = host.session.confirmation!!.id))
         host.apply(joined(isAdmin = false))
         assertTrue(host.ledger.isPending(MeetingActionKind.endForEveryone))
@@ -341,5 +341,155 @@ class PresenterSessionBridgeTests {
         shell.apply(joined(callSession = 2))
         shell.apply(joined(callSession = 2, connectionState = ConnectionState.error))
         assertTrue(recorder.commands.isEmpty())
+    }
+
+    // MARK: WP2-S2a contract amendments (same scenarios as PresenterSessionTests)
+
+    @Test
+    fun s2aPhaseRowsAndSessionFacts() {
+        val disconnected = MeetingTerminalOutcome(id = 4, callSession = 1, kind = MeetingTerminalOutcomeKind.serverDisconnected, serverText = "")
+        val outcome = MeetingPhasePolicy.resolve(MeetingShellInputs.make(identity = identity(1), connectionState = ConnectionState.disconnected, terminalOutcome = disconnected))
+        assertEquals(MeetingPhaseKind.outcome, outcome.phase)
+        val held = MeetingPhasePolicy.resolve(MeetingShellInputs.make(identity = identity(1), connectionState = ConnectionState.joined, audioInterruption = AudioInterruptionKind.held))
+        assertEquals(MeetingNoticeKind.onHold, held.notice)
+        val redirect = MeetingPhasePolicy.resolve(MeetingShellInputs.make(identity = identity(1), connectionState = ConnectionState.joining, isRedirectContinuation = true))
+        assertEquals(MeetingPhaseKind.recovering, redirect.phase)
+
+        val recorder = Recorder()
+        val shell = presenter(recorder, MeetingShellInputs.make(identity = identity(1), connectionState = ConnectionState.connecting))
+        assertFalse(shell.session.hasBeenAdmittedThisSession)
+        assertEquals(MeetingEntryOrigin.initial, shell.session.entryOrigin)
+        shell.apply(MeetingShellInputs.make(identity = identity(1), connectionState = ConnectionState.reconnecting, isRecoveringConnection = true))
+        assertFalse(shell.session.hasBeenAdmittedThisSession)
+        shell.apply(joined(attempt = 2))
+        assertEquals(FeedbackKind.joined, shell.feedbackState.token.kind)
+        assertTrue(shell.session.hasBeenAdmittedThisSession)
+        shell.apply(joined(attempt = 2, isRecoveringConnection = true, connectionState = ConnectionState.reconnecting))
+        assertEquals(MeetingEntryOrigin.recovery, shell.session.entryOrigin)
+        val ui = MeetingSessionUi.from(shell.session)
+        assertTrue(ui.hasBeenAdmittedThisSession)
+        assertEquals(MeetingEntryOrigin.recovery, ui.entryOrigin)
+        shell.apply(joined(attempt = 3, connectionState = ConnectionState.disconnected, terminalOutcome = MeetingTerminalOutcome(id = 5, callSession = 1, kind = MeetingTerminalOutcomeKind.serverDisconnected, serverText = "")))
+        assertEquals(FeedbackKind.connectionLost, shell.feedbackState.token.kind)
+    }
+
+    @Test
+    fun s2aBlockedReasonsAndDirections() {
+        val offline = MeetingShellInputs.make(identity = identity(1), connectionState = ConnectionState.joined, isNetworkOffline = true, isAdmin = true)
+        val inCall = MeetingControlRowContext.make(phase = MeetingPhaseKind.inCall)
+        for (id in listOf(MeetingControlID.screenShare, MeetingControlID.hand, MeetingControlID.reactions, MeetingControlID.endForEveryone)) {
+            assertEquals("$id", MeetingBlockedReason.offline, MeetingControlAvailabilityPolicy.row(id, inputs = offline, context = inCall).blockedReason)
+        }
+        assertTrue(MeetingControlAvailabilityPolicy.row(MeetingControlID.microphone, inputs = offline, context = inCall).isEnabled)
+        val pausedLive = MeetingShellInputs.make(identity = identity(1), connectionState = ConnectionState.joined, isMuted = false, audioInterruption = AudioInterruptionKind.otherAudio)
+        val mic = MeetingControlAvailabilityPolicy.row(MeetingControlID.microphone, inputs = pausedLive, context = inCall)
+        assertEquals(MeetingBlockedReason.audioInterrupted, mic.blockedReason)
+        assertTrue(mic.isEnabled)
+        val denied = MeetingShellInputs.make(identity = identity(1), connectionState = ConnectionState.joined, isCameraOff = true, cameraPermission = MeetingMediaPermissionStatus.denied)
+        assertFalse(MeetingControlAvailabilityPolicy.row(MeetingControlID.camera, inputs = denied, context = inCall).isEnabled)
+        val host = MeetingShellInputs.make(identity = identity(1), connectionState = ConnectionState.joined, isAdmin = true)
+        val ending = MeetingControlRowContext.make(phase = MeetingPhaseKind.inCall, endTicketPending = true)
+        assertEquals(MeetingBlockedReason.ending, MeetingControlAvailabilityPolicy.row(MeetingControlID.endForEveryone, inputs = host, context = ending).blockedReason)
+        assertTrue(MeetingControlAvailabilityPolicy.row(MeetingControlID.leave, inputs = host, context = ending).isEnabled)
+
+        // CC3: a failed lower carries its direction; PH17: the confirmation invoker is the asking surface.
+        val recorder = Recorder()
+        val shell = presenter(recorder, joined(isAdmin = true, isHandRaised = true))
+        assertEquals(MeetingDispatch.dispatched, shell.toggleHand())
+        assertTrue(shell.finish(recorder.tickets[0], MeetingActionResult.failed(MeetingActionFailure.ackTimedOut)))
+        assertEquals(MeetingActionDirection.lower, row(shell, MeetingControlID.hand).failureDirection)
+        assertEquals(MeetingActionDirection.lower, MeetingControlRowUi.from(row(shell, MeetingControlID.hand)).failureDirection)
+        shell.requestEndForEveryone(from = MeetingConfirmationInvoker.hostControls)
+        assertEquals("hostControls", shell.session.confirmation?.invoker)
+        assertEquals("hostControls", MeetingSessionUi.from(shell.session).confirmationInvoker)
+
+        // PLAN-next 7 item 4: a typed microphone failure publishes on the row and clears with the row's state.
+        val failure = MeetingErrorClassifier.actionResult(
+            MeetingErrorClassifier.classify(serverMessage = "Microphone permission not granted", context = MeetingErrorContext.media)
+        )
+        assertTrue(shell.reportFailure(MeetingActionKind.microphone, failure))
+        assertEquals(MeetingActionFailure.permissionDenied, row(shell, MeetingControlID.microphone).failure)
+        shell.apply(joined(isAdmin = true, isHandRaised = true, isMuted = false))
+        assertEquals(MeetingActionFailure.none, row(shell, MeetingControlID.microphone).failure)
+    }
+
+    /** S70 7 l1: the transpiled message table equals MeetingErrorClassifierTests.messageRows. */
+    @Test
+    fun classifierTableMatchesSwift() {
+        val rows = listOf(
+            Triple("Socket is not connected", MeetingErrorContext.chat, MeetingErrorCategory.serverUnreachable),
+            Triple("Socket not connected", MeetingErrorContext.hostAction, MeetingErrorCategory.serverUnreachable),
+            Triple("Timed out waiting for the SFU", MeetingErrorContext.hostAction, MeetingErrorCategory.timedOut),
+            Triple("Timed out waiting for setHandRaised acknowledgement", MeetingErrorContext.hostAction, MeetingErrorCategory.timedOut),
+            Triple("Socket changed before setHandRaised acknowledgement", MeetingErrorContext.hostAction, MeetingErrorCategory.serverUnreachable),
+            Triple("Connection error", MeetingErrorContext.join, MeetingErrorCategory.serverUnreachable),
+            Triple("Timed out waiting for SFU connection", MeetingErrorContext.join, MeetingErrorCategory.timedOut),
+            Triple("Microphone permission not granted", MeetingErrorContext.media, MeetingErrorCategory.microphonePermission),
+            Triple("Camera permission not granted", MeetingErrorContext.media, MeetingErrorCategory.cameraPermission),
+            Triple("Camera/microphone permission denied", MeetingErrorContext.media, MeetingErrorCategory.cameraPermission),
+            Triple("NotAllowedError", MeetingErrorContext.media, MeetingErrorCategory.microphonePermission),
+            Triple("No screen capture permission", MeetingErrorContext.screenShare, MeetingErrorCategory.screenCapturePermission),
+            Triple("Screen source unavailable", MeetingErrorContext.screenShare, MeetingErrorCategory.deviceUnavailable),
+            Triple("Send transport not ready", MeetingErrorContext.media, MeetingErrorCategory.serverUnreachable),
+            Triple("Transport not created", MeetingErrorContext.media, MeetingErrorCategory.serverUnreachable),
+            Triple("No camera available", MeetingErrorContext.media, MeetingErrorCategory.deviceUnavailable),
+            Triple("No rear camera available", MeetingErrorContext.media, MeetingErrorCategory.deviceUnavailable),
+            Triple("DevicesNotFoundError", MeetingErrorContext.media, MeetingErrorCategory.deviceUnavailable),
+            Triple("The camera is in use by another app", MeetingErrorContext.media, MeetingErrorCategory.deviceInUse),
+            Triple("This meeting has been ended by the host.", MeetingErrorContext.rejoin, MeetingErrorCategory.roomEnded),
+            Triple("No room found.", MeetingErrorContext.join, MeetingErrorCategory.roomNotFound),
+            Triple("Meeting invite code required.", MeetingErrorContext.join, MeetingErrorCategory.inviteCodeRequired),
+            Triple("Invalid meeting invite code.", MeetingErrorContext.join, MeetingErrorCategory.inviteCodeInvalid),
+            Triple("Webinar invite code required.", MeetingErrorContext.join, MeetingErrorCategory.inviteCodeRequired),
+            Triple("Invalid webinar invite code.", MeetingErrorContext.join, MeetingErrorCategory.inviteCodeInvalid),
+            Triple("Guests are not allowed in this meeting.", MeetingErrorContext.join, MeetingErrorCategory.signInRequired),
+            Triple("Meeting server is draining. Try again shortly.", MeetingErrorContext.join, MeetingErrorCategory.serverRestarting),
+            Triple("Meeting servers are draining. Try again shortly.", MeetingErrorContext.join, MeetingErrorCategory.serverRestarting),
+            Triple("Meeting placement is temporarily unavailable. Try again shortly.", MeetingErrorContext.join, MeetingErrorCategory.serverBusy),
+            Triple("Room is hosted by another SFU instance.", MeetingErrorContext.join, MeetingErrorCategory.serverBusy),
+            Triple("Webinar is locked.", MeetingErrorContext.join, MeetingErrorCategory.lockedByHost),
+            Triple("Room is locked", MeetingErrorContext.hostAction, MeetingErrorCategory.lockedByHost),
+            Triple("Use the public webinar link to join as an attendee.", MeetingErrorContext.join, MeetingErrorCategory.attendeeOnly),
+            Triple("Display name too long", MeetingErrorContext.hostAction, MeetingErrorCategory.invalidInput),
+            Triple("You are changing your display name too quickly", MeetingErrorContext.hostAction, MeetingErrorCategory.rateLimited),
+            Triple("Display name updates are disabled", MeetingErrorContext.hostAction, MeetingErrorCategory.disabledByHost),
+            Triple("Only the host can end the meeting", MeetingErrorContext.hostAction, MeetingErrorCategory.roleRequired),
+            Triple("Webinar is full.", MeetingErrorContext.join, MeetingErrorCategory.rejectedByServer),
+            Triple("Webinar is not live.", MeetingErrorContext.join, MeetingErrorCategory.rejectedByServer),
+            Triple("You are not allowed to join this meeting.", MeetingErrorContext.join, MeetingErrorCategory.rejectedByServer),
+            Triple("Authentication error: Invalid token payload", MeetingErrorContext.join, MeetingErrorCategory.sessionExpired),
+            Triple("The operation was cancelled.", MeetingErrorContext.screenShare, MeetingErrorCategory.cancelled),
+            Triple("Missing room ID", MeetingErrorContext.join, MeetingErrorCategory.invalidInput),
+            Triple("You are not in a room", MeetingErrorContext.hostAction, MeetingErrorCategory.notJoined),
+            Triple("", MeetingErrorContext.media, MeetingErrorCategory.unknown),
+            Triple("   ", MeetingErrorContext.hostAction, MeetingErrorCategory.unknown),
+            Triple("Screen sharing failed to start: java.lang.SecurityException: denied", MeetingErrorContext.apps, MeetingErrorCategory.unknown),
+        )
+        for ((text, context, expected) in rows) {
+            assertEquals(text, expected, MeetingErrorClassifier.classify(serverMessage = text, context = context).category)
+        }
+        // Android-only evidence (S70 7 d): ErrorException(message) reads the message table; Java classes are typed.
+        val wrapped = skip.lib.ErrorException("Socket not connected")
+        assertEquals(MeetingErrorCategory.serverUnreachable, MeetingErrorClassifier.classify(wrapped, context = MeetingErrorContext.hostAction).category)
+        assertEquals("cancelled", MeetingAndroidErrorTypes.categoryName(java.util.concurrent.CancellationException("stop"), false, 28))
+        assertEquals("serverUnreachable", MeetingAndroidErrorTypes.categoryName(java.net.UnknownHostException("conclave.acmvit.in"), false, 28))
+        assertEquals("offline", MeetingAndroidErrorTypes.categoryName(java.net.UnknownHostException("conclave.acmvit.in"), true, 28))
+        assertEquals("serverUnreachable", MeetingAndroidErrorTypes.categoryName(java.net.ConnectException("refused"), false, 28))
+        assertEquals("timedOut", MeetingAndroidErrorTypes.categoryName(java.net.SocketTimeoutException("slow"), false, 28))
+        assertEquals("timedOut", MeetingAndroidErrorTypes.categoryName(skip.lib.ErrorException(java.net.SocketTimeoutException("slow")), false, 28))
+        assertEquals("", MeetingAndroidErrorTypes.categoryName(skip.lib.ErrorException("Socket not connected"), false, 28))
+        assertEquals("platformRefused", MeetingAndroidErrorTypes.classNameCategory(MeetingAndroidErrorTypes.FOREGROUND_SERVICE_NOT_ALLOWED, 31))
+        assertEquals("", MeetingAndroidErrorTypes.classNameCategory(MeetingAndroidErrorTypes.FOREGROUND_SERVICE_NOT_ALLOWED, 30))
+        val typed = MeetingErrorClassifier.classify(skip.lib.ErrorException(java.net.SocketTimeoutException("slow")), context = MeetingErrorContext.join)
+        assertEquals(MeetingErrorCategory.timedOut, typed.category)
+        assertEquals("android.timedOut", typed.diagnosticCode)
+        // HTTP and Retry-After (RECONCILE R48).
+        val draining = MeetingErrorClassifier.classify(httpStatus = 503, retryAfterSeconds = 5, serverMessage = "Meeting servers are draining. Try again shortly.", context = MeetingErrorContext.join)
+        assertEquals(MeetingErrorCategory.serverRestarting, draining.category)
+        assertEquals(5, draining.retryAfterSeconds)
+        assertEquals(10, MeetingJoinRetryPolicy.automaticRetryDelaySeconds(
+            ClassifiedError(category = MeetingErrorCategory.serverBusy, context = MeetingErrorContext.join, serverText = "", diagnosticCode = "http.503", retryAfterSeconds = 30),
+            retriesSoFar = 0,
+        ))
     }
 }

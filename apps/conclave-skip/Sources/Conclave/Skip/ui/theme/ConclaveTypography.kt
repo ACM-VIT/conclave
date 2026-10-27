@@ -48,3 +48,13 @@ internal fun ConclaveTextStyle.textStyle(weight: ConclaveTextWeight = ConclaveTe
     val typography = MaterialTheme.typography
     return remember(this, weight, typography) { textStyle(typography, weight) }
 }
+
+/**
+ * Tabular digits for counters, timers and scores (F00 5; S60 R6-13). material3 Text has no fontFeatureSettings
+ * parameter, so the feature rides on the style. The pure form is for host tests; composables use the remembered
+ * form, which allocates once per base style.
+ */
+internal fun TextStyle.tabular(): TextStyle = copy(fontFeatureSettings = "tnum")
+
+@Composable
+internal fun rememberTabular(style: TextStyle): TextStyle = remember(style) { style.tabular() }

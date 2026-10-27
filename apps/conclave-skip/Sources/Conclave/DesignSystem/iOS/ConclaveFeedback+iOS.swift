@@ -53,7 +53,12 @@ enum ConclaveFeedback {
 @MainActor
 @Observable
 final class IOSFeedbackDelivery {
-    let presenter: NativeHostingPresenter
+    /// The outcome stream this delivery consumes. Read during `body`, so SwiftUI observes the source's published state.
+    @ObservationIgnored private let source: @MainActor () -> FeedbackSourceState
+    /// WP2-S2b: the production sink plays only the token-route kinds (`ConclaveRootFeedback+iOS.swift`); the fixture
+    /// accepts every kind.
+    @ObservationIgnored private let deliversKind: (FeedbackKind) -> Bool
+    @ObservationIgnored private let records: FeedbackDeliveryRecords?
     @ObservationIgnored private let cursor = FeedbackDeliveryCursor()
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var active = false
@@ -65,15 +70,39 @@ final class IOSFeedbackDelivery {
     private(set) var lastKind = "none"
     private(set) var effect: FeedbackDelivery? = nil
     private(set) var preferenceEnabled: Bool
-    // This fixture never enables hardware effects or audio.
-    let recordOnly = true
+    /// The Debug fixture never enables hardware effects or audio; the production root consumer does (WP2-S2b).
+    let recordOnly: Bool
 
-    init(presenter: NativeHostingPresenter, defaults: UserDefaults = .standard) {
-        self.presenter = presenter
-        self.defaults = defaults
-        preferenceEnabled = ConclaveFeedback.isEnabled(in: defaults)
-        cursor.attach(session: presenter.feedbackState.session, current: presenter.feedbackState.token, eligible: false)
+    /// The Debug hosting fixture: record-only, every kind.
+    convenience init(presenter: NativeHostingPresenter, defaults: UserDefaults = .standard) {
+        self.init(
+            source: { FeedbackSourceState(session: presenter.feedbackState.session, token: presenter.feedbackState.token) },
+            defaults: defaults,
+            recordOnly: true,
+            deliversKind: { _ in true },
+            records: nil
+        )
     }
+
+    init(
+        source: @escaping @MainActor () -> FeedbackSourceState,
+        defaults: UserDefaults = .standard,
+        recordOnly: Bool,
+        deliversKind: @escaping (FeedbackKind) -> Bool,
+        records: FeedbackDeliveryRecords?
+    ) {
+        self.source = source
+        self.defaults = defaults
+        self.recordOnly = recordOnly
+        self.deliversKind = deliversKind
+        self.records = records
+        preferenceEnabled = ConclaveFeedback.isEnabled(in: defaults)
+        let state = source()
+        cursor.attach(session: state.session, current: state.token, eligible: false)
+    }
+
+    /// The current state of the consumed stream.
+    var sourceState: FeedbackSourceState { source() }
 
     private var eligible: Bool { attached && active && !suspended && ConclaveFeedback.isEnabled(in: defaults) }
 
@@ -88,7 +117,8 @@ final class IOSFeedbackDelivery {
         latestMount = mount
         attached = true
         self.active = active
-        cursor.attach(session: presenter.feedbackState.session, current: presenter.feedbackState.token, eligible: eligible)
+        let state = source()
+        cursor.attach(session: state.session, current: state.token, eligible: eligible)
         if exposureEpoch != cursor.epoch { exposureEpoch = cursor.epoch }
     }
 
@@ -123,7 +153,7 @@ final class IOSFeedbackDelivery {
     private func refresh() {
         let enabled = ConclaveFeedback.isEnabled(in: defaults)
         if preferenceEnabled != enabled { preferenceEnabled = enabled }
-        let state = presenter.feedbackState
+        let state = source()
         cursor.setEligibility(session: state.session, current: state.token, eligible: eligible)
         if exposureEpoch != cursor.epoch { exposureEpoch = cursor.epoch }
     }
@@ -136,7 +166,7 @@ final class IOSFeedbackDelivery {
     func prepareObservation(mount: Int) -> FeedbackDelivery? {
         guard owns(mount) else { return nil }
         refresh()
-        let state = presenter.feedbackState
+        let state = source()
         return cursor.observe(session: state.session, token: state.token, epoch: exposureEpoch, eligible: eligible)
     }
 
@@ -144,7 +174,7 @@ final class IOSFeedbackDelivery {
         // This root action deliberately targets the currently attached consumer.
         guard let mount = latestMount, owns(mount) else { return }
         refresh()
-        submit(cursor.gesture(kind: .selectionChanged, session: presenter.feedbackState.session, eligible: eligible), mount: mount)
+        submit(cursor.gesture(kind: .selectionChanged, session: source().session, eligible: eligible), mount: mount)
     }
 
     private func submit(_ delivery: FeedbackDelivery?, mount: Int) {
@@ -164,8 +194,14 @@ final class IOSFeedbackDelivery {
         // Check ownership before take: an old modifier must not steal a new owner's ticket.
         guard owns(mount) else { return nil }
         // Read preference, lifecycle and session again at delivery, not only when queued.
-        guard let kind = cursor.take(delivery, session: presenter.feedbackState.session, eligible: eligible) else { return nil }
-        return ConclaveFeedback.sensory(kind)
+        guard let kind = cursor.take(delivery, session: source().session, eligible: eligible) else { return nil }
+        // Single-path invariant (PLAN-next A9): a kind still on its legacy route never plays here too.
+        guard deliversKind(kind), let feedback = ConclaveFeedback.sensory(kind) else { return nil }
+        if !recordOnly, let records {
+            // Recorded after the view update that asked for the effect, never during it.
+            Task { @MainActor in records.record(kind) }
+        }
+        return feedback
     }
 }
 
@@ -179,7 +215,7 @@ struct ConclaveFeedbackConsumer: ViewModifier {
                 guard !Task.isCancelled else { return }
                 delivery.attach(mount: mount, active: UIApplication.shared.applicationState == .active)
             }
-            .onChange(of: delivery.presenter.feedbackState) { _, _ in delivery.observe(mount: mount) }
+            .onChange(of: delivery.sourceState) { _, _ in delivery.observe(mount: mount) }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
                 delivery.setActive(false, mount: mount)
             }

@@ -3080,23 +3080,17 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(snapshot[0].displayName, "Nikhil Rao")
     }
 
+    /// WP2-S2a: the chat copy now comes from the one classifier (S70 SY11); transport errors stay readable.
     func testMeetingChatErrorPresentationKeepsTransportErrorsReadable() throws {
-        XCTAssertEqual(
-            MeetingChatErrorPresentation.message(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Socket is not connected"]
-            )),
-            "Reconnect before sending chat."
-        )
-        XCTAssertEqual(
-            MeetingChatErrorPresentation.message(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Chat is locked by the host."]
-            )),
-            "Chat is locked by the host."
-        )
+        func message(_ text: String) -> String? {
+            MeetingErrorLegacyCopy.message(MeetingErrorClassifier.classify(
+                NSError(domain: "test", code: 0, userInfo: [NSLocalizedDescriptionKey: text]),
+                context: .chat
+            ))
+        }
+        XCTAssertEqual(message("Socket is not connected"), "Reconnect before sending chat.")
+        XCTAssertEqual(message("Chat is locked by the host."), "Chat is locked by the host.")
+        XCTAssertEqual(message("Socket changed before chat:send acknowledgement"), "Reconnect before sending chat.")
     }
 
     @MainActor
@@ -9001,55 +8995,40 @@ final class ConclaveTests: XCTestCase {
         )
     }
 
+    /// WP2-S2a: media failures are typed by the one classifier (PLAN-next 7 item 4, S70 7); the legacy banner gets
+    /// owned copy and the retired strings ("Camera/microphone permission denied", "Failed to toggle screen sharing:")
+    /// never come back.
     func testMeetingMediaErrorPresentationMatchesWebMeetErrors() throws {
+        func classified(_ text: String, _ context: MeetingErrorContext = .media) -> ClassifiedError {
+            MeetingErrorClassifier.classify(
+                NSError(domain: "test", code: 0, userInfo: [NSLocalizedDescriptionKey: text]),
+                context: context
+            )
+        }
+        XCTAssertEqual(classified("Camera permission not granted").category, .cameraPermission)
         XCTAssertEqual(
-            MeetingMediaErrorPresentation.message(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Camera permission not granted"]
-            )),
-            "Camera/microphone permission denied"
+            MeetingErrorLegacyCopy.message(classified("Camera permission not granted"), device: .camera),
+            "Camera access is off. Turn it on in Settings."
         )
+        XCTAssertEqual(classified("DevicesNotFoundError").category, .deviceUnavailable)
         XCTAssertEqual(
-            MeetingMediaErrorPresentation.message(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "DevicesNotFoundError"]
-            )),
-            "Camera or microphone not found"
+            MeetingErrorLegacyCopy.message(classified("DevicesNotFoundError"), device: .microphone),
+            "Your microphone isn't available right now."
         )
+        XCTAssertEqual(classified("Send transport not ready").category, .serverUnreachable)
+        XCTAssertEqual(MeetingErrorLegacyCopy.message(classified("Send transport not ready")), "That didn't go through. Try again.")
+        XCTAssertEqual(classified("No rear camera available").category, .deviceUnavailable)
+        XCTAssertEqual(classified("No screen capture permission", .screenShare).category, .screenCapturePermission)
         XCTAssertEqual(
-            MeetingMediaErrorPresentation.message(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Send transport not ready"]
-            )),
-            "Failed to connect to server"
+            MeetingErrorLegacyCopy.message(classified("No screen capture permission", .screenShare), device: .screen),
+            "Screen sharing isn't allowed on this device."
         )
-        XCTAssertEqual(
-            MeetingMediaErrorPresentation.message(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "No rear camera available"]
-            )),
-            "No rear camera available"
-        )
-        XCTAssertEqual(
-            MeetingMediaErrorPresentation.screenShareMessage(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "No screen capture permission"]
-            )),
-            "Failed to toggle screen sharing: Screen sharing permission denied"
-        )
-        XCTAssertEqual(
-            MeetingMediaErrorPresentation.screenShareMessage(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Send transport not ready"]
-            )),
-            "Failed to toggle screen sharing: Failed to connect to server"
-        )
+        XCTAssertNil(MeetingErrorLegacyCopy.message(classified("The operation was cancelled.", .screenShare)))
+        for text in ["Camera permission not granted", "DevicesNotFoundError", "Send transport not ready", "No screen capture permission"] {
+            let message = MeetingErrorLegacyCopy.message(classified(text, .screenShare), device: .screen) ?? ""
+            XCTAssertFalse(message.hasPrefix("Failed to toggle screen sharing:"), message)
+            XCTAssertFalse(message.contains("Camera/microphone permission denied"), message)
+        }
     }
 
     func testDisplayNameSnapshotProducerSyncPolicyOnlySyncsJoinedClearedDepartures() throws {

@@ -13,24 +13,30 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.movableContentOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -82,9 +88,10 @@ internal fun panelHostDecision(
     request: PanelRequest,
     window: PanelWindow,
     sideStylesEnabled: Boolean = PanelPresentationPolicy.sideStylesEnabled,
+    isAccessibilitySize: Boolean = false,
 ): PanelHostDecision {
     val presentation = PanelPresentationPolicy.resolve(request, window = window, platform = PanelPlatform.android,
-        sideStylesEnabled = sideStylesEnabled)
+        isAccessibilitySize = isAccessibilitySize, sideStylesEnabled = sideStylesEnabled)
     return PanelHostDecision(
         style = presentation.style,
         coverage = PanelPresentationPolicy.coverage(presentation, detent = null),
@@ -170,6 +177,64 @@ internal suspend fun requestPanelFocus(attempts: Int, awaitFrame: suspend () -> 
 internal fun Modifier.panelInvoker(focus: PanelInvokerFocus, tag: String): Modifier =
     this.focusRequester(focus.requester(tag)).focusProperties { canFocus = true }
 
+/**
+ * The in-pane pages of one presentation (S40 R40-12, PS 8.3): content pushes a page key (for example the chat GIF
+ * picker or the reactions viewer in the side pane) instead of opening a window-level sheet over the live stage, and
+ * renders the page `top` names. System Back pops the page before it closes the panel, and predictive back moves the
+ * page, not the pane. One stack per presentation, remembered by the host, so it survives a move between the
+ * overlay and the side pane; a replacement starts empty. Keys are plain strings (a route enum's raw value).
+ */
+internal class PanelPageStack {
+    private val pages = mutableStateListOf<String>()
+
+    /** Gesture progress of the pop in flight; a fresh instance per page, so a committed pop never latches the next. */
+    var backProgress by mutableStateOf(PanelBackProgress())
+        private set
+
+    val depth: Int get() = pages.size
+
+    val isNested: Boolean get() = pages.isNotEmpty()
+
+    /** The page on top, or null at the panel's root page. */
+    val top: String? get() = pages.lastOrNull()
+
+    fun push(page: String) {
+        pages.add(page)
+        backProgress = PanelBackProgress()
+    }
+
+    /** Pops the top page; false at the root, where Back belongs to the panel. */
+    fun pop(): Boolean {
+        if (pages.isEmpty()) return false
+        pages.removeAt(pages.size - 1)
+        backProgress = PanelBackProgress()
+        return true
+    }
+
+    fun popToRoot() {
+        if (pages.isEmpty()) return
+        pages.clear()
+        backProgress = PanelBackProgress()
+    }
+}
+
+/** The shown presentation's page stack; null outside a panel host. */
+internal val LocalPanelPageStack = staticCompositionLocalOf<PanelPageStack?> { null }
+
+/** What one system Back does in an open panel (PS 8.5, S40 R40-12): an inner page pops first. */
+internal enum class PanelBackAction { PopPage, ClosePanel }
+
+internal fun panelBackAction(pages: PanelPageStack): PanelBackAction =
+    if (pages.isNested) PanelBackAction.PopPage else PanelBackAction.ClosePanel
+
+/** Applies a committed Back: a pop on the page stack, or Close (cancelling a pending replacement). */
+internal fun performPanelBack(action: PanelBackAction, pages: PanelPageStack, panels: PanelCoordinator) {
+    when (action) {
+        PanelBackAction.PopPage -> pages.pop()
+        PanelBackAction.ClosePanel -> panels.dismiss(cancelPending = true)
+    }
+}
+
 /** Debug readouts: `panel.style` follows the host live; the mount counters are read on refresh only. */
 internal class PanelHostReadout {
     var style by mutableStateOf(NONE)
@@ -207,7 +272,9 @@ internal class PanelHostReadout {
  * translates the coordinator into containers and reports removal back after composition disposal; it never
  * presents or resets. One movable content per presentation carries the page between the overlay and the side
  * pane when the window class changes (WP1-3b2, PS 9.2): its remembered state and its mount survive the move, so
- * nothing is acknowledged and the coordinator keeps its request.
+ * nothing is acknowledged and the coordinator keeps its request. Each presentation also gets its [PanelPageStack]
+ * through [LocalPanelPageStack] (PNL-1, S40 R40-12): Back pops an inner page first, and the gesture moves that
+ * page; at the root Back closes the panel, scaling the overlay or sliding the side pane toward its outer edge.
  */
 @Composable
 internal fun NativePanelHost(
@@ -222,9 +289,11 @@ internal fun NativePanelHost(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val state = panels.snapshot
         val window = PanelPresentationPolicy.androidWindow(width = maxWidth.value.toDouble(), height = maxHeight.value.toDouble())
+        val accessibilitySize = PanelPresentationPolicy.androidIsAccessibilitySize(fontScale = LocalDensity.current.fontScale.toDouble())
+        val rightToLeft = LocalLayoutDirection.current == LayoutDirection.Rtl
         val request = state.current
-        val decision = remember(request, window.horizontalRegular, window.verticalRegular) {
-            if (request == null) null else panelHostDecision(request, window)
+        val decision = remember(request, window.horizontalRegular, window.verticalRegular, accessibilitySize) {
+            if (request == null) null else panelHostDecision(request, window, isAccessibilitySize = accessibilitySize)
         }
         val visible = panelContainerVisible(state)
         val overlay = decision != null && decision.style == PanelHostStyle.overlay && visible
@@ -232,12 +301,19 @@ internal fun NativePanelHost(
         val coverage = if (overlay && decision != null) decision.coverage else PanelStageCoverage.none
         val covered = coverage == PanelStageCoverage.full
         val back = remember(state.session, request?.presentationID) { PanelBackProgress() }
+        val pages = remember(state.session, request?.presentationID) { PanelPageStack() }
         val latestPanel by rememberUpdatedState(panel)
         val movablePanel = remember(state.session, request?.presentationID) {
             val session = state.session
             val shown = request
             if (shown == null) null else movableContentOf { variant: InCallPageVariant, current: PanelHostDecision ->
-                latestPanel(session, shown, current, variant)
+                CompositionLocalProvider(LocalPanelPageStack provides pages) {
+                    // A pop in flight moves the page inside its container; the layer reads the progress, so the
+                    // gesture redraws without recomposing the page.
+                    Box(Modifier.fillMaxSize().graphicsLayer { translationX = pages.backProgress.pageTranslationDp * 1.dp.toPx() }) {
+                        latestPanel(session, shown, current, variant)
+                    }
+                }
             }
         }
         systemBars(panelBarInputs(state, decision))
@@ -255,7 +331,7 @@ internal fun NativePanelHost(
             }
             // Non-modal: the stage stays visible and reachable, and traversal reads the stage, then the pane.
             if (sidePane && request != null && decision != null && movablePanel != null) {
-                PanelSidePane(decision) {
+                PanelSidePane(decision, back, rightToLeft) {
                     if (!state.isDismissing) {
                         key(state.session, request.presentationID) { movablePanel(InCallPageVariant.SidePane, decision) }
                     }
@@ -287,12 +363,15 @@ internal fun NativePanelHost(
         SideEffect { lifetime.acknowledgeAbsent() }
         // Registered after the root handler, so it wins while a panel is open; the root handler closes the
         // preview only when no panel is current (PS 8.5).
+        // An inner page pops first and its own progress moves it; at the root the panel's progress drives Close.
         PredictiveBackHandler(enabled = request != null && !state.isDismissing) { events ->
+            val action = panelBackAction(pages)
+            val progress = if (action == PanelBackAction.PopPage) pages.backProgress else back
             try {
-                events.collect { event -> back.update(event.progress, event.swipeEdge == BackEventCompat.EDGE_LEFT) }
-                if (back.commit()) panels.dismiss(cancelPending = true)
+                events.collect { event -> progress.update(event.progress, event.swipeEdge == BackEventCompat.EDGE_LEFT) }
+                if (progress.commit()) performPanelBack(action, pages, panels)
             } catch (cancelled: CancellationException) {
-                back.cancel()
+                progress.cancel()
                 throw cancelled
             }
         }
@@ -309,12 +388,14 @@ internal fun NativePanelHost(
 /**
  * The expanded side pane (PS 8.3): a 1 dp divider and a fixed-width page container after the stage in the same
  * Row, so the stage only narrows and the pane sits at the end, mirroring to the start in right-to-left layouts.
- * It is not modal and is never laid over the stage.
+ * It is not modal and is never laid over the stage. A Back gesture at the panel's root slides it up to 24 dp
+ * toward its outer edge (PS 8.5); a pop of an inner page moves only the page.
  */
 @Composable
-private fun PanelSidePane(decision: PanelHostDecision, content: @Composable () -> Unit) {
+private fun PanelSidePane(decision: PanelHostDecision, back: PanelBackProgress, rightToLeft: Boolean, content: @Composable () -> Unit) {
     HostingTheme(inCall = decision.inCallAppearance) {
-        Row(Modifier.fillMaxHeight().testTag("panel.sidePane")) {
+        Row(Modifier.fillMaxHeight().testTag("panel.sidePane")
+            .graphicsLayer { translationX = back.paneTranslationDp(rightToLeft) * 1.dp.toPx() }) {
             VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Surface(
                 modifier = Modifier.width(decision.paneWidthDp.dp).fillMaxHeight().focusGroup(),

@@ -37,6 +37,10 @@ public struct ConclaveRootView: View {
 
     private var legacyRoot: some View {
         ContentView(appState: appState)
+            #if os(iOS) && !SKIP
+            // WP2-S2b (S70 12 c): the single production feedback root, mounted once.
+            .conclaveRootFeedback(shell: MeetingViewModel.shared.shell)
+            #endif
             #if !SKIP
             .onOpenURL { url in
                 _ = ConclaveAppDelegate.shared.onOpenURL(url)

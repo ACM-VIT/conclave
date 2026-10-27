@@ -669,13 +669,14 @@ struct DesignContractsTests {
     }
 
     @Test func panelPolicyDetentTable() {
-        // PS 6.2 panel table: bottom composer, iOS sheet detents, initial detent, appearance from the call.
+        // PS 6.2 panel table as PNL-1 amends it (RECONCILE R9, S60 R6-10): bottom composer, iOS sheet detents, initial
+        // detent at default text sizes, appearance (Effects now short then large).
         let table: [(MeetingPanel, Bool, [PanelDetent], PanelDetent, PanelAppearance)] = [
             (.chat, true, [.large], .large, .system),
             (.participants, false, [.medium, .large], .medium, .system),
             (.transcript, true, [.large], .large, .system),
             (.activities, false, [.medium, .large], .medium, .system),
-            (.effects, false, [.medium, .large], .medium, .inCall),
+            (.effects, false, [.short, .large], .short, .inCall),
             (.hostControls, false, [.medium, .large], .large, .system),
             (.settings, false, [.medium, .large], .large, .system),
             (.webinarQA, true, [.large], .large, .system),
@@ -695,12 +696,13 @@ struct DesignContractsTests {
         }
     }
 
-    @Test func panelPolicyLayoutAppearanceIsInvokerScoped() {
+    @Test func panelPolicyLayoutAndEffectsAreInCall() {
+        // S60 R6-10 renames panelPolicyLayoutAppearanceIsInvokerScoped: Layout and Effects are dark for every invoker
+        // (RECONCILE R9, owner default Q8.6); every content panel follows the system appearance.
         let invokers: [PanelInvoker] = [.call, .more, .settings]
         for panel in MeetingPanel.allCases {
             for invoker in invokers {
-                // Owner default Q8.6 extends the contract's Layout rule to Effects.
-                let dark = invoker == .call && (panel == .layout || panel == .effects)
+                let dark = panel == .layout || panel == .effects
                 #expect(PanelPresentationPolicy.appearance(panel, invoker: invoker) == (dark ? .inCall : .system), "\(panel) from \(invoker)")
                 let android = PanelPresentationPolicy.resolve(request(panel, invoker), window: PanelPresentationPolicy.androidWindow(width: 411, height: 891), platform: .android)
                 #expect(android.appearance == (dark ? .inCall : .system), "\(panel) from \(invoker)")
@@ -796,18 +798,21 @@ struct DesignContractsTests {
 
     @Test func panelPolicyStageInteractionAndTextFocus() throws {
         // Owner default Q8.1: sheets that can sit at medium keep the stage usable up through medium.
+        // PNL-1 (R9): Effects keeps it up through its short detent; large-only composer sheets stay modal.
         for panel in MeetingPanel.allCases {
             let sheet = PanelPresentationPolicy.resolve(request(panel), window: Self.phonePortrait, platform: .iOS)
-            #expect(PanelPresentationPolicy.stageInteractiveUpThroughMedium(sheet) == !PanelPresentationPolicy.hasBottomComposer(panel), "\(panel)")
+            let composer = PanelPresentationPolicy.hasBottomComposer(panel)
+            let interactive: PanelDetent? = composer ? nil : (panel == .effects ? .short : .medium)
+            #expect(PanelPresentationPolicy.stageInteractiveDetent(sheet) == interactive, "\(panel)")
             let overlay = PanelPresentationPolicy.resolve(request(panel), window: Self.phonePortrait, platform: .android)
-            #expect(!PanelPresentationPolicy.stageInteractiveUpThroughMedium(overlay), "\(panel)")
+            #expect(PanelPresentationPolicy.stageInteractiveDetent(overlay) == nil, "\(panel)")
             // Review n4: text focus promotion is tested on the path that ships, the adapter, for every panel.
             let panels = PanelCoordinator(session: 1)
             let adapter = NativePanelHostAdapter()
             panels.present(panel, from: .call)
             adapter.synchronize(panels)
             adapter.selectDetent(.medium)
-            #expect(adapter.detent == (sheet.detents.contains(.medium) ? .medium : .large), "\(panel)")
+            #expect(adapter.detent == (sheet.detents.contains(.medium) ? PanelDetent.medium : sheet.initialDetent), "\(panel)")
             adapter.promoteToLarge()
             #expect(adapter.detent == .large, "\(panel)")
         }
@@ -992,17 +997,25 @@ struct DesignContractsTests {
         #expect(host.hasPrefix("#if os(iOS) && !SKIP\n"))
         // WP1-3b2: both hosts follow the coordinator in the live style, and the sheet item reads nil outside the
         // sheet style, so the two hosts never present one request twice.
-        #expect(flat.components(separatedBy: ".onChange(of: coordinator.snapshot, initial: true) { _, _ in adapter.synchronize(coordinator, style: style) }").count - 1 == 2)
-        #expect(flat.components(separatedBy: ".onChange(of: style) { _, newStyle in adapter.synchronize(coordinator, style: newStyle) }").count - 1 == 2)
+        // PNL-1 (R9): both hosts pass the text size, the policy's accessibility input.
+        #expect(flat.components(separatedBy: ".onChange(of: coordinator.snapshot, initial: true) { _, _ in adapter.synchronize(coordinator, style: style, isAccessibilitySize: accessibilitySize) }").count - 1 == 2)
+        #expect(flat.components(separatedBy: ".onChange(of: style) { _, newStyle in adapter.synchronize(coordinator, style: newStyle, isAccessibilitySize: accessibilitySize) }").count - 1 == 2)
+        #expect(flat.components(separatedBy: "let accessibilitySize = dynamicTypeSize.isAccessibilitySize").count - 1 == 2)
         #expect(flat.contains(".sheet(item: Binding(get: { style == .sheet ? adapter.sheetItem : nil }, set: { [captured] value in"))
         #expect(flat.contains("if value == nil { adapter.sheetBindingLost(captured, coordinator: coordinator) }"))
         #expect(flat.contains("adapter.sheetDidDismiss(captured, coordinator: coordinator)"))
-        #expect(flat.contains("PanelPresentationPolicy.resolve(presentation.request, window: window, platform: .iOS)"))
-        #expect(flat.contains(".presentationDetents(Set(resolved.detents.map { Self.systemDetent($0) }), selection: Binding("))
-        #expect(flat.contains("set: { adapter.selectDetent($0 == .medium ? .medium : .large) }"))
-        // Owner default Q8.1, through the shared policy.
-        #expect(flat.contains("PanelStageInteraction(enabled: PanelPresentationPolicy.stageInteractiveUpThroughMedium(resolved))"))
-        #expect(flat.contains("content.presentationBackgroundInteraction(.enabled(upThrough: .medium))"))
+        #expect(flat.components(separatedBy: "PanelPresentationPolicy.resolve(presentation.request, window: window, platform: .iOS, isAccessibilitySize: accessibilitySize)").count - 1 == 2)
+        #expect(flat.contains(".presentationDetents(Set(resolved.detents.map { Self.systemDetent($0, shortHeight: shortHeight) }), selection: Binding("))
+        #expect(flat.contains("set: { adapter.selectDetent(Self.panelDetent($0, shortHeight: shortHeight)) }"))
+        // PNL-1 (S60 R6-10): the short detent is the content-measured height.
+        #expect(flat.contains("case .short: return .height(CGFloat(shortHeight))"))
+        #expect(flat.contains(".environment(\\.panelReportShortDetentHeight, PanelShortDetentHeightAction(action: { adapter.setShortDetentHeight($0) }))"))
+        // Owner default Q8.1 and R9, through the shared policy: up through medium, or the short height for Effects.
+        #expect(flat.contains(".modifier(PanelStageInteraction(upThrough: PanelPresentationPolicy.stageInteractiveDetent(resolved) .map { Self.systemDetent($0, shortHeight: shortHeight) }))"))
+        #expect(flat.contains("content.presentationBackgroundInteraction(.enabled(upThrough: upThrough))"))
+        // RECONCILE R10: one compact-height rule for every panel sheet.
+        #expect(flat.contains(".modifier(PanelCompactHeightRule(keepsSheet: PanelPresentationPolicy.keepsSheetInCompactHeight(resolved)))"))
+        #expect(flat.contains("content.presentationCompactAdaptation(horizontal: .automatic, vertical: .sheet)"))
         // No panel path ever covers the window or customizes the system sheet chrome.
         var files = try panelSourceFiles(under: "Sources/Conclave/Features/Meeting/Panels")
         files.append("Sources/Conclave/App/PlatformRoot+iOS.swift")
@@ -1012,7 +1025,8 @@ struct DesignContractsTests {
                 #expect(!text.contains(pattern), "\(file) uses \(pattern)")
             }
         }
-        // The adapter is host-testable: no SwiftUI in it, and the frozen coordinator files stay as they were.
+        // The adapter is host-testable: no SwiftUI in it. PNL-1 lifted the WP1-3b1 freeze on MeetingPanel.swift and
+        // PanelCoordinator.swift; T/PNL1PanelContractTests.swift pins the contract v2 they carry now.
         let adapter = try panelSource("Sources/Conclave/Features/Meeting/Panels/PanelHostAdapter.swift")
         #expect(adapter.hasPrefix("#if !SKIP\n") && !adapter.contains("import SwiftUI"))
         #expect(!host.contains("final class"))
@@ -1186,18 +1200,24 @@ struct DesignContractsTests {
         // WP1-3b2: one movable content per presentation, invoked by the overlay or by the side pane, never both.
         #expect(host.contains("if (!state.isDismissing) { key(state.session, request.presentationID) { movablePanel(InCallPageVariant.Overlay, decision) } }"))
         #expect(host.contains("if (!state.isDismissing) { key(state.session, request.presentationID) { movablePanel(InCallPageVariant.SidePane, decision) } }"))
-        #expect(host.contains("val movablePanel = remember(state.session, request?.presentationID) { val session = state.session val shown = request if (shown == null) null else movableContentOf { variant: InCallPageVariant, current: PanelHostDecision -> latestPanel(session, shown, current, variant) } }"))
+        // PNL-1 (S40 R40-12): the movable page carries its presentation's page stack and the pop transform.
+        #expect(host.contains("val movablePanel = remember(state.session, request?.presentationID) { val session = state.session val shown = request if (shown == null) null else movableContentOf { variant: InCallPageVariant, current: PanelHostDecision -> CompositionLocalProvider(LocalPanelPageStack provides pages) {"))
+        #expect(host.contains("val pages = remember(state.session, request?.presentationID) { PanelPageStack() }"))
+        #expect(host.contains("Box(Modifier.fillMaxSize().graphicsLayer { translationX = pages.backProgress.pageTranslationDp * 1.dp.toPx() }) { latestPanel(session, shown, current, variant) }"))
         #expect(host.contains("val latestPanel by rememberUpdatedState(panel)"))
         // The side pane follows the stage in the same Row, so the stage only narrows; it is never modal.
-        #expect(host.contains("stage(coverage) } // Non-modal: the stage stays visible and reachable, and traversal reads the stage, then the pane. if (sidePane && request != null && decision != null && movablePanel != null) { PanelSidePane(decision) {"))
+        #expect(host.contains("stage(coverage) } // Non-modal: the stage stays visible and reachable, and traversal reads the stage, then the pane. if (sidePane && request != null && decision != null && movablePanel != null) { PanelSidePane(decision, back, rightToLeft) {"))
         #expect(host.contains("Modifier.width(decision.paneWidthDp.dp).fillMaxHeight().focusGroup()"))
         #expect(host.contains("SideEffect { readout.update(decision, overlay || sidePane) }"))
         #expect(host.contains("val panelVisible = overlay || sidePane LaunchedEffect(panelVisible) { val target = focus.tracker.update(panelVisible) ?: return@LaunchedEffect"))
         #expect(host.components(separatedBy: "panel(state.session, request, decision,").count - 1 == 0)
         #expect(host.contains("SideEffect { lifetime.acknowledgeAbsent() }"))
         #expect(host.contains("PredictiveBackHandler(enabled = request != null && !state.isDismissing)"))
-        #expect(host.contains("if (back.commit()) panels.dismiss(cancelPending = true)"))
-        #expect(host.contains("back.cancel() throw cancelled"))
+        // PNL-1: an inner page pops before the panel closes, each with its own progress.
+        #expect(host.contains("val action = panelBackAction(pages) val progress = if (action == PanelBackAction.PopPage) pages.backProgress else back"))
+        #expect(host.contains("if (progress.commit()) performPanelBack(action, pages, panels)"))
+        #expect(host.contains("progress.cancel() throw cancelled"))
+        #expect(host.contains("PanelBackAction.ClosePanel -> panels.dismiss(cancelPending = true)"))
         #expect(host.contains(".focusProperties { onExit = { cancelFocusChange() } }"))
         // Review ISSUE 3: focus requests report their real outcome and retry until they land.
         #expect(host.contains("fun restore(tag: String): Boolean = requesters[tag]?.requestFocusOrFalse() ?: false"))
@@ -1236,6 +1256,8 @@ struct DesignContractsTests {
 
     @Test func wp1PanelSourcesStayFlatDashFreeAndLocalized() throws {
         let touched = [
+            "Sources/Conclave/Features/Meeting/Panels/MeetingPanel.swift",
+            "Sources/Conclave/Features/Meeting/Panels/PanelCoordinator.swift",
             "Sources/Conclave/Features/Meeting/Panels/PanelPresentationPolicy.swift",
             "Sources/Conclave/Features/Meeting/Panels/RendererIdentityLedger.swift",
             "Sources/Conclave/Features/Meeting/Panels/PanelHostAdapter.swift",
@@ -1293,7 +1315,8 @@ struct DesignContractsTests {
             used.formUnion(panelMatches(#""(native_panel_[a-z0-9_]+)""#, in: try panelSource(file)).map { $0[0] })
         }
         let defined = Set(panelMatches(#"<string name="(native_panel_[a-z0-9_]+)""#, in: xml).map { $0[0] })
-        #expect(used.count == 13 && used == defined, "\(used.symmetricDifference(defined).sorted())")
+        // PNL-1 adds native_panel_back (the nested-page Back icon) through HD/strings/B2-T3.json.
+        #expect(used.count == 14 && used == defined, "\(used.symmetricDifference(defined).sorted())")
         for file in ["Sources/Conclave/Skip/ui/call/panels/InCallPage.kt", "Sources/Conclave/Skip/ui/call/panels/CallMiniTile.kt",
                      "Sources/Conclave/Skip/ui/call/panels/NativePanelHost.kt"] {
             #expect(panelMatches(#"Text\(\s*""#, in: try panelSource(file)).isEmpty, "\(file) has a literal Text")

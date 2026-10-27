@@ -245,6 +245,7 @@ struct ControlsBarView: View {
                         accessibilityLabel: viewModel.state.isMuted ? "Unmute microphone" : "Mute microphone",
                         accessibilityHint: recoveryControlHint
                     ) {
+                    ConclaveHapticFeedback.gesture(viewModel.state.isMuted ? FeedbackKind.micOn : FeedbackKind.micOff)
                     viewModel.toggleMute()
                 }
                 .disabled(mediaControlsDisabled)
@@ -258,6 +259,7 @@ struct ControlsBarView: View {
                             ? "Camera is disabled in audio-only mode."
                             : recoveryControlHint
                     ) {
+                    ConclaveHapticFeedback.gesture(viewModel.state.isCameraOff ? FeedbackKind.cameraOn : FeedbackKind.cameraOff)
                     viewModel.toggleCamera()
                 }
                 .disabled(cameraControlDisabled)
@@ -304,6 +306,7 @@ struct ControlsBarView: View {
                         isDisabledDimmed: !canUseParticipantActions,
                         accessibilityLabel: viewModel.state.isHandRaised ? "Lower hand" : "Raise hand"
                     ) {
+                        ConclaveHapticFeedback.gesture(viewModel.state.isHandRaised ? FeedbackKind.handLowered : FeedbackKind.handRaised)
                         viewModel.toggleHandRaise()
                     }
                     .disabled(!canUseParticipantActions)
@@ -321,6 +324,7 @@ struct ControlsBarView: View {
                         .overlay(alignment: .top) {
                             if showReactionPicker {
                                 ReactionPickerView { option in
+                                    ConclaveHapticFeedback.gesture(FeedbackKind.reactionSent)
                                     viewModel.sendReaction(option)
                                     showReactionPicker = false
                                 }

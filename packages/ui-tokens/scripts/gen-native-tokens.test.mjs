@@ -69,6 +69,9 @@ test("renders all 48 roles per scheme as unsigned ARGB Int64, plus typed metrics
   assert.deepEqual(avatar, [...native.avatar.palette]);
   assert.equal(avatar.length, 16);
   assert.equal(constants.get("avatarRing"), 0x2EFFFFFF);
+  // FND-1: the approved iOS Leave fill under Increase Contrast (owner OQ4) and the avatar tongue (F00 C07).
+  assert.equal(constants.get("iosInCallLeaveHighContrast"), 0xFFE9152D);
+  assert.equal(constants.get("avatarTongue"), 0xFFFF8FB1);
   assert.doesNotMatch(swift, /accentSecondary|PolySans|SwiftUI|UIKit/);
 });
 
@@ -193,6 +196,8 @@ test("malformed token input fails before changing any output", async (t) => {
     ["short palette", (x) => { x.avatar.palette.pop(); }, /must contain 16/],
     ["sparse palette", (x) => { delete x.avatar.palette[3]; }, /native.avatar.palette\[3\].*ARGB integer/],
     ["invalid ring", (x) => { x.avatar.ring = undefined; }, /native.avatar.ring.*ARGB integer/],
+    ["missing leave high contrast", (x) => { delete x.ios.inCall.leaveHighContrast; }, /native.ios.inCall.*missing \[leaveHighContrast\]/],
+    ["missing tongue", (x) => { delete x.avatar.tongue; }, /native.avatar: missing \[tongue\]/],
   ];
   for (const [name, mutate, error] of cases) {
     await t.test(name, async () => {

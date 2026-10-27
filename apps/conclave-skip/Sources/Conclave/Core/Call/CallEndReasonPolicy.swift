@@ -33,6 +33,8 @@ enum CallEndReasonPolicy {
             return .joinFailed
         case .connectionLost:
             return .connectionLost
+        case .serverDisconnected:
+            return .serverDisconnected
         }
     }
 

@@ -258,4 +258,53 @@ private struct PersonStatusValue: ViewModifier {
         }
     }
 }
+
+// MARK: Section header and footer (F00 C11)
+
+/// A section header with an optional count, for `Section { } header: { }`: the system header style (title case
+/// on iOS 26, no forced capitals, never coral), one combined element with the header trait, so the count reads
+/// with the title ("In This Meeting, 5"). The count keeps tabular digits; long titles wrap and the count stays.
+struct ConclaveSectionHeader: View {
+    let title: String
+    let count: Int?
+    let identifier: String
+
+    init(_ title: String, count: Int? = nil, identifier: String) {
+        self.title = title
+        self.count = count
+        self.identifier = identifier
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            if let count {
+                Text(count, format: .number)
+                    .monospacedDigit()
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+/// A section footer: explanatory text in the system footer style ("Only you see this layout.").
+struct ConclaveSectionFooter: View {
+    let text: String
+    let identifier: String
+
+    init(_ text: String, identifier: String) {
+        self.text = text
+        self.identifier = identifier
+    }
+
+    var body: some View {
+        Text(text)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier(identifier)
+    }
+}
 #endif

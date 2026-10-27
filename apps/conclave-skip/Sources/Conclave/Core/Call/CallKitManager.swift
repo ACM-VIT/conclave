@@ -85,6 +85,16 @@ final class CallKitManager: NSObject, CallProviding {
         }
     }
 
+    func requestSetHeld(uuid: UUID, onHold: Bool, completion: @escaping (Bool) -> Void) {
+        let heldAction = CXSetHeldCallAction(call: uuid, onHold: onHold)
+        callController.request(CXTransaction(action: heldAction)) { error in
+            if let error = error {
+                debugLog("[CallKit] setHeld request failed: \(error.localizedDescription)")
+            }
+            Task { @MainActor in completion(error == nil) }
+        }
+    }
+
     func requestEnd(uuid: UUID, completion: @escaping (Bool) -> Void) {
         callController.request(CXTransaction(action: CXEndCallAction(call: uuid))) { error in
             if let error = error {
@@ -162,6 +172,10 @@ extension CallKitManager: CXProviderDelegate {
 
     nonisolated func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
         debugLog("[CallKit] didDeactivate audio session")
+        Task { @MainActor in
+            // S70 5 c: WebRTC's audio unit stops with CallKit's deactivation (manual audio).
+            CallAudioSession.shared.handleCallKitDeactivation()
+        }
     }
 
     /// Configure the shared audio session for a voice/video call. Mirrors the
@@ -170,11 +184,8 @@ extension CallKitManager: CXProviderDelegate {
     nonisolated static func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(
-                .playAndRecord,
-                mode: .voiceChat,
-                options: CallAudioSession.voiceCallCategoryOptions(for: session)
-            )
+            // Category, mode, options and haptics while recording (TG 3.7 R-H1); never activation (S70 5 c).
+            try CallAudioSession.configureCallCategory(on: session, options: CallAudioSession.voiceCallCategoryOptions(for: session))
         } catch {
             debugLog("[CallKit] configureAudioSession failed: \(error.localizedDescription)")
         }

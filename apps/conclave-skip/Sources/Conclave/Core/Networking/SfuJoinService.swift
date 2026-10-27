@@ -231,7 +231,13 @@ enum SfuJoinService {
 
         if !(200...299).contains(statusCode) {
             let errorResponse = try? JSONDecoder().decode(SfuJoinError.self, from: data)
-            throw SfuJoinErrorResponse(message: errorResponse?.error ?? "Join request failed")
+            // WP2-S2a (S70 7 c, RECONCILE R48): typed status and Retry-After for MeetingErrorClassifier.
+            let retryAfter = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After")
+            throw MeetingHTTPStatusError(
+                statusCode: statusCode,
+                retryAfterSeconds: MeetingErrorClassifier.retryAfterSeconds(header: retryAfter),
+                message: errorResponse?.error ?? "Join request failed"
+            )
         }
 
         return try JSONDecoder().decode(SfuJoinInfo.self, from: data)
@@ -295,7 +301,13 @@ enum SfuJoinService {
         let data = responseEnvelope.body.data(using: String.Encoding.utf8) ?? Data()
         if !(200...299).contains(responseEnvelope.statusCode) {
             let errorResponse = try? JSONDecoder().decode(SfuJoinError.self, from: data)
-            throw SfuJoinErrorResponse(message: errorResponse?.error ?? "Join request failed")
+            // WP2-S2a: typed status; the Android HTTP envelope carries no headers yet, so Retry-After stays 0
+            // (follow-up for the C18 owner: add the header to AndroidNativeHttpClient's envelope).
+            throw MeetingHTTPStatusError(
+                statusCode: responseEnvelope.statusCode,
+                retryAfterSeconds: 0,
+                message: errorResponse?.error ?? "Join request failed"
+            )
         }
 
         return try JSONDecoder().decode(SfuJoinInfo.self, from: data)

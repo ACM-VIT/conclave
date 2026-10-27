@@ -149,6 +149,7 @@ struct DetachedSelfViewOverlay: View {
     private var selfCameraSwitchButton: some View {
         if !viewModel.state.isCameraOff && viewModel.canSwitchLocalCamera() {
             Button {
+                ConclaveHapticFeedback.gesture(FeedbackKind.selectionChanged)
                 viewModel.switchLocalCamera()
             } label: {
                 ACMSystemIcon.icon("arrow.triangle.2.circlepath.camera.fill", android: "camera.flip", size: 14, tint: "white")

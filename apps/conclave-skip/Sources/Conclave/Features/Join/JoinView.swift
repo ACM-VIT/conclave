@@ -2465,9 +2465,7 @@ struct JoinView: View {
     }
     
     private func handleCreateRoom() {
-        #if !SKIP
-        HapticManager.shared.trigger(.success)
-        #endif
+        // WP2-H2 (TG 3.6 row 1): no haptic at the tap; the root feedback consumer plays `joined` when the join lands.
         guard !shouldBlockJoinForSystemSuspension() else { return }
         let shouldJoinWithCameraOn = isCameraOn
         viewModel.setPreferredLocalCameraFacing(previewCameraFacing)
@@ -2495,9 +2493,7 @@ struct JoinView: View {
     }
 
     private func handleJoinRoom() {
-        #if !SKIP
-        HapticManager.shared.trigger(.success)
-        #endif
+        // WP2-H2 (TG 3.6 row 2): no haptic at the tap; the root feedback consumer plays `joined` or `admitted`.
         guard !shouldBlockJoinForSystemSuspension() else { return }
         let joinTarget = resolvedJoinTarget(from: roomCode)
         guard !joinTarget.roomId.isEmpty else { return }

@@ -1596,6 +1596,7 @@ struct SettingsSheetView: View {
         let canSwitch = viewModel.canSwitchLocalCamera()
 
         Button {
+            ConclaveHapticFeedback.gesture(FeedbackKind.selectionChanged)
             viewModel.switchLocalCamera()
         } label: {
             HStack(spacing: ACMSpacing.sm) {

@@ -225,6 +225,8 @@ private fun NativeHostingStage(
                             TextButton(onClick = { presenter.resetFixtureSession() }, modifier = Modifier.testTag("fixture.resetSession")) { Text("Reset session") }
                         }
                     }
+                    // WP2-S2b Debug session readout (S1C Q8, OWNER-DEFAULTS Q16).
+                    item(key = "session") { SessionReadoutSection(MeetingViewModel.shared.shell, FeedbackDeliveryRecords.shared) }
                     item(key = "icons") { NativeHostingIconSection(icons) }
                     item(key = "components.toggle") {
                         NativeComponentGalleryToggle(componentsExpanded) { componentsExpanded = it }
@@ -525,9 +527,16 @@ private fun NativeHostingLayoutChoices() {
     }
 }
 
-private class NativeHostingStageLifetime {
+/**
+ * The stage lifetime probe (S10 R12): counts stage creations so host tests and a stand-in CallRoot can prove a
+ * renderer host survives panel, theme and route changes (S10 10 l4). Internal, not private, so other Debug roots and
+ * the Robolectric suite reuse it; plain storage, never observed, so counting never recomposes anything.
+ */
+internal class NativeHostingStageLifetime {
     var creations = 0
         private set
+
+    /** Records one stage creation and returns a short instance identity for the readout. */
     fun create(): String {
         creations++
         return UUID.randomUUID().toString().take(8)

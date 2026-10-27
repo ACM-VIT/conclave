@@ -307,4 +307,108 @@ class FeedbackPanelBridgeTests {
         assertEquals(fresh, panels.snapshot.current)
         assertTrue(fresh.presentationID > old.presentationID)
     }
+
+    // MARK: WP2-S2b production sink (S70 12 d; F1 rules; PLAN-next A9)
+
+    private fun shellIdentity(attempt: Int = 1) =
+        MeetingSessionIdentity(callSession = 1, attempt = attempt, attemptToken = "attempt-1-$attempt")
+
+    private fun shellAt(state: ConnectionState, attempt: Int = 1, recovering: Boolean = false) =
+        MeetingShellInputs.make(identity = shellIdentity(attempt), connectionState = state, isRecoveringConnection = recovering)
+
+    private fun productionDelivery(
+        shell: MeetingShellPresenter,
+        received: MutableList<FeedbackKind>,
+        records: FeedbackDeliveryRecords,
+    ) = NativeFeedbackDelivery(
+        source = { FeedbackSourceState(session = shell.feedbackState.session, token = shell.feedbackState.token) },
+        sink = { received += it },
+        deliversKind = { DeliveredTokenKinds.delivers(it) },
+        records = records,
+    )
+
+    @Test fun productionSinkDeliversEachShellTokenOnce() {
+        val shell = MeetingShellPresenter()
+        shell.apply(shellAt(ConnectionState.connecting))
+        val received = mutableListOf<FeedbackKind>()
+        val records = FeedbackDeliveryRecords()
+        val delivery = productionDelivery(shell, received, records)
+        delivery.setActive(true)
+        delivery.attach()
+        shell.apply(shellAt(ConnectionState.joined))
+        assertEquals(FeedbackKind.joined, shell.feedbackState.token.kind)
+        delivery.deliver(delivery.observe())
+        delivery.deliver(delivery.observe())
+        assertEquals(listOf(FeedbackKind.joined), received)
+        assertEquals(1, records.count)
+        assertEquals("joined", records.lastKind)
+        // A restore is silent on Android: consumed, never played, never recorded.
+        shell.apply(shellAt(ConnectionState.reconnecting, attempt = 1, recovering = true))
+        shell.apply(shellAt(ConnectionState.joined, attempt = 2))
+        assertEquals(FeedbackKind.connectionRestored, shell.feedbackState.token.kind)
+        delivery.deliver(delivery.observe())
+        assertEquals(listOf(FeedbackKind.joined), received)
+        assertEquals(1, records.count)
+    }
+
+    @Test fun productionSinkNeverReplaysAfterRotationOrPictureInPicture() {
+        val shell = MeetingShellPresenter()
+        shell.apply(shellAt(ConnectionState.connecting))
+        shell.apply(shellAt(ConnectionState.joined))
+        val received = mutableListOf<FeedbackKind>()
+        val records = FeedbackDeliveryRecords()
+        // Rotation: the activity recreates the root, and the new consumer baselines on the published token.
+        val rotated = productionDelivery(shell, received, records)
+        rotated.setActive(true)
+        rotated.attach()
+        rotated.deliver(rotated.observe())
+        assertTrue(received.isEmpty())
+        // PiP (paused): a token published meanwhile is consumed without an effect and never replayed on resume.
+        rotated.setActive(false)
+        val removed = MeetingTerminalOutcome(id = 1, callSession = 1, kind = MeetingTerminalOutcomeKind.removed, serverText = "")
+        shell.apply(MeetingShellInputs.make(identity = shellIdentity(), connectionState = ConnectionState.error, terminalOutcome = removed))
+        assertEquals(FeedbackKind.removed, shell.feedbackState.token.kind)
+        rotated.deliver(rotated.observe())
+        rotated.setActive(true)
+        rotated.deliver(rotated.observe())
+        assertTrue(received.isEmpty())
+        assertEquals(0, records.count)
+    }
+
+    @Test fun productionSinkPlaysOnlyDeliveredTokenKinds() {
+        val owner = NativeHostingPresenter()
+        val received = mutableListOf<FeedbackKind>()
+        val records = FeedbackDeliveryRecords()
+        val delivery = NativeFeedbackDelivery(
+            source = { FeedbackSourceState(session = owner.feedbackState.session, token = owner.feedbackState.token) },
+            sink = { received += it },
+            deliversKind = { DeliveredTokenKinds.delivers(it) },
+            records = records,
+        )
+        delivery.setActive(true)
+        delivery.attach()
+        // hostAdmitted has a confirm constant but its publisher (S50) is not wired to the root yet: it stays silent.
+        owner.completeNextFixtureAction(kind = FeedbackKind.hostAdmitted)
+        delivery.deliver(delivery.observe())
+        assertTrue(received.isEmpty())
+        owner.completeNextFixtureAction(kind = FeedbackKind.actionRejected)
+        delivery.deliver(delivery.observe())
+        assertEquals(listOf(FeedbackKind.actionRejected), received)
+        assertEquals(1, records.count)
+        records.reset()
+        assertEquals(0, records.count)
+        assertEquals("none", records.lastKind)
+    }
+
+    @Test fun deliveredKindsLeftTheLegacyRouteInTheSameChange() {
+        val delivered = DeliveredTokenKinds.kinds.toSet()
+        assertEquals(setOf(FeedbackKind.joined, FeedbackKind.admitted, FeedbackKind.joinFailed, FeedbackKind.denied,
+            FeedbackKind.removed, FeedbackKind.connectionLost, FeedbackKind.connectionRestored, FeedbackKind.actionRejected), delivered)
+        assertTrue(delivered.intersect(LegacyHapticRoutes.outcomeKinds.toSet()).isEmpty())
+        for (kind in delivered) {
+            assertTrue("$kind", kind.isAsyncOutcome)
+            assertFalse("$kind", ConclaveHapticFeedback.accepts(kind, route = ConclaveHapticRoute.legacyOutcome))
+        }
+        assertTrue(ConclaveHapticFeedback.accepts(FeedbackKind.validationFailed, route = ConclaveHapticRoute.legacyOutcome))
+    }
 }

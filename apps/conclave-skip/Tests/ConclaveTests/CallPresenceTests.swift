@@ -77,6 +77,7 @@ struct CallPresenceTests {
         #expect(CallEndReasonPolicy.reason(outcome: .denied, phaseBeforeTeardown: .waiting) == .denied)
         #expect(CallEndReasonPolicy.reason(outcome: .joinFailed, phaseBeforeTeardown: .connecting) == .joinFailed)
         #expect(CallEndReasonPolicy.reason(outcome: .connectionLost, phaseBeforeTeardown: .recovering) == .connectionLost)
+        #expect(CallEndReasonPolicy.reason(outcome: .serverDisconnected, phaseBeforeTeardown: .live) == .serverDisconnected)
         #expect(CallEndReasonPolicy.reason(outcome: nil, phaseBeforeTeardown: .live) == CallEndReason.none)
 
         #expect(CallEndReasonPolicy.callKitEnd(.userLeft) == .localEndRequest)

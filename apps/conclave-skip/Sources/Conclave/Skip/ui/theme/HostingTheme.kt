@@ -6,6 +6,7 @@ import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 
 // F00 section 5.1. All roles come from generated shared constants.
@@ -166,18 +167,21 @@ private val HostingInCallColors = darkColorScheme(
 private val HostingShapes = Shapes()
 
 /** Colors, type and shapes only. System bars belong to ConclaveSystemBars at the native root (PS 8.7), so an
- *  in-call surface nested anywhere stays bar-neutral. */
+ *  in-call surface nested anywhere stays bar-neutral. The extended roles (F00 2.6 A4) follow the same appearance:
+ *  in-call and dark share the dark set, so a screen never chooses a light or dark token itself. */
 @Composable
 internal fun HostingTheme(inCall: Boolean = false, content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme() || inCall
-    MaterialTheme(
-        colorScheme = when {
-            inCall -> HostingInCallColors
-            dark -> HostingDarkColors
-            else -> HostingLightColors
-        },
-        typography = ConclaveTypography,
-        shapes = HostingShapes,
-        content = content,
-    )
+    CompositionLocalProvider(LocalConclaveExtendedColors provides if (dark) ConclaveExtendedColorsDark else ConclaveExtendedColorsLight) {
+        MaterialTheme(
+            colorScheme = when {
+                inCall -> HostingInCallColors
+                dark -> HostingDarkColors
+                else -> HostingLightColors
+            },
+            typography = ConclaveTypography,
+            shapes = HostingShapes,
+            content = content,
+        )
+    }
 }

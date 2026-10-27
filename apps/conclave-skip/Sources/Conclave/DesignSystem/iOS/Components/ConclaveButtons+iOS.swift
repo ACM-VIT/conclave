@@ -123,4 +123,107 @@ private struct PendingValue: ViewModifier {
         }
     }
 }
+
+// MARK: Icon buttons, Close and Back (F00 C02)
+
+/// The foreground of an in-content icon button: `.primary` for actions, the secondary text color for quiet
+/// trailing actions such as a row's More (F00 C02 e). Toolbar items take the system tint instead.
+enum ConclaveIconButtonTone: String, CaseIterable {
+    case primary, secondary
+}
+
+/// An icon-only action in system-appearance chrome or content: a toolbar action, a row's trailing action, a field
+/// clear. The image is hidden from accessibility and the label names the action, not the glyph (AX2). Targets
+/// are at least 44 pt. In-call floating chrome is `ConclaveChromeButton` (C03), not this.
+struct ConclaveIconButton: View {
+    let title: String
+    let systemImage: String
+    let tone: ConclaveIconButtonTone
+    let isEnabled: Bool
+    let identifier: String
+    let action: () -> Void
+
+    init(_ title: String, systemImage: String, tone: ConclaveIconButtonTone = .primary, isEnabled: Bool = true,
+         identifier: String, action: @escaping () -> Void) {
+        self.title = title
+        self.systemImage = systemImage
+        self.tone = tone
+        self.isEnabled = isEnabled
+        self.identifier = identifier
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .accessibilityHidden(true)
+                .frame(minWidth: ConclaveButtonMetrics.minimumHeight, minHeight: ConclaveButtonMetrics.minimumHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(tone == .primary ? AnyShapeStyle(.primary) : AnyShapeStyle(HostingTheme.secondaryText))
+        .disabled(!isEnabled)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+/// A two-state icon button (for example the Q&A upvote): the system button-style toggle, so it keeps the toggle
+/// trait and the selected state; the label stays for accessibility while only the glyph shows.
+struct ConclaveIconToggleButton: View {
+    let title: String
+    let systemImage: String
+    let selectedSystemImage: String
+    @Binding var isOn: Bool
+    let identifier: String
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            Label(title, systemImage: isOn ? selectedSystemImage : systemImage)
+                .labelStyle(.iconOnly)
+                .frame(minWidth: ConclaveButtonMetrics.minimumHeight, minHeight: ConclaveButtonMetrics.minimumHeight)
+        }
+        .toggleStyle(.button)
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+/// A panel or sheet Close (F00 C02 c; Q12): the iOS 26 system close role, or the `xmark` glyph on iOS 17 to 25,
+/// labelled "Close {title}" on both. Escape closes it. Place it at `.topBarTrailing`. `title` nil keeps the
+/// plain "Close" label (S10 R10: the Account sheet, where "Close Account" could be heard as deleting it).
+struct ConclaveCloseButton: View {
+    let title: String?
+    let identifier: String
+    let action: () -> Void
+
+    init(title: String?, identifier: String = "panel.close", action: @escaping () -> Void) {
+        self.title = title
+        self.identifier = identifier
+        self.action = action
+    }
+
+    private var label: String {
+        if let title { return ConclaveStrings.format("Close %@", title) }
+        return ConclaveStrings.text("Close")
+    }
+
+    var body: some View {
+        closeButton
+            .keyboardShortcut(.cancelAction)
+            .accessibilityLabel(label)
+            .accessibilityIdentifier(identifier)
+    }
+
+    @ViewBuilder
+    private var closeButton: some View {
+        if #available(iOS 26.0, *) {
+            Button(role: .close, action: action)
+        } else {
+            Button(action: action) {
+                Image(systemName: ConclaveSymbols.xmark)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+}
 #endif

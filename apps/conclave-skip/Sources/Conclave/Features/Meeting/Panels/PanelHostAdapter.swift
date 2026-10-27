@@ -12,8 +12,9 @@ struct NativePanelPresentation: Identifiable, Equatable {
 /// column is not a modal presentation, so a dismissal is acknowledged at once and a replacement swaps the content
 /// while the column stays open. A window-class change moves the shown request between the two without any
 /// coordinator call (WP1-3b2): the sheet leaves as a migration whose late callbacks acknowledge nothing, and drafts
-/// keyed by presentation ID carry over. Every transition is value-guarded, so `onChange`-driven re-entry is
-/// idempotent.
+/// keyed by presentation ID carry over (chat drafts live in their own store, S40 R40-7; these are fixture and
+/// migration drafts only). PNL-1: the initial detent reads the text size (R9) and the short detent takes the height
+/// the content reports (S60 R6-10). Every transition is value-guarded, so `onChange`-driven re-entry is idempotent.
 @MainActor
 @Observable
 final class NativePanelHostAdapter {
@@ -26,6 +27,12 @@ final class NativePanelHostAdapter {
     private(set) var inspectorItem: NativePanelPresentation? = nil
     /// The detent selection for the current sheet item; reset to its initial detent per presentation.
     private(set) var detent: PanelDetent = .large
+    /// The text-size input of the policy's initial detent (R9): read once per presentation, when its sheet item is
+    /// created, so a later text-size change never moves a shown sheet.
+    private(set) var isAccessibilitySize = false
+    /// The height the shown content reports for the short detent (S60 R6-10); the policy default until then. Kept
+    /// across presentations, so the next short sheet opens at the last measured height.
+    private(set) var shortDetentHeight: Double = PanelPresentationPolicy.defaultShortDetentHeight
     /// presentationID -> fixture draft text. Presentation IDs never reset, so a key is never reused.
     private(set) var drafts: [Int: String] = [:]
 
@@ -33,6 +40,12 @@ final class NativePanelHostAdapter {
 
     /// Follows the coordinator in the current style.
     func synchronize(_ coordinator: PanelCoordinator) {
+        synchronize(coordinator, style: style)
+    }
+
+    /// Follows the coordinator in `style` with the current text size (R9); the hosts call this one.
+    func synchronize(_ coordinator: PanelCoordinator, style: PanelHostStyle, isAccessibilitySize: Bool) {
+        if self.isAccessibilitySize != isAccessibilitySize { self.isAccessibilitySize = isAccessibilitySize }
         synchronize(coordinator, style: style)
     }
 
@@ -66,7 +79,7 @@ final class NativePanelHostAdapter {
                 synchronizeSheet(coordinator)
             } else {
                 sheetItem = NativePanelPresentation(session: state.session, request: request)
-                let initial = PanelPresentationPolicy.initialSheetDetent(request.panel)
+                let initial = PanelPresentationPolicy.initialSheetDetent(request.panel, isAccessibilitySize: isAccessibilitySize)
                 if detent != initial { detent = initial }
             }
         }
@@ -137,7 +150,14 @@ final class NativePanelHostAdapter {
         self.detent = detent
     }
 
-    /// A text field gained focus in a medium sheet (PS 7.3); a large-only or already large sheet is unchanged.
+    /// The content's measured short-detent height (`panelReportShortDetentHeight`). Value-guarded to half a point,
+    /// so a layout pass that reports the same height again is a quiet no-op; non-finite or empty heights are ignored.
+    func setShortDetentHeight(_ height: Double) {
+        guard height.isFinite, height > 0, abs(height - shortDetentHeight) >= 0.5 else { return }
+        shortDetentHeight = height
+    }
+
+    /// A text field gained focus in a short or medium sheet (PS 7.3); a large-only or already large sheet is unchanged.
     /// The only implementation of the promotion rule: `selectDetent` accepts large only when the shown panel's
     /// policy detents offer it.
     func promoteToLarge() {

@@ -8,8 +8,10 @@ enum PanelHostStyle: String, Equatable {
     case sheet, inspector, overlay, bottomSheet, sidePane
 }
 
+/// `short` is a content-measured height (RECONCILE R9, S60 R6-10): the iOS host maps it to `.height(shortHeight)`
+/// with the height the content reports, so Effects keeps the self video visible while choosing.
 enum PanelDetent: String, Equatable {
-    case medium, large
+    case short, medium, large
 }
 
 enum PanelAppearance: String, Equatable {
@@ -55,12 +57,23 @@ enum PanelPresentationPolicy {
     /// expanded Android window shows the inspector or the side pane. Tests pass the parameter explicitly, so both
     /// branches stay covered.
     static let sideStylesEnabled = true
+    /// Android reads accessibility text sizes from the font scale (S60 R6-10); iOS reads
+    /// `dynamicTypeSize.isAccessibilitySize`.
+    static let androidAccessibilityFontScale = 1.5
+    /// The short detent's height until the content reports its own (S60 4 c: Effects measures 222 pt at the
+    /// default text size).
+    static let defaultShortDetentHeight = 222.0
 
     /// An Android window measured by the host's own constraints, in dp.
     static func androidWindow(width: Double, height: Double) -> PanelWindow {
         PanelWindow(width: width, height: height,
                     horizontalRegular: width >= PanelPresentationPolicy.regularMinWidth,
                     verticalRegular: height >= PanelPresentationPolicy.regularMinHeight)
+    }
+
+    /// The Android accessibility-size input of `resolve` (font scale 1.5 and up).
+    static func androidIsAccessibilitySize(fontScale: Double) -> Bool {
+        fontScale >= PanelPresentationPolicy.androidAccessibilityFontScale
     }
 
     /// Side styles only on regular x regular windows; otherwise the iOS sheet or the Android full overlay. The
@@ -74,7 +87,10 @@ enum PanelPresentationPolicy {
         return platform == PanelPlatform.iOS ? PanelHostStyle.sheet : PanelHostStyle.overlay
     }
 
+    /// `isAccessibilitySize` is a policy input because the shared policy cannot see view-level scaled metrics: at
+    /// accessibility text sizes Layout and Effects open large (RECONCILE R9, S60 R6-10).
     static func resolve(_ request: PanelRequest, window: PanelWindow, platform: PanelPlatform,
+                        isAccessibilitySize: Bool = false,
                         sideStylesEnabled: Bool = PanelPresentationPolicy.sideStylesEnabled) -> PanelPresentation {
         let hostStyle = PanelPresentationPolicy.style(window: window, platform: platform, panel: request.panel,
                                                       sideStylesEnabled: sideStylesEnabled)
@@ -84,7 +100,7 @@ enum PanelPresentationPolicy {
         var initialDetent: PanelDetent? = nil
         if isSheet {
             detents = PanelPresentationPolicy.sheetDetents(request.panel)
-            initialDetent = PanelPresentationPolicy.initialSheetDetent(request.panel)
+            initialDetent = PanelPresentationPolicy.initialSheetDetent(request.panel, isAccessibilitySize: isAccessibilitySize)
         }
         return PanelPresentation(
             style: hostStyle,
@@ -97,19 +113,28 @@ enum PanelPresentationPolicy {
         )
     }
 
-    /// Composer panels are large-only, so the keyboard never meets a medium sheet (Q8.4).
+    /// Composer panels are large-only, so the keyboard never meets a medium sheet (Q8.4). Effects sits at a short,
+    /// content-measured detent below large (R9).
     static func sheetDetents(_ panel: MeetingPanel) -> [PanelDetent] {
         if PanelPresentationPolicy.hasBottomComposer(panel) {
             return [PanelDetent.large]
+        }
+        if panel == MeetingPanel.effects {
+            return [PanelDetent.short, PanelDetent.large]
         }
         return [PanelDetent.medium, PanelDetent.large]
     }
 
     /// Medium keeps the stage visible where the user watches its effect; settings and host controls open at
-    /// today's large geometry, which the accepted L2 cells measured.
-    static func initialSheetDetent(_ panel: MeetingPanel) -> PanelDetent {
+    /// today's large geometry, which the accepted L2 cells measured. Effects opens short and Layout medium, and
+    /// both open large at accessibility text sizes (R9).
+    static func initialSheetDetent(_ panel: MeetingPanel, isAccessibilitySize: Bool = false) -> PanelDetent {
         switch panel {
-        case .participants, .activities, .effects, .meetingInfo, .layout:
+        case .effects:
+            return isAccessibilitySize ? PanelDetent.large : PanelDetent.short
+        case .layout:
+            return isAccessibilitySize ? PanelDetent.large : PanelDetent.medium
+        case .participants, .activities, .meetingInfo:
             return PanelDetent.medium
         case .chat, .transcript, .webinarQA, .hostControls, .settings:
             return PanelDetent.large
@@ -125,22 +150,23 @@ enum PanelPresentationPolicy {
         }
     }
 
-    /// Invoker-scoped: Layout and Effects opened from the call take the dark in-call appearance (R07, owner
-    /// default Q8.6); from More or Settings, and every content panel, they follow the system appearance.
+    /// Layout and Effects take the dark in-call appearance for every invoker (owner default Q8.6, S60 R6-10,
+    /// RECONCILE R9); every content panel follows the system appearance. The invoker stays a parameter so the
+    /// call sites keep one shape.
     static func appearance(_ panel: MeetingPanel, invoker: PanelInvoker) -> PanelAppearance {
-        if invoker == PanelInvoker.call && (panel == MeetingPanel.layout || panel == MeetingPanel.effects) {
+        if panel == MeetingPanel.layout || panel == MeetingPanel.effects {
             return PanelAppearance.inCall
         }
         return PanelAppearance.system
     }
 
-    /// How much of the stage a shown panel covers. A sheet at medium is partial and at large full; a nil
+    /// How much of the stage a shown panel covers. A sheet at short or medium is partial and at large full; a nil
     /// detent reads as the presentation's initial detent.
     static func coverage(_ presentation: PanelPresentation, detent: PanelDetent?) -> PanelStageCoverage {
         switch presentation.style {
         case .sheet:
-            let selected = detent ?? presentation.initialDetent
-            if selected == PanelDetent.medium && presentation.detents.contains(PanelDetent.medium) {
+            let selected = detent ?? presentation.initialDetent ?? PanelDetent.large
+            if selected != PanelDetent.large && presentation.detents.contains(selected) {
                 return PanelStageCoverage.partial
             }
             return PanelStageCoverage.full
@@ -153,9 +179,24 @@ enum PanelPresentationPolicy {
         }
     }
 
-    /// Owner default Q8.1: a sheet that can sit at medium keeps the stage interactive up through medium. Text
-    /// focus promotion (PS 7.3) lives in one place, `NativePanelHostAdapter.promoteToLarge()`.
-    static func stageInteractiveUpThroughMedium(_ presentation: PanelPresentation) -> Bool {
-        presentation.style == PanelHostStyle.sheet && presentation.detents.contains(PanelDetent.medium)
+    /// The detent up through which the stage stays interactive behind a sheet (owner default Q8.1, R9): medium
+    /// for the medium panels, short for Effects, nil for a large-only sheet and every other style. Text focus
+    /// promotion (PS 7.3) lives in one place, `NativePanelHostAdapter.promoteToLarge()`.
+    static func stageInteractiveDetent(_ presentation: PanelPresentation) -> PanelDetent? {
+        guard presentation.style == PanelHostStyle.sheet else { return nil }
+        if presentation.detents.contains(PanelDetent.short) {
+            return PanelDetent.short
+        }
+        if presentation.detents.contains(PanelDetent.medium) {
+            return PanelDetent.medium
+        }
+        return nil
+    }
+
+    /// One compact-height rule for every in-call panel (RECONCILE R10): in compact height (iPhone landscape) an iOS
+    /// sheet stays a sheet, `.presentationCompactAdaptation(horizontal: .automatic, vertical: .sheet)`, instead of
+    /// the system's full-screen adaptation, which risks the same stage renderer detach as `.fullScreenCover`.
+    static func keepsSheetInCompactHeight(_ presentation: PanelPresentation) -> Bool {
+        presentation.style == PanelHostStyle.sheet
     }
 }

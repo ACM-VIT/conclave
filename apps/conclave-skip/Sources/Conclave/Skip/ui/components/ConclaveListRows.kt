@@ -32,6 +32,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.semantics.heading
+import java.util.Locale
 
 /*
  * List rows (F00 C09) and the person row (F00 C10) as Material 3 ListItems. Each row is one accessibility node
@@ -177,4 +181,37 @@ internal fun ConclaveWaitingPersonRow(
         },
         modifier = modifier.testTag(identifier),
     )
+}
+
+// MARK: Section header and footer (F00 C11)
+
+/**
+ * A section header: titleSmall in onSurfaceVariant (never coral), the optional count at the end with tabular digits,
+ * one merged heading node so the count reads with the title ("In this meeting, 5"). Long titles wrap; the count
+ * stays. Empty sections are not rendered (the caller's rule).
+ */
+@Composable
+internal fun ConclaveSectionHeader(title: String, identifier: String, modifier: Modifier = Modifier, count: Int? = null) {
+    val scheme = MaterialTheme.colorScheme
+    val style = MaterialTheme.typography.titleSmall
+    Row(
+        modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag(identifier)
+            .semantics(mergeDescendants = true) { heading() },
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ConclaveText(title, line = "$identifier.title", style = style, color = scheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+        if (count != null) {
+            ConclaveText(String.format(Locale.getDefault(), "%d", count), line = "$identifier.count",
+                style = rememberTabular(style), color = scheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** A section footer: bodySmall in onSurfaceVariant with 16 dp margins ("Only you see this layout."). */
+@Composable
+internal fun ConclaveSectionFooter(text: String, identifier: String, modifier: Modifier = Modifier) {
+    ConclaveText(text, line = "$identifier.text", style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag(identifier))
 }

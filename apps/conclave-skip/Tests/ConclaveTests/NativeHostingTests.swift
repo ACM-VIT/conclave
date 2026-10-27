@@ -221,6 +221,43 @@ struct NativeHostingTests {
         #expect(timer.startCount == 1)
         #expect(timer.firstFrame(presentationID: 1, at: 1) == -1 && timer.firstFrame(presentationID: 2, at: 1) == 1000)
     }
+
+    /// WP2-S2b Debug session readout (S1C Q8, OWNER-DEFAULTS Q16; S70 0.6): both platforms show every key with the key
+    /// as identifier or test tag, read the live shell, reset the records once per mount and use no color literal.
+    @Test
+    func sessionReadoutShowsEveryKeyOnBothPlatforms() throws {
+        let ios = try hostingSource("Sources/Conclave/App/Hosting/SessionReadout+iOS.swift")
+        let android = try hostingSource("Sources/Conclave/Skip/ui/hosting/SessionReadout.kt")
+        #expect(ios.hasPrefix("#if os(iOS) && !SKIP\n"))
+        for key in ["identityKey", "phaseKey", "outcomeKey", "controlsKey", "ledgerKey", "feedbackKey", "feedbackRecordsKey"] {
+            #expect(ios.contains("key: MeetingSessionReadout.\(key))"), "iOS misses \(key)")
+            #expect(android.contains("SessionReadoutLine(MeetingSessionReadout.\(key))"), "Android misses \(key)")
+        }
+        #expect(ios.contains("LabeledContent(ConclaveStrings.text(labelKey), value: value())\n            .accessibilityIdentifier(key)"))
+        #expect(android.contains("modifier = Modifier.testTag(key),"))
+        #expect(ios.contains("Section(ConclaveStrings.text(\"Session Readout\"))"))
+        #expect(android.contains("conclaveString(\"sys_session_readout_title\")"))
+        #expect(ios.contains("records.reset()"))
+        #expect(android.contains("LaunchedEffect(records) { records.reset() }"))
+        for text in [ios, android] {
+            for pattern in ["Color(red", "Color(0x", "UIColor(", ".white", ".black", "gradient", "Gradient", "\u{2013}", "\u{2014}"] {
+                #expect(!text.contains(pattern), "\(pattern)")
+            }
+        }
+        // The readout values are ASCII through the shared formatter, never formatted numbers.
+        #expect(!ios.contains("ConclaveStrings.format(") && !android.contains("String.format("))
+    }
+
+    /// The labels the readout resolves exist after the strings merge (HD/strings/B2-T1.json).
+    @Test
+    func sessionReadoutStringsAreInTheCatalogs() throws {
+        let catalog = try hostingSource("Sources/Conclave/Resources/Localizable.xcstrings")
+        for key in ["Session Readout", "Identity", "Phase", "Outcome", "Controls", "Ledger", "Feedback", "Feedback Records"] {
+            #expect(catalog.contains("\"\(key)\" : {"), "catalog misses \(key)")
+        }
+        let resources = try hostingSource("Android/app/src/main/res/values/strings.xml")
+        #expect(resources.contains("<string name=\"sys_session_readout_title\">Session readout</string>"))
+    }
 }
 
 private func hostingSource(_ packageRelativePath: String) throws -> String {

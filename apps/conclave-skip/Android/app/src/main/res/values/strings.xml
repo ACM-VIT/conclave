@@ -134,6 +134,8 @@
     <!-- Hosting preview controls added with the panels. -->
     <string name="native_panel_open_layout">Layout panel</string>
     <string name="native_panel_refresh_readouts">Refresh readouts</string>
+    <!-- In-call panel pages (PNL-1): the nested-page Back icon. -->
+    <string name="native_panel_back">Back</string>
 
     <!-- Design system components (WP1-2b): ds_ -->
     <string name="ds_in_progress">In progress</string>
@@ -157,6 +159,42 @@
     <string name="ds_state_muted">Muted</string>
     <string name="ds_state_off">Off</string>
     <string name="ds_state_sharing">Sharing</string>
+    <!-- Foundation pack and in-call chrome (FND-1, FND-2): ds_ -->
+    <string name="ds_close">Close</string>
+    <string name="ds_close_title">Close %1$s</string>
+    <string name="ds_back_to_call">Back to call</string>
+    <string name="ds_back">Back</string>
+    <string name="ds_cancel">Cancel</string>
+    <string name="ds_not_now">Not now</string>
+    <string name="ds_send">Send</string>
+    <string name="ds_char_count">%1$d of %2$d characters</string>
+    <string name="ds_char_counter">%1$s/%2$s</string>
+    <string name="ds_locked">Locked</string>
+    <string name="ds_minimize_call">Minimize call</string>
+    <string name="ds_audio_output">Audio output</string>
+    <string name="ds_flip_camera">Flip camera</string>
+    <string name="ds_front">Front</string>
+    <string name="ds_back_camera">Back</string>
+    <string name="ds_tag_host">Host</string>
+    <string name="ds_tag_cohost">Co-host</string>
+    <string name="ds_tag_you">You</string>
+    <string name="ds_you">You</string>
+    <string name="ds_state_camera_off">Camera off</string>
+    <string name="ds_state_hand_raised">Hand raised</string>
+    <string name="ds_state_pinned">Pinned</string>
+    <string name="ds_state_presenting">Presenting</string>
+    <string name="ds_state_weak_connection">Weak connection</string>
+    <string name="ds_state_reconnecting">Reconnecting</string>
+    <string name="ds_overflow_count">+%1$s</string>
+    <plurals name="ds_more_participants">
+        <item quantity="one">%1$d more participant</item>
+        <item quantity="other">%1$d more participants</item>
+    </plurals>
+    <string name="ds_raise_hand">Raise hand</string>
+    <string name="ds_lower_hand">Lower hand</string>
+    <string name="ds_state_raised">Raised</string>
+    <string name="ds_state_not_raised">Not raised</string>
+    <string name="ds_reactions_off">Reactions are off</string>
 
     <!-- Call notification, notification channel and system fixture (SYS-1): sys_ -->
     <string name="sys_call_fallback_title">Conclave meeting</string>
@@ -168,4 +206,14 @@
     <string name="sys_call_unmute">Unmute</string>
     <string name="sys_channel_call">Ongoing call</string>
     <string name="sys_channel_call_desc">Shows while you’re in a meeting so you can mute or hang up.</string>
+    <!-- Debug session readout in the hosting preview (WP2-S2b): sys_ -->
+    <string name="sys_session_readout_title">Session readout</string>
+
+    <!-- Audio route names (SYS-2): ctl_route_ -->
+    <string name="ctl_route_phone">Phone</string>
+    <string name="ctl_route_speaker">Speaker</string>
+    <string name="ctl_route_bluetooth">Bluetooth headset</string>
+    <string name="ctl_route_wired">Wired headset</string>
+    <string name="ctl_route_usb">USB audio</string>
+    <string name="ctl_route_hearing_aid">Hearing aid</string>
 </resources>

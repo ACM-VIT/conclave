@@ -30,7 +30,8 @@ const iosInCallKeys = ["stage", "tile", "surface", "surfaceRaised", "surfaceHigh
   "textTertiaryHighContrast", "border", "borderHighContrast", "borderStrong",
   "borderStrongHighContrast", "labelScrim", "labelScrimHighContrast", "scrim",
   "coralFill", "onCoral", "onCoralHighContrast", "coralText", "coralTextHighContrast",
-  "controlOff", "onControlOff", "controlFallback", "success", "warning", "live"];
+  "controlOff", "onControlOff", "controlFallback", "success", "warning", "live",
+  "leaveHighContrast"];
 export const androidRoles = Object.freeze([
   "primary", "onPrimary", "primaryContainer", "onPrimaryContainer", "inversePrimary",
   "secondary", "onSecondary", "secondaryContainer", "onSecondaryContainer",
@@ -100,7 +101,7 @@ export function renderNativeTokens(tokens = native) {
   expectKeys(tokens.status, ["light", "dark"], "native.status");
   expectKeys(tokens.ios, ["app", "inCall"], "native.ios");
   expectKeys(tokens.android, ["light", "dark", "inCall", "extended"], "native.android");
-  expectKeys(tokens.avatar, ["palette", "ring"], "native.avatar");
+  expectKeys(tokens.avatar, ["palette", "ring", "tongue"], "native.avatar");
   const lines = [`// ${generatedNotice}`, "import Foundation", "", "enum DesignTokens {"];
   const names = new Set();
   function constant(name, type, value) {
@@ -147,6 +148,7 @@ export function renderNativeTokens(tokens = native) {
   lines.push("    // avatar");
   constant("avatarPalette", "[Int64]", `[${avatarColors.join(", ")}]`);
   constant("avatarRing", "Int64", `0x${argb(tokens.avatar.ring, "native.avatar.ring")}`);
+  constant("avatarTongue", "Int64", `0x${argb(tokens.avatar.tongue, "native.avatar.tongue")}`);
   lines.push("}", "");
 
   const app = tokens.ios.app;

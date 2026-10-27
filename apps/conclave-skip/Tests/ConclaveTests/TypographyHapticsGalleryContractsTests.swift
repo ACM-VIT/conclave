@@ -313,8 +313,8 @@ struct TypographyHapticsGalleryContractsTests {
 
     @Test func galleryCatalogPairsMeetDeclaredClass() {
         let pairs = ComponentGalleryCatalog.contrastPairs
-        // WP1-2b adds the five F00 C12 i banner pairs (56 to 61).
-        #expect(pairs.count == 61)
+        // WP1-2b adds the five F00 C12 i banner pairs (56 to 61); FND-1 and FND-2 add 19 (62 to 80).
+        #expect(pairs.count == 80)
         for pair in pairs {
             let ratio = pair.ratio
             #expect(abs(ratio - pair.expectedRatio) < 0.001, "\(pair.id): \(ratio) against \(pair.expectedRatio)")
@@ -351,7 +351,8 @@ struct TypographyHapticsGalleryContractsTests {
         let ids = ComponentGalleryCatalog.contrastPairs.map { $0.id }
         #expect(Set(ids).count == ids.count)
         #expect(ids.prefix(4) == ["contrast.onCoral.ink", "contrast.onCoral.black", "contrast.coral.white", "contrast.accentDark.white"])
-        #expect(ids.last == "contrast.warningLight.groupedLight")
+        #expect(ids.last == "contrast.lobbyCaption.android")
+        #expect(ids.contains("contrast.warningLight.groupedLight") && ids.contains("contrast.leaveHighContrast.white"))
         #expect(ids.contains("contrast.inCallBorderHighContrast.ink"))
         var specimens = ids + ComponentGalleryCatalog.systemProminentSpecimenIDs + [ComponentGalleryCatalog.galleryToggleID]
         for style in ConclaveTextStyle.allCases {
@@ -360,7 +361,7 @@ struct TypographyHapticsGalleryContractsTests {
         for kind in FeedbackKind.allCases { specimens.append(ComponentGalleryCatalog.hapticSpecimenID(kind)) }
         // WP1-2b: every component specimen in its columns, spinner specimens included.
         specimens += ComponentGalleryCatalog.componentSpecimenIDs(showLoading: true)
-        #expect(specimens.count == 61 + 5 + 1 + 44 + 66 + 46)
+        #expect(specimens.count == 80 + 5 + 1 + 44 + 66 + 46)
         #expect(Set(specimens).count == specimens.count)
         for id in specimens {
             #expect(id.unicodeScalars.allSatisfy { ($0.value >= 0x30 && $0.value <= 0x39) || ($0.value >= 0x41 && $0.value <= 0x5A) || ($0.value >= 0x61 && $0.value <= 0x7A) || $0 == "." }, "\(id) is not a plain ASCII key")
@@ -643,13 +644,24 @@ struct TypographyHapticsGalleryContractsTests {
             }
         }
         #expect(used.count > 60)
+        // FND-1 (S10 R11): plural names resolve through conclavePlural against <plurals> resources; every one used
+        // must exist as a plural and every ds_ plural must be used.
+        let plurals = try androidPlurals()
+        let usedPlurals = used.intersection(Set(plurals.keys))
+        used.subtract(usedPlurals)
+        #expect(usedPlurals == Set(plurals.keys.filter { $0.hasPrefix("ds_") }), "plurals: \(usedPlurals.symmetricDifference(Set(plurals.keys.filter { $0.hasPrefix("ds_") })).sorted())")
+        for (name, forms) in plurals {
+            #expect(forms["other"] != nil, "\(name) needs an other form")
+            for value in forms.values { #expect(!containsDash(value) && regexMatches(#"%(?![0-9]\$)"#, in: value).isEmpty, "\(name)") }
+        }
         // SYS-1 owns the sys_ resources (the call notification and the system fixture); T/CallPresenceTests.swift pins
-        // the names its builder asks for.
-        let galleryNames = Set(resources.keys.filter { !$0.hasPrefix("sys_") })
+        // the names its builder asks for. SYS-2 owns the ctl_route_ audio route names; T/SYS2AudioRoutingTests.swift
+        // and T/Skip/SYS2AudioRouteBridgeTests.kt pin them (batch 2 integrator).
+        let galleryNames = Set(resources.keys.filter { !$0.hasPrefix("sys_") && !$0.hasPrefix("ctl_route_") })
         #expect(used == galleryNames, "unused or missing resources: \(used.symmetricDifference(galleryNames).sorted())")
         for (name, value) in resources {
             #expect(name.hasPrefix("native_gallery_") || name.hasPrefix("native_semantics_") || name.hasPrefix("native_panel_")
-                    || name.hasPrefix("ds_") || name.hasPrefix("sys_"), "\(name)")
+                    || name.hasPrefix("ds_") || name.hasPrefix("sys_") || name.hasPrefix("ctl_route_"), "\(name)")
             #expect(!containsDash(value), "\(name)")
             #expect(!value.contains("'"), "\(name) needs an escaped apostrophe")
             // Positional format arguments only, so translations can reorder them.
@@ -758,6 +770,15 @@ struct TypographyHapticsGalleryContractsTests {
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveBanner+iOS.swift",
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveStatus+iOS.swift",
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveCallControl+iOS.swift",
+        // FND-1 and FND-2 (the shared ConclaveComponentModels.swift is transpiled and scanned by FND1FoundationPackTests).
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveAvatar+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveFields+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveDialogs+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveStageChip+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveBadge+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveTileChrome+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveToast+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveMenus+iOS.swift",
     ]
     static let androidComponentFiles = [
         "Sources/Conclave/Skip/ui/components/ConclaveButtons.kt",
@@ -765,6 +786,17 @@ struct TypographyHapticsGalleryContractsTests {
         "Sources/Conclave/Skip/ui/components/ConclaveBanner.kt",
         "Sources/Conclave/Skip/ui/components/ConclaveStatus.kt",
         "Sources/Conclave/Skip/ui/components/ConclaveCallControl.kt",
+        // FND-1 and FND-2. ConclaveToastHost.kt runs one LaunchedEffect per toast id and is scanned on its own by
+        // FND2InCallChromeTests (toastHostTimesOneToastAtATime); it names no string resource.
+        "Sources/Conclave/Skip/ui/components/ConclaveAvatar.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveDialogs.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveFields.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveStageChrome.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveBadge.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveTileChrome.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveMenus.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveActionSheet.kt",
+        "Sources/Conclave/Skip/ui/components/AudioRouteList.kt",
     ]
     static let glassBranchCondition = "if #available(iOS 26.0, *), !reduceTransparency, !forceOpaque {"
 
@@ -789,14 +821,15 @@ struct TypographyHapticsGalleryContractsTests {
         // Internals: two comma-form branches (the surface and the bar) hold every glass call.
         let text = try source(Self.callControlFile)
         let code = withoutComments(text)
+        // WP1-2b: the surface and the bar; FND-2: the top chrome cluster (capsule plus route, F00 4 Containers).
         let branches = bracedBlocks(after: Self.glassBranchCondition, in: code)
-        #expect(branches.count == 2)
+        #expect(branches.count == 3)
         var outside = code
         for range in branches.reversed() { outside.removeSubrange(range) }
         for pattern in glass { #expect(!outside.contains(pattern), "\(pattern) outside the iOS 26 branch") }
         let inside = branches.map { String(code[$0]) }.joined(separator: "\n")
         #expect(inside.components(separatedBy: ".glassEffect(").count - 1 == 1)
-        #expect(normalized(inside).contains(".glassEffect(.regular.interactive(spec.isInteractive), in: Circle())"))
+        #expect(normalized(inside).contains(".glassEffect(.regular.interactive(spec.isInteractive), in: ConclaveControlOutline(shape: shape))"))
         #expect(inside.contains("GlassEffectContainer(spacing: spacing)"))
         for pattern in [".clear", ".tint(", "Glass.tint", "glassProminent", "Material", "symbolColorRenderingMode(.gradient"] {
             #expect(!code.contains(pattern), "the entry uses \(pattern)")
@@ -831,11 +864,14 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(abs(ContrastRatio.wcag(foreground: DesignTokens.iosInCallOnControlOff, background: DesignTokens.iosInCallControlOff) - 18.960) < 0.001)
         // Every fill and stroke resolves through the single adapter; no adapter member is added (FND-1 owns them).
         let code = normalized(withoutComments(try source(Self.callControlFile)))
-        #expect(code.contains(".background(HostingTheme.token(spec.fillToken ?? DesignTokens.iosInCallControlFallback), in: Circle())"))
-        #expect(code.contains("Circle().strokeBorder(HostingTheme.token(token), lineWidth: 1)"))
+        #expect(code.contains(".background(HostingTheme.token(spec.fillToken ?? DesignTokens.iosInCallControlFallback), in: ConclaveControlOutline(shape: shape))"))
+        #expect(code.contains("ConclaveControlOutline(shape: shape).strokeBorder(HostingTheme.token(token), lineWidth: 1)"))
         #expect(code.components(separatedBy: ".foregroundStyle(HostingTheme.token(spec.glyphToken))").count - 1 == 2)
-        let adapter = try source("Sources/Conclave/DesignSystem/iOS/HostingTheme+iOS.swift")
-        #expect(!adapter.contains("inCallLeave") && !adapter.contains("statusWarning"))
+        // FND-1 adds the adapter members (F00 2.6 A1 to A3); the Leave fill resolves through inCallLeave (OQ4).
+        let adapter = normalized(try source("Sources/Conclave/DesignSystem/iOS/HostingTheme+iOS.swift"))
+        #expect(adapter.contains("static let inCallLeave = Color(uiColor: UIColor { traits in"))
+        #expect(adapter.contains("if traits.accessibilityContrast == .high { return color(DesignTokens.iosInCallLeaveHighContrast) }"))
+        #expect(adapter.contains("static let statusWarning = appearancePair(light: DesignTokens.warningLight, dark: DesignTokens.warningDark)"))
     }
 
     /// The R02 table (brief scope 4) written out: every state times glass available or not, Reduce
@@ -894,11 +930,13 @@ struct TypographyHapticsGalleryContractsTests {
         // The view reads the mapping in both branches and passes glassAvailable true only inside the iOS 26 one.
         let code = withoutComments(try source(Self.callControlFile))
         let surface = try #require(bracedBlocks(after: Self.glassBranchCondition, in: code).first)
-        #expect(normalized(String(code[surface])).contains("let spec = ConclaveControlSurfaceMapping.spec(state, glassAvailable: true,"))
+        #expect(normalized(String(code[surface])).contains("let spec = ConclaveControlSurfaceMapping.spec(state, context: context, glassAvailable: true,"))
         #expect(code.components(separatedBy: "glassAvailable: true").count - 1 == 1)
-        #expect(normalized(code).contains("opaque(content, ConclaveControlSurfaceMapping.spec(state, glassAvailable: false,"))
-        // Leave is outside the mapping: opaque system red, never glass.
-        #expect(normalized(code).contains(".background(Color(uiColor: .systemRed), in: Circle())"))
+        #expect(normalized(code).contains("opaque(content, ConclaveControlSurfaceMapping.spec(state, context: context, glassAvailable: false,"))
+        // Leave is outside the mapping: the opaque inCallLeave adapter (system red, #E9152D under Increase Contrast,
+        // owner OQ4), never glass.
+        #expect(normalized(code).contains(".background(HostingTheme.inCallLeave, in: Circle())"))
+        #expect(!code.contains("Color(uiColor: .systemRed)"))
     }
 
     @Test func forceFallbackOverrideIsDebugOnly() throws {
@@ -913,7 +951,8 @@ struct TypographyHapticsGalleryContractsTests {
         let text = try source(Self.callControlFile)
         let release = withoutDebugBlocks(text)
         for name in [key, "forceOpaqueSetting", "ConclaveForceOpaqueControlsKey"] { #expect(!release.contains(name), "\(name) in Release") }
-        #expect(normalized(text).components(separatedBy: "#if DEBUG return forceOpaqueSetting #else return false #endif").count - 1 == 2)
+        // The surface, the bar and the FND-2 top chrome cluster.
+        #expect(normalized(text).components(separatedBy: "#if DEBUG return forceOpaqueSetting #else return false #endif").count - 1 == 3)
         #expect(!text.contains(".environment(\\.\(key)"))
         // The gallery, Debug-only as a whole, is the only setter.
         let gallery = try source(galleryFile)
@@ -1151,6 +1190,18 @@ private func isSentenceCase(_ label: String) -> Bool {
 
 private func isAcronymOrName(_ word: String) -> Bool {
     properNouns.contains(word) || !word.unicodeScalars.contains { CharacterSet.lowercaseLetters.contains($0) }
+}
+
+/// The app module's plural resources, name to quantity forms.
+private func androidPlurals() throws -> [String: [String: String]] {
+    let xml = try source("Android/app/src/main/res/values/strings.xml")
+    var result: [String: [String: String]] = [:]
+    for match in regexMatches(#"<plurals name="([a-z0-9_]+)"[^>]*>([\s\S]*?)</plurals>"#, in: xml) {
+        var forms: [String: String] = [:]
+        for item in regexMatches(#"<item quantity="([a-z]+)">([^<]*)</item>"#, in: match[1]) { forms[item[0]] = item[1] }
+        result[match[0]] = forms
+    }
+    return result
 }
 
 /// The app module's string resources, name to value.

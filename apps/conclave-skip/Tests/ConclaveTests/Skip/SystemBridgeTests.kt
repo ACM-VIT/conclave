@@ -340,9 +340,11 @@ class SystemBridgeTests {
     fun legacyFacadeRoutesAndTheTranspiledMapperAgree() {
         assertTrue(ConclaveHapticFeedback.accepts(FeedbackKind.micOn, route = ConclaveHapticRoute.gesture))
         assertFalse(ConclaveHapticFeedback.accepts(FeedbackKind.joined, route = ConclaveHapticRoute.gesture))
-        assertTrue(ConclaveHapticFeedback.accepts(FeedbackKind.joined, route = ConclaveHapticRoute.legacyOutcome))
+        // WP2-S2b: joined is delivered as a token now, so the legacy route refuses it; validationFailed stays legacy.
+        assertFalse(ConclaveHapticFeedback.accepts(FeedbackKind.joined, route = ConclaveHapticRoute.legacyOutcome))
+        assertTrue(ConclaveHapticFeedback.accepts(FeedbackKind.validationFailed, route = ConclaveHapticRoute.legacyOutcome))
         assertFalse(ConclaveHapticFeedback.accepts(FeedbackKind.hostMutedYou, route = ConclaveHapticRoute.legacyOutcome))
-        assertTrue(DeliveredTokenKinds.kinds.isEmpty)
+        assertTrue(DeliveredTokenKinds.delivers(FeedbackKind.joined))
         assertEquals(LegacyIOSHaptic.impactMedium, ConclaveHapticFeedback.iosLegacyHaptic(FeedbackKind.shareStarted))
         assertEquals(LegacyIOSHaptic.impactLight, ConclaveHapticFeedback.iosLegacyHaptic(FeedbackKind.transcriptionStopped))
     }

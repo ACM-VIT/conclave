@@ -236,6 +236,7 @@ import Combine
 @preconcurrency import AVFoundation
 import AudioToolbox
 import Mediasoup
+import UIKit
 import WebRTC
 
 // MARK: - Video Track Wrapper
@@ -2200,8 +2201,14 @@ final class WebRTCClient: NSObject, ObservableObject {
     // MARK: - Audio Session
 
     var audioSession = AVAudioSession.sharedInstance()
+    /// The platform target the route owner told this client to apply (S30 CC4). The person's explicit choice lives
+    /// in `AudioRouteOwner.preferredRouteIntent`, so clearing a target whose device left never erases it.
     private var selectedAudioInputId: String?
     private var selectedAudioOutputId: String?
+    /// The single routing authority this client is the iOS backend of (SYS-2); tests may substitute their own.
+    var routeOwnerOverride: AudioRouteOwner?
+    var routeOwner: AudioRouteOwner { routeOwnerOverride ?? AudioRouteOwner.shared }
+    private var routeOwnerAttached = false
     private var localAudioTrackSequence = 0
     private var localVideoTrackSequence = 0
     private var screenVideoTrackSequence = 0
@@ -2213,6 +2220,10 @@ final class WebRTCClient: NSObject, ObservableObject {
     // MARK: - Setup
 
     func configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities, iceServersJSON: String?) {
+        // S70 5 c: WebRTC manual audio before the first peer connection; the route owner's backend before any
+        // route report (SYS-2).
+        CallAudioSession.shared.prepareWebRTCManualAudio()
+        ensureRouteOwnerAttached()
         configurationGeneration += 1
         plannedConsumerResetCoordinatorTask?.cancel()
         plannedConsumerResetCandidates.removeAll()
@@ -6016,13 +6027,17 @@ extension WebRTCClient: SendTransportDelegate, ReceiveTransportDelegate, Produce
 // MARK: - Audio Device Routing (iOS)
 
 extension WebRTCClient {
+    /// Join, foreground, background and the healthy-producer reassert (VM sites, S70 5 c): configure-only while
+    /// CallKit owns the call; the refused fallback activates inside `CallAudioSession`.
     func activateCallAudioSession() {
+        ensureRouteOwnerAttached()
         do {
             try configureCallAudioSession()
             scheduleLocalAudioCaptureReassertion()
         } catch {
             debugLog("[WebRTC] activate call audio session failed: \(error)")
         }
+        publishRouteState()
     }
 
     func recoverCallAudioSessionAfterRouteChange() {
@@ -6038,14 +6053,15 @@ extension WebRTCClient {
         callAudioSessionOptions()
     }
 
-    private func configureCallAudioSession() throws {
-        try audioSession.setCategory(
-            .playAndRecord,
-            mode: .voiceChat,
-            options: callAudioSessionOptions()
-        )
-        try audioSession.setActive(true)
-        try applySelectedAudioRoutes()
+    /// Category, mode and options, then the activation `AudioActivationPolicy` allows (none while CallKit owns the
+    /// call; `setActive(true)` lives only in `CallAudioSession`'s refused fallback), then the route owner's target.
+    /// The capture ladder passes `applyRoutes: false`: it re-asserts capture, never the route (S70 5 c).
+    private func configureCallAudioSession(applyRoutes: Bool = true) throws {
+        try CallAudioSession.configureCallCategory(on: audioSession, options: callAudioSessionOptions())
+        try CallAudioSession.shared.activateIfAllowed(site: .webRTCConfigure)
+        if applyRoutes {
+            try applySelectedAudioRoutes()
+        }
     }
 
     private func reassertLocalAudioCaptureState() {
@@ -6074,7 +6090,7 @@ extension WebRTCClient {
                       self.localAudioEnabled,
                       self.localAudioIntentEnabled else { return }
                 do {
-                    try self.configureCallAudioSession()
+                    try self.configureCallAudioSession(applyRoutes: false)
                 } catch {
                     debugLog("[WebRTC] delayed audio session reassert failed: \(error)")
                 }
@@ -6329,33 +6345,187 @@ extension WebRTCClient {
         }
     }
 
+    /// A person's microphone choice (legacy Settings picker): the route owner records the intent and applies it
+    /// through `applyOwnerInputTarget(_:)`.
     func selectAudioInput(_ deviceId: String) {
+        ensureRouteOwnerAttached()
+        routeOwner.requestInput(id: deviceId)
+    }
+
+    /// A person's output choice (legacy Settings picker): it becomes the route owner's explicit intent, applied
+    /// through `applyOwnerOutputTarget(_:)` (S30 CC4: one routing authority).
+    func selectAudioOutput(_ deviceId: String) {
+        ensureRouteOwnerAttached()
+        routeOwner.requestRoute(id: deviceId)
+    }
+
+    // MARK: Route owner backend (SYS-2, S30 CC4)
+
+    /// Installs this client as the iOS backend of the route owner and the route source of `CallAudioSession`.
+    func ensureRouteOwnerAttached() {
+        guard !routeOwnerAttached else { return }
+        routeOwnerAttached = true
+        routeOwner.backend = AudioRouteBackend(
+            applyOutput: { [weak self] id in
+                self?.applyOwnerOutputTarget(id) ?? false
+            },
+            adoptOutput: { [weak self] id in
+                self?.adoptOwnerOutputTarget(id)
+            },
+            applyInput: { [weak self] id in
+                self?.applyOwnerInputTarget(id) ?? false
+            },
+            requestBluetoothAccess: {},
+            refresh: { [weak self] in
+                self?.publishRouteState()
+            }
+        )
+        CallAudioSession.shared.routeStateProvider = { [weak self] in
+            self?.routePlatformState()
+        }
+        CallAudioSession.shared.routeApplier = { [weak self] in
+            guard let self else { return }
+            do {
+                try self.applySelectedAudioRoutes()
+            } catch {
+                debugLog("[WebRTC] apply call audio route failed: \(error)")
+            }
+        }
+    }
+
+    /// Owner-instructed output (a person's request, a restore, a fallback): the old `selectAudioOutput` body.
+    private func applyOwnerOutputTarget(_ deviceId: String) -> Bool {
+        let trimmed = deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        scheduleRouteRequestTimeoutCheck()
+        do {
+            selectedAudioOutputId = trimmed.isEmpty ? nil : trimmed
+            try configureCallAudioSession()
+            reassertAudioAfterRouteSelection()
+            publishRouteState()
+            return true
+        } catch {
+            debugLog("[WebRTC] selectAudioOutput failed: \(error)")
+            publishRouteState()
+            return false
+        }
+    }
+
+    /// A route chosen in system UI is already active: record it as the target so later configure paths keep it
+    /// instead of reverting it (S70 5 c: adopt, never fight).
+    private func adoptOwnerOutputTarget(_ deviceId: String) {
+        let trimmed = deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        selectedAudioOutputId = trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Owner-instructed microphone input: the old `selectAudioInput` body.
+    private func applyOwnerInputTarget(_ deviceId: String) -> Bool {
         let trimmed = deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             if trimmed.isEmpty {
                 selectedAudioInputId = nil
                 try applySelectedAudioRoutes()
                 reassertAudioAfterRouteSelection()
-                return
+                publishRouteState()
+                return true
             }
-            guard let input = (audioSession.availableInputs ?? []).first(where: { $0.uid == trimmed }) else { return }
+            guard let input = (audioSession.availableInputs ?? []).first(where: { $0.uid == trimmed }) else { return false }
             selectedAudioInputId = input.uid
             try applySelectedAudioRoutes()
             reassertAudioAfterRouteSelection()
+            publishRouteState()
+            return true
         } catch {
             debugLog("[WebRTC] setPreferredInput failed: \(error)")
+            return false
         }
     }
 
-    func selectAudioOutput(_ deviceId: String) {
-        let trimmed = deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            selectedAudioOutputId = trimmed.isEmpty ? nil : trimmed
-            try configureCallAudioSession()
-            reassertAudioAfterRouteSelection()
-        } catch {
-            debugLog("[WebRTC] selectAudioOutput failed: \(error)")
+    func publishRouteState() {
+        routeOwner.publish(routePlatformState())
+    }
+
+    /// S30 3 d: a requested switch that has not landed after 3 s fails; the owner keeps no timer, so the backend
+    /// checks a little after.
+    private func scheduleRouteRequestTimeoutCheck() {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_100_000_000)
+            self?.routeOwner.checkPendingTimeout()
         }
+    }
+
+    /// The routes present now, in the owner's vocabulary (S30 0.5, RECONCILE R23). The device's own receiver and
+    /// speaker are always listed (no receiver on iPad), then every external input and output, one row per device
+    /// (a headset's input and output ports can carry different UIDs and names). Names are the system's
+    /// port names (S30 3 g).
+    func routePlatformState() -> AudioRoutePlatformState {
+        let isPhone = UIDevice.current.userInterfaceIdiom == .phone
+        var options: [AudioRouteOption] = []
+        if isPhone {
+            options.append(AudioRouteOption(id: "receiver", kind: .receiver, name: ConclaveStrings.text("iPhone"), isConnecting: false))
+        }
+        options.append(AudioRouteOption(id: "speaker", kind: .speaker, name: ConclaveStrings.text("Speaker"), isConnecting: false))
+        // Outputs first, so an active device keeps its output UID.
+        let ports = audioSession.currentRoute.outputs + (audioSession.availableInputs ?? [])
+        for port in ports {
+            let kind = Self.routeKind(for: port.portType)
+            guard kind != .speaker, kind != .receiver else { continue }
+            if port.portType == .builtInMic { continue }
+            if kind == .unknown && !audioSession.currentRoute.outputs.contains(where: { $0.uid == port.uid }) { continue }
+            // One row per device: a wired or USB headset lists its microphone and its output under different names.
+            let isDuplicate = options.contains { option in
+                option.id == port.uid ||
+                    (option.kind == kind && (option.name == port.portName || kind == .wired || kind == .usb))
+            }
+            if isDuplicate { continue }
+            options.append(AudioRouteOption(id: port.uid, kind: kind, name: port.portName, isConnecting: false))
+        }
+        var currentId = CallAudioSession.routeId(for: audioSession.currentRoute)
+        if !currentId.isEmpty, !options.contains(where: { $0.id == currentId }),
+           let output = audioSession.currentRoute.outputs.first,
+           let sameDevice = options.first(where: { $0.kind == Self.routeKind(for: output.portType) && $0.name == output.portName }) {
+            currentId = sameDevice.id
+        }
+        let externalCurrent = options.first { $0.id == currentId && $0.kind.isExternal }
+        let firstExternal = options.first { $0.kind.isExternal }
+        let defaultId = externalCurrent?.id ?? firstExternal?.id ?? "speaker"
+        let inputs = (audioSession.availableInputs ?? []).map { port in
+            AudioRouteOption(id: port.uid, kind: Self.inputKind(for: port.portType), name: port.portName, isConnecting: false)
+        }
+        return AudioRoutePlatformState(
+            options: options,
+            currentId: currentId,
+            defaultId: defaultId,
+            inputs: inputs,
+            currentInputId: audioSession.currentRoute.inputs.first?.uid ?? "",
+            canToggleSpeaker: isPhone,
+            canChooseInput: inputs.count > 1,
+            canShowMicModes: true,
+            bluetoothAccess: .notNeeded
+        )
+    }
+
+    static func routeKind(for port: AVAudioSession.Port) -> AudioRouteKind {
+        switch port {
+        case .builtInSpeaker:
+            return .speaker
+        case .builtInReceiver:
+            return .receiver
+        case .bluetoothHFP, .bluetoothA2DP:
+            return .bluetooth
+        case .bluetoothLE:
+            return .hearingAid
+        case .headphones, .headsetMic:
+            return .wired
+        case .usbAudio:
+            return .usb
+        default:
+            return .unknown
+        }
+    }
+
+    /// Microphone inputs: the device's own microphone carries the receiver kind (the phone itself).
+    static func inputKind(for port: AVAudioSession.Port) -> AudioRouteKind {
+        port == .builtInMic ? .receiver : routeKind(for: port)
     }
 
     private func reassertAudioAfterRouteSelection() {
@@ -6377,10 +6547,21 @@ extension WebRTCClient {
         }
     }
 
+    /// The input that belongs to an output id: the same UID, else (a Bluetooth headset whose output port carries a
+    /// different UID, as the route owner may list it) the hands-free input with the output's name.
+    private func matchingCallInput(forOutputId outputId: String) -> AVAudioSessionPortDescription? {
+        let inputs = audioSession.availableInputs ?? []
+        if let sameId = inputs.first(where: { $0.uid == outputId }) {
+            return sameId
+        }
+        guard let output = audioSession.currentRoute.outputs.first(where: { $0.uid == outputId }) else { return nil }
+        return inputs.first { $0.portType == .bluetoothHFP && $0.portName == output.portName }
+    }
+
     private func preferredCallInput(for outputId: String?) -> AVAudioSessionPortDescription? {
         let inputs = audioSession.availableInputs ?? []
         if let outputId,
-           let matchingInput = inputs.first(where: { $0.uid == outputId }) {
+           let matchingInput = matchingCallInput(forOutputId: outputId) {
             return matchingInput
         }
         if outputId != nil {
@@ -6404,6 +6585,8 @@ extension WebRTCClient {
 
     private func applySelectedAudioRoutes() throws {
         normalizeSelectedAudioRoutes()
+        // The change this apply causes is the owner's own, not a choice made in system UI.
+        routeOwner.noteOwnRouteRequest(targetId: selectedAudioOutputId ?? "")
 
         if let selectedAudioInputId {
             if let input = (audioSession.availableInputs ?? []).first(where: { $0.uid == selectedAudioInputId }) {
@@ -6425,7 +6608,7 @@ extension WebRTCClient {
             try audioSession.overrideOutputAudioPort(.none)
         case .some(let outputId):
             try audioSession.overrideOutputAudioPort(.none)
-            if let input = (audioSession.availableInputs ?? []).first(where: { $0.uid == outputId }) {
+            if let input = matchingCallInput(forOutputId: outputId) {
                 try audioSession.setPreferredInput(input)
             }
         }

@@ -11,6 +11,7 @@ protocol CallProviding: AnyObject {
     func reportConnected(uuid: UUID, at date: Date)
     func reportUpdate(uuid: UUID, handle: String, callerName: String, hasVideo: Bool)
     func requestSetMuted(uuid: UUID, muted: Bool, completion: @escaping (Bool) -> Void)
+    func requestSetHeld(uuid: UUID, onHold: Bool, completion: @escaping (Bool) -> Void)
     func requestEnd(uuid: UUID, completion: @escaping (Bool) -> Void)
     func reportEnded(uuid: UUID, failed: Bool)
 }
@@ -53,6 +54,13 @@ final class FakeCallProvider: CallProviding {
         completion(true)
         let fulfilled = actionHandler?.providerSetMuted(uuid: uuid, muted: muted) ?? false
         log.append("setMutedEcho:\(fulfilled ? "fulfilled" : "failed")")
+    }
+
+    func requestSetHeld(uuid: UUID, onHold: Bool, completion: @escaping (Bool) -> Void) {
+        log.append("setHeld:\(onHold ? 1 : 0)")
+        completion(true)
+        let fulfilled = actionHandler?.providerSetHeld(uuid: uuid, held: onHold) ?? false
+        log.append("setHeldEcho:\(fulfilled ? "fulfilled" : "failed")")
     }
 
     func requestEnd(uuid: UUID, completion: @escaping (Bool) -> Void) {
@@ -195,6 +203,13 @@ final class CallKitPresenceAdapter: CallProviderActionHandler {
             guard let self, !accepted, self.activeUUID == uuid, self.reportedMuted == muted else { return }
             self.reportedMuted = previousMuted
         }
+    }
+
+    /// S70 5 c: the hold banner's Resume requests one `CXSetHeldCallAction(onHold: false)`; CallKit's echo then
+    /// reaches `providerSetHeld`, which dispatches `.resume` (the call stays muted, O2).
+    func requestResumeFromHold() {
+        guard let uuid = activeUUID else { return }
+        provider.requestSetHeld(uuid: uuid, onHold: false) { _ in }
     }
 
     private func endCall(_ kind: CallKitEndKind) {

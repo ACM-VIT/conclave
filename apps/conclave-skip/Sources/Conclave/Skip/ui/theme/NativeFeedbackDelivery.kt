@@ -7,16 +7,30 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
-/** UI-owned ephemeral cursor. The fixture supplies a recording sink, never a physical effect. */
+/**
+ * UI-owned ephemeral cursor over one outcome stream. The Debug fixture supplies a recording sink; the production root
+ * (WP2-S2b, [ConclaveRootFeedback]) supplies the view's single-argument haptic, delivers only DeliveredTokenKinds and
+ * records each effect for sys.feedbackRecords.
+ */
 internal class NativeFeedbackDelivery(
-    private val presenter: NativeHostingPresenter,
+    private val source: () -> FeedbackSourceState,
     private val sink: (FeedbackKind) -> Unit,
+    private val deliversKind: (FeedbackKind) -> Boolean = { true },
+    private val records: FeedbackDeliveryRecords? = null,
 ) {
+    /** The Debug hosting fixture: every kind, recording sink. */
+    constructor(presenter: NativeHostingPresenter, sink: (FeedbackKind) -> Unit) : this(
+        source = { FeedbackSourceState(session = presenter.feedbackState.session, token = presenter.feedbackState.token) },
+        sink = sink,
+    )
+
     private val cursor = FeedbackDeliveryCursor()
     private var active = false
     var suspended by mutableStateOf(false)
@@ -31,9 +45,12 @@ internal class NativeFeedbackDelivery(
     private fun checkMain() = check(Looper.myLooper() == Looper.getMainLooper())
     private fun eligible() = active && !suspended
 
+    /** The consumed stream's current state; read during composition so Compose observes it. */
+    fun sourceState(): FeedbackSourceState = source()
+
     fun attach() {
         checkMain()
-        val state = presenter.feedbackState
+        val state = source()
         cursor.attach(session = state.session, current = state.token, eligible = eligible())
         exposureEpoch = cursor.epoch
     }
@@ -51,7 +68,7 @@ internal class NativeFeedbackDelivery(
     }
 
     private fun refresh() {
-        val state = presenter.feedbackState
+        val state = source()
         cursor.setEligibility(session = state.session, current = state.token, eligible = eligible())
         exposureEpoch = cursor.epoch
     }
@@ -59,7 +76,7 @@ internal class NativeFeedbackDelivery(
     fun observe(): FeedbackDelivery? {
         checkMain()
         refresh()
-        val state = presenter.feedbackState
+        val state = source()
         return cursor.observe(session = state.session, token = state.token,
             epoch = exposureEpoch, eligible = eligible())
     }
@@ -68,10 +85,13 @@ internal class NativeFeedbackDelivery(
         checkMain()
         if (delivery == null) return
         refresh()
-        val kind = cursor.take(delivery, session = presenter.feedbackState.session, eligible = eligible()) ?: return
+        val kind = cursor.take(delivery, session = source().session, eligible = eligible()) ?: return
+        // Single-path invariant (PLAN-next A9): a kind still on its legacy route never plays here too.
+        if (!deliversKind(kind)) return
         if (ConclaveHaptics.constant(kind) == null) return
         intendedCount++
         lastKind = kind.rawValue
+        records?.record(kind)
         sink(kind)
     }
 
@@ -79,19 +99,15 @@ internal class NativeFeedbackDelivery(
         checkMain()
         refresh()
         deliver(cursor.gesture(kind = FeedbackKind.selectionChanged,
-            session = presenter.feedbackState.session, eligible = eligible()))
+            session = source().session, eligible = eligible()))
     }
 }
 
-/** Exactly one consumer at the root, independent of panel composition. */
+/** Exactly one consumer per stream at the root, independent of panel composition. */
 @Composable
-internal fun NativeFeedbackConsumer(
-    presenter: NativeHostingPresenter,
-    delivery: NativeFeedbackDelivery,
-    mount: Int,
-) {
+internal fun NativeFeedbackConsumer(delivery: NativeFeedbackDelivery, mount: Int) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    val state = presenter.feedbackState // Observe generated state during composition.
+    val state = delivery.sourceState() // Observe generated state during composition.
     val epoch = delivery.exposureEpoch
     DisposableEffect(delivery, lifecycle, mount) {
         delivery.setActive(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
@@ -109,4 +125,38 @@ internal fun NativeFeedbackConsumer(
     LaunchedEffect(delivery, state.session, state.token.sequence, epoch, mount) {
         delivery.deliver(delivery.observe())
     }
+}
+
+/** The Debug hosting fixture's consumer (AppRoot.kt). */
+@Composable
+internal fun NativeFeedbackConsumer(
+    presenter: NativeHostingPresenter,
+    delivery: NativeFeedbackDelivery,
+    mount: Int,
+) {
+    presenter.feedbackState // The fixture presenter's observed state.
+    NativeFeedbackConsumer(delivery, mount)
+}
+
+/**
+ * WP2-S2b: the single root consumer of production outcome tokens (S70 12 d; F1 rules). It delivers the shell's
+ * feedbackState through the activity view's single-argument performHapticFeedback (the system touch-feedback setting
+ * governs; no in-app preference, Q11), only for DeliveredTokenKinds and only while the activity is RESUMED. Main.kt
+ * composes it once at the top of setContent, outside the PiP and route switch (HD request B2-T1): a PiP swap never
+ * remounts it, a rotation recreates it with a baselined cursor, and tokens published while paused (PiP, background)
+ * are consumed without an effect and never replayed. Public because the app module composes it.
+ */
+@Composable
+fun ConclaveRootFeedback() {
+    val shell = MeetingViewModel.shared.shell
+    val view = LocalView.current
+    val delivery = remember(shell, view) {
+        NativeFeedbackDelivery(
+            source = { FeedbackSourceState(session = shell.feedbackState.session, token = shell.feedbackState.token) },
+            sink = { ConclaveHaptics.perform(view, it) },
+            deliversKind = { DeliveredTokenKinds.delivers(it) },
+            records = FeedbackDeliveryRecords.shared,
+        )
+    }
+    NativeFeedbackConsumer(delivery, mount = 0)
 }

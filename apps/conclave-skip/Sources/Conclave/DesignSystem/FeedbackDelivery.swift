@@ -1,3 +1,6 @@
+import Foundation
+import Observation
+
 /// An ephemeral native effect, never persisted or acknowledged back to the outcome owner.
 struct FeedbackDelivery: Equatable {
     let session: Int
@@ -61,5 +64,34 @@ final class FeedbackDeliveryCursor {
         let delivery = FeedbackDelivery(session: session ?? 0, epoch: epoch, id: nextID, kind: kind)
         pending = delivery
         return delivery
+    }
+}
+
+/// One published outcome stream as a root consumer reads it (WP2-S2b): the source's session and its latest token. The
+/// shell (`MeetingShellFeedbackState`), the Debug hosting fixture and, with ENT-1, the premeeting presenter each feed
+/// one consumer, and each stream is deduplicated by its own sequence (S10 0.5).
+struct FeedbackSourceState: Equatable {
+    let session: Int
+    let token: FeedbackToken
+}
+
+/// WP2-S2b `sys.feedbackRecords` (S70 0.6 Debug readouts, 12 l4): the effects the production root consumers asked the
+/// platform for in this process. Only the Debug session readout reads it; a fixture start resets it.
+@MainActor
+@Observable
+final class FeedbackDeliveryRecords {
+    static let shared = FeedbackDeliveryRecords()
+
+    private(set) var count = 0
+    private(set) var lastKind = "none"
+
+    func record(_ kind: FeedbackKind) {
+        count += 1
+        lastKind = kind.rawValue
+    }
+
+    func reset() {
+        count = 0
+        lastKind = "none"
     }
 }

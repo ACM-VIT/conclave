@@ -18,16 +18,17 @@ struct ConclaveBannerAction: Identifiable {
     let title: String
     let identifier: String
     let action: () -> Void
+    /// S20 SR5 `NoticeAction.isEnabled`: Retry Now stays visible but disabled while an attempt is in flight.
+    var isEnabled: Bool = true
 
     var id: String { identifier }
 }
 
-/// Banner motion (F00 9, C12 h): an 8 pt move plus opacity over 120 ms, opacity only under Reduce Motion.
-/// DesignTokens has no motion durations yet; this is `motion.fast` from packages/ui-tokens/src/tokens.ts and moves
-/// to the FND-1 A5 motion constants.
+/// Banner motion (F00 9, C12 h): an 8 pt move plus opacity over 120 ms, opacity only under Reduce Motion. The
+/// values are the shared A5 durations (`ConclaveMotionDurations`, `motion.fast`).
 enum ConclaveBannerMotion {
-    static let duration = 0.12
-    static let travel: CGFloat = 8
+    static let duration = Double(ConclaveMotionDurations.fastMillis) / 1000.0
+    static let travel = CGFloat(ConclaveMotionDurations.bannerTravel)
 }
 
 /// A flat banner with a 1 pt border and radius 12, never glass (F00 0.4 O7). A static banner reads as one
@@ -43,8 +44,6 @@ struct ConclaveBanner: View {
     let announces: Bool
     let lineLimit: Int?
     let identifier: String
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var contrast
     @State private var announced = BannerAnnouncementLatch()
 
     init(kind: ConclaveBannerKind, text: String, surface: ConclaveBannerSurface = .inCall,
@@ -77,6 +76,7 @@ struct ConclaveBanner: View {
                             Button(action.title, action: action.action)
                                 .buttonStyle(.borderless)
                                 .tint(HostingTheme.coralText)
+                                .disabled(!action.isEnabled)
                                 .accessibilityIdentifier(action.identifier)
                         }
                     }
@@ -125,21 +125,18 @@ struct ConclaveBanner: View {
 
     private var border: Color {
         guard surface == .inCall else { return Color(uiColor: .separator) }
-        return HostingTheme.token(contrast == .increased ? DesignTokens.iosInCallBorderHighContrast : DesignTokens.iosInCallBorder)
+        return HostingTheme.inCallBorder
     }
 
-    /// Status colors by surface (F00 C12 e); never coral as a warning.
+    /// Status colors by surface (F00 C12 e) through the A1 and A3 adapter members; never coral as a warning.
     private var glyphColor: Color {
-        let dark = surface == .inCall || colorScheme == .dark
         switch kind {
         case .info, .reconnecting:
             return surface == .inCall ? HostingTheme.token(DesignTokens.iosInCallText) : HostingTheme.secondaryText
         case .warning:
-            if surface == .inCall { return HostingTheme.token(DesignTokens.iosInCallWarning) }
-            return HostingTheme.token(dark ? DesignTokens.warningDark : DesignTokens.warningLight)
+            return surface == .inCall ? HostingTheme.token(DesignTokens.iosInCallWarning) : HostingTheme.statusWarning
         case .success:
-            if surface == .inCall { return HostingTheme.token(DesignTokens.iosInCallSuccess) }
-            return HostingTheme.token(dark ? DesignTokens.successDark : DesignTokens.successLight)
+            return surface == .inCall ? HostingTheme.token(DesignTokens.iosInCallSuccess) : HostingTheme.statusSuccess
         case .error:
             return Color(uiColor: .systemRed)
         }
@@ -202,6 +199,45 @@ struct ConclaveBannerPresence<Content: View>: View {
 
     private var transition: AnyTransition {
         reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -ConclaveBannerMotion.travel))
+    }
+}
+
+// MARK: In-call banner lane (F00 C12 c; S20 10 f)
+
+enum ConclaveBannerLaneMetrics {
+    /// F00 C12 c: the lane never grows wider than this, centered under the capsule.
+    static let maxWidth: CGFloat = 560
+    /// F00 C12 f: up to four lines in the lane; the full text stays in the accessibility element.
+    static let lineLimit = 4
+}
+
+/// The in-call banner lane: the one banner the S20 presenter publishes (highest priority wins, STG-5 decides),
+/// under the capsule with `space8` from it, at most 560 pt wide. It is an overlay outside the tile layout, so it
+/// never moves tiles, and it stays when chrome auto-hides (MTU 6 item 3). Enter and exit use the banner motion.
+/// `content` draws the banner for the current notice (in-call surface, four-line cap).
+struct ConclaveBannerLane<Content: View>: View {
+    let noticeID: String?
+    let identifier: String
+    @ViewBuilder let content: () -> Content
+
+    init(noticeID: String?, identifier: String, @ViewBuilder content: @escaping () -> Content) {
+        self.noticeID = noticeID
+        self.identifier = identifier
+        self.content = content
+    }
+
+    var body: some View {
+        ConclaveBannerPresence(isPresented: noticeID != nil) {
+            content()
+                .id(noticeID)
+                .frame(maxWidth: ConclaveBannerLaneMetrics.maxWidth)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, CGFloat(DesignTokens.space12))
+        .padding(.top, CGFloat(DesignTokens.space8))
+        .environment(\.colorScheme, .dark)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(identifier)
     }
 }
 #endif

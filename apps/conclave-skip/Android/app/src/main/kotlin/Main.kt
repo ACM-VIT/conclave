@@ -80,6 +80,11 @@ open class MainActivity: AppCompatActivity {
                 if (BuildConfig.DEBUG && debuggable) intent?.getStringExtra("conclave.systemFixture") else null
             }
             val saveableStateHolder = rememberSaveableStateHolder()
+            // WP2-S2b (S70 12 d): the single production feedback root, outside the PiP swap and the route switch,
+            // so neither remounts it (a rotation recreates it with a baselined cursor). Never for the system fixture.
+            if (systemFixture == null) {
+                ConclaveRootFeedback()
+            }
             if (PipController.inPipMode && PipController.isInCall) {
                 PipContent()
             } else if (systemFixture != null && !PipController.isInCall) {
@@ -112,6 +117,8 @@ open class MainActivity: AppCompatActivity {
         if (android.os.Build.VERSION.SDK_INT >= 26) {
             PipManager.handleActivityResumed(this)
         }
+        // S70 SY18: the volume keys change call volume while a call is live, even during silence.
+        AudioRouteOwnerBridge.applyVolumeControlStream(this)
         AppDelegate.shared.onResume()
     }
 

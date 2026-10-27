@@ -36,7 +36,19 @@ final class MeetingShellPresenter {
     @ObservationIgnored private var leaveFailure: MeetingActionFailure = .none
     @ObservationIgnored private var endFailure: MeetingActionFailure = .none
     @ObservationIgnored private var admittedThisSession = false
+    /// Published as `session.hasBeenAdmittedThisSession` (S10 R6 c): the session reached `inCall` at least once.
     @ObservationIgnored private var joinedThisSession = false
+    @ObservationIgnored private var entryOrigin: MeetingEntryOrigin = .initial
+    /// WP2-S2a typed media failures, each with the row's `isOn` when it failed: a later change of that row clears it.
+    @ObservationIgnored private var micFailure: MeetingActionFailure = .none
+    @ObservationIgnored private var micFailureIsOn = false
+    @ObservationIgnored private var cameraFailure: MeetingActionFailure = .none
+    @ObservationIgnored private var cameraFailureIsOn = false
+    @ObservationIgnored private var screenShareFailure: MeetingActionFailure = .none
+    @ObservationIgnored private var screenShareFailureIsOn = false
+    /// S30 CC3: the direction of the pending hand ticket and of the last hand failure.
+    @ObservationIgnored private var pendingHandDirection: MeetingActionDirection = .none
+    @ObservationIgnored private var handFailureDirection: MeetingActionDirection = .none
     @ObservationIgnored private var lastOutcomeTokenID = 0
     @ObservationIgnored private var publishCount = 0
     @ObservationIgnored private var publishedCountAtLastSpy = 0
@@ -55,7 +67,9 @@ final class MeetingShellPresenter {
             isLocalHost: initial.isAdmin,
             isWebinarAttendee: initial.isWebinarAttendee,
             canEndForEveryone: false,
-            confirmation: nil
+            confirmation: nil,
+            hasBeenAdmittedThisSession: false,
+            entryOrigin: .initial
         )
     }
 
@@ -89,8 +103,18 @@ final class MeetingShellPresenter {
             handFailure = .none
             leaveFailure = .none
             endFailure = .none
-            admittedThisSession = false
-            joinedThisSession = false
+            handFailureDirection = .none
+            pendingHandDirection = .none
+            clearMediaFailures()
+            if next.isRedirectContinuation && joinedThisSession {
+                // R70-11: a same-meeting server redirect keeps the admission, so the stage stays and the redirected
+                // join plays no second `joined`; a failure from here on is a rejoin failure.
+                entryOrigin = .recovery
+            } else {
+                admittedThisSession = false
+                joinedThisSession = false
+                entryOrigin = .initial
+            }
             panels.reset(session: next.identity.callSession)
             setFeedback(MeetingShellFeedbackState(session: next.identity.callSession, token: FeedbackToken.baseline))
         } else if next.identity.attempt != previous.identity.attempt
@@ -104,6 +128,7 @@ final class MeetingShellPresenter {
             // S1C ACK: R10 disables socket mutations during recovery.
             ledger.interrupt(kinds: [MeetingActionKind.hand, MeetingActionKind.endForEveryone])
         }
+        clearMediaFailuresThatChanged(next)
         if previous.isAdmin && !next.isAdmin {
             // S1C ROLE: host loss clears the confirmation; a pending end keeps waiting for its result.
             confirmation = nil
@@ -136,6 +161,9 @@ final class MeetingShellPresenter {
             if resolution.phase == .inCall {
                 joinedThisSession = true
             }
+            if resolution.phase == .recovering && joinedThisSession {
+                entryOrigin = .recovery
+            }
             if pendingToken == .none {
                 pendingToken = phaseToken
             }
@@ -154,7 +182,13 @@ final class MeetingShellPresenter {
         guard ledger.finish(ticket, result: result, currentIdentity: inputs.identity) else { return false }
         if result.kind == .failed {
             setFailure(result.failure, for: ticket.kind)
+            if ticket.kind == .hand {
+                handFailureDirection = result.direction != .none ? result.direction : pendingHandDirection
+            }
             advanceFeedback(.actionRejected)
+        }
+        if ticket.kind == .hand {
+            pendingHandDirection = .none
         }
         publishAll(resolution: MeetingPhasePolicy.resolve(inputs))
         return true
@@ -169,6 +203,10 @@ final class MeetingShellPresenter {
         // CC21: a tap toward muted while an unmute is pending still dispatches; the view model applies it at once.
         let dispatch = MeetingPendingMediaTapPolicy.microphoneTap(isPending: row.isPending, isMuted: inputs.isMuted)
         guard dispatch == .dispatched else { return dispatch }
+        if micFailure != .none {
+            micFailure = .none
+            publishAll(resolution: MeetingPhasePolicy.resolve(inputs))
+        }
         onCommand?(.toggleMicrophone, nil)
         return .dispatched
     }
@@ -179,6 +217,10 @@ final class MeetingShellPresenter {
         guard row.isVisible, row.isEnabled else { return .unavailable }
         let dispatch = MeetingPendingMediaTapPolicy.cameraTap(isPending: row.isPending, isCameraOff: inputs.isCameraOff)
         guard dispatch == .dispatched else { return dispatch }
+        if cameraFailure != .none {
+            cameraFailure = .none
+            publishAll(resolution: MeetingPhasePolicy.resolve(inputs))
+        }
         onCommand?(.toggleCamera, nil)
         return .dispatched
     }
@@ -188,6 +230,10 @@ final class MeetingShellPresenter {
         let row = currentRow(.screenShare)
         guard row.isVisible, row.isEnabled else { return .unavailable }
         guard !row.isPending else { return .duplicate }
+        if screenShareFailure != .none {
+            screenShareFailure = .none
+            publishAll(resolution: MeetingPhasePolicy.resolve(inputs))
+        }
         onCommand?(.toggleScreenShare, nil)
         return .dispatched
     }
@@ -199,13 +245,16 @@ final class MeetingShellPresenter {
         guard !row.isPending,
               let ticket = ledger.begin(.hand, identity: inputs.identity) else { return .duplicate }
         handFailure = .none
+        handFailureDirection = .none
+        pendingHandDirection = inputs.isHandRaised ? .lower : .raise
         // Pending is visible in the same frame as the tap (S1C PUB).
         publishAll(resolution: MeetingPhasePolicy.resolve(inputs))
         onCommand?(.toggleHand, ticket)
         return .dispatched
     }
 
-    func requestEndForEveryone(from invoker: PanelInvoker) {
+    /// `invoker` is a `MeetingConfirmationInvoker` value (S50 PH17): the dialog shows on the surface that asked.
+    func requestEndForEveryone(from invoker: String) {
         let row = currentRow(.endForEveryone)
         guard row.isVisible, row.isEnabled, !row.isPending, confirmation == nil else { return }
         nextConfirmationID += 1
@@ -255,6 +304,30 @@ final class MeetingShellPresenter {
         onCommand?(.retry, nil)
     }
 
+    /// Core only (WP2-S2a, PLAN-next 7 item 4): a typed microphone, camera or screen share failure the view model
+    /// classified (`MeetingErrorClassifier`). It publishes the row failure and no feedback token: these are not
+    /// tickets, and the S20 banners and toasts carry them (S70 7 e). Cleared by the next dispatch of that row, by a
+    /// change of the row's state, and by a new call session. Other kinds and non-failures are ignored.
+    @discardableResult
+    func reportFailure(_ kind: MeetingActionKind, _ result: MeetingActionResult) -> Bool {
+        guard result.kind == .failed, result.failure != .none else { return false }
+        switch kind {
+        case .microphone:
+            micFailure = result.failure
+            micFailureIsOn = !inputs.isMuted
+        case .camera:
+            cameraFailure = result.failure
+            cameraFailureIsOn = !inputs.isCameraOff
+        case .screenShare:
+            screenShareFailure = result.failure
+            screenShareFailureIsOn = inputs.isScreenSharing
+        case .hand, .leave, .endForEveryone:
+            return false
+        }
+        publishAll(resolution: MeetingPhasePolicy.resolve(inputs))
+        return true
+    }
+
     func dismissOutcome() {
         onCommand?(.dismissOutcome, nil)
     }
@@ -276,8 +349,31 @@ final class MeetingShellPresenter {
             endTicketPending: ledger.isPending(.endForEveryone),
             handFailure: handFailure,
             leaveFailure: leaveFailure,
-            endFailure: endFailure
+            endFailure: endFailure,
+            micFailure: micFailure,
+            cameraFailure: cameraFailure,
+            screenShareFailure: screenShareFailure,
+            handFailureDirection: handFailureDirection
         )
+    }
+
+    private func clearMediaFailures() {
+        micFailure = .none
+        cameraFailure = .none
+        screenShareFailure = .none
+    }
+
+    /// A media failure stands until its row's state moves away from the state it failed in.
+    private func clearMediaFailuresThatChanged(_ next: MeetingShellInputs) {
+        if micFailure != .none && !next.isMuted != micFailureIsOn {
+            micFailure = .none
+        }
+        if cameraFailure != .none && !next.isCameraOff != cameraFailureIsOn {
+            cameraFailure = .none
+        }
+        if screenShareFailure != .none && next.isScreenSharing != screenShareFailureIsOn {
+            screenShareFailure = .none
+        }
     }
 
     private func setFailure(_ failure: MeetingActionFailure, for kind: MeetingActionKind) {
@@ -316,7 +412,9 @@ final class MeetingShellPresenter {
             isLocalHost: inputs.isAdmin,
             isWebinarAttendee: inputs.isWebinarAttendee,
             canEndForEveryone: MeetingControlAvailabilityPolicy.canEndForEveryone(inputs),
-            confirmation: confirmation
+            confirmation: confirmation,
+            hasBeenAdmittedThisSession: joinedThisSession,
+            entryOrigin: entryOrigin
         )
         if nextSession != session {
             session = MeetingSessionSnapshot(
@@ -330,7 +428,9 @@ final class MeetingShellPresenter {
                 isLocalHost: nextSession.isLocalHost,
                 isWebinarAttendee: nextSession.isWebinarAttendee,
                 canEndForEveryone: nextSession.canEndForEveryone,
-                confirmation: nextSession.confirmation
+                confirmation: nextSession.confirmation,
+                hasBeenAdmittedThisSession: nextSession.hasBeenAdmittedThisSession,
+                entryOrigin: nextSession.entryOrigin
             )
             publishCount += 1
         }

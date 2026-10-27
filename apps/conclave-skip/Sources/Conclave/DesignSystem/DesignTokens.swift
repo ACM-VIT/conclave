@@ -88,6 +88,7 @@ enum DesignTokens {
     static let iosInCallSuccess: Int64 = 0xFF22C55E
     static let iosInCallWarning: Int64 = 0xFFFBBF24
     static let iosInCallLive: Int64 = 0xFF60A5FA
+    static let iosInCallLeaveHighContrast: Int64 = 0xFFE9152D
 
     // android.light
     static let androidLightPrimary: Int64 = 0xFFB94333
@@ -296,4 +297,5 @@ enum DesignTokens {
     // avatar
     static let avatarPalette: [Int64] = [0xFFF95F4A, 0xFFFF007A, 0xFF7C5CFF, 0xFF2DA8A8, 0xFF4F86F7, 0xFF3FA66A, 0xFFF59E0B, 0xFF14B8A6, 0xFFE879F9, 0xFF38BDF8, 0xFFFF8A3D, 0xFFFB7185, 0xFFC084FC, 0xFF6366F1, 0xFF10B981, 0xFFFF5EAE]
     static let avatarRing: Int64 = 0x2EFFFFFF
+    static let avatarTongue: Int64 = 0xFFFF8FB1
 }

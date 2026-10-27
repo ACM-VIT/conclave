@@ -1593,7 +1593,7 @@ struct LocalToggleGuardRecoveryTests {
         call.calls.hold("setHandRaised(true)")
         #expect(shell.toggleHand() == .dispatched)
         #expect(await settle { call.calls.isHolding("setHandRaised(true)") })
-        shell.requestEndForEveryone(from: .more)
+        shell.requestEndForEveryone(from: MeetingConfirmationInvoker.more)
         #expect(shell.session.confirmation != nil)
         let before = shell.session.identity
         guard let ticket = shell.ledger.pendingTicket(.hand) else {

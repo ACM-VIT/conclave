@@ -47,6 +47,7 @@ import skip.foundation.JSONDecoder
 import skip.foundation.JSONEncoder
 import skip.foundation.ProcessInfo
 import skip.lib.*
+import skip.ui.UIApplication
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -1766,8 +1767,21 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     // localAudioMuteIntentGeneration, so a late acknowledgement or a start
     // never turns a newer camera-off back on.
     private var localVideoOffIntentGeneration = 0
-    private var bluetoothConnectAutoRequestAttempted = false
     private var bluetoothConnectPermissionRequestToken: PermissionHelper.PermissionRequestToken? = null
+    // SYS-2 (S30 CC4, S70 5 d): this client is the Android backend of the single route owner. The person's explicit
+    // choice lives in AudioRouteOwner.preferredRouteIntent; selectedAudioOutputDeviceId is only the target this
+    // client applies, so clearing it when its device leaves never erases the choice.
+    internal var routeOwnerOverride: AudioRouteOwner? = null
+    private val routeOwner: AudioRouteOwner
+        get() = routeOwnerOverride ?: AudioRouteOwner.shared
+    private var routeOwnerAttached = false
+    private var lastPublishedRouteId: String = ""
+    private var lastRouteOptionIds: List<String> = emptyList()
+    private var lastRouteDeviceIds: Set<String> = emptySet()
+    private var pendingRouteChangeReason: AudioRouteChangeReason? = null
+    private var pendingRouteChangePreviousId: String = ""
+    private var ownCommunicationDeviceRequestAtMs = -1L
+    private var bluetoothAccessDeniedOnce = false
     private var audioStartOrEnableInFlight = false
     private var audioRouteReapplyScheduled = false
     private var delayedAudioRouteReapplyRunnable: Runnable? = null
@@ -1791,6 +1805,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                 hasCallAudioFocus = false
             }
+        }
+        // S70 5 d: a cellular call or another VoIP app took the audio (otherAudio); gain clears it and re-applies
+        // the intent. Mute intent is never touched; LOSS_TRANSIENT_CAN_DUCK is ignored.
+        val event = AudioRouteOwnerBridge.interruptionEvent(change)
+        if (event != null && isCallAudioModeActive) {
+            routeOwner.reportInterruptionEvent(event)
         }
     }
     private var audioBandwidthRefreshInFlight = false
@@ -4596,7 +4616,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         applyAudioModuleInputDevice(null)
         audioStartOrEnableInFlight = false
         localAudioTargetEnabled = false
-        bluetoothConnectAutoRequestAttempted = false
         if (!preserveCallAudioRouting) {
             releaseCallAudioMode()
         }
@@ -4700,9 +4719,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             )
             audioCaptureReassertionGeneration += 1
             isCallAudioModeActive = true
+            ensureRouteOwnerAttached()
+            AudioRouteOwnerBridge.setCallAudioLive(true)
             requestCallAudioFocus(manager)
             startAudioDeviceRouteMonitor(manager)
-            requestBluetoothRoutingPermissionIfNeeded(manager)
+            // SY17: BLUETOOTH_CONNECT is never requested at audio setup; the route sheet row is the only request.
             val preselectedRouteChanged = if (Build.VERSION.SDK_INT >= 31) {
                 val changed = applyPreferredCommunicationRoute(manager)
                 NativePerformanceDiagnostics.event("audio_route_preselect", "changed=$changed")
@@ -4720,6 +4741,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             applyLocalAudioCaptureState(manager, shouldLocalAudioCaptureStayActive(shouldRecord))
             restartLocalAudioTrackAfterRouteChange(routeChanged, "call audio mode configure")
             scheduleLocalAudioCaptureReassertion(shouldRecord)
+            publishRouteState()
+            if (!wasActive) {
+                routeOwner.callAudioDidStart()
+            }
             NativePerformanceDiagnostics.timingAlways("audio_mode_configure", startedAt, "record=$shouldRecord routeChanged=$routeChanged")
         } catch (error: Throwable) {
             debugLog("[WebRTC] Failed to configure call audio mode: ${error}")
@@ -4727,7 +4752,18 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     private fun releaseCallAudioMode() {
+        val wasActive = isCallAudioModeActive
         isCallAudioModeActive = false
+        AudioRouteOwnerBridge.setCallAudioLive(false)
+        pendingRouteChangeReason = null
+        pendingRouteChangePreviousId = ""
+        lastPublishedRouteId = ""
+        lastRouteOptionIds = emptyList()
+        lastRouteDeviceIds = emptySet()
+        ownCommunicationDeviceRequestAtMs = -1L
+        if (wasActive) {
+            routeOwner.callAudioDidEnd()
+        }
         audioRouteReapplyScheduled = false
         delayedAudioRouteReapplyRunnable?.let { mainHandler.removeCallbacks(it) }
         delayedAudioRouteReapplyRunnable = null
@@ -4824,10 +4860,18 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         if (audioDeviceCallback == null) {
             val callback = object : AudioDeviceCallback() {
                 override fun onAudioDevicesAdded(addedDevices: kotlin.Array<out AudioDeviceInfo>?) {
+                    // The registration callback lists every present device: only a device the owner has not seen
+                    // is an arrival (no toast at call start).
+                    if (addedDevices.orEmpty().any { !lastRouteDeviceIds.contains(it.id.toString()) }) {
+                        noteRouteChange(AudioRouteChangeReason.newDeviceAvailable)
+                    }
                     scheduleCallAudioRouteReapply(forceCaptureRestart = shouldLocalAudioCaptureStayActive())
                 }
 
                 override fun onAudioDevicesRemoved(removedDevices: kotlin.Array<out AudioDeviceInfo>?) {
+                    if (removedDevices.orEmpty().any { lastRouteDeviceIds.contains(it.id.toString()) }) {
+                        noteRouteChange(AudioRouteChangeReason.oldDeviceUnavailable)
+                    }
                     scheduleCallAudioRouteReapply(forceCaptureRestart = shouldLocalAudioCaptureStayActive())
                 }
             }
@@ -4841,8 +4885,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (Build.VERSION.SDK_INT >= 31 && communicationDeviceChangedListener == null) {
-            val listener = AudioManager.OnCommunicationDeviceChangedListener {
-                scheduleCallAudioRouteReapply(forceCaptureRestart = shouldLocalAudioCaptureStayActive())
+            val listener = AudioManager.OnCommunicationDeviceChangedListener { device ->
+                handleCommunicationDeviceChanged(device)
             }
             communicationDeviceChangedListener = listener
             try {
@@ -4888,6 +4932,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 "audio_route_reapply_skip",
                 "reason=muted forceCaptureRestart=$forceCaptureRestart"
             )
+            reportPendingRouteChange()
             notifyCallAudioRouteChanged()
             return
         }
@@ -4931,6 +4976,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     "audio_route_reapply_skip",
                     "reason=muted_in_reapply forceCaptureRestart=$forceCaptureRestart"
                 )
+                reportPendingRouteChange()
                 notifyCallAudioRouteChanged()
                 return
             }
@@ -4938,7 +4984,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             NativePerformanceDiagnostics.event("audio_route_reapply", "forceCaptureRestart=$forceCaptureRestart")
             requestCallAudioFocus(manager)
             ensureCommunicationMode(manager)
-            requestBluetoothRoutingPermissionIfNeeded(manager)
             val routeChanged = applyPreferredCommunicationRoute(manager)
             applyLocalAudioCaptureState(manager, shouldRecord)
             restartLocalAudioTrackAfterRouteChange(
@@ -4946,6 +4991,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 "audio route change"
             )
             scheduleLocalAudioCaptureReassertion(shouldRecord)
+            reportPendingRouteChange()
             notifyCallAudioRouteChanged()
             NativePerformanceDiagnostics.timingAlways("audio_route_reapply", startedAt, "record=$shouldRecord routeChanged=$routeChanged")
         } catch (error: Throwable) {
@@ -5520,21 +5566,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return devices.any { isBluetoothRoute(it) }
     }
 
-    private fun requestBluetoothRoutingPermissionIfNeeded(manager: AudioManager) {
-        val hasBluetoothRoute = selectedRouteNeedsBluetoothConnectPermission(manager) ||
-            hasVisibleBluetoothCallRoute(manager)
-        if (
-            Build.VERSION.SDK_INT < 31 ||
-            PermissionHelper.hasBluetoothConnectPermission() ||
-            bluetoothConnectAutoRequestAttempted ||
-            !hasBluetoothRoute
-        ) {
-            return
-        }
-        bluetoothConnectAutoRequestAttempted = true
-        requestBluetoothConnectPermissionThenReapplyRoute()
-    }
-
     private fun inputDevices(manager: AudioManager): List<AudioDeviceInfo> {
         return sortedCallRoutes(callRouteDevices(manager).filter { isInputCapableCallRoute(it) })
     }
@@ -5662,6 +5693,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         if (Build.VERSION.SDK_INT < 31) {
             return true
         }
+        // The communication device change this causes is the owner's own, not a choice in the system switcher.
+        ownCommunicationDeviceRequestAtMs = SystemClock.uptimeMillis()
+        AudioRouteOwnerBridge.noteSetCommunicationDevice()
         return if (target != null) {
             manager.setCommunicationDevice(target)
         } else {
@@ -5996,8 +6030,21 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             ?.let { audioDeviceSelectionId(it, AudioDeviceSelectionDirection.output) }
     }
 
+    /** A person's microphone choice (legacy Settings picker); the route owner records it and applies it here. */
     internal fun selectAudioInput(deviceId: String) {
-        val manager = audioManager() ?: return
+        ensureRouteOwnerAttached()
+        routeOwner.requestInput(id = deviceId)
+    }
+
+    /** A person's output choice: it becomes the route owner's explicit intent (S30 CC4: one routing authority). */
+    internal fun selectAudioOutput(deviceId: String) {
+        ensureRouteOwnerAttached()
+        routeOwner.requestRoute(id = deviceId)
+    }
+
+    /** Owner-instructed microphone input (the old selectAudioInput body). */
+    private fun applyOwnerInputTarget(deviceId: String): Boolean {
+        val manager = audioManager() ?: return false
         val trimmed = deviceId.trim()
         selectedAudioInputDeviceId = if (trimmed.isEmpty()) {
             null
@@ -6007,7 +6054,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             }
             if (!isSelectable && !isPermissionHiddenBluetoothRoute(manager, trimmed)) {
                 debugLog("[WebRTC] Ignoring unavailable audio input route: $trimmed")
-                return
+                return false
             }
             trimmed
         }
@@ -6017,17 +6064,24 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             reassertCallAudioCaptureIfActive(manager)
             restartLocalAudioTrackAfterRouteChange(routeChanged && shouldLocalAudioCaptureStayActive(), "audio input selection")
             notifyCallAudioRouteChanged()
+            // In context: the person picked this Bluetooth route (never at audio setup, SY17).
             requestBluetoothConnectPermissionThenReapplyRoute()
-            return
+            publishRouteState()
+            return true
         }
         val routeChanged = applyPreferredCommunicationRoute(manager)
         reassertCallAudioCaptureIfActive(manager)
         restartLocalAudioTrackAfterRouteChange(routeChanged && shouldLocalAudioCaptureStayActive(), "audio input selection")
         notifyCallAudioRouteChanged()
+        publishRouteState()
+        return true
     }
 
-    internal fun selectAudioOutput(deviceId: String) {
-        val manager = audioManager() ?: return
+    /** Owner-instructed output: a person's request, a restore or a fallback (the old selectAudioOutput body). */
+    private fun applyOwnerOutputTarget(deviceId: String): Boolean {
+        // S30 3 d: a requested switch that has not landed after 3 s fails; the owner keeps no timer of its own.
+        mainHandler.postDelayed({ routeOwner.checkPendingTimeout() }, 3_100L)
+        val manager = audioManager() ?: return false
         val trimmed = deviceId.trim()
         selectedAudioOutputDeviceId = if (trimmed.isEmpty()) {
             null
@@ -6037,7 +6091,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             }
             if (!isSelectable && !isPermissionHiddenBluetoothRoute(manager, trimmed)) {
                 debugLog("[WebRTC] Ignoring unavailable audio output route: $trimmed")
-                return
+                return false
             }
             trimmed
         }
@@ -6050,16 +6104,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             reassertCallAudioCaptureIfActive(manager)
             restartLocalAudioTrackAfterRouteChange(routeChanged && shouldLocalAudioCaptureStayActive(), "audio output selection")
             notifyCallAudioRouteChanged()
+            // In context: the person picked this Bluetooth route (never at audio setup, SY17).
             requestBluetoothConnectPermissionThenReapplyRoute()
-            return
-        }
-
-        if (trimmed.isBlank()) {
-            val routeChanged = applyPreferredCommunicationRoute(manager)
-            reassertCallAudioCaptureIfActive(manager)
-            restartLocalAudioTrackAfterRouteChange(routeChanged && shouldLocalAudioCaptureStayActive(), "audio output selection")
-            notifyCallAudioRouteChanged()
-            return
+            publishRouteState()
+            return true
         }
 
         // API 31+ and legacy devices both go through the unified path so output
@@ -6068,6 +6116,199 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         reassertCallAudioCaptureIfActive(manager)
         restartLocalAudioTrackAfterRouteChange(routeChanged && shouldLocalAudioCaptureStayActive(), "audio output selection")
         notifyCallAudioRouteChanged()
+        publishRouteState()
+        return true
+    }
+
+    /** A route chosen in the system output switcher is already active: keep it as the target instead of reverting it. */
+    private fun adoptOwnerOutputTarget(deviceId: String) {
+        val trimmed = deviceId.trim()
+        selectedAudioOutputDeviceId = if (trimmed.isEmpty()) null else trimmed
+    }
+
+    // MARK: - Route owner backend (SYS-2, S30 CC4, S70 5 d)
+
+    private fun ensureRouteOwnerAttached() {
+        if (routeOwnerAttached) return
+        routeOwnerAttached = true
+        routeOwner.backend = AudioRouteBackend(
+            applyOutput = { id -> applyOwnerOutputTarget(id) },
+            adoptOutput = { id -> adoptOwnerOutputTarget(id) },
+            applyInput = { id -> applyOwnerInputTarget(id) },
+            requestBluetoothAccess = { requestBluetoothAccessFromRouteSheet() },
+            refresh = { publishRouteState() },
+        )
+    }
+
+    /** Records an automatic change; it is reported once the throttled re-apply has settled the route. */
+    private fun noteRouteChange(reason: AudioRouteChangeReason) {
+        if (pendingRouteChangeReason == null) {
+            pendingRouteChangePreviousId = lastPublishedRouteId
+        }
+        pendingRouteChangeReason = reason
+    }
+
+    /** Reports the pending automatic change to the owner (restore, fallback or adopt; one toast at most). */
+    private fun reportPendingRouteChange() {
+        val reason = pendingRouteChangeReason
+        if (reason == null) {
+            publishRouteState()
+            return
+        }
+        pendingRouteChangeReason = null
+        val previousId = pendingRouteChangePreviousId
+        pendingRouteChangePreviousId = ""
+        val state = buildRoutePlatformState() ?: return
+        rememberRouteState(state)
+        routeOwner.handleRouteChange(reason, previousId = previousId, state = state)
+    }
+
+    /**
+     * API 31+ communication device changes. The client's own setCommunicationDevice (and its mismatch retries) is
+     * not a choice; a change caused by a device leaving or arriving is that loss or arrival; a change between two
+     * present devices was made in the system output switcher or by a headset button and becomes the intent with no
+     * toast (S70 5 d), recorded as the target so no re-apply reverts it.
+     */
+    private fun handleCommunicationDeviceChanged(device: AudioDeviceInfo?) {
+        if (!isCallAudioModeActive) return
+        val nowMs = SystemClock.uptimeMillis()
+        // Each mismatch retry re-applies through applyCommunicationDevice, which refreshes this window.
+        val isOwn = ownCommunicationDeviceRequestAtMs >= 0L &&
+            nowMs - ownCommunicationDeviceRequestAtMs <= AudioRouteChangePolicy.ownRequestWindowMillis.toLong()
+        if (isOwn) {
+            publishRouteState()
+            return
+        }
+        val newId = device?.let { audioDeviceSelectionId(it, AudioDeviceSelectionDirection.output) } ?: ""
+        val previousId = lastPublishedRouteId
+        val previousIds = lastRouteOptionIds
+        val state = buildRoutePlatformState() ?: return
+        val currentIds = routeOptionIds(state)
+        val reason = AudioRouteChangePolicy.classifyCommunicationDeviceChange(
+            previousId = previousId,
+            newId = newId,
+            previousAvailableIds = skip.lib.Array(previousIds),
+            currentAvailableIds = skip.lib.Array(currentIds),
+        )
+        when (reason) {
+            AudioRouteChangeReason.routeOverride -> {
+                rememberRouteState(state)
+                routeOwner.handleRouteChange(reason, previousId = previousId, state = state)
+                restartLocalAudioTrackAfterRouteChange(shouldLocalAudioCaptureStayActive(), "communication device chosen in system UI")
+                notifyCallAudioRouteChanged()
+            }
+            AudioRouteChangeReason.oldDeviceUnavailable,
+            AudioRouteChangeReason.newDeviceAvailable -> {
+                noteRouteChange(reason)
+                scheduleCallAudioRouteReapply(forceCaptureRestart = shouldLocalAudioCaptureStayActive())
+            }
+            else -> {
+                scheduleCallAudioRouteReapply(forceCaptureRestart = shouldLocalAudioCaptureStayActive())
+            }
+        }
+    }
+
+    private fun rememberRouteState(state: AudioRoutePlatformState) {
+        lastPublishedRouteId = state.currentId
+        lastRouteOptionIds = routeOptionIds(state)
+        val manager = audioManager()
+        lastRouteDeviceIds = if (manager == null) {
+            emptySet()
+        } else {
+            (safeAudioDevices(manager, AudioManager.GET_DEVICES_OUTPUTS) +
+                safeAudioDevices(manager, AudioManager.GET_DEVICES_INPUTS)).map { it.id.toString() }.toSet()
+        }
+    }
+
+    /** Option ids as a Kotlin list (skip.lib.Array.map returns a Skip array). */
+    private fun routeOptionIds(state: AudioRoutePlatformState): List<String> {
+        val ids = mutableListOf<String>()
+        for (option in state.options) {
+            ids.add(option.id)
+        }
+        return ids
+    }
+
+    private fun publishRouteState() {
+        val state = buildRoutePlatformState() ?: return
+        rememberRouteState(state)
+        routeOwner.publish(state)
+    }
+
+    /** The routes present now in the owner's vocabulary (S30 0.5, RECONCILE R23), in the default order. */
+    private fun buildRoutePlatformState(): AudioRoutePlatformState? {
+        val manager = audioManager() ?: return null
+        val context = ProcessInfo.processInfo.androidContext
+        val outputs = sortedCallRoutes(outputDevices(manager)).filter { it.type != AudioDeviceInfo.TYPE_TELEPHONY }
+        val devices = outputs.map {
+            AndroidRouteDevice(
+                id = audioDeviceSelectionId(it, AudioDeviceSelectionDirection.output),
+                type = it.type,
+                productName = it.productName?.toString(),
+            )
+        }
+        val currentId = if (Build.VERSION.SDK_INT >= 31) {
+            currentCommunicationDevice(manager)
+                ?.takeIf { current -> outputs.any { isSameAudioDevice(it, current) } }
+                ?.let { audioDeviceSelectionId(it, AudioDeviceSelectionDirection.output) }
+                ?: ""
+        } else {
+            currentAudioOutputId() ?: ""
+        }
+        val defaultTarget = defaultCommunicationTarget(outputs, shouldLocalAudioCaptureStayActive())
+        val granted = Build.VERSION.SDK_INT < 31 || PermissionHelper.hasBluetoothConnectPermission()
+        val activity = UIApplication.shared.androidActivity
+        val access = AudioRouteOwnerBridge.bluetoothAccess(
+            sdk = Build.VERSION.SDK_INT,
+            granted = granted,
+            bluetoothPresent = !granted && hasVisibleBluetoothCallRoute(manager),
+            deniedOnce = bluetoothAccessDeniedOnce,
+            canAskAgain = activity == null || AudioRouteOwnerBridge.canAskBluetoothAgain(activity),
+        )
+        return AudioRouteOwnerBridge.platformState(
+            devices = devices,
+            currentId = currentId,
+            defaultId = defaultTarget?.let { audioDeviceSelectionId(it, AudioDeviceSelectionDirection.output) } ?: "",
+            bluetoothAccess = access,
+            resolver = ContextResourceResolver(context),
+        )
+    }
+
+    /**
+     * The R70-2 row in the route sheet: the only BLUETOOTH_CONNECT request point (SY17, RECONCILE R24). On grant
+     * the row becomes the named device and the route is selected; after a permanent denial the tap opens the app's
+     * system settings, because a permanently denied request shows no dialog.
+     */
+    private fun requestBluetoothAccessFromRouteSheet() {
+        if (Build.VERSION.SDK_INT < 31 || PermissionHelper.hasBluetoothConnectPermission()) {
+            publishRouteState()
+            return
+        }
+        val activity = UIApplication.shared.androidActivity
+        if (bluetoothAccessDeniedOnce && activity != null && !AudioRouteOwnerBridge.canAskBluetoothAgain(activity)) {
+            AudioRouteOwnerBridge.openAppSettings(activity)
+            return
+        }
+        if (bluetoothConnectPermissionRequestToken != null) return
+        var completedSynchronously = false
+        val token = PermissionHelper.requestBluetoothConnectPermission { granted ->
+            completedSynchronously = true
+            bluetoothConnectPermissionRequestToken = null
+            bluetoothAccessDeniedOnce = !granted
+            val manager = audioManager()
+            val bluetooth = if (granted && manager != null) {
+                sortedCallRoutes(outputDevices(manager)).firstOrNull { isBluetoothRoute(it) }
+            } else {
+                null
+            }
+            if (bluetooth != null) {
+                routeOwner.requestRoute(id = audioDeviceSelectionId(bluetooth, AudioDeviceSelectionDirection.output))
+            } else if (granted) {
+                reapplyCallAudioRoute(forceCaptureRestart = false)
+            }
+            publishRouteState()
+        }
+        bluetoothConnectPermissionRequestToken = if (completedSynchronously) null else token
     }
 
     private fun requestBluetoothConnectPermissionThenReapplyRoute() {

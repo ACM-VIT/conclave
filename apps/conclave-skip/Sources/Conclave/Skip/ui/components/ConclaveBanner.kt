@@ -8,11 +8,12 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -44,17 +45,18 @@ import androidx.compose.ui.unit.dp
 /** The visual kinds of a banner. */
 internal enum class ConclaveBannerKind { Info, Warning, Error, Success, Reconnecting }
 
-/** One banner action, drawn as a text button after the text. */
-internal data class ConclaveBannerAction(val title: String, val identifier: String, val onClick: () -> Unit)
+/** One banner action, drawn as a text button after the text. [enabled] is S20 SR5 `NoticeAction.isEnabled`: Retry
+ *  now stays visible but disabled while an attempt is in flight. [onClick] stays last so callers can pass it as a
+ *  trailing lambda (the gallery's `ConclaveBannerAction(title, id) {}`). */
+internal data class ConclaveBannerAction(
+    val title: String, val identifier: String, val enabled: Boolean = true, val onClick: () -> Unit,
+)
 
-/**
- * Banner motion: an 8 dp move plus opacity over 120 ms, opacity only when animations are removed. DesignTokens
- * has no motion durations yet; this is `motion.fast` from packages/ui-tokens/src/tokens.ts and moves to the
- * FND-1 A5 motion specs in ConclaveMotion.kt.
- */
+/** Banner motion: an 8 dp move plus opacity over 120 ms, opacity only when animations are removed. The values are
+ *  the shared A5 durations (ConclaveMotionDurations, `motion.fast`). */
 internal object ConclaveBannerMotion {
-    const val DURATION_MILLIS = 120
-    const val TRAVEL_DP = 8
+    val DURATION_MILLIS: Int = ConclaveMotionDurations.fastMillis
+    val TRAVEL_DP: Int = ConclaveMotionDurations.bannerTravel.toInt()
 }
 
 /**
@@ -67,12 +69,13 @@ internal fun ConclaveBanner(
     actions: List<ConclaveBannerAction> = emptyList(), onDismiss: (() -> Unit)? = null, maxLines: Int = Int.MAX_VALUE,
 ) {
     val scheme = MaterialTheme.colorScheme
-    val dark = inCall || isSystemInDarkTheme()
-    val border = if (inCall) Color(DesignTokens.androidExtendedBorderDark) else scheme.outlineVariant
+    // The extended roles (F00 2.6 A4) from the theme; an in-call banner always takes the dark set.
+    val ext = if (inCall) ConclaveExtendedColorsDark else LocalConclaveExtendedColors.current
+    val border = if (inCall) ext.border else scheme.outlineVariant
     val glyph = when (kind) {
         ConclaveBannerKind.Info, ConclaveBannerKind.Reconnecting -> if (inCall) scheme.onSurface else scheme.onSurfaceVariant
-        ConclaveBannerKind.Warning -> Color(if (dark) DesignTokens.androidExtendedWarningDark else DesignTokens.androidExtendedWarningLight)
-        ConclaveBannerKind.Success -> Color(if (dark) DesignTokens.androidExtendedSuccessDark else DesignTokens.androidExtendedSuccessLight)
+        ConclaveBannerKind.Warning -> ext.warning
+        ConclaveBannerKind.Success -> ext.success
         ConclaveBannerKind.Error -> scheme.error
     }
     Surface(
@@ -90,7 +93,8 @@ internal fun ConclaveBanner(
                 if (actions.isNotEmpty()) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         for (action in actions) {
-                            TextButton(onClick = action.onClick, modifier = Modifier.heightIn(min = 48.dp).testTag(action.identifier)) {
+                            TextButton(onClick = action.onClick, enabled = action.enabled,
+                                modifier = Modifier.heightIn(min = 48.dp).testTag(action.identifier)) {
                                 ConclaveText(action.title, line = action.identifier)
                             }
                         }
@@ -132,5 +136,29 @@ internal fun ConclaveBannerPresence(visible: Boolean, modifier: Modifier = Modif
         tween(durationMillis = ConclaveBannerMotion.DURATION_MILLIS, easing = LinearOutSlowInEasing)) { -travel }
     AnimatedVisibility(visible = visible, modifier = modifier, enter = enter, exit = exit) {
         content()
+    }
+}
+
+/** The lane's width cap and line cap (F00 C12 c, f). */
+internal object ConclaveBannerLaneMetrics {
+    const val MAX_WIDTH_DP = 560
+    const val LINE_LIMIT = 4
+}
+
+/**
+ * The in-call banner lane: the one banner the S20 presenter publishes (highest priority wins, STG-5 decides) in the
+ * stage Box under the top chrome, at most 560 dp wide and centered. It overlays the stage outside the tile layout,
+ * so it never moves tiles, and it stays while chrome auto-hides. [noticeId] null hides the lane with the banner
+ * motion; [content] draws the banner for the current notice (inCall = true, maxLines = LINE_LIMIT).
+ */
+@Composable
+internal fun ConclaveBannerLane(
+    noticeId: String?, identifier: String, modifier: Modifier = Modifier, content: @Composable () -> Unit,
+) {
+    Box(modifier.fillMaxWidth().padding(horizontal = DesignTokens.space12.dp).padding(top = DesignTokens.space8.dp)
+        .testTag(identifier), contentAlignment = Alignment.TopCenter) {
+        ConclaveBannerPresence(visible = noticeId != null, modifier = Modifier.widthIn(max = ConclaveBannerLaneMetrics.MAX_WIDTH_DP.dp)) {
+            content()
+        }
     }
 }

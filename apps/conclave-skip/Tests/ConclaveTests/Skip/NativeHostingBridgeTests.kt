@@ -92,4 +92,27 @@ class NativeHostingBridgeTests {
             observer.clear()
         }
     }
+
+    /** WP2-S2b: the transpiled readout values equal the Swift ones (WP2S2bFeedbackRoomSwitchTests). */
+    @Test
+    fun sessionReadoutValuesMatchSwift() {
+        val shell = MeetingShellPresenter()
+        val identity = MeetingSessionIdentity(callSession = 3, attempt = 7, attemptToken = "attempt")
+        shell.apply(MeetingShellInputs.make(identity = identity, connectionState = ConnectionState.connecting))
+        shell.apply(MeetingShellInputs.make(identity = identity, connectionState = ConnectionState.joined, isAdmin = true, isHandRaised = true))
+        assertTrue(MeetingSessionReadout.identity(shell.session).startsWith("cs=3 a=7 r="))
+        assertEquals("inCall/none admitted=1 origin=initial", MeetingSessionReadout.phase(shell.session))
+        assertEquals("none", MeetingSessionReadout.outcome(shell.session))
+        assertEquals("s=3 seq=1 kind=joined", MeetingSessionReadout.feedback(shell.feedbackState))
+        assertEquals(MeetingDispatch.dispatched, shell.toggleHand())
+        assertEquals("pending=hand resolved=0 last=none", MeetingSessionReadout.ledger(shell.ledger))
+        assertTrue(MeetingSessionReadout.controls(shell.controls).contains("hand=on,enabled,pending"))
+        assertTrue(shell.finish(shell.ledger.pending[0], MeetingActionResult.failed(MeetingActionFailure.ackTimedOut)))
+        assertTrue(MeetingSessionReadout.controls(shell.controls).contains("hand=on,enabled,failed:ackTimedOut:lower"))
+        val records = FeedbackDeliveryRecords()
+        records.record(FeedbackKind.joined)
+        assertEquals("1 last=joined", MeetingSessionReadout.feedbackRecords(count = records.count, lastKind = records.lastKind))
+        assertEquals(7, MeetingSessionReadout.keys.count)
+        assertEquals("sys.feedbackRecords", MeetingSessionReadout.feedbackRecordsKey)
+    }
 }

@@ -146,6 +146,66 @@ enum ComponentGalleryCatalog {
     ]
     static let compactBarMoveOrder: [String] = [compactBarShareScreen]
 
+    // MARK: FND-1 and FND-2 specimen identifiers (F00 13; S20 SR6; S30 CL12)
+
+    // Stable names for the foundation components' gallery specimens, runtime cells and production identifiers.
+    // Every one is drawn in the App and In call columns where the component can appear in both (F00 13), with the
+    // in-call-only components (chrome, tiles, toasts, labelled toggles) in the In call column alone.
+    static let iconButtonID = "button.icon"
+    static let closeButtonID = "button.close"
+    static let iconToggleID = "button.icon.toggle"
+    static let avatarRowID = "avatar.row"
+    static let avatarChatID = "avatar.chat"
+    static let avatarTileID = "avatar.tile"
+    static let avatarLobbyID = "avatar.lobby"
+    static let sectionHeaderID = "section.header"
+    static let sectionFooterID = "section.footer"
+    static let dialogConfirmID = "dialog.confirm"
+    static let dialogAlertID = "dialog.alert"
+    static let fieldTextID = "field.text"
+    static let fieldTextErrorID = "field.text.error"
+    static let fieldComposerID = "field.composer"
+    static let toggleLabelledID = "toggle.call.labelled"
+    static let chromeCapsuleID = "chrome.capsule"
+    static let chromeButtonID = "chrome.button"
+    static let stageChipHandID = "stage.chip.hand"
+    static let stageChipNowPlayingID = "stage.chip.nowPlaying"
+    static let badgeDotID = "badge.dot"
+    static let badgeTagID = "badge.tag"
+    static let badgeStatusID = "badge.status"
+    static let tileVideoID = "tile.chrome.video"
+    static let tileCameraOffID = "tile.chrome.cameraOff"
+    static let tileSpeakingID = "tile.chrome.speaking"
+    static let tileDenseID = "tile.chrome.dense"
+    static let tileReconnectingID = "tile.chrome.reconnecting"
+    static let tileSelfFlipID = "tile.chrome.selfFlip"
+    static let tileSpotlightID = "tile.chrome.spotlight"
+    static let tileOverflowID = "stage.overflow"
+    static let toastInfoID = "toast.info"
+    static let toastActionID = "toast.action"
+    static let menuAnchoredID = "menu.anchored"
+    static let menuContextID = "menu.context"
+    static let paletteReactionsID = "palette.reactions"
+    /// Android only: the C17 More action sheet.
+    static let sheetActionsID = "sheet.actions"
+    /// Android only: the S30 CL8 route list in its sheet.
+    static let sheetRouteID = "sheet.route"
+
+    /// FND-1 specimens (C02, C07, C11, C18, C19 and the C04 labelled toggle), in drawing order.
+    static let foundationSpecimenIDs: [String] = [
+        iconButtonID, closeButtonID, iconToggleID, avatarRowID, avatarChatID, avatarTileID, avatarLobbyID,
+        sectionHeaderID, sectionFooterID, dialogConfirmID, dialogAlertID, fieldTextID, fieldTextErrorID, fieldComposerID,
+        toggleLabelledID,
+    ]
+
+    /// FND-2 specimens (C03, C06, C08, C13, C16, C17, C22, S30 CL8), in drawing order.
+    static let inCallChromeSpecimenIDs: [String] = [
+        chromeCapsuleID, chromeButtonID, stageChipHandID, stageChipNowPlayingID, badgeDotID, badgeTagID, badgeStatusID,
+        tileVideoID, tileCameraOffID, tileSpeakingID, tileDenseID, tileReconnectingID, tileSelfFlipID, tileSpotlightID,
+        tileOverflowID, toastInfoID, toastActionID, menuAnchoredID, menuContextID, paletteReactionsID, sheetActionsID,
+        sheetRouteID,
+    ]
+
     /// A sample room code for the value row; data, not copy.
     static let sampleRoomCode = "abc-defg-hij"
 
@@ -272,6 +332,27 @@ enum ComponentGalleryCatalog {
         pair("contrast.inCallLive.surfaceRaised", "Live on raised in-call surface", DesignTokens.iosInCallLive, DesignTokens.iosInCallSurfaceRaised, .text, 6.159),
         pair("contrast.androidDark.errorSurfaceHigh", "Android dark error on surfaceContainerHigh", DesignTokens.androidDarkError, DesignTokens.androidDarkSurfaceContainerHigh, .text, 9.222),
         pair("contrast.warningLight.groupedLight", "Warning on grouped background", DesignTokens.warningLight, DesignTokens.iosAppLaunchBackgroundLight, .text, 6.354),
+        // FND-1 and FND-2 pairs (F00 C04 l7, C06 i, C08 i, C13 i, C16, C17, C04 f; S30 3 i). System colors (dynamic
+        // system red, tertiary system fill) stay live-only.
+        pair("contrast.leaveHighContrast.white", "White on the iOS Leave fill, increased contrast (glyph)", DesignTokens.neutralWhite, DesignTokens.iosInCallLeaveHighContrast, .nonText, 4.555),
+        pair("contrast.leaveHighContrast.stage", "iOS Leave fill, increased contrast, against the stage", DesignTokens.iosInCallLeaveHighContrast, DesignTokens.iosInCallStage, .nonText, 4.344),
+        pair("contrast.speakingRing.tile", "Coral speaking ring against a tile", DesignTokens.coral, DesignTokens.iosInCallTile, .nonText, 5.973),
+        pair("contrast.handBadge.ink", "Ink glyph on the hand raised badge", DesignTokens.iosInCallOnControlOff, DesignTokens.iosInCallWarning, .nonText, 11.855),
+        pair("contrast.coralFill.surfaceRaised", "Coral badge against the raised in-call surface", DesignTokens.coral, DesignTokens.iosInCallSurfaceRaised, .nonText, 5.043),
+        pair("contrast.coralFill.toolbar", "Coral badge against the Android call toolbar", DesignTokens.coral, DesignTokens.androidExtendedToolbarContainer, .nonText, 5.706),
+        pair("contrast.snackbar.text", "Android stage lane snackbar text", DesignTokens.androidInCallOnSurface, DesignTokens.androidInCallSurfaceContainerHigh, .text, 15.001),
+        pair("contrast.snackbar.action", "Android stage lane snackbar action", DesignTokens.androidInCallPrimary, DesignTokens.androidInCallSurfaceContainerHigh, .text, 6.246),
+        pair("contrast.snackbarInPage.dark.text", "Android in-page snackbar text, dark", DesignTokens.androidDarkInverseOnSurface, DesignTokens.androidDarkInverseSurface, .text, 16.118),
+        pair("contrast.snackbarInPage.dark.action", "Android in-page snackbar action, dark", DesignTokens.androidDarkInversePrimary, DesignTokens.androidDarkInverseSurface, .text, 4.882),
+        pair("contrast.snackbarInPage.light.text", "Android in-page snackbar text, light", DesignTokens.androidLightInverseOnSurface, DesignTokens.androidLightInverseSurface, .text, 14.270),
+        pair("contrast.snackbarInPage.light.action", "Android in-page snackbar action, light", DesignTokens.androidLightInversePrimary, DesignTokens.androidLightInverseSurface, .text, 5.942),
+        pair("contrast.tagLight", "Android role tag, light", DesignTokens.androidLightOnSurfaceVariant, DesignTokens.androidLightSurfaceContainerHighest, .text, 6.556),
+        pair("contrast.tagDark", "Android role tag, dark", DesignTokens.androidDarkOnSurfaceVariant, DesignTokens.androidDarkSurfaceContainerHighest, .text, 5.270),
+        pair("contrast.menuErrorLight", "Android destructive menu item, light", DesignTokens.androidLightError, DesignTokens.androidLightSurfaceContainer, .text, 5.878),
+        pair("contrast.menuErrorDark", "Android destructive menu item, dark", DesignTokens.androidDarkError, DesignTokens.androidDarkSurfaceContainer, .text, 10.435),
+        pair("contrast.routeRadio", "Android route radio on the in-call sheet", DesignTokens.androidInCallPrimary, DesignTokens.androidInCallSurfaceContainerLow, .nonText, 7.398),
+        pair("contrast.lobbyCaption.ios", "iOS lobby toggle caption on the card strip", DesignTokens.iosInCallTextSecondary, DesignTokens.iosInCallSurface, .text, 9.738),
+        pair("contrast.lobbyCaption.android", "Android lobby toggle caption on the card strip", DesignTokens.androidInCallOnSurfaceVariant, DesignTokens.androidInCallSurfaceContainer, .text, 6.913),
     ]
 
     private static func pair(_ id: String, _ caption: String, _ foreground: Int64, _ background: Int64,
