@@ -79,4 +79,20 @@
     <string name="native_semantics_idle">No export yet. Exports go to cache/wp1-semantics, newest in latest.json.</string>
     <string name="native_semantics_status">Wrote %1$s: %2$d merged and %3$d unmerged nodes</string>
     <string name="native_semantics_failed">Export failed: %1$s</string>
+
+    <!-- In-call panels (WP1-3b1): page navigation, the mini tile and the hosting preview panel titles. -->
+    <string name="native_panel_back_to_call">Back to call</string>
+    <string name="native_panel_close">Close %1$s</string>
+    <string name="native_panel_return_to_call">Return to call</string>
+    <string name="native_panel_name_camera_off">%1$s, camera off</string>
+    <string name="native_panel_speaking">Speaking</string>
+    <string name="native_panel_participants">Participants</string>
+    <string name="native_panel_settings">Settings</string>
+    <string name="native_panel_layout">Layout</string>
+    <string name="native_panel_layout_grid">Grid</string>
+    <string name="native_panel_layout_spotlight">Spotlight</string>
+    <string name="native_panel_layout_sidebar">Sidebar</string>
+    <!-- Hosting preview controls added with the panels. -->
+    <string name="native_panel_open_layout">Layout panel</string>
+    <string name="native_panel_refresh_readouts">Refresh readouts</string>
 </resources>

@@ -516,7 +516,8 @@ struct TypographyHapticsGalleryContractsTests {
         // Each pattern group must match something, so a reworded or moved label cannot pass by escaping the scan.
         let groups: [(name: String, pattern: String, minimum: Int)] = [
             ("literal control labels", #"(?:Button|Toggle|Section|DisclosureGroup|NavigationLink|LabeledContent|Label|Picker|TextField|navigationTitle)\(\s*"([^"\\]+)""#, 15),
-            ("literal title choices", #"(?:Button|navigationTitle)\(\s*[A-Za-z.]+\s*\?\s*"([^"\\]+)"\s*:\s*"([^"\\]+)""#, 3),
+            // WP1-3b1 moved the sample panel title choice into the catalog ("catalog title choices" below).
+            ("literal title choices", #"(?:Button|navigationTitle)\(\s*[A-Za-z.]+\s*\?\s*"([^"\\]+)"\s*:\s*"([^"\\]+)""#, 2),
             ("action button labels", #"Button\(action:[^\n]*\)\s*\{\s*Text\(\s*"([^"\\]+)""#, 1),
             ("label views", #"Label\s*\{\s*Text\(\s*"([^"\\]+)""#, 2),
             ("catalog control labels", #"(?:Button|Toggle|Section|NavigationLink|LabeledContent|navigationTitle|readout)\(\s*ConclaveStrings\.text\(\s*"([^"\\]+)""#, 20),
@@ -583,11 +584,13 @@ struct TypographyHapticsGalleryContractsTests {
         // Owner decision Q14: new handwritten Compose strings are Android string resources, resolved by name.
         let resources = try androidStrings()
         var used = Set<String>()
+        // WP1-3b1 adds the in-call panel strings (native_panel_) and the panel files that name them.
         for file in ["Sources/Conclave/Skip/ui/hosting/NativeComponentGallery.kt", "Sources/Conclave/Skip/ui/hosting/NativeSemanticsExport.kt",
-                     "Sources/Conclave/Skip/ui/AppRoot.kt"] {
+                     "Sources/Conclave/Skip/ui/AppRoot.kt", "Sources/Conclave/Skip/ui/call/panels/InCallPage.kt",
+                     "Sources/Conclave/Skip/ui/call/panels/CallMiniTile.kt", "Sources/Conclave/Skip/ui/call/panels/NativePanelHost.kt"] {
             let text = try source(file)
             // Names appear at call sites or in tables such as the live role list.
-            used.formUnion(regexMatches(#""(native_(?:gallery|semantics)_[a-z0-9_]+)""#, in: text).map { $0[0] })
+            used.formUnion(regexMatches(#""(native_(?:gallery|semantics|panel)_[a-z0-9_]+)""#, in: text).map { $0[0] })
             if !file.hasSuffix("AppRoot.kt") {
                 // No user-facing literal: every Text takes a resource, a catalog caption or a kind identifier.
                 #expect(regexMatches(#"Text\(\s*""#, in: text).isEmpty, "\(file) has a literal Text")
@@ -596,7 +599,7 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(used.count > 60)
         #expect(used == Set(resources.keys), "unused or missing resources: \(used.symmetricDifference(Set(resources.keys)).sorted())")
         for (name, value) in resources {
-            #expect(name.hasPrefix("native_gallery_") || name.hasPrefix("native_semantics_"), "\(name)")
+            #expect(name.hasPrefix("native_gallery_") || name.hasPrefix("native_semantics_") || name.hasPrefix("native_panel_"), "\(name)")
             #expect(!containsDash(value), "\(name)")
             #expect(!value.contains("'"), "\(name) needs an escaped apostrophe")
             // Positional format arguments only, so translations can reorder them.

@@ -163,6 +163,9 @@ android {
     }
 
     buildTypes {
+        debug {
+            isPseudoLocalesEnabled = true
+        }
         release {
             signingConfig = signingConfigs.findByName("release")
             // R8 minification miscompiles SkipUI's presentation/preferences code:

@@ -5,10 +5,13 @@ import SwiftUI
 struct NativeHostingPreview: View {
     @State private var presenter: NativeHostingPresenter
     @State private var feedback: IOSFeedbackDelivery
-    @State private var sheet = NativePanelSheetAdapter()
+    @State private var panelHost = NativePanelHostAdapter()
     @State private var consumerMount = 0
     @State private var stageLifetime = HostingStageLifetime()
+    @State private var rootSize = CGSize.zero
     @Environment(\.colorScheme) private var systemScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     let onClose: () -> Void
 
     init(onClose: @escaping () -> Void) {
@@ -18,9 +21,21 @@ struct NativeHostingPreview: View {
         self.onClose = onClose
     }
 
+    /// Size classes from the environment, size from the root's own layout (PS 7.1). The root never branches
+    /// its structure on them; only the host's bindings follow.
+    private var window: PanelWindow {
+        PanelWindow(width: Double(rootSize.width), height: Double(rootSize.height),
+                    horizontalRegular: horizontalSizeClass == .regular, verticalRegular: verticalSizeClass == .regular)
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                // L1, as amended by the WP1-3b1 review (M1): the stage is a layout sibling above the List, so a
+                // medium sheet never hides it (P1.3, IOS-1); it reserves its height in the same layout and never
+                // overlays the List.
+                HostingStageStrip(lifetime: stageLifetime, presenter: presenter)
+                    .fixedSize(horizontal: false, vertical: true)
                 List {
                     Section {
                         Text("Sample people for the native hosting preview. Changes stay in this preview.")
@@ -33,12 +48,19 @@ struct NativeHostingPreview: View {
                         .accessibilityIdentifier("hosting.details")
                     }
                     Section("Inert Stage") {
-                        Button("Participants Panel") { presenter.panels.present(.participants, from: .call) }
+                        Button("Participants Panel") { presenter.presentPanel(.participants, from: .call, at: hostingUptime()) }
                             .accessibilityIdentifier("panel.open.participants")
-                        Button("Settings Panel") { presenter.panels.present(.settings, from: .settings) }
+                        Button("Settings Panel") { presenter.presentPanel(.settings, from: .settings, at: hostingUptime()) }
                             .accessibilityIdentifier("panel.open.settings")
+                        Button(ConclaveStrings.text("Layout Panel")) { presenter.presentPanel(.layout, from: .call, at: hostingUptime()) }
+                            .accessibilityIdentifier("panel.open.layout")
                         Button("Rapid Replacement") { rapidPanels(presenter) }
                             .accessibilityIdentifier("panel.rapid")
+                    }
+                    Section(ConclaveStrings.text("Stage Readouts")) {
+                        // Readouts live in the List, never in the stage, so refreshing them never redraws a tile.
+                        HostingPanelStyleReadout(adapter: panelHost, window: window)
+                        HostingRendererReadouts(presenter: presenter)
                     }
                     Section("Silent Feedback Fixture") {
                         Text("No call, audio or vibration.")
@@ -95,10 +117,6 @@ struct NativeHostingPreview: View {
                     }
                 }
                 .listStyle(.insetGrouped)
-
-                // Reserve the stage height in the same layout as the scrolling controls.
-                HostingInertStage(lifetime: stageLifetime)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             .navigationTitle("Hosting Preview")
             .toolbar {
@@ -110,9 +128,10 @@ struct NativeHostingPreview: View {
                 }
             }
         }
-        .modifier(NativePanelSheet(coordinator: presenter.panels, adapter: sheet) { presentation in
-            HostingSamplePanel(presenter: presenter, presentation: presentation)
-                .preferredColorScheme(systemScheme)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { rootSize = $0 }
+        .modifier(NativePanelSheetHost(coordinator: presenter.panels, adapter: panelHost, window: window) { presentation, resolved in
+            HostingPanelContent(presenter: presenter, feedback: feedback, adapter: panelHost, presentation: presentation,
+                                resolved: resolved, systemScheme: systemScheme)
         })
         .background {
             Color.clear.frame(width: 0, height: 0)
@@ -152,38 +171,189 @@ private final class HostingStageLifetime {
     }
 }
 
-private struct HostingInertStage: View {
-    private static let stageColor = Color(.sRGB,
-        red: Double((DesignTokens.iosInCallStage >> 16) & 0xFF) / 255,
-        green: Double((DesignTokens.iosInCallStage >> 8) & 0xFF) / 255,
-        blue: Double(DesignTokens.iosInCallStage & 0xFF) / 255, opacity: 1)
+/// The inert stage strip (PS 7.6): the original stage line plus one tile per row, each over a renderer probe.
+/// It is dark through its own environment and in-call token colors, never a window override, and its tiles
+/// derive from the rows, so a row mutation redraws its tile without recreating any probe.
+private struct HostingStageStrip: View {
     let lifetime: HostingStageLifetime
+    let presenter: NativeHostingPresenter
     @State private var identity: String?
+
     var body: some View {
-        Text("Inert stage \(identity ?? "attaching"); instances \(lifetime.creations)")
-            .frame(maxWidth: .infinity, minHeight: 80)
-            .foregroundStyle(.white)
-            .background(Self.stageColor)
-            .accessibilityIdentifier("fixture.stage")
-            .task { if identity == nil { identity = lifetime.create() } }
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Inert stage \(identity ?? "attaching"); instances \(lifetime.creations)")
+                .accessibilityIdentifier("fixture.stage")
+                .task { if identity == nil { identity = lifetime.create() } }
+            HStack(spacing: 8) {
+                ForEach(presenter.rowsState.rows) { row in
+                    HostingStageTile(row: row, ledger: presenter.renderers)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+        // Sideways only: the strip sits right below the navigation bar, which must keep the system background.
+        .background(HostingTheme.token(DesignTokens.iosInCallStage), ignoresSafeAreaEdges: .horizontal)
+        // The whole stage keeps its dark look under Smart Invert, like the video it stands for (IOS-12).
+        .accessibilityIgnoresInvertColors()
+        .environment(\.colorScheme, .dark)
     }
 }
 
+/// One stage tile over its renderer probe. The name never sits in a fixed-height container (PS 7.7): the tile is
+/// at least 96 pt tall (PS 7.6) and grows with its label, which stops growing at the first accessibility size,
+/// like a video name label, and shows in the large content viewer. The selection badge has its own corner, so
+/// the name keeps the full width.
+private struct HostingStageTile: View {
+    let row: NativeHostingRow
+    let ledger: RendererIdentityLedger
+
+    var body: some View {
+        Text(row.name)
+            .font(.subheadline.weight(.semibold))
+            .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+            .padding(8)
+            .frame(maxWidth: .infinity, minHeight: 96, alignment: .bottomLeading)
+            .overlay(alignment: .topTrailing) {
+                if row.isSelected {
+                    Image(systemName: ConclaveSymbols.checkmark)
+                        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+                        .padding(8)
+                        .accessibilityHidden(true)
+                }
+            }
+            .background { RendererProbe(key: row.id, slot: .stage, ledger: ledger) }
+            .background(HostingTheme.token(DesignTokens.iosInCallTile))
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.radiusTile))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(row.name)
+            .accessibilityValue(row.isSelected ? "Selected" : "Not selected")
+            .accessibilityShowsLargeContentViewer()
+            .accessibilityIdentifier("stage.tile.\(row.id)")
+            .accessibilityIgnoresInvertColors()
+    }
+}
+
+/// `style=<s> detent=<d> coverage=<c>` for the shown sheet. Machine-read, so it is not localized.
+private struct HostingPanelStyleReadout: View {
+    let adapter: NativePanelHostAdapter
+    let window: PanelWindow
+
+    var body: some View {
+        Text(verbatim: text)
+            .font(.footnote.monospaced())
+            .accessibilityIdentifier("panel.style")
+    }
+
+    private var text: String {
+        guard let item = adapter.sheetItem else { return "style=none detent=none coverage=none" }
+        let resolved = PanelPresentationPolicy.resolve(item.request, window: window, platform: .iOS)
+        let coverage = PanelPresentationPolicy.coverage(resolved, detent: adapter.detent)
+        return "style=\(resolved.style.rawValue) detent=\(adapter.detent.rawValue) coverage=\(coverage.rawValue)"
+    }
+}
+
+/// The renderer ledger and the open timer are not observable; this leaf reads them on appear and on Refresh.
+private struct HostingRendererReadouts: View {
+    let presenter: NativeHostingPresenter
+    @State private var refresh = 0
+
+    var body: some View {
+        let _ = refresh
+        Text(verbatim: presenter.renderers.summary())
+            .font(.footnote.monospaced())
+            .accessibilityIdentifier("stage.renderers")
+        Text(verbatim: "open " + presenter.openTimer.summary())
+            .font(.footnote.monospaced())
+            .accessibilityIdentifier("panel.openLatency")
+        Button(ConclaveStrings.text("Refresh Readouts")) { refresh += 1 }
+            .accessibilityIdentifier("stage.renderers.refresh")
+            .task { refresh += 1 }
+    }
+}
+
+/// Debug readouts inside the panel (review m1): at the large detent the root List is not interactive, and a sheet
+/// can cover the root readouts at any detent. `panel.readout.style` follows the detent live; the ledger is not
+/// observable, so the renderer line reads on appear and on Refresh. Machine-read, so the values are not localized.
+private struct HostingPanelReadouts: View {
+    let presenter: NativeHostingPresenter
+    let feedback: IOSFeedbackDelivery
+    let adapter: NativePanelHostAdapter
+    let resolved: PanelPresentation
+    @State private var refresh = 0
+
+    var body: some View {
+        let _ = refresh
+        let coverage = PanelPresentationPolicy.coverage(resolved, detent: adapter.detent)
+        Text(verbatim: "style=\(resolved.style.rawValue) detent=\(adapter.detent.rawValue) coverage=\(coverage.rawValue)")
+            .font(.footnote.monospaced())
+            .accessibilityIdentifier("panel.readout.style")
+        Text(verbatim: presenter.renderers.summary())
+            .font(.footnote.monospaced())
+            .accessibilityIdentifier("panel.readout.renderers")
+        Text(verbatim: "Session \(presenter.feedbackState.session); outcomes \(presenter.feedbackState.acceptedCount); sequence \(presenter.feedbackState.token.sequence); intended \(feedback.intendedCount); \(feedback.lastKind)")
+            .font(.footnote.monospaced())
+            .accessibilityIdentifier("panel.readout.feedback")
+        Button(ConclaveStrings.text("Refresh Readouts")) { refresh += 1 }
+            .accessibilityIdentifier("panel.readout.refresh")
+            .task { refresh += 1 }
+    }
+}
+
+/// Rapid Replacement goes through the timed path, so the panel it ends on reports its open latency (review
+/// ISSUE 6); the presenter drops the start of the presentation it supersedes.
 @MainActor
 private func rapidPanels(_ presenter: NativeHostingPresenter) {
-    presenter.panels.present(.participants, from: .call)
-    presenter.panels.present(.settings, from: .settings)
-    presenter.panels.present(.participants, from: .more)
+    let now = hostingUptime()
+    presenter.presentPanel(.participants, from: .call, at: now)
+    presenter.presentPanel(.settings, from: .settings, at: now)
+    presenter.presentPanel(.participants, from: .more, at: now)
+}
+
+/// One monotonic clock for the diagnostic open timer.
+private func hostingUptime() -> Double {
+    ProcessInfo.processInfo.systemUptime
+}
+
+private struct HostingPanelContent: View {
+    let presenter: NativeHostingPresenter
+    let feedback: IOSFeedbackDelivery
+    let adapter: NativePanelHostAdapter
+    let presentation: NativePanelPresentation
+    let resolved: PanelPresentation
+    let systemScheme: ColorScheme
+
+    var body: some View {
+        Group {
+            if presentation.request.panel == .layout {
+                HostingLayoutPanel(presenter: presenter, feedback: feedback, adapter: adapter, presentation: presentation,
+                                   resolved: resolved, systemScheme: systemScheme)
+            } else {
+                HostingSamplePanel(presenter: presenter, feedback: feedback, adapter: adapter, presentation: presentation,
+                                   resolved: resolved, systemScheme: systemScheme)
+            }
+        }
+        .task(id: presentation.id) {
+            presenter.openTimer.firstFrame(presentationID: presentation.request.presentationID, at: hostingUptime())
+        }
+    }
 }
 
 private struct HostingSamplePanel: View {
     let presenter: NativeHostingPresenter
+    let feedback: IOSFeedbackDelivery
+    let adapter: NativePanelHostAdapter
     let presentation: NativePanelPresentation
-    @State private var sampleText = ""
+    let resolved: PanelPresentation
+    let systemScheme: ColorScheme
     private var settings: Bool { presentation.request.panel == .settings }
 
     var body: some View {
-        NavigationStack {
+        PanelShell(title: settings ? ConclaveStrings.text("Settings") : ConclaveStrings.text("Participants"),
+                   presentation: resolved, hostStyle: resolved.style, systemScheme: systemScheme,
+                   onClose: { presenter.panels.dismiss(cancelPending: true) },
+                   onPromoteToLarge: { adapter.promoteToLarge() }) {
             List {
                 Text("Presentation \(presentation.request.presentationID); from \(presentation.request.invoker.rawValue)")
                     .accessibilityIdentifier("panel.identity")
@@ -191,8 +361,7 @@ private struct HostingSamplePanel: View {
                     .accessibilityIdentifier("panel.selectedCount")
                 if settings {
                     Text("Sample settings. Text stays in this panel.")
-                    TextField("Sample Text", text: $sampleText)
-                        .accessibilityIdentifier("panel.input")
+                    HostingSampleTextField(adapter: adapter, presentationID: presentation.request.presentationID)
                 } else {
                     ForEach(presenter.rowsState.rows) { row in
                         NativeHostingPersonRow(row: row, showsDetails: presenter.showsDetails,
@@ -200,7 +369,7 @@ private struct HostingSamplePanel: View {
                     }
                 }
                 Button(settings ? "Open Participants" : "Open Settings") {
-                    presenter.panels.present(settings ? .participants : .settings, from: settings ? .settings : .more)
+                    presenter.presentPanel(settings ? .participants : .settings, from: settings ? .settings : .more, at: hostingUptime())
                 }.accessibilityIdentifier("panel.replace")
                 Button("Rapid Replacement") { rapidPanels(presenter) }
                     .accessibilityIdentifier("panel.rapid")
@@ -212,27 +381,80 @@ private struct HostingSamplePanel: View {
                     presenter.panels.present(settings ? .participants : .settings, from: .more)
                     presenter.resetFixtureSession()
                 }.accessibilityIdentifier("panel.resetDuringDismissal")
-            }
-            .navigationTitle(settings ? "Settings" : "Participants")
-            .navigationBarTitleDisplayMode(.inline)
-            .modifier(HostingSamplePanelBarMinimization())
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Close") { presenter.panels.dismiss(cancelPending: true) }
-                        .accessibilityIdentifier("panel.close")
+                Section {
+                    HostingPanelReadouts(presenter: presenter, feedback: feedback, adapter: adapter, resolved: resolved)
                 }
             }
         }
     }
 }
 
-private struct HostingSamplePanelBarMinimization: ViewModifier {
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(iOS 27.0, *) {
-            content.toolbarMinimizationBehavior(.never, for: .navigationBar)
-        } else {
-            content
+/// The fixture sample text lives in the adapter's draft store, keyed by presentation, and focus promotes a
+/// medium sheet to large through the shell's environment action. Runtime enters text only by Paste.
+private struct HostingSampleTextField: View {
+    let adapter: NativePanelHostAdapter
+    let presentationID: Int
+    @FocusState private var focused: Bool
+    @Environment(\.panelPromoteToLargeDetent) private var promoteToLarge
+
+    var body: some View {
+        TextField("Sample Text", text: Binding(
+            get: { adapter.draft(for: presentationID) },
+            set: { adapter.setDraft($0, for: presentationID) }
+        ))
+        .focused($focused)
+        .onChange(of: focused) { _, isFocused in
+            if isFocused { promoteToLarge() }
+        }
+        .accessibilityIdentifier("panel.input")
+    }
+}
+
+private enum HostingLayoutChoice: String, CaseIterable, Identifiable {
+    case grid, spotlight, sidebar
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .grid: return ConclaveStrings.text("Grid")
+        case .spotlight: return ConclaveStrings.text("Spotlight")
+        case .sidebar: return ConclaveStrings.text("Sidebar")
+        }
+    }
+}
+
+/// Layout from the call: a medium sheet in the dark in-call appearance with one native single choice. The
+/// choice stays inside the panel and changes nothing else.
+private struct HostingLayoutPanel: View {
+    let presenter: NativeHostingPresenter
+    let feedback: IOSFeedbackDelivery
+    let adapter: NativePanelHostAdapter
+    let presentation: NativePanelPresentation
+    let resolved: PanelPresentation
+    let systemScheme: ColorScheme
+    @State private var choice = HostingLayoutChoice.grid
+
+    var body: some View {
+        PanelShell(title: ConclaveStrings.text("Layout"), presentation: resolved, hostStyle: resolved.style,
+                   systemScheme: systemScheme,
+                   onClose: { presenter.panels.dismiss(cancelPending: true) },
+                   onPromoteToLarge: { adapter.promoteToLarge() }) {
+            List {
+                Text("Presentation \(presentation.request.presentationID); from \(presentation.request.invoker.rawValue)")
+                    .accessibilityIdentifier("panel.identity")
+                Picker(ConclaveStrings.text("Layout"), selection: $choice) {
+                    ForEach(HostingLayoutChoice.allCases) { option in
+                        Text(option.title)
+                            .tag(option)
+                            .accessibilityIdentifier("panel.layout.\(option.rawValue)")
+                    }
+                }
+                .pickerStyle(.inline)
+                Section {
+                    HostingPanelReadouts(presenter: presenter, feedback: feedback, adapter: adapter, resolved: resolved)
+                }
+            }
         }
     }
 }

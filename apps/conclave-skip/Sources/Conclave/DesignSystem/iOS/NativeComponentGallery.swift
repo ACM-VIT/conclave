@@ -97,12 +97,16 @@ private struct GalleryHeader: View {
 /// collapsed, so scrolling back up to read the count cannot hide a truncation, and the readout shows how many
 /// specimens were measured in the current configuration. "No clipped text" means 0 truncated with every
 /// specimen measured. Heights live outside observation, so a report only invalidates the readout when a set
-/// really changes.
+/// really changes. A specimen whose layout does not depend on the new configuration (the System Prominent
+/// rows ignore Long Text) never reports again after a switch, so its last measurement is filed under the new
+/// configuration too (WP1-2a r3 residual R1); a row that does change reports its new heights over it.
 @MainActor
 @Observable
 private final class GalleryOverflowLedger {
     @ObservationIgnored private var shown: [String: CGFloat] = [:]
     @ObservationIgnored private var ideal: [String: CGFloat] = [:]
+    @ObservationIgnored private var latestShown: [String: CGFloat] = [:]
+    @ObservationIgnored private var latestIdeal: [String: CGFloat] = [:]
     private(set) var truncated: Set<String> = []
     private(set) var measured: Set<String> = []
 
@@ -114,13 +118,23 @@ private final class GalleryOverflowLedger {
         measured.reduce(0) { $0 + ($1.hasPrefix(configuration + "|") ? 1 : 0) }
     }
 
-    func reportShown(_ key: String, _ height: CGFloat) {
+    func reportShown(_ key: String, id: String, _ height: CGFloat) {
         shown[key] = height
+        latestShown[id] = height
         update(key)
     }
 
-    func reportIdeal(_ key: String, _ height: CGFloat) {
+    func reportIdeal(_ key: String, id: String, _ height: CGFloat) {
         ideal[key] = height
+        latestIdeal[id] = height
+        update(key)
+    }
+
+    /// The probe's configuration changed. Heights already reported under the new key win; otherwise the
+    /// specimen's latest heights, unchanged because its layout did not change, are filed under it.
+    func refile(id: String, to key: String) {
+        if shown[key] == nil, let height = latestShown[id] { shown[key] = height }
+        if ideal[key] == nil, let height = latestIdeal[id] { ideal[key] = height }
         update(key)
     }
 
@@ -160,14 +174,15 @@ private struct TruncationProbe: ViewModifier {
         let key = probe.key(id)
         let ledger = probe.ledger
         content
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { ledger.reportShown(key, $0) }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { ledger.reportShown(key, id: id, $0) }
             .background(alignment: .topLeading) {
                 // The same content at its ideal height for this width, never drawn or spoken.
                 content
                     .fixedSize(horizontal: false, vertical: true)
                     .hidden()
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { ledger.reportIdeal(key, $0) }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { ledger.reportIdeal(key, id: id, $0) }
             }
+            .onChange(of: key) { _, newKey in ledger.refile(id: id, to: newKey) }
     }
 }
 

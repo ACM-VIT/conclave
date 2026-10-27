@@ -74,6 +74,10 @@
         }
       }
     },
+    "Close %@" : {
+      "comment" : "Panel shell: accessibility label of the Close button, with the panel title",
+      "extractionState" : "manual"
+    },
     "Component Gallery" : {
       "comment" : "Debug component gallery: disclosure title that shows the gallery",
       "extractionState" : "manual"
@@ -138,6 +142,10 @@
       "comment" : "Debug component gallery: shown instead of glass specimens on older iOS versions",
       "extractionState" : "manual"
     },
+    "Grid" : {
+      "comment" : "Layout panel option: every tile in an equal grid",
+      "extractionState" : "manual"
+    },
     "Haptics" : {
       "comment" : "Debug component gallery: section title for haptic mapping specimens",
       "extractionState" : "manual"
@@ -162,8 +170,16 @@
       "comment" : "Debug component gallery: readout name for the most recent haptic tap",
       "extractionState" : "manual"
     },
+    "Layout" : {
+      "comment" : "Panel title and picker label: how the call stage arranges its tiles",
+      "extractionState" : "manual"
+    },
     "Layout Direction" : {
       "comment" : "Debug component gallery: readout name for the layout direction",
+      "extractionState" : "manual"
+    },
+    "Layout Panel" : {
+      "comment" : "Debug hosting preview: button that opens the Layout panel from the call",
       "extractionState" : "manual"
     },
     "Left to Right" : {
@@ -230,6 +246,10 @@
       "comment" : "Debug component gallery: shown instead of a contrast verdict when a resolved color lies outside sRGB",
       "extractionState" : "manual"
     },
+    "Participants" : {
+      "comment" : "Panel title: the people in the meeting",
+      "extractionState" : "manual"
+    },
     "Passes" : {
       "comment" : "Debug component gallery: contrast verdict when the ratio meets its class",
       "extractionState" : "manual"
@@ -248,6 +268,10 @@
     },
     "Reduce Transparency" : {
       "comment" : "Debug component gallery: readout name for the Reduce Transparency setting",
+      "extractionState" : "manual"
+    },
+    "Refresh Readouts" : {
+      "comment" : "Debug hosting preview: button that reads the renderer and panel diagnostics again",
       "extractionState" : "manual"
     },
     "Right to Left" : {
@@ -326,7 +350,12 @@
             "value" : "设置"
           }
         }
-      }
+      },
+      "extractionState" : "manual"
+    },
+    "Sidebar" : {
+      "comment" : "Layout panel option: one large tile with the others in a side strip",
+      "extractionState" : "manual"
     },
     "Silent on this platform" : {
       "comment" : "Debug component gallery: haptic row detail for kinds that play nothing on iPhone",
@@ -334,6 +363,14 @@
     },
     "Smart Invert" : {
       "comment" : "Debug component gallery: readout name for the Smart Invert setting",
+      "extractionState" : "manual"
+    },
+    "Spotlight" : {
+      "comment" : "Layout panel option: one large tile for the active speaker",
+      "extractionState" : "manual"
+    },
+    "Stage Readouts" : {
+      "comment" : "Debug hosting preview: section title for the renderer and panel diagnostics",
       "extractionState" : "manual"
     },
     "Standard" : {

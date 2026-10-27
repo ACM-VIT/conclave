@@ -9,19 +9,29 @@ internal data class NativeHostingPerson(
     val isSelected: Boolean,
 )
 
-internal class NativeHostingRows(source: NativeHostingRowsState) {
+/**
+ * Per-row reuse (PS 8.8, P1): a row whose Swift value is unchanged keeps the previous snapshot's exact
+ * instance, found by ID, so only the mutated row's composables see a new value.
+ */
+internal class NativeHostingRows(source: NativeHostingRowsState, previous: NativeHostingRows? = null) {
     val revision: Int = source.revision
     val selectedCount: Int = source.selectedCount
     private val people: List<NativeHostingPerson> = buildList {
+        val prior = previous?.people?.associateBy { it.id }
         for (row in source.rows) {
-            add(NativeHostingPerson(row.id, row.name, row.detail, row.isSelected))
+            val reused = prior?.get(row.id)
+            if (reused != null && reused.name == row.name && reused.detail == row.detail && reused.isSelected == row.isSelected) {
+                add(reused)
+            } else {
+                add(NativeHostingPerson(row.id, row.name, row.detail, row.isSelected))
+            }
         }
     }
     val size: Int get() = people.size
     operator fun get(index: Int): NativeHostingPerson = people[index]
 }
 
-/** One cache per presenter lifetime. Scalar changes reuse the exact row snapshot. */
+/** One cache per presenter lifetime. Scalar changes reuse the exact row snapshot; row changes reuse rows. */
 internal class NativeHostingRowsCache(private val presenter: NativeHostingPresenter) {
     private var cached: NativeHostingRows? = null
 
@@ -30,7 +40,7 @@ internal class NativeHostingRowsCache(private val presenter: NativeHostingPresen
         val state = presenter.rowsState
         val previous = cached
         if (previous != null && previous.revision == state.revision) return previous
-        return NativeHostingRows(state).also { cached = it }
+        return NativeHostingRows(state, previous).also { cached = it }
     }
 }
 
