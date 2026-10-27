@@ -145,7 +145,7 @@ object AudioRouteOwnerBridge {
         applyVolumeControlStream(activity)
     }
 
-    /** The call activity re-applies this after a recreation (request R7: `MainActivity.onResume`). */
+    /** The call activity re-applies this after a recreation (request R6: `MainActivity.onResume`). */
     fun applyVolumeControlStream(activity: Activity, live: Boolean = isCallAudioLive) {
         try {
             activity.volumeControlStream = volumeStream(live)
