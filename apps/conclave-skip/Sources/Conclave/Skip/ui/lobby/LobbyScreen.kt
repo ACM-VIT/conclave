@@ -15,14 +15,10 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -49,21 +45,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /*
- * ENT-3 (S10 6 d, f, g, i, k; 8 and 9 in place until ENT-5): the Android pre-join lobby, handwritten Compose Material 3
+ * ENT-3 (S10 6 d, f, g, i, k) and ENT-5 (S10 8, 9: EntryStatusBlock's connecting, waiting and failed states, the
+ * busy Back and the card anchor of the entry expansion): the Android pre-join lobby, handwritten Compose Material 3
  * in the system appearance with the dark preview card. A non-lazy scrolling Column (few children, the preview surface
  * is never disposed). Each child reads one of the six lobby snapshots: the card `lobbyMedia` (through LobbyUiCache),
  * the bottom bar `lobbyStatus`, the title `lobbyLink` and `lobbyPresence`, the identity items `lobbyIdentity`, the
  * Audio row `lobbyAudio`. Intent reaches the core only through the presenter (S10 0.8 C1, C2; D14). Back is the
- * premeeting host's NavDisplay handler (a pop in editing, Cancel while connecting or waiting); no other handler here.
+ * premeeting host's NavDisplay handler in editing (a pop); while connecting or waiting LobbyBusyBackHandler takes it
+ * (Cancel, or the Stop asking confirmation) so the gesture never previews Home.
  */
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -76,6 +70,7 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
     }
     val cache = remember(routeId) { LobbyUiCache() }
     val snackbarHostState = remember { SnackbarHostState() }
+    LobbyBusyBackHandler(premeeting, routeId, onBack)
     val scheme = MaterialTheme.colorScheme
     Scaffold(
         topBar = { LobbyTopBar(premeeting, key, onBack) },
@@ -121,6 +116,8 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
 private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: LobbyUiCache, wide: Boolean, modifier: Modifier) {
     val media = premeeting.lobbyMedia?.takeIf { it.routeId == routeId } ?: return
     val card = cache.card(media)
+    // ENT-5 (S10 8 d, L10): the entry expansion starts from this card's bounds (a plain holder write).
+    val anchors = LocalEntryTransitionAnchors.current
     HostingTheme(inCall = true) {
         LobbyPreviewCard(
             card = card,
@@ -130,7 +127,7 @@ private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: 
             onFlip = { premeeting.flipCamera() },
             onEffects = { premeeting.openEffects() },
             onOpenSettings = { premeeting.openSystemSettings() },
-            modifier = modifier,
+            modifier = modifier.entryTransitionAnchor(anchors, routeId),
         )
     }
 }
@@ -181,11 +178,19 @@ private fun LobbyTitle(premeeting: PremeetingPresenter, key: PremeetingKey.Lobby
     val scheme = MaterialTheme.colorScheme
     val link = premeeting.lobbyLink?.takeIf { it.routeId == key.routeId }
     val presence = premeeting.lobbyPresence?.takeIf { it.routeId == key.routeId }
-    val subtitle = when (presence?.kind) {
-        PresenceKind.checking -> conclaveString("pm_presence_checking")
-        PresenceKind.empty -> conclaveString("pm_presence_none")
-        PresenceKind.count -> conclavePlural("pm_presence_count", presence?.count ?: 0, presence?.count ?: 0)
-        else -> ""
+    val status = premeeting.lobbyStatus?.takeIf { it.routeId == key.routeId }
+    // ENT-5 (S10 8 g, 9 g): "Joining" or "Reconnecting" while connecting, nothing while waiting or failed.
+    val subtitle = when (status?.mode) {
+        LobbyMode.connecting ->
+            if (status?.waitingKind == WaitingKind.reconnecting) conclaveString("pm_subtitle_reconnecting")
+            else conclaveString("pm_subtitle_joining")
+        LobbyMode.waiting, LobbyMode.failed -> ""
+        else -> when (presence?.kind) {
+            PresenceKind.checking -> conclaveString("pm_presence_checking")
+            PresenceKind.empty -> conclaveString("pm_presence_none")
+            PresenceKind.count -> conclavePlural("pm_presence_count", presence?.count ?: 0, presence?.count ?: 0)
+            else -> ""
+        }
     }
     Column {
         Text(link?.roomLabel ?: key.roomId, style = MaterialTheme.typography.titleLarge, maxLines = 1,
@@ -201,9 +206,12 @@ private fun LobbyTitle(premeeting: PremeetingPresenter, key: PremeetingKey.Lobby
 
 @Composable
 private fun LobbyIssueBanner(premeeting: PremeetingPresenter, routeId: Int) {
-    val status = premeeting.lobbyStatus?.takeIf { it.routeId == routeId && it.mode == LobbyMode.editing } ?: return
+    // ENT-5 (S10 8 f): while connecting only the offline row shows ("Waiting for a connection"); the primary stays.
+    val status = premeeting.lobbyStatus?.takeIf {
+        it.routeId == routeId && (it.mode == LobbyMode.editing || (it.mode == LobbyMode.connecting && it.issue == LobbyIssue.offline))
+    } ?: return
     val text = when (status.issue) {
-        LobbyIssue.offline -> conclaveString("pm_offline")
+        LobbyIssue.offline -> if (status.mode == LobbyMode.connecting) conclaveString("pm_offline_waiting") else conclaveString("pm_offline")
         LobbyIssue.roomNotFound -> conclaveString("pm_room_not_found")
         LobbyIssue.signInRequired -> conclaveString("pm_sign_in_required")
         LobbyIssue.appSuspended -> conclaveString("pm_app_suspended")
@@ -351,7 +359,7 @@ private fun LobbyIdentityItems(premeeting: PremeetingPresenter, routeId: Int) {
     }
 }
 
-// MARK: Bottom bar (S10 6 d EntryStatusBar in editing; connecting, waiting and failed until ENT-5)
+// MARK: Bottom bar (S10 6 d, 8 d, 9 d: ENT-5's EntryStatusBlock in all four modes)
 
 @Composable
 private fun LobbyBottomBar(premeeting: PremeetingPresenter, routeId: Int, cache: LobbyUiCache) {
@@ -361,96 +369,9 @@ private fun LobbyBottomBar(premeeting: PremeetingPresenter, routeId: Int, cache:
     Surface(color = scheme.surface) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().imePadding()) {
             HorizontalDivider(color = scheme.outlineVariant)
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                when (status.mode) {
-                    LobbyMode.editing -> {
-                        LobbyPrimaryButton(
-                            title = lobbyPrimaryTitle(status.intent),
-                            enabled = status.isPrimaryEnabled,
-                            pending = status.isPrimaryPending,
-                            identifier = "lobby.primary",
-                        ) { premeeting.startOrJoin() }
-                        val reason = lobbyPrimaryReasonText(status.reason)
-                        if (reason.isNotEmpty()) {
-                            Text(reason, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center, modifier = Modifier.testTag("lobby.primary.reason"))
-                        }
-                    }
-                    LobbyMode.connecting, LobbyMode.waiting -> {
-                        Row(
-                            modifier = Modifier.heightIn(min = 48.dp).testTag("lobby.status")
-                                .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                            Text(
-                                when {
-                                    status.isReconnecting -> conclaveString("pm_subtitle_reconnecting")
-                                    status.mode == LobbyMode.waiting -> conclaveString("pm_asking_to_join")
-                                    else -> conclaveString("pm_subtitle_joining")
-                                },
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                        }
-                    }
-                    LobbyMode.failed -> {
-                        Column(Modifier.fillMaxWidth().testTag("lobby.status")
-                            .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }) {
-                            Text(
-                                if (status.intent == LobbyIntent.newMeeting) conclaveString("pm_couldnt_start") else conclaveString("pm_couldnt_join"),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = scheme.error,
-                            )
-                            if (status.issueServerText.isNotEmpty()) {
-                                Text(status.issueServerText, style = MaterialTheme.typography.bodyMedium,
-                                    color = scheme.onSurfaceVariant)
-                            }
-                        }
-                        LobbyPrimaryButton(title = conclaveString("ds_try_again"), enabled = true, pending = false,
-                            identifier = "lobby.retry") { premeeting.retryJoin() }
-                    }
-                }
+            Box(Modifier.fillMaxWidth().padding(16.dp)) {
+                EntryStatusBlock(premeeting, status)
             }
         }
     }
-}
-
-/** The one coral action (primaryContainer with onPrimaryContainer, F00 C01); M3's disabled container when off. */
-@Composable
-private fun LobbyPrimaryButton(title: String, enabled: Boolean, pending: Boolean, identifier: String, onClick: () -> Unit) {
-    val scheme = MaterialTheme.colorScheme
-    Button(
-        onClick = onClick,
-        enabled = enabled && !pending,
-        colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(identifier),
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            if (pending) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = scheme.onPrimaryContainer)
-            } else {
-                Text(title, textAlign = TextAlign.Center)
-            }
-        }
-    }
-}
-
-@Composable
-private fun lobbyPrimaryTitle(intent: LobbyIntent): String = when (intent) {
-    LobbyIntent.newMeeting -> conclaveString("pm_start_meeting")
-    LobbyIntent.promotion -> conclaveString("pm_join_as_speaker")
-    else -> conclaveString("pm_join")
-}
-
-@Composable
-private fun lobbyPrimaryReasonText(reason: LobbyPrimaryReason): String = when (reason) {
-    LobbyPrimaryReason.nameMissingJoin -> conclaveString("pm_need_name_join")
-    LobbyPrimaryReason.nameMissingStart -> conclaveString("pm_need_name_start")
-    LobbyPrimaryReason.offline -> conclaveString("pm_offline")
-    else -> ""
 }

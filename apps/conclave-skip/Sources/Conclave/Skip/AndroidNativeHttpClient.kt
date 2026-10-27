@@ -173,6 +173,8 @@ object AndroidNativeHttpClient {
                 .put("statusCode", response.code)
                 .put("body", response.body?.string().orEmpty())
                 .put("setCookieHeaders", setCookieHeaders)
+                // S10 0.8 C18 (HD request B5-T5 R4): the join's Retry-After for the one automatic retry.
+                .put("retryAfter", response.header("Retry-After").orEmpty())
                 .toString()
         }
     }

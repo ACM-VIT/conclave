@@ -32,6 +32,10 @@ struct CallRoot: View {
     var forceScreenReader: Bool = false
     /// S60 (ACT-1, ACT-2, STG-9): the activity presenters for the card and the Activities panel; nil in fixtures without them.
     var activitySession: ActivitySession? = nil
+    /// STG-6 (RECONCILE R34): who generates a missing webinar link for Meeting Details. nil on the live route, which uses
+    /// the People presenter's S50 `HostControlsPresenter.ensureWebinarLink()`; the stage fixture passes its counting
+    /// stand-in (`StageFixtureSession.ensureWebinarLink`).
+    var webinarLinkProvider: MeetingDetailsWebinarLinkProvider? = nil
     @State private var panelHost = NativePanelHostAdapter()
     /// View-local chrome visibility (SL8); the root holds the reference and never reads its properties.
     @State private var chromeVisibility = StageChromeVisibility()
@@ -47,10 +51,15 @@ struct CallRoot: View {
     var body: some View {
         ZStack {
             StageCanvas(stage: stage, renderers: renderers, chrome: chromeVisibility)
+                // PPL-2 (S50 3 j, R50-9): tile-menu confirmations (source tileMenu) over the stage in the in-call theme.
+                .peopleStageConfirmations(people)
                 .accessibilitySortPriority(3)
             // STG-7 (S20 13 j): the one stable PiP anchor; it takes no touches and is hidden from accessibility.
             StagePipAnchor(stage: stage)
             StageSoloLayer(stage: stage)
+                .accessibilitySortPriority(3)
+            // STG-8 (S20 12 c): the attendee waiting state; reads only `stage.attendee`.
+            AttendeeWaitingLayer(stage: stage)
                 .accessibilitySortPriority(3)
             ReactionBurstLayer(stage: stage)
             StageChromeLayer(shell: shell, stage: stage, chrome: chromeVisibility, forceScreenReader: forceScreenReader)
@@ -74,11 +83,13 @@ struct CallRoot: View {
         .onGeometryChange(for: CGSize.self) { proxy in proxy.size } action: { size in rootSize = size }
         .modifier(NativePanelInspectorHost(coordinator: shell.panels, adapter: panelHost, window: window) { presentation, resolved in
             CallPanelContent(shell: shell, people: people, adapter: panelHost, presentation: presentation, resolved: resolved,
-                             activitySession: activitySession)
+                             activitySession: activitySession, stage: stage,
+                             webinarLinkProvider: CallRootWebinarLink.provider(webinarLinkProvider, people: people))
         })
         .modifier(NativePanelSheetHost(coordinator: shell.panels, adapter: panelHost, window: window) { presentation, resolved in
             CallPanelContent(shell: shell, people: people, adapter: panelHost, presentation: presentation, resolved: resolved,
-                             activitySession: activitySession)
+                             activitySession: activitySession, stage: stage,
+                             webinarLinkProvider: CallRootWebinarLink.provider(webinarLinkProvider, people: people))
         })
         // The platform's call gesture: a two-finger double tap toggles the microphone (S20 1 i, iOS 14).
         .accessibilityAction(.magicTap) { shell.toggleMicrophone() }
@@ -96,16 +107,28 @@ struct CallPanelContent: View {
     let presentation: NativePanelPresentation
     let resolved: PanelPresentation
     var activitySession: ActivitySession? = nil
+    /// STG-6: Meeting Details reads the stage's `meetingInfo`; nil keeps the empty native shell.
+    var stage: StagePresenter? = nil
+    var webinarLinkProvider: MeetingDetailsWebinarLinkProvider? = nil
     @Environment(\.conclaveSystemColorScheme) private var systemScheme
 
     var body: some View {
-        if presentation.request.panel == .chat {
+        if presentation.request.panel == .meetingInfo, let stage {
+            // STG-6 (S20 15): Meeting Details, or Webinar Details for an attendee (RECONCILE R44), with its own PanelShell
+            // and page path (Host Controls and the attendee Settings push inside it).
+            MeetingDetailsPanel(stage: stage, shell: shell, people: people, adapter: adapter, presentation: presentation,
+                                resolved: resolved, webinarLinkProvider: webinarLinkProvider)
+        } else if presentation.request.panel == .chat {
             // CHT-1 (S40 1, R40-9): the chat host owns its PanelShell with the chat's own path.
             ChatPanelHost(chat: shell.chat, panels: shell.panels, presentation: presentation, resolved: resolved,
                           onPromoteToLarge: { adapter.promoteToLarge() })
         } else if presentation.request.panel == .participants, let people {
             // PPL-1 (S50 1): the native Participants panel with its own PanelShell and R50-2 path binding.
             ParticipantsPanel(people: people, shell: shell, adapter: adapter, presentation: presentation, resolved: resolved)
+        } else if presentation.request.panel == .hostControls, let people {
+            // PPL-4 (S50 6 a): Host Controls as a root panel, its own PanelShell and a PeopleRoute path starting at Host
+            // Controls (R50-2); the R50-3 destination scrolls to Meeting Access.
+            HostControlsPanel(people: people, shell: shell, adapter: adapter, presentation: presentation, resolved: resolved)
         } else if presentation.request.panel == .activities, let activitySession {
             // ACT-1 (S60 7): the Activities launcher with its own PanelShell and page path.
             ActivitiesPanel(session: activitySession, adapter: adapter, presentation: presentation, resolved: resolved)
@@ -120,6 +143,16 @@ struct CallPanelContent: View {
                 .accessibilityIdentifier("call.panel." + presentation.request.panel.rawValue)
             }
         }
+    }
+}
+
+/// STG-6 (RECONCILE R34): the one owner of webinar link generation is the S50 `HostControlsPresenter` (PPL-4); the root
+/// forwards to it unless a fixture passed its own stand-in. Without either, the webinar link rows stay disabled.
+enum CallRootWebinarLink {
+    static func provider(_ override: MeetingDetailsWebinarLinkProvider?, people: PeoplePresenter?) -> MeetingDetailsWebinarLinkProvider? {
+        if let override { return override }
+        guard let people else { return nil }
+        return { await people.host.ensureWebinarLink() }
     }
 }
 
@@ -185,13 +218,13 @@ struct StageVisibilityReporter: View {
         let choice = stage.pipTarget
         // Re-evaluates once per decoded size change; an unchanged size never bumps the revision (R70-10).
         let _ = stage.frameSizes.revision
-        // iOS points; the canvas is full bleed, so canvas coordinates are window coordinates. `isInPip` stays false until
-        // SYS-4 builds the iOS window (STG-7, HD request B4-T6 R6).
+        // iOS points; the canvas is full bleed, so canvas coordinates are window coordinates. `isInPip` follows the iOS
+        // PiP window (SYS-4, `PipWindowState`; HD request B5-T4 R10).
         let pipTarget = PipTargetPolicy.frame(choice: choice, frames: frames, canvasWidth: viewport.width, originX: 0, originY: 0,
                                               scale: 1, isRightToLeft: layoutDirection == .rightToLeft,
                                               frameSize: stage.frameSizes.size(slotId: choice.slotId))
         let report = StageVisibilityPolicy.report(frames: frames, slots: layout.slots, viewport: viewport, kind: layout.kind,
-                                                  coverage: coverage, chromeHidden: chrome.state.isHidden, isInPip: false,
+                                                  coverage: coverage, chromeHidden: chrome.state.isHidden, isInPip: PipWindowState.shared.isShowing,
                                                   pipTarget: pipTarget)
         Color.clear
             .frame(width: 0, height: 0)

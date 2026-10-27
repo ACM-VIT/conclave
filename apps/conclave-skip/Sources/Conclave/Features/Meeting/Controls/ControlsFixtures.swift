@@ -4,8 +4,9 @@ import Foundation
 // (iOS launch environment) and the intent extra `conclave.stageFixture=controls-<state>` (Android, Debug only,
 // FLAG_DEBUGGABLE). A standalone shell, stage and controls presenter with a scripted core; slots render the counting
 // `RendererProbe`. No WebRTC, audio, capture or network, never `MeetingViewModel`. Shared (transpiled), so both
-// fixture roots and both test hosts read the same states. CTL-1 ships the bar states; the route, reactions, recap,
-// webinar host and More states arrive with CTL-2, CTL-3, CTL-5 and CTL-6.
+// fixture roots and both test hosts read the same states. CTL-1 ships the bar states; CTL-2 the End states (a held
+// acknowledgment in `controls-end-confirm`, a slow one in `controls-end-slow-ack`, a refused one in
+// `controls-end-failed`); the route, recap (TRN-2, CC8), webinar host and More states arrive with CTL-3, CTL-5 and CTL-6.
 
 enum ControlsFixtureState: String, CaseIterable, Equatable {
     case guest = "controls-guest"
@@ -24,6 +25,7 @@ enum ControlsFixtureState: String, CaseIterable, Equatable {
     case handRaising = "controls-hand-raising"
     case slowAck = "controls-slow-ack"
     case endConfirm = "controls-end-confirm"
+    case endSlowAck = "controls-end-slow-ack"
     case endFailed = "controls-end-failed"
     case leaving = "controls-leaving"
     case wide = "controls-wide"
@@ -48,7 +50,7 @@ enum ControlsFixtureScript {
 
     static func isHost(_ state: ControlsFixtureState) -> Bool {
         switch state {
-        case .host, .hostWaiting3, .hostRecovering, .hostOffline, .endConfirm, .endFailed:
+        case .host, .hostWaiting3, .hostRecovering, .hostOffline, .endConfirm, .endSlowAck, .endFailed:
             return true
         default:
             return false
@@ -71,6 +73,11 @@ enum ControlsFixtureScript {
         default:
             return false
         }
+    }
+
+    /// The End states open on the host's confirmation, as the Leave menu would leave it (S30 4 l3, l4).
+    static func opensOnEndConfirmation(_ state: ControlsFixtureState) -> Bool {
+        state == .endConfirm || state == .endSlowAck || state == .endFailed
     }
 
     /// The S1 inputs for a state with the scripted microphone, camera and hand.
@@ -153,7 +160,7 @@ final class ControlsFixtureCounters {
     private(set) var toggleHand = 0
     private(set) var panelPresent = 0
     private(set) var leave = 0
-    private(set) var endRequested = 0
+    /// End tickets that reached the scripted core (S30 4 l3: one per dispatched confirm).
     private(set) var endConfirmed = 0
     private(set) var requestPermission = 0
 
@@ -163,11 +170,12 @@ final class ControlsFixtureCounters {
     func recordHand() { toggleHand += 1 }
     func recordPanelPresent() { panelPresent += 1 }
     func recordLeave() { leave += 1 }
-    func recordEndRequested() { endRequested += 1 }
     func recordEndConfirmed() { endConfirmed += 1 }
     func recordPermissionRequest() { requestPermission += 1 }
 
-    func summary(explain: Int, permissionAlert: Int) -> String {
+    /// `endRequested` comes from the presenter: the End requests made through `requestEndForEveryone(from:)` (the Leave
+    /// menu, its accessibility action and the fixture button; the failure toast's Retry asks S1 through the stage).
+    func summary(explain: Int, permissionAlert: Int, endRequested: Int) -> String {
         "toggleMicrophone=" + String(toggleMicrophone) + " toggleCamera=" + String(toggleCamera)
             + " toggleShare=" + String(toggleShare) + " toggleHand=" + String(toggleHand)
             + " panelPresent=" + String(panelPresent) + " leave=" + String(leave)
@@ -200,6 +208,8 @@ final class ControlsFixtureSession {
     private var recovering = false
     private var ackSerial = 0
     private var lastPresentationId = 0
+    /// `controls-end-confirm` keeps its End ticket unanswered (a held acknowledgment).
+    private var heldEndTicket: MeetingActionTicket? = nil
 
     init(state: ControlsFixtureState) {
         self.state = state
@@ -221,6 +231,11 @@ final class ControlsFixtureSession {
         shell.panels.onSnapshotChanged = { [weak self] in
             self?.panelsChanged()
         }
+        // HD/requests/B5-T3.md R1 in the fixture: S1 publishes caused by an intent (the stage's Retry re-requesting the
+        // confirmation, a ticket's result) reach the controls at once, as the view model's publish hook does.
+        shell.onPublish = { [weak self] _, _, _ in
+            self?.refreshControls()
+        }
         controls.onCommand = { [weak self] _ in
             self?.counters.recordPermissionRequest()
         }
@@ -230,7 +245,7 @@ final class ControlsFixtureSession {
             recovering = true
         }
         push()
-        if state == .endConfirm || state == .endFailed {
+        if ControlsFixtureScript.opensOnEndConfirmation(state) {
             requestEnd(from: MeetingConfirmationInvoker.call)
         }
         if state == .endFailed, let id = shell.session.confirmation?.id {
@@ -240,9 +255,8 @@ final class ControlsFixtureSession {
 
     // MARK: Fixture buttons
 
-    /// The S30 4 host End path, as the CTL-2 controls will call it.
+    /// The S30 4 host End path, as the Leave menu calls it (the presenter counts the request).
     func requestEnd(from invoker: String) {
-        counters.recordEndRequested()
         controls.requestEndForEveryone(from: invoker)
         refreshControls()
     }
@@ -255,7 +269,7 @@ final class ControlsFixtureSession {
     // MARK: Readouts (outside the stage subtree, PS 7.6)
 
     func countersReadout() -> String {
-        counters.summary(explain: controls.explainCount, permissionAlert: controls.promptCount)
+        counters.summary(explain: controls.explainCount, permissionAlert: controls.promptCount, endRequested: controls.endRequestCount)
     }
 
     func barReadout() -> String { controls.fitReadout }
@@ -278,8 +292,14 @@ final class ControlsFixtureSession {
     func leaveReadout() -> String {
         let leave = controls.leaveState
         return "leave=" + leave.leavePhase.rawValue + " end=" + leave.endPhase.rawValue + " confirmation="
-            + String(leave.confirmationId) + " failure=" + leave.endFailure
+            + String(leave.confirmationId) + (leave.confirmationInvoker.isEmpty ? "" : ":" + leave.confirmationInvoker)
+            + " failure=" + leave.endFailure + " hostMenu=" + (leave.showsEndForEveryone ? "1" : "0")
+            + " endReason=" + leave.endBlockedReason.rawValue
     }
+
+    /// `stage.notices` (S20 10): the banner and toast kinds, so the End progress and failure toasts can be read (S30 4 l3,
+    /// l4) without a screenshot.
+    func noticesReadout() -> String { stage.noticesReadout() }
 
     func panelReadout() -> String {
         guard let current = shell.panels.snapshot.current else { return "none" }
@@ -337,7 +357,12 @@ final class ControlsFixtureSession {
             refreshControls()
         case .endForEveryone:
             counters.recordEndConfirmed()
-            if let ticket = ticket {
+            if state == .endConfirm {
+                // S30 4 l3: the acknowledgment never arrives, so "Ending the call for everyone…" stays and Leave stays live.
+                heldEndTicket = ticket
+            } else if state == .endSlowAck {
+                scheduleEndAck(ticket: ticket)
+            } else if let ticket = ticket {
                 let result = state == .endFailed ? MeetingActionResult.failed(MeetingActionFailure.rejectedByServer)
                                                  : MeetingActionResult.completed
                 _ = shell.finish(ticket, result)
@@ -358,6 +383,17 @@ final class ControlsFixtureSession {
             self.micInFlight = false
             self.cameraInFlight = false
             self.push()
+        }
+    }
+
+    /// `controls-end-slow-ack`: End completes after the scripted delay, which clears the progress toast.
+    private func scheduleEndAck(ticket: MeetingActionTicket?) {
+        let wait = sleep
+        Task { @MainActor [weak self] in
+            await wait(ControlsFixtureScript.slowAckMillis)
+            guard let self = self, let ticket = ticket else { return }
+            _ = self.shell.finish(ticket, MeetingActionResult.completed)
+            self.refreshControls()
         }
     }
 

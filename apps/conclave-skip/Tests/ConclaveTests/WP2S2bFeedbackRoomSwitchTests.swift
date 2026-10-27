@@ -122,7 +122,7 @@ struct WP2S2bFeedbackRoomSwitchTests {
         let main = try s2bSource("Android/app/src/main/kotlin/Main.kt")
         #expect(main.components(separatedBy: "ConclaveRootFeedback()").count - 1 == 1)
         let rootCall = try #require(main.range(of: "ConclaveRootFeedback()"))
-        let pipBranch = try #require(main.range(of: "if (PipController.inPipMode && PipController.isInCall) {"))
+        let pipBranch = try #require(main.range(of: "if (PipController.showsLegacyPipContent) {"))
         #expect(rootCall.lowerBound < pipBranch.lowerBound, "the consumer must sit outside the PiP swap")
         let iosPreview = try s2bSource("Sources/Conclave/App/PlatformRoot+iOS.swift")
         #expect(iosPreview.contains("SessionReadoutSection(shell: MeetingViewModel.shared.shell, records: FeedbackDeliveryRecords.shared)"))

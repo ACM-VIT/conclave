@@ -69,6 +69,13 @@ final class PanelCoordinator {
         snapshot.current?.panel.rawValue ?? ""
     }
 
+    /// True while `panel` is the current presentation or the request queued behind a dismissal (S20 15 k: Meeting
+    /// Details keeps its snapshot from the capsule tap through a replacement until it closes). Reads `snapshot`, so an
+    /// observing caller invalidates with it; the stage presenter calls it outside any view body.
+    func isShowingOrQueued(_ panel: MeetingPanel) -> Bool {
+        snapshot.current?.panel == panel || snapshot.pending?.panel == panel
+    }
+
     /// The latest destination request when it names `presentationID` in the current session, else nil, so a
     /// panel never acts on a request meant for an earlier presentation of the same panel.
     func latestDestination(for presentationID: Int) -> PanelDestinationRequest? {

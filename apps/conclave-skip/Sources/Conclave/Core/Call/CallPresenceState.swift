@@ -39,6 +39,38 @@ struct PipTargetFrame: Equatable {
     let bottom: Double
     let videoWidth: Int
     let videoHeight: Int
+
+    /// The slot is laid out (a target behind an activity or past the cap keeps zero bounds: no source rectangle).
+    var hasBounds: Bool { right > left && bottom > top }
+
+    /// The target renderer reported its first decoded frame (S70 R70-10).
+    var hasVideoSize: Bool { videoWidth > 0 && videoHeight > 0 }
+
+    /// A share is shown fit, a camera fill (S20 13 d).
+    var isShare: Bool { slotId.hasPrefix("share:") }
+}
+
+/// S70 8 c, 8 d and 0.5 (SYS-8; RECONCILE R25, S70 R70-5): whether the camera keeps capturing while the person is
+/// outside Conclave. It drives the S40 D23 camera line, so the line disappears by itself once continuity exists.
+/// iOS: multitasking camera access is enabled and PiP is eligible or showing (3 c). Android: the call service holds
+/// the `camera` foreground-service type (1 d). Never with the camera off (an attendee has no camera).
+enum CameraContinuityPolicy {
+    static func continuesInBackground(
+        isCameraOn: Bool,
+        multitaskingCameraAccessEnabled: Bool,
+        pip: PipAvailability,
+        foregroundServiceHoldsCamera: Bool
+    ) -> Bool {
+        if !isCameraOn { return false }
+        if foregroundServiceHoldsCamera { return true }
+        return multitaskingCameraAccessEnabled && (pip == .eligible || pip == .active)
+    }
+
+    /// The S40 D23 line "Your camera pauses while you're outside Conclave.": only with the camera on and no
+    /// continuity (S70 8 f: camera off never shows it; camera on with continuity never shows it).
+    static func showsCameraLine(isCameraOn: Bool, cameraContinuesInBackground: Bool) -> Bool {
+        isCameraOn && !cameraContinuesInBackground
+    }
 }
 
 struct CallPresenceSnapshot: Equatable {

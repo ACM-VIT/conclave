@@ -69,7 +69,7 @@ struct EntryCoreDeltaTests {
         #expect(main.contains("NativeRouteLaunch.installProductionWiring()"))
         #expect(main.components(separatedBy: "ConclaveRootFeedback()").count - 1 == 1)
         let rootCall = try #require(main.range(of: "ConclaveRootFeedback()"))
-        let pipBranch = try #require(main.range(of: "if (PipController.inPipMode && PipController.isInCall) {"))
+        let pipBranch = try #require(main.range(of: "if (PipController.showsLegacyPipContent) {"))
         #expect(rootCall.lowerBound < pipBranch.lowerBound)
         #expect(main.components(separatedBy: "SideEffect { saveableStateHolder.removeState(FULL_ROOT_SAVEABLE_KEY) }").count - 1 == 1)
         // The legacy root is still the last branch.
@@ -126,7 +126,8 @@ struct EntryCoreDeltaTests {
         let viewModel = try entrySource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
         // Batch 3 integrator: STG-1 (HD request B3-T2 R2b) appends the stage's phase refresh after the premeeting apply,
         // so the shell, presence, premeeting order is pinned up to the premeeting apply and the stage block after it.
-        #expect(entryFlat(viewModel).contains("shell.apply(makeShellInputs()) callPresence.apply(makeCallPresenceInputs()) // S10 0.8 C8: the premeeting presenter reads the snapshot the shell just published (equality-guarded). premeeting.apply(makePremeetingInputs()) // The stage's `isInCall` follows the shell phase"))
+        // Batch 5 integrator (HD request B5-T3 R1c): the CTL-2 publish guard wraps the shell apply.
+        #expect(entryFlat(viewModel).contains("isApplyingShellInputs = true shell.apply(makeShellInputs()) isApplyingShellInputs = false callPresence.apply(makeCallPresenceInputs()) // S10 0.8 C8: the premeeting presenter reads the snapshot the shell just published (equality-guarded). premeeting.apply(makePremeetingInputs()) // The stage's `isInCall` follows the shell phase"))
         #expect(viewModel.contains("let premeeting = PremeetingPresenter()"))
         #expect(entryFlat(viewModel).contains("premeeting.onCommand = { [weak self] command in self?.performPremeetingCommand(command) }"))
         #expect(entryFlat(viewModel).contains("case .leave: shell.leave() case .dismissOutcome: shell.dismissOutcome()"))

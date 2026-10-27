@@ -21,7 +21,7 @@ final class ChatPresenter {
     private(set) var panel: ChatPanelSnapshot = ChatPanelSnapshot.initial
     private(set) var timeline: ChatTimelineSnapshot = ChatTimelineSnapshot.empty
     private(set) var composer: ChatComposerSnapshot = ChatComposerSnapshot.initial
-    /// Read only inside voice rows (CHT-6); constant here.
+    /// Read only inside voice rows (CHT-6); follows `ChatInputs.activeTtsMessageId` through the row index.
     private(set) var playback = ChatPlaybackSnapshot(activeVoiceRowId: "")
     /// The iOS 17 streaming follow counter (2 c, CHT-7); constant here.
     private(set) var tailGrowth = 0
@@ -30,8 +30,12 @@ final class ChatPresenter {
 
     @ObservationIgnored let rows = ChatRowStore()
     @ObservationIgnored let drafts = ChatDraftStore()
+    /// CH16 (CHT-5): the session cache of link cards. Rows carry only ready URLs; views read entries, never fetch.
+    @ObservationIgnored let embeds = ChatEmbedStore()
     /// Core only: the view model forwards each request to its implementation (S1C 3.2 closures, never protocols).
     @ObservationIgnored var onCommand: ((ChatCommandRequest) -> Void)? = nil
+    /// CH19 (CHT-5): set by the core over `KlipyService.searchPage`; the fixture injects canned pages.
+    @ObservationIgnored var gifSearch: ((ChatGifKind, String, Int) async -> ChatGifPage)? = nil
     /// Injectable clock and sleep so the `sendingSlow` timing and announcement coalescing are testable.
     @ObservationIgnored var now: () -> Double = { Date().timeIntervalSince1970 * 1000.0 }
     @ObservationIgnored var sleep: (Double) async -> Void = { millis in
@@ -51,6 +55,11 @@ final class ChatPresenter {
     @ObservationIgnored private var hiddenSenderTimes: [String: Double] = [:]
     @ObservationIgnored private var replyRowId = ""
     @ObservationIgnored private var privateToUserId = ""
+    @ObservationIgnored private var voiceModeOn = false
+    /// SYS-8 (S70 8, RECONCILE R25, S70 R70-5): whether a link that leaves Conclave shows the S40 D23 camera line (camera
+    /// on and no background continuity). The view model feeds it from CallPresence through its own adapter; read only
+    /// when the confirmation is built, so it is not observed.
+    @ObservationIgnored private(set) var showsCameraLine = false
     @ObservationIgnored private var inlineNotice: ChatFailure = ChatFailure.none
     @ObservationIgnored private var firstUnreadId = ""
     @ObservationIgnored private var pendingFirstUnreadId = ""
@@ -75,6 +84,13 @@ final class ChatPresenter {
     @ObservationIgnored private var slowTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var slowRowIds: [String: Bool] = [:]
     @ObservationIgnored private(set) var slowTasksStarted = 0
+    /// CH16: embeddable URLs per row id with the body they were extracted from.
+    @ObservationIgnored private var embedURLCache: [String: [String]] = [:]
+    @ObservationIgnored private var embedSourceCache: [String: String] = [:]
+    /// CH6: the photo state shown from the moment a photo is handed over until the core reports a change.
+    @ObservationIgnored private var localAttachment: ChatAttachmentState? = nil
+    /// GIFs handed to the core by id (`ChatCommandRequest` carries scalars only); the core takes each once.
+    @ObservationIgnored private var sentGifs: [String: ChatGifAttachment] = [:]
 
     /// `sendingSlow` after this long (S40 0.5).
     static let slowSendMillis = 1000.0
@@ -83,7 +99,11 @@ final class ChatPresenter {
     /// Quote previews are cut like the SFU's reply preview (MAX_REPLY_CONTENT_LENGTH).
     static let replyPreviewLimit = 280
 
-    init() {}
+    init() {
+        embeds.onResolved = { [weak self] _ in
+            self?.embedDidResolve()
+        }
+    }
 
     // MARK: - Core
 
@@ -100,15 +120,24 @@ final class ChatPresenter {
             || previous.roster != next.roster || previous.gate != next.gate || previous.isLocked != next.isLocked
             || previous.privateEnabled != next.privateEnabled || previous.reactionsEnabled != next.reactionsEnabled
             || previous.isHost != next.isHost || previous.localUserId != next.localUserId || previous.localName != next.localName
+            || previous.voiceEnabled != next.voiceEnabled
         hasBuilt = true
         if !next.privateEnabled && !privateToUserId.isEmpty {
             privateToUserId = ""
+        }
+        if voiceModeOn && !VoiceMessagePolicy.voiceModeAllowed(voiceEnabled: next.voiceEnabled, isPrivateMode: !privateToUserId.isEmpty) {
+            voiceModeOn = false
+        }
+        if previous.attachment != next.attachment {
+            // The core reported the photo: its state replaces the one shown since the hand-over.
+            localAttachment = nil
         }
         if rowsChanged || change == ChatInputChange.messages {
             rebuildRows(previousRowIds: timeline.rowIds)
         }
         publishPanel()
         publishComposer()
+        publishPlayback()
     }
 
     /// Maps the panel contract's destination (S20 0.5, RECONCILE R11) to the chat's.
@@ -163,6 +192,7 @@ final class ChatPresenter {
         if composer != ChatComposerSnapshot.initial { composer = ChatComposerSnapshot.initial }
         if panel != ChatPanelSnapshot.initial { panel = ChatPanelSnapshot.initial }
         if announcement != nil { announcement = nil }
+        if playback.activeVoiceRowId != "" { playback = ChatPlaybackSnapshot(activeVoiceRowId: "") }
     }
 
     private func resetSessionState() {
@@ -173,11 +203,17 @@ final class ChatPresenter {
         slowRowIds = [:]
         rows.reset()
         drafts.reset()
+        embeds.reset()
+        embedURLCache = [:]
+        embedSourceCache = [:]
+        localAttachment = nil
+        sentGifs = [:]
         hiddenSenderIds = []
         hiddenSenderNames = [:]
         hiddenSenderTimes = [:]
         replyRowId = ""
         privateToUserId = ""
+        voiceModeOn = false
         inlineNotice = ChatFailure.none
         firstUnreadId = ""
         pendingFirstUnreadId = ""
@@ -193,13 +229,20 @@ final class ChatPresenter {
 
     /// Routes the draft (D24) and dispatches it. Returns `blocked` without dispatch when the gate is closed, a limit
     /// is exceeded or the route blocks; the view keeps the draft and `composer.inlineNotice` names the reason.
+    ///
+    /// CHT-4: a ready photo goes with the send (`fileURL` names it) alone or with a caption, public text only; a photo
+    /// still preparing, uploading or failed blocks Send (the chip shows why). CHT-5: `url` is the composer preview
+    /// the person removed; when it is still the draft's first embeddable URL the send carries `suppressEmbeds`
+    /// (`flag`), so the message shows no cards for anyone (web ChatPanel.tsx).
     @discardableResult
     func send(text: String, suppressEmbedsFor url: String = "") -> ChatSendResult {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return ChatSendResult.empty }
+        let attachment = composer.attachment
+        if trimmed.isEmpty && !attachment.isReady { return ChatSendResult.empty }
         if inputs.gate != ChatSendGate.open { return ChatSendResult.blocked }
-        if ChatComposerPolicy.isOverLimit(text: trimmed, isVoiceMode: false) {
-            setInlineNotice(ChatComposerPolicy.limit(text: trimmed, isVoiceMode: false) == ChatComposerPolicy.voiceLimit
+        if attachment.blocksSend { return ChatSendResult.blocked }
+        if !trimmed.isEmpty && ChatComposerPolicy.isOverLimit(text: trimmed, isVoiceMode: voiceModeOn) {
+            setInlineNotice(ChatComposerPolicy.limit(text: trimmed, isVoiceMode: voiceModeOn) == ChatComposerPolicy.voiceLimit
                             ? ChatFailure.voiceTooLong : ChatFailure.tooLong)
             return ChatSendResult.blocked
         }
@@ -207,31 +250,133 @@ final class ChatPresenter {
             setInlineNotice(ChatFailure.privateTargetLeft)
             return ChatSendResult.blocked
         }
-        let mode = ChatComposerMode(privateToUserId: privateToUserId, isVoiceMode: false,
+        let mode = ChatComposerMode(privateToUserId: privateToUserId, isVoiceMode: voiceModeOn,
                                     privateEnabled: inputs.privateEnabled, voiceEnabled: inputs.voiceEnabled)
-        let route = ChatComposerPolicy.route(draft: trimmed, mode: mode)
+        let route = trimmed.isEmpty ? ChatRoute(kind: ChatRouteKind.publicText, wireText: "", failure: ChatFailure.none)
+            : ChatComposerPolicy.route(draft: trimmed, mode: mode)
         if route.kind == ChatRouteKind.blocked {
             setInlineNotice(route.failure)
             return ChatSendResult.blocked
         }
+        var photoFileURL = ""
+        if attachment.isReady {
+            let photoFailure = ChatComposerPolicy.photoRouteFailure(route.kind)
+            if photoFailure != ChatFailure.none {
+                setInlineNotice(photoFailure)
+                return ChatSendResult.blocked
+            }
+            if route.kind == ChatRouteKind.publicText {
+                photoFileURL = attachment.thumbnailKey
+            }
+        }
         var implicitTarget = ""
         if route.kind == ChatRouteKind.privateText {
             implicitTarget = privateToUserId
-        } else if route.kind == ChatRouteKind.publicText {
+        } else if route.kind == ChatRouteKind.publicText && !trimmed.isEmpty {
             let implicit = ChatComposerPolicy.implicitPrivateTarget(draft: trimmed, options: composer.recipients,
                                                                     localUserId: inputs.localUserId,
                                                                     privateEnabled: inputs.privateEnabled)
             implicitTarget = implicit.recipient?.userId ?? ""
         }
+        let suppress = photoFileURL.isEmpty && ChatComposerPolicy.suppressesEmbeds(draft: trimmed, dismissedURL: url)
         let replyServerId = replyRowId.isEmpty ? "" : rows.entry(for: replyRowId).row.serverId
         onCommand?(ChatCommandRequest.make(ChatCommandKind.send, rowId: replyRowId, messageId: replyServerId,
-                                           text: route.wireText, emoji: route.kind.rawValue, userId: implicitTarget))
+                                           text: route.wireText, emoji: route.kind.rawValue, userId: implicitTarget,
+                                           fileURL: photoFileURL, flag: suppress))
         if route.kind != ChatRouteKind.command {
             replyRowId = ""
+            // One voice message per entry into voice mode (it is read aloud to everyone).
+            if route.kind == ChatRouteKind.voice { voiceModeOn = false }
+        }
+        if !photoFileURL.isEmpty {
+            // The core takes the uploaded photo with this send and clears its attachment.
+            localAttachment = ChatAttachmentState.none
         }
         inlineNotice = ChatFailure.none
         publishComposer()
         return ChatSendResult.dispatched
+    }
+
+    /// CH19: sends a picked GIF, sticker or clip at once with the current reply (web parity, S40 7 a). Unavailable
+    /// in private mode (text only, 6 f). The core reads the attachment back with `takeSentGif(id:)`.
+    func sendGif(_ gif: ChatGifAttachment) {
+        if inputs.gate != ChatSendGate.open { return }
+        if !privateToUserId.isEmpty {
+            setInlineNotice(ChatFailure.privateTextOnly)
+            return
+        }
+        sentGifs[gif.id] = gif
+        let replyServerId = replyRowId.isEmpty ? "" : rows.entry(for: replyRowId).row.serverId
+        onCommand?(ChatCommandRequest.make(ChatCommandKind.sendGif, rowId: replyRowId, messageId: replyServerId, text: gif.id,
+                                           emoji: gif.kind ?? "", fileURL: gif.url))
+        replyRowId = ""
+        inlineNotice = ChatFailure.none
+        publishComposer()
+    }
+
+    /// The GIF a `sendGif` request names (its `text` is the GIF id); nil once taken or when unknown.
+    func takeSentGif(id: String) -> ChatGifAttachment? {
+        guard let gif = sentGifs[id] else { return nil }
+        sentGifs.removeValue(forKey: id)
+        return gif
+    }
+
+    /// CH19: one page from the injected search (the core's Klipy closure or the fixture's canned pages); a failed
+    /// page while nothing is injected.
+    func searchGifs(kind: ChatGifKind, query: String, page: Int) async -> ChatGifPage {
+        guard let search = gifSearch else { return ChatGifPage.failure }
+        return await search(kind, query, page)
+    }
+
+    /// CH6: hands over a picked, pasted or dropped photo, a file already copied into the caches directory (never
+    /// image bytes through the main actor). The chip shows `preparing` at once; the core prepares and uploads it.
+    /// For `attachPhoto` the request's `fileURL` is the file, `text` the picker's file name and `emoji` its MIME type.
+    func attachPhoto(fileURL: String, mimeType: String, fileName: String) {
+        if fileURL.isEmpty || inputs.gate != ChatSendGate.open { return }
+        if !privateToUserId.isEmpty {
+            setInlineNotice(ChatFailure.privateTextOnly)
+            return
+        }
+        if !inputs.photosEnabled {
+            setInlineNotice(ChatFailure.photosDisabled)
+            return
+        }
+        localAttachment = ChatAttachmentState(phase: ChatAttachmentPhase.preparing, progress: -1, thumbnailKey: fileURL,
+                                              failure: ChatFailure.none)
+        inlineNotice = ChatFailure.none
+        onCommand?(ChatCommandRequest.make(ChatCommandKind.attachPhoto, text: fileName, emoji: mimeType, fileURL: fileURL))
+        publishComposer()
+    }
+
+    /// A photo the view refused before handing it over (Android: `OpenableColumns.SIZE` above the prepare step's input
+    /// cap, so the file is never copied): the inline notice names the reason.
+    func rejectPhoto(_ failure: ChatFailure) {
+        setInlineNotice(failure)
+    }
+
+    /// Removes the photo (and cancels its prepare or upload in the core).
+    func removeAttachment() {
+        let current = composer.attachment
+        if current.phase == ChatAttachmentPhase.none { return }
+        localAttachment = ChatAttachmentState.none
+        onCommand?(ChatCommandRequest.make(ChatCommandKind.removeAttachment, fileURL: current.thumbnailKey))
+        publishComposer()
+    }
+
+    /// Try Again on a failed photo.
+    func retryAttachment() {
+        let current = composer.attachment
+        if current.phase != ChatAttachmentPhase.failed { return }
+        localAttachment = ChatAttachmentState(phase: ChatAttachmentPhase.preparing, progress: -1, thumbnailKey: current.thumbnailKey,
+                                              failure: ChatFailure.none)
+        onCommand?(ChatCommandRequest.make(ChatCommandKind.retryAttachment, fileURL: current.thumbnailKey))
+        publishComposer()
+    }
+
+    /// CH16 for the composer preview (S40 6 c): the entry for the draft's first embeddable URL, starting its one
+    /// fetch through the session cache. The view calls it after its 450 ms debounce and keeps the entry it gets.
+    func requestLinkPreview(url: String) -> ChatEmbedEntry {
+        embeds.request(url)
     }
 
     func retry(rowId: String) {
@@ -301,10 +446,37 @@ final class ChatPresenter {
         publishComposer()
     }
 
+    /// S40 6 c: voice mode from the attach menu; ignored while private (D24) or while the host turned voice off.
+    func setVoiceMode(_ on: Bool) {
+        let next = on && VoiceMessagePolicy.voiceModeAllowed(voiceEnabled: inputs.voiceEnabled, isPrivateMode: !privateToUserId.isEmpty)
+        guard next != voiceModeOn else { return }
+        voiceModeOn = next
+        inlineNotice = ChatFailure.none
+        publishComposer()
+    }
+
+    /// S40 3 c, CH4: local replay of a voice row ("only you will hear it"); the core finds the message and its token.
+    func playVoice(rowId: String) {
+        let row = rows.entry(for: rowId).row
+        guard row.canPlayVoice else { return }
+        onCommand?(ChatCommandRequest.make(ChatCommandKind.playVoice, rowId: rowId, messageId: row.serverId,
+                                           text: row.plainText, userId: row.senderId))
+    }
+
+    func stopVoice() {
+        onCommand?(ChatCommandRequest.make(ChatCommandKind.stopVoice))
+    }
+
+    /// SYS-8 (HD request B5-T4 R17a): the view model's camera line input (see `showsCameraLine`).
+    func setCameraLine(_ shows: Bool) {
+        if showsCameraLine != shows { showsCameraLine = shows }
+    }
+
     /// "" returns to everyone. Ignored while private messages are off.
     func setPrivateTo(userId: String) {
         if !userId.isEmpty && !inputs.privateEnabled { return }
         if userId == privateToUserId { return }
+        if !userId.isEmpty { voiceModeOn = false }
         privateToUserId = userId
         inlineNotice = ChatFailure.none
         publishComposer()
@@ -511,6 +683,8 @@ final class ChatPresenter {
             isEmpty: rowIds.isEmpty
         )
         publishTimeline(next)
+        // An acknowledgement can move a message id to its row id (CHT-6).
+        publishPlayback()
     }
 
     private func messageRow(_ message: ChatMessageInput, rowId: String, isGroupStart: Bool, isGroupEnd: Bool,
@@ -524,6 +698,8 @@ final class ChatPresenter {
             body = message.content == message.imageFileName ? "" : message.content
         } else if kind == ChatRowKind.gif {
             body = message.gifTitle.isEmpty ? message.content : message.gifTitle
+        } else if kind == ChatRowKind.voice {
+            body = VoiceMessageText.spokenText(normalizedContent: message.content)
         }
         let spans = cachedSpans(rowId: rowId, body: body, kind: kind, tokens: tokens, youToken: youToken, signature: tokenSignature)
         let privacy: ChatPrivacy = message.isDirect ? (message.isOwn ? ChatPrivacy.privateSent : ChatPrivacy.privateReceived)
@@ -557,6 +733,18 @@ final class ChatPresenter {
             canJump = messageToRow[reply.messageId] != nil
         }
         let senderName = message.isOwn ? inputs.localName : message.senderName
+        // CH16: the fetch starts here, when the row is built (never from a view); the row carries only ready cards, and
+        // only once none of its URLs is still loading, so a row with two cards changes height once, not twice.
+        var embedURLs: [String] = []
+        if kind == ChatRowKind.text && !message.suppressEmbeds {
+            var isLoading = false
+            for url in cachedEmbedURLs(rowId: rowId, body: body) {
+                let entry = embeds.request(url)
+                if entry.phase == ChatEmbedPhase.loading { isLoading = true }
+                if entry.phase == ChatEmbedPhase.ready { embedURLs.append(url) }
+            }
+            if isLoading { embedURLs = [] }
+        }
         return ChatRowModel(
             id: rowId,
             serverId: serverId,
@@ -581,7 +769,7 @@ final class ChatPresenter {
             gifKind: ChatGifKind(rawValue: message.gifKind) ?? ChatGifKind.gif,
             gifAspect: gifAspect(width: message.gifWidth, height: message.gifHeight),
             gifTitle: message.gifTitle,
-            embedURLs: [],
+            embedURLs: embedURLs,
             reactions: chips,
             delivery: delivery,
             failure: message.failure,
@@ -598,7 +786,7 @@ final class ChatPresenter {
             canRetry: message.delivery == ChatDelivery.failed && message.isRetryable,
             canDelete: message.delivery == ChatDelivery.failed,
             canReport: false,
-            canPlayVoice: false,
+            canPlayVoice: VoiceMessagePolicy.canPlay(kind: kind, voiceEnabled: inputs.voiceEnabled, text: body),
             isAtReactionCap: chips.count >= ChatReactionRules.maxDistinctPerMessage,
             canHideSender: !message.isOwn && !message.isAssistant && !message.senderId.isEmpty && kind != ChatRowKind.action,
             canJumpToReply: canJump,
@@ -628,6 +816,10 @@ final class ChatPresenter {
         if message.isAssistant { return ChatRowKind.assistant }
         if !message.imageURL.isEmpty { return ChatRowKind.photo }
         if !message.gifURL.isEmpty { return ChatRowKind.gif }
+        if VoiceMessagePolicy.isVoiceRow(isTts: message.isTts, isAssistant: message.isAssistant, hasImage: !message.imageURL.isEmpty,
+                                         hasGif: !message.gifURL.isEmpty, isDirect: message.isDirect) {
+            return ChatRowKind.voice
+        }
         if ChatMessageContentPolicy.fullActionText(from: message.content) != nil { return ChatRowKind.action }
         return ChatRowKind.text
     }
@@ -658,6 +850,24 @@ final class ChatPresenter {
         return spans
     }
 
+    /// CH16: the embeddable URLs of a row's body (at most 2, `<url>` suppressed), extracted once per body.
+    private func cachedEmbedURLs(rowId: String, body: String) -> [String] {
+        if embedSourceCache[rowId] == body, let cached = embedURLCache[rowId] {
+            return cached
+        }
+        let urls = LinkEmbedPolicy.embedURLs(body)
+        embedURLCache[rowId] = urls
+        embedSourceCache[rowId] = body
+        return urls
+    }
+
+    /// A card resolved (ready or none): rows waiting for it rebuild once; entries are equality-guarded, so only the
+    /// rows whose `embedURLs` changed redraw, and each row changes height at most once.
+    private func embedDidResolve() {
+        guard hasBuilt else { return }
+        rebuildRows(previousRowIds: timeline.rowIds)
+    }
+
     private func trimCaches(messages: [ChatMessageInput]) {
         var live: [String: Bool] = [:]
         for message in messages {
@@ -670,6 +880,14 @@ final class ChatPresenter {
         for key in stale {
             spansCache.removeValue(forKey: key)
             spansSignature.removeValue(forKey: key)
+        }
+        var staleEmbeds: [String] = []
+        for key in embedURLCache.keys {
+            if live[key] == nil { staleEmbeds.append(key) }
+        }
+        for key in staleEmbeds {
+            embedURLCache.removeValue(forKey: key)
+            embedSourceCache.removeValue(forKey: key)
         }
     }
 
@@ -816,6 +1034,13 @@ final class ChatPresenter {
         publishComposer()
     }
 
+    /// S40 0.5: only voice rows read it; the active message id resolves through the row index (D25).
+    private func publishPlayback() {
+        let rowId = inputs.activeTtsMessageId.isEmpty ? "" : rows.rowId(forMessageId: inputs.activeTtsMessageId)
+        if playback.activeVoiceRowId == rowId { return }
+        playback = ChatPlaybackSnapshot(activeVoiceRowId: rowId)
+    }
+
     private func publishComposer() {
         let recipients = recipientList()
         var privateTo: ChatRecipient? = nil
@@ -849,9 +1074,9 @@ final class ChatPresenter {
             photosEnabled: inputs.photosEnabled,
             voiceEnabled: inputs.voiceEnabled,
             reply: reply,
-            attachment: ChatAttachmentState.none,
-            isVoiceMode: false,
-            voiceKind: "system",
+            attachment: localAttachment ?? inputs.attachment,
+            isVoiceMode: voiceModeOn && inputs.voiceEnabled && privateTo == nil,
+            voiceKind: inputs.voiceKind,
             textLimit: ChatComposerPolicy.textLimit,
             voiceLimit: ChatComposerPolicy.voiceLimit,
             assistant: inputs.assistant,
@@ -860,14 +1085,14 @@ final class ChatPresenter {
                                                         isPrivateMode: privateTo != nil),
             inlineNotice: inlineNotice,
             draftKey: ChatComposerPolicy.draftKey(roomId: inputs.roomId, privateToUserId: privateTo?.userId ?? ""),
-            attachKinds: []
+            attachKinds: ChatComposerPolicy.attachKinds
         )
         let current = composer
         let same = current.gate == next.gate && current.isHost == next.isHost && current.isLockedForOthers == next.isLockedForOthers
             && current.privateTo == next.privateTo && current.recipients == next.recipients
             && current.privateEnabled == next.privateEnabled && current.photosEnabled == next.photosEnabled
             && current.voiceEnabled == next.voiceEnabled && current.reply == next.reply && current.attachment == next.attachment
-            && current.isVoiceMode == next.isVoiceMode && current.assistant == next.assistant
+            && current.isVoiceMode == next.isVoiceMode && current.voiceKind == next.voiceKind && current.assistant == next.assistant
             && current.mentionOptions == next.mentionOptions && current.commandRows == next.commandRows
             && current.inlineNotice == next.inlineNotice && current.draftKey == next.draftKey
             && current.attachKinds == next.attachKinds

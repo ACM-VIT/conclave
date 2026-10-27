@@ -56,6 +56,8 @@ struct LobbyStatusSnapshot: Equatable {
     let showsSlowNotice: Bool
     let waitingKind: WaitingKind
     let isPrimaryPending: Bool
+    /// ENT-5 (S10 9 f `serverRestarting`): the clean server sentence for the waiting body ("" uses the S20 copy).
+    let waitingText: String
 }
 
 // MARK: - Home
@@ -128,14 +130,26 @@ enum OutcomeAction: String, CaseIterable, Equatable {
     case rejoin, tryAgain, backHome, none
 }
 
-/// The outcome screen model. ENT-1 publishes it with Back to Home only; ENT-6 adds Rejoin and Try Again once the
-/// view model keeps a rejoin context (S10 0.8 C3). No display strings: each platform maps the variant to its copy.
+/// The outcome screen model (S10 10 j). ENT-6: Rejoin and Try Again are offered while the view model keeps a rejoin
+/// context (S10 0.8 C3, `OutcomeModelPolicy`). No display strings: each platform maps the variant, the actions and
+/// `failure` (the S10 8 g body class of a failed rejoin, additive to S10 10 j) to its copy.
 struct OutcomeModel: Equatable {
     let id: Int
     let variant: OutcomeVariant
     let primary: OutcomeAction
     let secondary: OutcomeAction
     let serverDetail: String
+    let failure: LobbyIssue
+
+    init(id: Int, variant: OutcomeVariant, primary: OutcomeAction, secondary: OutcomeAction, serverDetail: String,
+         failure: LobbyIssue = LobbyIssue.none) {
+        self.id = id
+        self.variant = variant
+        self.primary = primary
+        self.secondary = secondary
+        self.serverDetail = serverDetail
+        self.failure = failure
+    }
 }
 
 // MARK: - Root routing (S10 0.4)
@@ -271,6 +285,10 @@ enum PremeetingCommand: String, CaseIterable, Equatable {
     case leave
     /// Dismissing an S1 Home notice or the outcome screen: `shell.dismissOutcome()`.
     case dismissOutcome
+    /// ENT-6 (S10 0.8 C3): Rejoin on Home or the outcome screen, Try Again after a failed rejoin, and Join or Try Again
+    /// in a `rejoin` lobby: `MeetingViewModel.rejoinLastMeeting()` joins with the call's original room, invite codes,
+    /// client id and media intent (RECONCILE R4; HD request B5-T5 R3).
+    case rejoinLastMeeting
 }
 
 /// Pushed inputs (S10 0.5 table, S1C 3.2 format). Every field is a scalar the core already owns; `apply(_:)` is
@@ -310,6 +328,13 @@ struct PremeetingInputs: Equatable {
     // R51 version gate (S70 16; a missing server field never gates)
     let updateRequired: Bool
     let storeURL: String
+    // ENT-6 (S10 0.8 C3): the room of the view model's rejoin context ("" when there is none)
+    let rejoinRoomId: String
+    // ENT-5 (S10 9 f, RECONCILE R46): the server restart notice while waiting ("" when none)
+    let serverRestartText: String
+    // ENT-5 (S10 8 f): the classifier's category raw value and diagnostic code of the last join failure ("" when none)
+    let joinFailureCategory: String
+    let joinFailureCode: String
 
     static func make(
         callSession: Int = 0,
@@ -338,7 +363,11 @@ struct PremeetingInputs: Equatable {
         resumeInFlight: Bool = false,
         resumeRoomId: String = "",
         updateRequired: Bool = false,
-        storeURL: String = ""
+        storeURL: String = "",
+        rejoinRoomId: String = "",
+        serverRestartText: String = "",
+        joinFailureCategory: String = "",
+        joinFailureCode: String = ""
     ) -> PremeetingInputs {
         PremeetingInputs(
             callSession: callSession,
@@ -367,7 +396,11 @@ struct PremeetingInputs: Equatable {
             resumeInFlight: resumeInFlight,
             resumeRoomId: resumeRoomId,
             updateRequired: updateRequired,
-            storeURL: storeURL
+            storeURL: storeURL,
+            rejoinRoomId: rejoinRoomId,
+            serverRestartText: serverRestartText,
+            joinFailureCategory: joinFailureCategory,
+            joinFailureCode: joinFailureCode
         )
     }
 
@@ -400,7 +433,11 @@ struct PremeetingInputs: Equatable {
             resumeInFlight: resumeInFlight,
             resumeRoomId: resumeRoomId,
             updateRequired: updateRequired,
-            storeURL: storeURL
+            storeURL: storeURL,
+            rejoinRoomId: rejoinRoomId,
+            serverRestartText: serverRestartText,
+            joinFailureCategory: joinFailureCategory,
+            joinFailureCode: joinFailureCode
         )
     }
 
@@ -433,7 +470,11 @@ struct PremeetingInputs: Equatable {
             resumeInFlight: resumeInFlight,
             resumeRoomId: resumeRoomId,
             updateRequired: updateRequired,
-            storeURL: storeURL
+            storeURL: storeURL,
+            rejoinRoomId: rejoinRoomId,
+            serverRestartText: serverRestartText,
+            joinFailureCategory: joinFailureCategory,
+            joinFailureCode: joinFailureCode
         )
     }
 
@@ -467,7 +508,11 @@ struct PremeetingInputs: Equatable {
             resumeInFlight: base.resumeInFlight,
             resumeRoomId: base.resumeRoomId,
             updateRequired: base.updateRequired,
-            storeURL: base.storeURL
+            storeURL: base.storeURL,
+            rejoinRoomId: base.rejoinRoomId,
+            serverRestartText: base.serverRestartText,
+            joinFailureCategory: base.joinFailureCategory,
+            joinFailureCode: base.joinFailureCode
         )
     }
 }

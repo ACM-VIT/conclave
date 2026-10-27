@@ -8,9 +8,9 @@ import Observation
 /// never observes the core (SkipModel has no `withObservationTracking`). Every intent goes through S1, so a bar tap,
 /// CallKit, the notification and Magic Tap share one media path (D18, S1C 3.3 MUTE).
 ///
-/// Extension points (later slices add their snapshots here, keeping one presenter): CTL-2 the Leave control and End
-/// dialog over `leaveState`; CTL-3 `route`; CTL-5 `more`, `moreMetrics`, `commands` and `select(_:)`; CTL-6 `reactions`
-/// and `sendReaction(id:)`.
+/// Extension points (later slices add their snapshots here, keeping one presenter): CTL-2 (here) the Leave control,
+/// the host Leave menu and the End dialog over `leaveState`, with the End progress and failure toasts (CC7); CTL-3
+/// `route`; CTL-5 `more`, `moreMetrics`, `commands` and `select(_:)`; CTL-6 `reactions` and `sendReaction(id:)`.
 @MainActor
 @Observable
 final class CallControlsPresenter {
@@ -50,6 +50,20 @@ final class CallControlsPresenter {
     @ObservationIgnored private(set) var commandCount = 0
     @ObservationIgnored private var nextExplanationId = 0
     @ObservationIgnored private var nextPromptId = 0
+    /// CTL-2 diagnostics (never observed): End requests through the presenter, dispatched End confirmations, and the
+    /// End notices posted to the stage toast lane (CL13 `controls.counters`, the tests).
+    @ObservationIgnored private(set) var endRequestCount = 0
+    @ObservationIgnored private(set) var endDispatchCount = 0
+    @ObservationIgnored private(set) var endingNoticeCount = 0
+    @ObservationIgnored private(set) var endFailedNoticeCount = 0
+    /// The `endingForEveryone` progress toast posted for the End ticket in flight; "" when none.
+    @ObservationIgnored private(set) var endingNoticeId = ""
+    /// A dispatched End whose result this presenter has not seen yet (S30 4: ending, then a failure or the end).
+    @ObservationIgnored private var endResultOwed = false
+    /// True while S1 runs `confirmEndForEveryone`: publishes nested in that call (a synchronous acknowledgment) wait for
+    /// the dispatch answer before the End notices are decided, so a refused confirm never posts a failure.
+    @ObservationIgnored private var isConfirmingEnd = false
+    @ObservationIgnored private var nextEndingNoticeSerial = 0
 
     init(shell: MeetingShellPresenter, stage: StagePresenter) {
         self.shell = shell
@@ -62,11 +76,7 @@ final class CallControlsPresenter {
     /// one-shots so nothing from the previous call is shown again.
     func apply(_ next: CallControlsInputs) {
         applyCount += 1
-        if inputs.callSession != 0 && next.callSession != inputs.callSession {
-            clearOneShots()
-        }
-        inputs = next
-        recompute()
+        absorb(next)
     }
 
     // MARK: View
@@ -148,32 +158,72 @@ final class CallControlsPresenter {
         }
     }
 
-    /// Leave works on one tap for everyone (S30 D24, R09); no haptic (Q11).
+    /// Leave works on one tap for everyone (S30 D24, R09); no haptic (Q11). The leaving state is published in the same
+    /// frame (S1 PUB): the S1 fields are re-read right after the intent.
     @discardableResult
     func leave() -> ControlTapResult {
         stage.noteControlAction()
-        switch shell.leave() {
+        let dispatch = shell.leave()
+        refreshFromShell()
+        switch dispatch {
         case .dispatched: return ControlTapResult.dispatched
         default: return ControlTapResult.ignored
         }
     }
 
-    /// Mirrors S1 (S50 PH17): `invoker` is a `MeetingConfirmationInvoker` value ("call" or "more").
+    /// Mirrors S1 (S50 PH17): `invoker` is a `MeetingConfirmationInvoker` value ("call" from the Leave menu, its
+    /// accessibility action and the failure toast's Retry; "more" from the More row, CTL-5). S1 refuses a request while
+    /// End is blocked, pending or already confirming; the confirmation (or nothing) shows in the same frame.
     func requestEndForEveryone(from invoker: String) {
+        stage.noteControlAction()
+        endRequestCount += 1
         shell.requestEndForEveryone(from: invoker)
+        refreshFromShell()
     }
 
-    /// `postRecap` waits for the WP8 recap owner (CC8); until then End goes straight to the S1 ticket.
+    /// One confirm per confirmation id (S1C DUP: a second confirm is a duplicate and returns `ignored`). A dispatched End
+    /// owes a result: the presenter posts the `endingForEveryone` progress toast while the ticket is in flight and the
+    /// `endFailed` toast with Retry if it fails, and Leave stays available throughout (R09). `postRecap` waits for the
+    /// WP8 recap owner (CC8, TRN-2); until then End goes straight to the S1 ticket.
     @discardableResult
     func confirmEndForEveryone(id: Int, postRecap: Bool) -> ControlTapResult {
-        switch shell.confirmEndForEveryone(id: id) {
+        stage.noteControlAction()
+        isConfirmingEnd = true
+        let dispatch = shell.confirmEndForEveryone(id: id)
+        isConfirmingEnd = false
+        if dispatch == MeetingDispatch.dispatched {
+            endDispatchCount += 1
+            endResultOwed = true
+        }
+        refreshFromShell()
+        switch dispatch {
         case .dispatched: return ControlTapResult.dispatched
         default: return ControlTapResult.ignored
         }
     }
 
+    /// Cancel, Back, a scrim tap or a tap outside the iPad popover: the confirmation closes and nothing else changes.
     func cancelEnd(id: Int) {
+        stage.noteControlAction()
         shell.cancelConfirmation(id: id)
+        refreshFromShell()
+    }
+
+    /// A host Leave menu row (S30 4 b): Leave leaves; End asks for the confirmation from the Leave control ("call").
+    @discardableResult
+    func selectLeaveMenuItem(_ id: String) -> ControlTapResult {
+        if id == LeaveControlPolicy.leaveItemId {
+            return leave()
+        }
+        if id == LeaveControlPolicy.endItemId {
+            if !LeaveControlPolicy.offersEndAction(leaveState) {
+                stage.noteControlAction()
+                return ControlTapResult.ignored
+            }
+            requestEndForEveryone(from: MeetingConfirmationInvoker.call)
+            return leaveState.confirmationId != 0 ? ControlTapResult.dispatched : ControlTapResult.ignored
+        }
+        return ControlTapResult.ignored
     }
 
     /// The alert closed (Open Settings or Not Now).
@@ -187,12 +237,32 @@ final class CallControlsPresenter {
     func reset() {
         inputs = CallControlsInputs.make()
         clearOneShots()
+        clearEndTracking()
         overflowIds = []
         fitReadout = "none"
         recompute()
     }
 
     // MARK: Private
+
+    /// The whole input set: a new call session clears the one-shots and the End tracking, so nothing from the previous
+    /// call is shown again.
+    private func absorb(_ next: CallControlsInputs) {
+        if inputs.callSession != 0 && next.callSession != inputs.callSession {
+            clearOneShots()
+            clearEndTracking()
+        }
+        inputs = next
+        recompute()
+    }
+
+    /// CTL-2: S1 publishes that this presenter's own intents cause (the End confirmation, its cancel, a dispatched End
+    /// or Leave ticket) change no core field, so the core may not refresh the controls for them; the S1 fields are re-read
+    /// from the shell snapshots and the controls-only fields stay (the view model's publish hook, HD/requests/B5-T3.md
+    /// R1, brings ticket results that arrive later). Equality guarded like `apply`.
+    private func refreshFromShell() {
+        absorb(inputs.refreshed(from: shell))
+    }
 
     private func recompute() {
         let candidate = ControlBarPolicy.bar(inputs: inputs, layout: layout, revision: bar.revision)
@@ -203,7 +273,48 @@ final class CallControlsPresenter {
         let leaveCandidate = ControlBarPolicy.leaveSnapshot(inputs: inputs, revision: leaveState.revision)
         if leaveCandidate != leaveState {
             leaveState = leaveCandidate.withRevision(leaveState.revision + 1)
+            // S30 CC16: an open End confirmation keeps chrome up on both platforms (the iOS dialog reports nothing of its
+            // own); equality guarded in the stage.
+            stage.setTransientChrome(id: ChromeAutoHidePolicy.endDialog, open: leaveState.confirmationId != 0)
         }
+        followEndResult()
+    }
+
+    /// S30 4 c and CC7: while a dispatched End is in flight the toast lane holds "Ending the call for everyone…"; a
+    /// failure replaces it with the Retry toast (S1 already delivered `actionRejected`); the end of the call, an
+    /// interruption or a cancelled ticket clears it. Decided only after S1 answered the confirm.
+    private func followEndResult() {
+        if !endResultOwed || isConfirmingEnd { return }
+        switch leaveState.endPhase {
+        case .ending:
+            if endingNoticeId.isEmpty {
+                nextEndingNoticeSerial += 1
+                endingNoticeId = LeaveControlPolicy.endingNoticePrefix + String(nextEndingNoticeSerial)
+                endingNoticeCount += 1
+                stage.postLocal(LeaveControlPolicy.endingNotice(id: endingNoticeId))
+            }
+        case .failed:
+            endResultOwed = false
+            // STG-5 `postLocal` swaps a showing progress toast for the failure in place and drops a queued one.
+            endingNoticeId = ""
+            endFailedNoticeCount += 1
+            stage.postLocal(LeaveControlPolicy.endFailedNotice())
+        case .idle, .confirming, .postingRecap:
+            endResultOwed = false
+            clearEndingNotice()
+        }
+    }
+
+    private func clearEndTracking() {
+        endResultOwed = false
+        clearEndingNotice()
+    }
+
+    private func clearEndingNotice() {
+        if endingNoticeId.isEmpty { return }
+        let id = endingNoticeId
+        endingNoticeId = ""
+        stage.clearLocalNotice(id: id)
     }
 
     private func clearOneShots() {

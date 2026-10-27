@@ -89,6 +89,7 @@ private fun ControlsFixtureControls(session: ControlsFixtureSession, modifier: M
             ControlsFixtureReadout(session.compositionReadout(), "controls.composition", tick)
             ControlsFixtureReadout(session.explanationReadout(), "controls.explanation", tick)
             ControlsFixtureReadout(session.leaveReadout(), "controls.leave", tick)
+            ControlsFixtureReadout(session.noticesReadout(), "stage.notices", tick)
             ControlsFixtureReadout(session.panelReadout(), "panel.current", tick)
             ControlsFixtureReadout(session.chromeReadout(), "chrome.transient", tick)
             ControlsFixtureReadout(session.renderersReadout(), "stage.renderers", tick)

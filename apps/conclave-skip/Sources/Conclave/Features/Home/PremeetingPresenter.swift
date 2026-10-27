@@ -48,6 +48,8 @@ final class PremeetingPresenter {
     /// R51: New Meeting, Join, Rejoin and links open the "Update Conclave" explanation instead of the lobby.
     private(set) var isUpdatePromptPresented = false
     private(set) var switchPrompt: RoomSwitchPrompt? = nil
+    /// ENT-5 (S10 9 d, Android only): Back while waiting asks "Stop asking to join?" instead of cancelling at once.
+    private(set) var isStopAskingPresented = false
     /// Premeeting async outcomes as tokens (F00 8; S10 0.5): `validationFailed` on a rejected join submit. The root
     /// consumer reads it beside the shell's stream and plays only `DeliveredTokenKinds`.
     private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
@@ -66,6 +68,8 @@ final class PremeetingPresenter {
     @ObservationIgnored var generateRoomCode: () -> String = { EntryPolicies.generateRoomCode() }
     /// The presence poll interval (S10 0.5 task table: 10 s; tests shorten it).
     @ObservationIgnored var presenceIntervalMillis: Double = LobbyPresencePolicy.pollIntervalMillis
+    /// ENT-5: the slow notice delay (S10 0.5 task table: one-shot 8 s; tests shorten it).
+    @ObservationIgnored var slowNoticeDelayMillis: Double = EntrySlowNoticePolicy.delayMillis
 
     @ObservationIgnored private var inputs = PremeetingInputs.make()
     @ObservationIgnored private var records: [RecentMeetingRecord] = []
@@ -109,6 +113,11 @@ final class PremeetingPresenter {
     @ObservationIgnored private var previewHandedOff = false
     @ObservationIgnored private var presenceFetches = 0
     @ObservationIgnored private var joinRequests = 0
+    // ENT-5 slow notice (S10 8 c) and ENT-6 rejoin (S10 0.8 C3)
+    @ObservationIgnored private var slowNoticeTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var slowNoticeShown = false
+    @ObservationIgnored private var pendingRejoinRouteId = 0
+    @ObservationIgnored private var rejoinCommands = 0
 
     init() {
         // ENT-7 (S10 5 e): the account's async outcomes (signInSucceeded, sessionExpired) join this token stream.
@@ -126,6 +135,7 @@ final class PremeetingPresenter {
     /// a lobby is visible in `editing`, and the C17 code check while a start is in flight.
     var liveTaskCount: Int {
         (rejoinExpiryTask == nil ? 0 : 1) + (presenceTask == nil ? 0 : 1) + (collisionTask == nil ? 0 : 1)
+            + (slowNoticeTask == nil ? 0 : 1)
     }
     var recentRecords: [RecentMeetingRecord] { records }
     /// ENT-3 Debug counters (S10 6 l6: polling stops when the lobby is popped).
@@ -133,6 +143,8 @@ final class PremeetingPresenter {
     var joinRequestCount: Int { joinRequests }
     var isStartInFlight: Bool { collisionTask != nil }
     var currentDeviceInputs: LobbyDeviceInputs { device }
+    /// ENT-6 Debug counter (S10 10 l6): `rejoinLastMeeting` commands sent to the core.
+    var rejoinCommandCount: Int { rejoinCommands }
 
     /// The target behind a pushed route (the lobby, ENT-3; tests).
     func target(forRoute id: Int) -> PremeetingRouteTarget? {
@@ -190,6 +202,11 @@ final class PremeetingPresenter {
             lastPreCallWasWaiting = true
         } else if next.phase == .entering {
             lastPreCallWasWaiting = false
+        }
+        if next.phase != previous.phase || next.callSession != previous.callSession {
+            // ENT-5 (S10 0.5 task table): any phase change cancels the slow notice; the next Connecting starts over.
+            cancelSlowNotice()
+            slowNoticeShown = false
         }
         trackSessionRoom(next)
         recordRecents(next)
@@ -355,13 +372,25 @@ final class PremeetingPresenter {
         republishHome()
     }
 
-    /// The Rejoin card (S10 2 j). The lobby opens with `rejoin` intent; the automatic connect arrives with the
-    /// view model's rejoin context (ENT-6, S10 0.8 C3).
+    /// The Rejoin card (S10 2 j). The lobby opens with `rejoin` intent and, while the view model keeps this room's
+    /// rejoin context (S10 0.8 C3), connects at once with the call's room, invite codes, client id and media intent
+    /// (RECONCILE R4). Without a context (a relaunch) the lobby opens editable with Join. Behind a sheet the connect
+    /// waits until the sheet is gone and the lobby is pushed.
     func rejoin() {
         guard !blockedByUpdate() else { return }
         guard let card = home.rejoin else { return }
         for record in records where record.id == card.recentId {
-            openOrQueue(targetFromRecord(record, routeId: allocateRouteId(), intent: .rejoin))
+            let target = targetFromRecord(record, routeId: allocateRouteId(), intent: .rejoin)
+            let connects = canRejoin(roomId: record.roomId)
+            let queued = isJoinSheetPresented || isAccountSheetPresented
+            openOrQueue(target)
+            if connects {
+                if queued {
+                    pendingRejoinRouteId = target.routeId
+                } else {
+                    sendRejoin()
+                }
+            }
             return
         }
     }
@@ -435,6 +464,7 @@ final class PremeetingPresenter {
         guard visibleLobbyRouteId == routeId else { return }
         visibleLobbyRouteId = 0
         stopPresencePolling()
+        cancelSlowNotice()
         updatePreviewDemand()
     }
 
@@ -484,6 +514,14 @@ final class PremeetingPresenter {
         guard let target = topLobbyTarget(), let status = lobbyStatus, status.routeId == target.routeId else { return }
         guard status.mode == .editing || status.mode == .failed, !isStarting else { return }
         guard !blockedByUpdate() else { return }
+        if target.intent == .rejoin && canRejoin(roomId: target.roomId) {
+            // ENT-6 (S10 0.8 C3): a rejoin lobby joins with the view model's context, never the record's bare room.
+            guard !inputs.isNetworkOffline else { return }
+            joinRequests += 1
+            sendRejoin()
+            refreshLobby()
+            return
+        }
         guard primaryReason(for: target) == .none else { return }
         if target.intent == .newMeeting && lobbyHooks?.fetchPresence != nil {
             isStarting = true
@@ -497,9 +535,28 @@ final class PremeetingPresenter {
         submitJoin(target)
     }
 
-    /// The inline failed block's Try Again (S10 0.4 initial `joinFailed`): the same join again.
+    /// The inline failed block's Try Again (S10 0.4 initial `joinFailed`): the same join again with the kept input
+    /// (invariant 11); a `rejoin` lobby asks the view model's rejoin context again.
     func retryJoin() {
         startOrJoin()
+    }
+
+    /// S10 9 d (Android): Back while waiting opens "Stop asking to join?"; iOS has no Back while waiting.
+    func requestStopAsking() {
+        guard let status = lobbyStatus, status.mode == .waiting else { return }
+        setStopAsking(true)
+    }
+
+    /// Keep waiting, Back or a scrim tap: the phase stays, nothing reaches the core.
+    func keepWaiting() {
+        setStopAsking(false)
+    }
+
+    /// Stop asking: cancels at once (`shell.leave()`), the lobby returns to editing.
+    func stopAsking() {
+        guard isStopAskingPresented else { return }
+        setStopAsking(false)
+        cancelJoin()
     }
 
     /// `LobbyMediaKind` raw value (S10 7): the system prompt or the Android queue.
@@ -614,13 +671,34 @@ final class PremeetingPresenter {
 
     // MARK: - Outcome
 
+    /// S10 10 j: Back to Home dismisses (`shell.dismissOutcome()`); Rejoin and Try Again push `lobby(rejoin)` and ask
+    /// the view model's rejoin context (`rejoinLastMeeting()`, S10 0.8 C3), so the lobby opens connecting. Without a
+    /// context (the model never offers them then) they fall back to Back to Home.
     func performOutcomeAction(_ action: OutcomeAction) {
         switch action {
         case .backHome, .none:
             dismissOutcome()
         case .rejoin, .tryAgain:
-            // ENT-6 (S10 0.8 C3): these need the view model's rejoin context; ENT-1 never offers them.
-            dismissOutcome()
+            let room = inputs.rejoinRoomId
+            guard !room.isEmpty else {
+                dismissOutcome()
+                return
+            }
+            guard !blockedByUpdate() else { return }
+            if inputs.outcomeId != 0 {
+                dismissedOutcomeId = inputs.outcomeId
+            }
+            setOutcome(nil)
+            if root.showsOutcome {
+                setRoot(PremeetingRootDecision.home)
+            }
+            let target = PremeetingRouteTarget(routeId: allocateRouteId(), kind: .lobby, intent: .rejoin, roomId: room,
+                                               title: room, joinMode: inputs.currentJoinMode, meetingInviteCode: nil,
+                                               webinarInviteCode: nil, clientId: nil, allowRoomCreation: false)
+            targets.append(target)
+            setPathValue([target.route])
+            refreshLobby()
+            sendRejoin()
         }
     }
 
@@ -763,6 +841,23 @@ final class PremeetingPresenter {
         guard let target = pendingTarget else { return }
         pendingTarget = nil
         openFromHome(target)
+        if pendingRejoinRouteId != 0 && pendingRejoinRouteId == target.routeId {
+            pendingRejoinRouteId = 0
+            if canRejoin(roomId: target.roomId) {
+                sendRejoin()
+            }
+        }
+    }
+
+    /// ENT-6: the view model keeps this room's rejoin context and no call or join is running.
+    private func canRejoin(roomId: String) -> Bool {
+        guard inputs.phase == .home || inputs.phase == .outcome else { return false }
+        return RejoinContextPolicy.matches(rejoinRoomId: inputs.rejoinRoomId, roomId: roomId)
+    }
+
+    private func sendRejoin() {
+        rejoinCommands += 1
+        onCommand?(.rejoinLastMeeting)
     }
 
     /// Lobby and webinar landing open from Home: the stack becomes `[Home, target]`.
@@ -985,8 +1080,12 @@ final class PremeetingPresenter {
             setOutcome(nil)
             return
         }
-        setOutcome(OutcomeModel(id: next.outcomeId, variant: variant, primary: .backHome, secondary: .none,
-                                serverDetail: next.outcomeServerText))
+        // ENT-6 (S10 10 f): Rejoin and Try Again while the view model keeps a rejoin context; a failed rejoin carries
+        // its S10 8 g body class.
+        let failure = EntryFailurePolicy.issue(category: next.joinFailureCategory, diagnosticCode: next.joinFailureCode,
+                                               serverText: next.outcomeServerText)
+        setOutcome(OutcomeModelPolicy.model(id: next.outcomeId, variant: variant, hasRejoinContext: !next.rejoinRoomId.isEmpty,
+                                            serverText: next.outcomeServerText, failure: failure))
     }
 
     // MARK: - Private: the lobby (ENT-3, S10 6)
@@ -1008,9 +1107,14 @@ final class PremeetingPresenter {
         if inputs.updateRequired {
             issue = .updateRequired
         } else if mode == .failed {
-            issue = inputs.outcomeServerText.isEmpty ? .failedUnknown : .failedServerText
-            issueServerText = inputs.outcomeServerText
-        } else if inputs.isNetworkOffline && mode == .editing {
+            // ENT-5 (S10 8 f): the failed block's class from the classifier's category, code and clean server text.
+            issue = EntryFailurePolicy.issue(category: inputs.joinFailureCategory, diagnosticCode: inputs.joinFailureCode,
+                                             serverText: inputs.outcomeServerText)
+            if issue == .failedServerText {
+                issueServerText = MeetingErrorClassifier.cleanServerText(inputs.outcomeServerText)
+            }
+        } else if inputs.isNetworkOffline && (mode == .editing || mode == .connecting) {
+            // S10 8 f: offline while connecting keeps the pending primary and shows the waiting-for-a-connection row.
             issue = .offline
         } else if mode == .editing && formIssue.issue != .none {
             issue = formIssue.issue
@@ -1019,11 +1123,24 @@ final class PremeetingPresenter {
             }
         }
         var waiting = WaitingKind.standard
-        if root.showsReconnecting {
+        var waitingText = ""
+        if mode == .waiting {
+            // ENT-5 (S10 9 f, RECONCILE R46): offline, server restart, reconnect, then today's server sentences.
+            waiting = WaitingKindPolicy.classify(waitingMessage: inputs.phase == .waiting ? inputs.noticeText : "",
+                                                 isNetworkOffline: inputs.isNetworkOffline,
+                                                 serverRestartText: inputs.serverRestartText,
+                                                 isReconnecting: root.showsReconnecting)
+            if waiting == .serverRestarting {
+                waitingText = MeetingErrorClassifier.cleanServerText(inputs.serverRestartText)
+            }
+        } else if root.showsReconnecting {
             waiting = .reconnecting
-        } else if inputs.isNetworkOffline && mode == .waiting {
-            waiting = .offline
         }
+        if mode != .waiting {
+            // The Android confirmation belongs to the waiting state only (admitted, denied or cancelled closes it).
+            setStopAsking(false)
+        }
+        updateSlowNotice(mode: mode, routeId: target.routeId)
         let reason = primaryReason(for: target)
         setLobbyStatus(LobbyStatusSnapshot(
             routeId: target.routeId,
@@ -1034,9 +1151,10 @@ final class PremeetingPresenter {
             isPrimaryEnabled: root.root == .premeeting
                 && LobbyPrimaryPolicy.isEnabled(mode: mode, reason: reason, isStarting: isStarting),
             primaryReason: LobbyPrimaryPolicy.snapshotValue(reason),
-            showsSlowNotice: false,
+            showsSlowNotice: mode == .connecting && slowNoticeShown,
             waitingKind: waiting,
-            isPrimaryPending: isStarting
+            isPrimaryPending: isStarting,
+            waitingText: waitingText
         ))
         refreshMediaSnapshot()
         refreshPresenceSnapshot()
@@ -1056,8 +1174,14 @@ final class PremeetingPresenter {
     }
 
     private func primaryReason(for target: PremeetingRouteTarget) -> LobbyPrimaryReason {
-        LobbyPrimaryPolicy.reason(intent: target.intent, isSignedIn: inputs.isSignedIn, guestName: guestNameDraft,
-                                  isOffline: inputs.isNetworkOffline, updateRequired: inputs.updateRequired)
+        let reason = LobbyPrimaryPolicy.reason(intent: target.intent, isSignedIn: inputs.isSignedIn, guestName: guestNameDraft,
+                                               isOffline: inputs.isNetworkOffline, updateRequired: inputs.updateRequired)
+        // ENT-6: a rejoin with the view model's context joins under the call's own name.
+        if target.intent == .rejoin && canRejoin(roomId: target.roomId)
+            && (reason == .nameMissingJoin || reason == .nameMissingStart) {
+            return LobbyPrimaryReason.none
+        }
+        return reason
     }
 
     /// Another lobby opened: the drafts, the form issue, the route choice and presence start fresh. The guest name
@@ -1086,6 +1210,7 @@ final class PremeetingPresenter {
             lobbyRouteId = 0
         }
         visibleLobbyRouteId = 0
+        setStopAsking(false)
         setLobbyStatus(nil)
         setLobbyMedia(nil)
         setLobbyPresence(nil)
@@ -1099,6 +1224,42 @@ final class PremeetingPresenter {
         stopPresencePolling()
         collisionTask?.cancel()
         collisionTask = nil
+        cancelSlowNotice()
+        slowNoticeShown = false
+    }
+
+    // MARK: - Private: the slow notice (ENT-5, S10 8 c)
+
+    /// The one-shot 8 s footnote while the visible lobby is in Connecting; it publishes `stillConnecting` once per
+    /// attempt (S10 0.5 premeeting tokens).
+    private func updateSlowNotice(mode: LobbyMode, routeId: Int) {
+        let runs = EntrySlowNoticePolicy.runs(mode: mode,
+                                              isLobbyVisible: visibleLobbyRouteId == routeId && root.root == .premeeting,
+                                              alreadyShown: slowNoticeShown)
+        guard runs else {
+            cancelSlowNotice()
+            return
+        }
+        guard slowNoticeTask == nil else { return }
+        let delay = slowNoticeDelayMillis
+        slowNoticeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(1.0, delay) * 1_000_000.0))
+            guard !Task.isCancelled else { return }
+            self?.slowNoticeFired(routeId: routeId)
+        }
+    }
+
+    private func slowNoticeFired(routeId: Int) {
+        slowNoticeTask = nil
+        guard lobbyRouteId == routeId, let status = lobbyStatus, status.mode == .connecting else { return }
+        slowNoticeShown = true
+        advanceFeedback(.stillConnecting)
+        refreshLobby()
+    }
+
+    private func cancelSlowNotice() {
+        slowNoticeTask?.cancel()
+        slowNoticeTask = nil
     }
 
     /// S10 6 f form errors from the S1 `formError` notice: classified once per notice, cleared when a new attempt
@@ -1399,6 +1560,12 @@ final class PremeetingPresenter {
     private func setUpdatePrompt(_ value: Bool) {
         guard value != isUpdatePromptPresented else { return }
         isUpdatePromptPresented = value
+        publishCount += 1
+    }
+
+    private func setStopAsking(_ value: Bool) {
+        guard value != isStopAskingPresented else { return }
+        isStopAskingPresented = value
         publishCount += 1
     }
 

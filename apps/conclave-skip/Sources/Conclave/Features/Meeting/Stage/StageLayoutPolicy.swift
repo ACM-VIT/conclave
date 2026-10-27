@@ -22,7 +22,7 @@ enum StageLayoutPolicy {
     static let compactHeightMaxColumns = 4
     static let tileAspect = 16.0 / 9.0
     /// Rails (S20 4 c, d): `SpotlightRailPolicy` (STG-2) owns the strip and column geometry and the capacity.
-    /// Floating self view (S20 6 owns the full rules; STG-3 refines the sizes).
+    /// Floating self view: the margin and the minimized chip; STG-3's SelfViewSnapPolicy owns the floating size.
     static let selfViewMargin = 12.0
     static let selfViewMinimumWidth = 96.0
     static let selfViewMaximumWidth = 140.0
@@ -349,20 +349,18 @@ enum StageLayoutPolicy {
         return result
     }
 
-    /// The floating self view: a portrait 3:4 tile (landscape 4:3) in its corner inside the reserved insets; the
-    /// minimized chip sits in the same corner.
+    /// The floating self view: a portrait 3:4 tile in every orientation (S20 6 c) in its corner inside the reserved
+    /// insets; the minimized chip sits in the same corner.
     static func selfFrame(viewport: StageViewport, role: StageSlotRole, corner: String, slotId: String) -> StageFrame {
         let width: Double
         let height: Double
         if role == StageSlotRole.selfMinimized {
             width = selfMinimizedWidth
             height = selfMinimizedHeight
-        } else if viewport.isLandscape {
-            height = min(max(viewport.height * selfViewWidthRatio, 72.0), 120.0)
-            width = height * 4.0 / 3.0
         } else {
-            width = min(max(viewport.width * selfViewWidthRatio, selfViewMinimumWidth), selfViewMaximumWidth)
-            height = width * 4.0 / 3.0
+            // S20 6 c (STG-3): portrait 3:4 in every orientation, sized from the short edge (160 on regular width).
+            width = SelfViewSnapPolicy.floatingWidth(viewport)
+            height = SelfViewSnapPolicy.floatingHeight(viewport)
         }
         let leading = corner == "top-left" || corner == "bottom-left"
         let top = corner == "top-left" || corner == "top-right"

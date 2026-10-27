@@ -181,6 +181,8 @@ private struct AndroidSfuJoinHTTPResponse: Decodable {
     let statusCode: Int
     let body: String
     let setCookieHeaders: [String]
+    /// S10 0.8 C18 (HD request B5-T5 R4): the `Retry-After` header ("" or absent when none).
+    let retryAfter: String?
 }
 #endif
 
@@ -301,11 +303,10 @@ enum SfuJoinService {
         let data = responseEnvelope.body.data(using: String.Encoding.utf8) ?? Data()
         if !(200...299).contains(responseEnvelope.statusCode) {
             let errorResponse = try? JSONDecoder().decode(SfuJoinError.self, from: data)
-            // WP2-S2a: typed status; the Android HTTP envelope carries no headers yet, so Retry-After stays 0
-            // (follow-up for the C18 owner: add the header to AndroidNativeHttpClient's envelope).
+            // WP2-S2a and S10 0.8 C18 (HD request B5-T5 R4): typed status and Retry-After from the Android envelope.
             throw MeetingHTTPStatusError(
                 statusCode: responseEnvelope.statusCode,
-                retryAfterSeconds: 0,
+                retryAfterSeconds: MeetingErrorClassifier.retryAfterSeconds(header: responseEnvelope.retryAfter),
                 message: errorResponse?.error ?? "Join request failed"
             )
         }

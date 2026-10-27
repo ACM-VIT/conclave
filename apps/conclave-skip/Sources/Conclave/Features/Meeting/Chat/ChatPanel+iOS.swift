@@ -13,6 +13,10 @@ import UIKit
 enum ChatPage: Hashable {
     case reactions(rowId: String)
     case addReaction(rowId: String)
+    /// CHT-4: the photo viewer (sheet host; an inspector host shows a page sheet instead, S40 9 c).
+    case photo(rowId: String)
+    /// CHT-5: the GIF, sticker and clip page (S40 7 c).
+    case gifs
 }
 
 /// One per panel (2 c): rows receive the same reference on every timeline change, so SwiftUI's input diffing skips
@@ -22,15 +26,18 @@ enum ChatPage: Hashable {
 final class ChatRowActions {
     @ObservationIgnored let chat: ChatPresenter
     @ObservationIgnored var push: (ChatPage) -> Void = { _ in }
+    /// Pops the top page (the GIF page after a pick, S40 7 f).
+    @ObservationIgnored var pop: () -> Void = {}
+    /// The panel host: an inspector shows the photo viewer as a page sheet, a sheet host pushes it (S40 9 c).
+    @ObservationIgnored var hostStyle = PanelHostStyle.sheet
+    /// The row whose photo the inspector host's page sheet shows; "" when none. Only the panel reads it.
+    var photoSheetRowId = ""
     /// Bumped to focus the composer (Reply, Send Private Message, Ask Conclave AI; S40 Q11).
     private(set) var focusRequest = 0
     /// Text the composer inserts with the next focus ("@Conclave " from the empty state).
     @ObservationIgnored var pendingInsert = ""
     /// D23: a link that leaves Conclave waits here for its confirmation.
     var pendingExternalURL: URL? = nil
-    /// S70 R70-5: the camera line shows while the camera does not continue in the background (true only once WP3
-    /// ships iOS PiP and multitasking camera access).
-    @ObservationIgnored var cameraContinuesInBackground = false
 
     init(chat: ChatPresenter) {
         self.chat = chat
@@ -91,6 +98,31 @@ final class ChatRowActions {
 
     func addReaction(_ rowId: String) {
         push(.addReaction(rowId: rowId))
+    }
+
+    /// S40 9: a push on a sheet host (iOS 18 zoom from the thumbnail), a page sheet on an inspector host.
+    func openPhoto(_ rowId: String) {
+        if hostStyle == PanelHostStyle.inspector {
+            photoSheetRowId = rowId
+        } else {
+            push(.photo(rowId: rowId))
+        }
+    }
+
+    /// S40 7: the GIF page (pushed; one sheet at a time, D12).
+    func openGifs() {
+        push(.gifs)
+    }
+
+    /// A card's entry (CH16): read only, never a fetch (the presenter fetched it when it built the row).
+    func embed(_ url: String) -> ChatEmbedEntry {
+        chat.embeds.entry(for: url)
+    }
+
+    /// Cards and clip posters open through the same link policy as message links (D23).
+    func openURLString(_ value: String) {
+        guard let url = URL(string: value) else { return }
+        openLink(url)
     }
 
     /// D23, RECONCILE R25: Conclave meeting links route in the app (S10 4, the join prompt while a call is live);
@@ -160,7 +192,7 @@ struct ChatPanelHost: View {
                    systemScheme: systemScheme, path: $path,
                    onClose: { panels.dismiss(cancelPending: true) },
                    onPromoteToLarge: onPromoteToLarge) {
-            ChatPanel(chat: chat, path: $path)
+            ChatPanel(chat: chat, path: $path, hostStyle: resolved.style)
         }
         .task(id: presentation.id) {
             let opened = Date().timeIntervalSince1970 * 1000.0
@@ -182,12 +214,18 @@ struct ChatPanelHost: View {
 struct ChatPanel: View {
     let chat: ChatPresenter
     @Binding var path: [ChatPage]
+    let hostStyle: PanelHostStyle
     @State private var actions: ChatRowActions
+    /// The iOS 18 photo zoom transition's namespace (rows are the sources, the viewer page the destination).
+    @Namespace private var photoNamespace
 
-    init(chat: ChatPresenter, path: Binding<[ChatPage]>) {
+    init(chat: ChatPresenter, path: Binding<[ChatPage]>, hostStyle: PanelHostStyle = PanelHostStyle.sheet) {
         self.chat = chat
         _path = path
-        _actions = State(initialValue: ChatRowActions(chat: chat))
+        self.hostStyle = hostStyle
+        let actions = ChatRowActions(chat: chat)
+        actions.hostStyle = hostStyle
+        _actions = State(initialValue: actions)
     }
 
     var body: some View {
@@ -205,14 +243,38 @@ struct ChatPanel: View {
                 actions.openLink(url)
                 return .handled
             })
+            .environment(\.chatPhotoNamespace, photoNamespace)
             .modifier(ChatExternalLinkConfirmation(actions: actions))
             .modifier(ChatAnnouncementPoster(chat: chat))
             .modifier(ChatFixtureBarHost())
+            .modifier(ChatPhotoSheetHost(chat: chat, actions: actions))
             .onAppear {
                 let pages = $path
                 actions.push = { page in pages.wrappedValue.append(page) }
+                actions.pop = {
+                    if !pages.wrappedValue.isEmpty { pages.wrappedValue.removeLast() }
+                }
+            }
+            .onChange(of: hostStyle) { _, style in
+                // A sheet to inspector migration keeps the panel; the viewer follows the new host (S40 9 c).
+                actions.hostStyle = style
             }
             .accessibilityIdentifier("chat.panel")
+    }
+}
+
+/// S40 9 c: on an inspector host the photo viewer is a page sheet (no other sheet is up; never a full-screen cover).
+private struct ChatPhotoSheetHost: ViewModifier {
+    let chat: ChatPresenter
+    @Bindable var actions: ChatRowActions
+
+    func body(content: Content) -> some View {
+        content.sheet(isPresented: Binding(get: { !actions.photoSheetRowId.isEmpty },
+                                           set: { if !$0 { actions.photoSheetRowId = "" } })) {
+            ChatPhotoViewerSheet(entry: chat.rows.entry(for: actions.photoSheetRowId)) {
+                actions.photoSheetRowId = ""
+            }
+        }
     }
 }
 
@@ -264,7 +326,8 @@ private struct ChatExternalLinkConfirmation: ViewModifier {
 
     private var externalMessage: String {
         let body = ConclaveStrings.text("This link opens another app.")
-        if actions.cameraContinuesInBackground { return body }
+        // SYS-8 (S70 R70-5, RECONCILE R25): the camera line follows CallPresence through the presenter.
+        if !actions.chat.showsCameraLine { return body }
         return body + " " + ConclaveStrings.text("Your camera pauses while you're outside Conclave.")
     }
 }
@@ -314,6 +377,10 @@ private struct ChatPageView: View {
             ReactionsPage(chat: chat, rowId: rowId)
         case .addReaction(let rowId):
             AddReactionPage(chat: chat, rowId: rowId)
+        case .photo(let rowId):
+            ChatPhotoViewerPage(entry: chat.rows.entry(for: rowId))
+        case .gifs:
+            ChatGifPickerPage(chat: chat, onPicked: { actions.pop() })
         }
     }
 }

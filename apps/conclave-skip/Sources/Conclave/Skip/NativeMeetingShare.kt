@@ -1,6 +1,12 @@
 package conclave.module
 
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import androidx.browser.customtabs.CustomTabsClient
+import androidx.browser.customtabs.CustomTabsIntent
 import skip.foundation.ProcessInfo
 import skip.ui.UIApplication
 
@@ -9,8 +15,11 @@ import skip.ui.UIApplication
  * EXTRA_SUBJECT is the F00 `ds_share_subject`, EXTRA_TEXT the F00 `ds_share_text` with the URL, EXTRA_TITLE the room
  * label (the API 29+ Sharesheet preview), and no chooser title. The native surfaces pass the strings they resolved
  * (`shareMeetingLink(link, subject, text, title)`); the legacy two-argument call resolves the same resources by name.
- * No EXTRA_IS_SENSITIVE (a meeting link is not secret). `PipManager.suppressNextAutoEnter` stays: a chooser fires
+ * No sensitive-content extra (a meeting link is not secret). `PipManager.suppressNextAutoEnter` stays: a chooser fires
  * onUserLeaveHint on several Android builds and must not tear a call into PiP.
+ *
+ * SYS-8 (S70 8 d): the transcript share carries its title as EXTRA_TITLE too, and both shares keep their suppression
+ * reasons ("meeting_share", "transcript_share"), which ExternalHandoffPolicy names for the sys.pipSuppressions readout.
  */
 object NativeMeetingShare {
     /** The ACTION_SEND intent (no chooser), so tests can read its extras. */
@@ -69,6 +78,8 @@ object NativeMeetingShare {
             type = "text/plain"
             putExtra(Intent.EXTRA_SUBJECT, title)
             putExtra(Intent.EXTRA_TEXT, text)
+            // The API 29+ Sharesheet preview title, like the meeting link share.
+            if (title.isNotEmpty()) putExtra(Intent.EXTRA_TITLE, title)
         }
         val chooser = Intent.createChooser(shareIntent, title)
 
@@ -85,6 +96,72 @@ object NativeMeetingShare {
             debugLog("[Share] Failed to share text: ${t}")
             ClipboardHelper.copyToClipboard(text = text, label = title)
             return true
+        }
+    }
+}
+
+/*
+ * SYS-8 (S70 8 d; RECONCILE R25; S40 3 h, Q16): every activity Conclave starts outside the call screen goes through
+ * one place, so PiP auto-enter is suppressed for each of them (ExternalHandoffPolicy: never for Settings, where
+ * auto-enter keeps the call visible over the switch) and restored when the launch fails; resuming restores it
+ * otherwise (PipManager.handleActivityResumed). http and https open in Custom Tabs launched from the call activity, so
+ * the tab sits on the call task and the camera keeps capturing under the camera foreground-service type.
+ */
+object NativeExternalHandoff {
+    /** A Custom Tabs browser is installed (needs the manifest `<queries>` entry for CustomTabsService on API 30+). */
+    fun supportsCustomTabs(context: Context): Boolean =
+        CustomTabsClient.getPackageName(context, emptyList<String>()) != null
+
+    /** http and https in Custom Tabs on the call task (S40 3 h). Returns false when nothing could open it. */
+    fun openWebLink(url: String): Boolean {
+        val activity = UIApplication.shared.androidActivity ?: return openExternalApp(url)
+        val uri = Uri.parse(url)
+        PipManager.suppressForExternalHandoff(ExternalHandoffKind.webLink)
+        return try {
+            CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(activity, uri)
+            true
+        } catch (t: ActivityNotFoundException) {
+            PipManager.restoreAutoEnterAfterExternalActivity()
+            debugLog("[Link] No browser for a web link: ${t}")
+            false
+        } catch (t: Throwable) {
+            PipManager.restoreAutoEnterAfterExternalActivity()
+            debugLog("[Link] Failed to open a web link: ${t}")
+            false
+        }
+    }
+
+    /**
+     * A link that opens another app, after the S40 confirmation: `tel:` only fills the dialer (ACTION_DIAL, never a
+     * placed call), `mailto:` composes (ACTION_SENDTO), anything else is ACTION_VIEW (also the fallback for a web link
+     * when no browser supports Custom Tabs).
+     */
+    fun openExternalApp(url: String): Boolean {
+        val uri = Uri.parse(url)
+        val action = when (uri.scheme?.lowercase()) {
+            "tel" -> Intent.ACTION_DIAL
+            "mailto" -> Intent.ACTION_SENDTO
+            else -> Intent.ACTION_VIEW
+        }
+        return start(Intent(action, uri), ExternalHandoffKind.otherApp)
+    }
+
+    /** App details, notification, channel or Wi-Fi settings: never suppressed, so auto-enter keeps the call visible. */
+    fun openSettings(intent: Intent): Boolean = start(intent, ExternalHandoffKind.systemSettings)
+
+    /** Starts an external activity with the hand-off's suppression; a failed start restores auto-enter at once. */
+    fun start(intent: Intent, kind: ExternalHandoffKind): Boolean {
+        val activity: Activity? = UIApplication.shared.androidActivity
+        val context: Context = activity ?: ProcessInfo.processInfo.androidContext.applicationContext
+        if (activity == null) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        PipManager.suppressForExternalHandoff(kind)
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (t: Throwable) {
+            PipManager.restoreAutoEnterAfterExternalActivity()
+            debugLog("[Handoff] Failed to start ${kind.rawValue}: ${t}")
+            false
         }
     }
 }

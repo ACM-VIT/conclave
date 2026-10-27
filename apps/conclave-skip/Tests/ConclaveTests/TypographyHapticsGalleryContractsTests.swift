@@ -661,7 +661,16 @@ struct TypographyHapticsGalleryContractsTests {
                      // STG-5 (batch 4, HD request B4-T4 R6): the notice lanes and the captions strip.
                      "Sources/Conclave/Skip/ui/call/stage/NoticeLanes.kt", "Sources/Conclave/Skip/ui/call/stage/CaptionsStrip.kt",
                      // STG-2 (batch 4, HD request B4-T5 R12): the tile menu (it names ds_flip_camera and no literal Text).
-                     "Sources/Conclave/Skip/ui/call/stage/TileMenu.kt"]
+                     "Sources/Conclave/Skip/ui/call/stage/TileMenu.kt",
+                     // STG-6 and STG-8 (batch 5, HD request B5-T2 R8): Meeting details and the attendee viewer (they
+                     // name ds_share_invite, ds_share_subject, ds_share_text, ds_link_copied and the new
+                     // ds_unavailable_reconnecting, and no literal Text).
+                     "Sources/Conclave/Skip/ui/call/stage/MeetingDetailsPage.kt", "Sources/Conclave/Skip/ui/call/stage/AttendeeViewer.kt",
+                     // STG-3 (batch 5, HD request B5-T8 R20): share viewing (it names ds_is_presenting and no literal Text).
+                     "Sources/Conclave/Skip/ui/call/stage/ShareZoom.kt",
+                     // PPL-2 and PPL-4 (batch 5 integrator): the people actions and the Host controls rows name the new
+                     // ds_unavailable_offline and no literal Text.
+                     "Sources/Conclave/Skip/ui/people/PeopleActions.kt", "Sources/Conclave/Skip/ui/host/HostRows.kt"]
             + Self.androidComponentFiles {
             let text = try source(file)
             // Names appear at call sites or in tables such as the live role list.
@@ -680,7 +689,10 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(usedPlurals == Set(plurals.keys.filter { $0.hasPrefix("ds_") }), "plurals: \(usedPlurals.symmetricDifference(Set(plurals.keys.filter { $0.hasPrefix("ds_") })).sorted())")
         for (name, forms) in plurals {
             #expect(forms["other"] != nil, "\(name) needs an other form")
-            for value in forms.values { #expect(!containsDash(value) && regexMatches(#"%(?![0-9]\$)"#, in: value).isEmpty, "\(name)") }
+            // An escaped percent (%%) is literal text, not an argument (batch 5: chat_attachment_uploading).
+            for value in forms.values {
+                #expect(!containsDash(value) && regexMatches(#"%(?![0-9]\$)"#, in: value.replacingOccurrences(of: "%%", with: "")).isEmpty, "\(name)")
+            }
         }
         // SYS-1 owns the sys_ resources (the call notification and the system fixture); T/CallPresenceTests.swift pins
         // the names its builder asks for. S30 owns the ctl_ names: SYS-2's ctl_route_ audio route names
@@ -696,22 +708,25 @@ struct TypographyHapticsGalleryContractsTests {
         // B4-T7 R8). CHT-1 to CHT-3 own the chat_ names (S40 copy tables); T/ChatPoliciesTests.swift and
         // T/Skip/ChatBridgeTests.kt use them (batch 4 integrator). ACT-1 and ACT-2 own the S60 act_, gm_, br_ and app_
         // names and the shared set_ recovery line; T/ActivityProjectionTests.swift checks every one the activity
-        // sources name (batch 4, HD request B4-T8 R10).
+        // sources name (batch 4, HD request B4-T8 R10). PPL-4 owns the hst_ Host Controls names (S50 6 copy tables);
+        // T/PPL4HostControlsTests.swift and T/Skip/PPL2PPL4BridgeTests.kt use them (batch 5 integrator).
         let galleryNames = Set(resources.keys.filter {
             !$0.hasPrefix("sys_") && !$0.hasPrefix("ctl_") && !$0.hasPrefix("pm_") && !$0.hasPrefix("stg_")
                 && !$0.hasPrefix("ppl_") && !$0.hasPrefix("chat_") && !$0.hasPrefix("act_") && !$0.hasPrefix("gm_")
-                && !$0.hasPrefix("br_") && !$0.hasPrefix("app_") && !$0.hasPrefix("set_")
+                && !$0.hasPrefix("br_") && !$0.hasPrefix("app_") && !$0.hasPrefix("set_") && !$0.hasPrefix("hst_")
         })
         #expect(used == galleryNames, "unused or missing resources: \(used.symmetricDifference(galleryNames).sorted())")
         for (name, value) in resources {
             #expect(name.hasPrefix("native_gallery_") || name.hasPrefix("native_semantics_") || name.hasPrefix("native_panel_")
                     || name.hasPrefix("ds_") || name.hasPrefix("sys_") || name.hasPrefix("ctl_") || name.hasPrefix("pm_")
                     || name.hasPrefix("stg_") || name.hasPrefix("ppl_") || name.hasPrefix("chat_") || name.hasPrefix("act_")
-                    || name.hasPrefix("gm_") || name.hasPrefix("br_") || name.hasPrefix("app_") || name.hasPrefix("set_"), "\(name)")
+                    || name.hasPrefix("gm_") || name.hasPrefix("br_") || name.hasPrefix("app_") || name.hasPrefix("set_")
+                    || name.hasPrefix("hst_"), "\(name)")
             #expect(!containsDash(value), "\(name)")
             #expect(!value.contains("'"), "\(name) needs an escaped apostrophe")
             // Positional format arguments only, so translations can reorder them.
-            #expect(regexMatches(#"%(?![0-9]\$)"#, in: value).isEmpty, "\(name) uses a non-positional argument")
+            #expect(regexMatches(#"%(?![0-9]\$)"#, in: value.replacingOccurrences(of: "%%", with: "")).isEmpty,
+                    "\(name) uses a non-positional argument")
         }
         let helper = try source("Sources/Conclave/Skip/ui/theme/ConclaveStrings.kt")
         #expect(helper.contains("getIdentifier(name, \"string\", context.packageName)"))
@@ -1231,7 +1246,9 @@ private func isTitleCase(_ label: String) -> Bool {
 }
 
 private let properNouns: Set<String> = ["Android", "iOS", "PiP", "TalkBack", "JSON", "Material", "Roboto", "Conclave",
-                                        "SF", "Dynamic", "Type", "Appendix"]
+                                        "SF", "Dynamic", "Type", "Appendix",
+                                        // Batch 5 (CHT-4, CHT-5 copy): product and format names.
+                                        "Klipy", "YouTube", "GIFs", "WebP"]
 
 /// Material sentence case: each sentence starts with a capital, a digit or a format argument, and later words
 /// are lowercase unless they are proper nouns or acronyms. A fragment that is substituted into a sentence may
@@ -1255,7 +1272,10 @@ private func isSentenceCase(_ label: String) -> Bool {
 }
 
 private func isAcronymOrName(_ word: String) -> Bool {
-    properNouns.contains(word) || !word.unicodeScalars.contains { CharacterSet.lowercaseLetters.contains($0) }
+    // Batch 5 integrator: trailing sentence punctuation ("GIFs.", "Conclave.") does not change the word.
+    let bare = word.trimmingCharacters(in: .punctuationCharacters)
+    return properNouns.contains(word) || properNouns.contains(bare)
+        || !word.unicodeScalars.contains { CharacterSet.lowercaseLetters.contains($0) }
 }
 
 /// The app module's plural resources, name to quantity forms.

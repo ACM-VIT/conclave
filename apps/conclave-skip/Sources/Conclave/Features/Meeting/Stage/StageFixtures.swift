@@ -96,6 +96,24 @@ enum StageFixtureState: String, CaseIterable, Equatable {
     case activitiesVoteZero = "activities-vote-zero"
     case activitiesGameLive = "activities-game-live"
     case activitiesRecovering = "activities-recovering"
+    // STG-6 Meeting Details (S20 15 l): each opens the panel from the capsule on start.
+    case meetingInfoHost = "meetingInfo-host"
+    case meetingInfoGuest = "meetingInfo-guest"
+    case meetingInfoRecovering = "meetingInfo-recovering"
+    case meetingInfoTenant = "meetingInfo-tenant"
+    case meetingInfoAttendee = "meetingInfo-attendee"
+    // STG-8 webinar attendee viewer (S20 12 l).
+    case attendeeWaiting128 = "attendee-waiting-128"
+    case attendeeLive = "attendee-live"
+    case attendeeLiveShare = "attendee-live-share"
+    case attendeeQaUnseen2 = "attendee-qa-unseen-2"
+    // STG-3 share viewing and the self view (S20 5 l, 6 l).
+    case presentationRemote = "presentation-remote"
+    case presentationPending = "presentation-pending"
+    case presentationLocal = "presentation-local"
+    case selfMinimized = "self-minimized"
+    case selfCameraPaused = "self-camera-paused"
+    case selfFlipInFlight = "self-flip-inflight"
 }
 
 /// Pure scripts per state, shared by the fixture roots and both test hosts.
@@ -244,6 +262,112 @@ enum StageFixtureScript {
              .gameUnsupported, .gamePrivateLoading, .appOpening, .appFailed, .activitiesHostIdle, .activitiesParticipantIdle,
              .activitiesVote, .activitiesVoteZero, .activitiesGameLive, .activitiesRecovering:
             return ActivityFixtureScript.stageInputs(named: state.rawValue, base: base(count: 6))
+        case .meetingInfoHost:
+            return copy(base(count: 4), participants: hostRoster(count: 4), isRoomLocked: true, captionsOn: true,
+                        liveNotes: LiveNotesState.live)
+        case .meetingInfoGuest:
+            return copy(base(count: 4), participants: hostRoster(count: 4, localIsHost: false))
+        case .meetingInfoRecovering:
+            return copy(base(count: 4), participants: hostRoster(count: 4), isRecovering: true)
+        case .meetingInfoTenant:
+            return copy(base(count: 4), participants: hostRoster(count: 4, localIsHost: false), meetingLink: tenantLink)
+        case .meetingInfoAttendee, .attendeeWaiting128, .attendeeLive, .attendeeLiveShare, .attendeeQaUnseen2:
+            return attendeeInputs(state)
+        case .presentationRemote:
+            // The 1920 x 1080 static test pattern share of Avery (r1) on the full-bleed share slot.
+            return inputs(for: .presentation)
+        case .presentationPending:
+            // Avery shares but the share track is not bound yet: the placeholder "%@ is presenting" with the avatar.
+            var pending = roster(count: 4)
+            pending[1] = StageParticipantInput.make(userId: remoteId(0), displayName: remoteName(0), isMuted: false,
+                                                    isCameraOff: false, isScreenSharing: true, joinSerial: 1,
+                                                    videoKey: "probe:" + remoteId(0), shareVideoKey: "")
+            return copy(base(count: 4), participants: pending, screenShareUserId: remoteId(0))
+        case .presentationLocal:
+            // You present: the share slot shows "You're presenting", the banner "You're sharing your screen" (R11 d).
+            return copy(base(count: 4), screenShareUserId: localUserId, isLocalScreenSharing: true)
+        case .selfMinimized:
+            return copy(base(count: 2, localCameraOn: true), selfViewMode: "minimized")
+        case .selfCameraPaused:
+            return copy(base(count: 2, localCameraOn: true), isCameraPaused: true)
+        case .selfFlipInFlight:
+            return copy(base(count: 2, localCameraOn: true), isFlipInFlight: true)
+        }
+    }
+
+    // MARK: Meeting Details and the attendee viewer (STG-6, STG-8)
+
+    static let tenantClientId = "acme-events"
+    /// The SC23 builder's custom-tenant link (RECONCILE R50): "?clientId=" rides along.
+    static let tenantLink = MeetingLinkBuilder.url(roomCode: roomLabel, clientId: tenantClientId)
+    static let webinarTitle = "Design Systems Week"
+    static let webinarLink = "https://conclave.acmvit.in/w/design-systems-week"
+
+    /// `count` people where r1 (Avery) is a host and you are one too unless `localIsHost` is false.
+    static func hostRoster(count: Int, localIsHost: Bool = true) -> [StageParticipantInput] {
+        var result: [StageParticipantInput] = []
+        for participant in roster(count: count) {
+            let isHost = participant.isLocal ? localIsHost : participant.userId == remoteId(0)
+            result.append(StageParticipantInput.make(userId: participant.userId, displayName: participant.displayName,
+                                                     isLocal: participant.isLocal, isMuted: participant.isMuted,
+                                                     isCameraOff: participant.isCameraOff, isHost: isHost,
+                                                     joinSerial: participant.joinSerial, videoKey: participant.videoKey))
+        }
+        return result
+    }
+
+    /// Attendee stages: you watch two panelists (r1 Avery, r2 Ben). Waiting has no speaker and every camera off; live
+    /// features Avery's camera; live share shows Ben's screen with Ben's camera as the inset.
+    static func attendeeInputs(_ state: StageFixtureState) -> StageInputs {
+        let live = state == StageFixtureState.attendeeLive || state == StageFixtureState.attendeeQaUnseen2
+        let sharing = state == StageFixtureState.attendeeLiveShare
+        var rows: [StageParticipantInput] = []
+        rows.append(StageParticipantInput.make(userId: localUserId, displayName: "You", isLocal: true))
+        rows.append(StageParticipantInput.make(userId: remoteId(0), displayName: remoteName(0), isMuted: !live,
+                                               isCameraOff: !live, isHost: true, joinSerial: 1,
+                                               videoKey: live ? "probe:" + remoteId(0) : ""))
+        rows.append(StageParticipantInput.make(userId: remoteId(1), displayName: remoteName(1), isMuted: !sharing,
+                                               isCameraOff: !sharing, isScreenSharing: sharing, joinSerial: 2,
+                                               videoKey: sharing ? "probe:" + remoteId(1) : "",
+                                               shareVideoKey: sharing ? "probe:share:" + remoteId(1) : ""))
+        let source = copy(base(count: 3), participants: rows, screenShareUserId: sharing ? remoteId(1) : "",
+                          isAloneConfirmed: false, isWebinarAttendee: true)
+        return copy(source, webinarSpeakerUserId: live ? remoteId(0) : "")
+    }
+
+    /// The Meeting Details and attendee inputs per state; nil for the stage-only states.
+    static func detailsInputs(_ state: StageFixtureState) -> StageDetailsInputs? {
+        switch state {
+        case .meetingInfoHost:
+            return StageDetailsInputs.make(callSession: 1, roomCode: roomLabel, requiresInviteCode: true, isWebinarEnabled: true,
+                                           connectionQuality: ConnectionQuality.good, connectionHasSample: true)
+        case .meetingInfoGuest:
+            return StageDetailsInputs.make(callSession: 1, roomCode: roomLabel)
+        case .meetingInfoRecovering:
+            return StageDetailsInputs.make(callSession: 1, roomCode: roomLabel, isWebinarEnabled: true,
+                                           webinarLinkURL: webinarLink, connectionQuality: ConnectionQuality.fair,
+                                           connectionHasSample: true)
+        case .meetingInfoTenant:
+            return StageDetailsInputs.make(callSession: 1, roomCode: roomLabel, connectionQuality: ConnectionQuality.good,
+                                           connectionHasSample: true)
+        case .meetingInfoAttendee, .attendeeWaiting128, .attendeeLive, .attendeeLiveShare, .attendeeQaUnseen2:
+            return StageDetailsInputs.make(callSession: 1, roomCode: roomLabel, isWebinarEnabled: true,
+                                           isWebinarPublicAccess: true, webinarLinkURL: webinarLink, webinarTitle: webinarTitle,
+                                           webinarAttendeeCount: state == StageFixtureState.attendeeWaiting128 ? 128 : 42,
+                                           isWebinarQaEnabled: true,
+                                           webinarQaUnseen: state == StageFixtureState.attendeeQaUnseen2 ? 2 : 0)
+        default:
+            return nil
+        }
+    }
+
+    /// Meeting Details fixtures open the panel from the capsule (invoker call) once the stage is up.
+    static func opensMeetingInfo(_ state: StageFixtureState) -> Bool {
+        switch state {
+        case .meetingInfoHost, .meetingInfoGuest, .meetingInfoRecovering, .meetingInfoTenant, .meetingInfoAttendee:
+            return true
+        default:
+            return false
         }
     }
 
@@ -300,6 +424,9 @@ enum StageFixtureScript {
         case .hostNotice, .hostNoticeLong, .toastJoins, .toastHand, .toastFailure, .toastChat, .toastRoute, .captionsLive,
              .captionsPartial, .captionsQuiet, .captionsAttendee:
             return noticeBase()
+        case .presentationLocal:
+            // STG-3 (S20 5 l): your share's banner "You're sharing your screen".
+            return noticeBase(isScreenSharing: true)
         default:
             return nil
         }
@@ -311,13 +438,15 @@ enum StageFixtureScript {
                            pendingUserIds: [String] = [], pendingFirstName: String = "", shareIssue: String = "",
                            liveNotes: LiveNotesState = LiveNotesState.off, catchUpMinutes: Int = 0,
                            connectionQuality: ConnectionQuality = ConnectionQuality.good,
-                           microphonePermissionRevoked: Bool = false, showsNotificationsPrime: Bool = false) -> StageNoticeInputs {
+                           microphonePermissionRevoked: Bool = false, showsNotificationsPrime: Bool = false,
+                           isScreenSharing: Bool = false) -> StageNoticeInputs {
         StageNoticeInputs.make(callSession: 1, isHost: true, localUserId: localUserId, participantCount: 4,
                                hasInitialPresenceSnapshot: true, isOffline: isOffline, isCaptivePortal: isCaptivePortal,
                                isRecovering: isRecovering, reconnectAttempt: reconnectAttempt, reconnectAttemptLimit: 5,
                                isRecoveryAttemptInFlight: isRecoveryAttemptInFlight,
                                hasServerRestartNotice: hasServerRestartNotice, isOnHold: isOnHold, isAudioPaused: isAudioPaused,
-                               pendingUserIds: pendingUserIds, pendingFirstName: pendingFirstName, shareIssue: shareIssue,
+                               pendingUserIds: pendingUserIds, pendingFirstName: pendingFirstName,
+                               isScreenSharing: isScreenSharing, shareIssue: shareIssue,
                                shareIssueSerial: shareIssue.isEmpty ? 0 : 1, liveNotes: liveNotes,
                                catchUpMinutes: catchUpMinutes, connectionQuality: connectionQuality,
                                microphonePermissionRevoked: microphonePermissionRevoked,
@@ -447,22 +576,28 @@ enum StageFixtureScript {
                      isGameActive: Bool? = nil, gameName: String? = nil, screenShareUserId: String? = nil,
                      isRoomLocked: Bool? = nil, captionsOn: Bool? = nil, liveNotes: LiveNotesState? = nil,
                      isAloneConfirmed: Bool? = nil, isHandRaised: Bool? = nil, handToggleInFlight: Bool? = nil,
-                     isRecovering: Bool? = nil, isFrontCamera: Bool? = nil, isWebinarAttendee: Bool? = nil) -> StageInputs {
+                     isRecovering: Bool? = nil, isFrontCamera: Bool? = nil, isWebinarAttendee: Bool? = nil,
+                     meetingLink: String? = nil, webinarSpeakerUserId: String? = nil, selfViewCorner: String? = nil,
+                     isLocalScreenSharing: Bool? = nil, isFlipInFlight: Bool? = nil,
+                     isCameraPaused: Bool? = nil) -> StageInputs {
         StageInputs.make(
             callSession: source.callSession, isInCall: source.isInCall, localUserId: source.localUserId,
-            roomLabel: source.roomLabel, meetingLink: source.meetingLink,
+            roomLabel: source.roomLabel, meetingLink: meetingLink ?? source.meetingLink,
             participants: participants ?? source.participants, viewMode: viewMode ?? source.viewMode,
             viewMaxTiles: source.viewMaxTiles, hideTilesWithoutVideo: hideTilesWithoutVideo ?? source.hideTilesWithoutVideo,
-            selfViewMode: selfViewMode ?? source.selfViewMode, selfViewCorner: source.selfViewCorner,
+            selfViewMode: selfViewMode ?? source.selfViewMode, selfViewCorner: selfViewCorner ?? source.selfViewCorner,
             pinnedUserId: pinnedUserId ?? source.pinnedUserId, activeAppId: source.activeAppId,
             activeAppName: source.activeAppName, isBrowserActive: source.isBrowserActive,
             isGameActive: isGameActive ?? source.isGameActive, gameName: gameName ?? source.gameName,
             screenShareUserId: screenShareUserId ?? source.screenShareUserId,
-            isLocalScreenSharing: source.isLocalScreenSharing, isWebinarAttendee: isWebinarAttendee ?? source.isWebinarAttendee,
-            webinarSpeakerUserId: source.webinarSpeakerUserId, isRoomLocked: isRoomLocked ?? source.isRoomLocked,
+            isLocalScreenSharing: isLocalScreenSharing ?? source.isLocalScreenSharing,
+            isWebinarAttendee: isWebinarAttendee ?? source.isWebinarAttendee,
+            webinarSpeakerUserId: webinarSpeakerUserId ?? source.webinarSpeakerUserId,
+            isRoomLocked: isRoomLocked ?? source.isRoomLocked,
             captionsOn: captionsOn ?? source.captionsOn, liveNotes: liveNotes ?? source.liveNotes,
             isAloneConfirmed: isAloneConfirmed ?? source.isAloneConfirmed, canFlipCamera: source.canFlipCamera,
-            isFrontCamera: isFrontCamera ?? source.isFrontCamera, routeKind: source.routeKind, routeName: source.routeName,
+            isFrontCamera: isFrontCamera ?? source.isFrontCamera, isFlipInFlight: isFlipInFlight ?? source.isFlipInFlight,
+            isCameraPaused: isCameraPaused ?? source.isCameraPaused, routeKind: source.routeKind, routeName: source.routeName,
             isHandRaised: isHandRaised ?? source.isHandRaised,
             handToggleInFlight: handToggleInFlight ?? source.handToggleInFlight,
             isRecovering: isRecovering ?? source.isRecovering, isMediaPending: source.isMediaPending,
@@ -478,6 +613,9 @@ enum StageFixtureScript {
             isRecoveringConnection: stage.isRecovering,
             roomId: roomLabel,
             displayName: "You",
+            // STG-6, STG-8: the host and attendee roles reach the S1 session too (Host Controls row, attendee bar).
+            isAdmin: stage.participant(localUserId)?.isHost ?? false,
+            isWebinarAttendee: stage.isWebinarAttendee,
             isMuted: isMuted,
             isCameraOff: isCameraOff,
             isHandRaised: stage.isHandRaised,
@@ -502,6 +640,8 @@ final class StageFixtureCounters {
     func recordMinimize() { minimize += 1 }
     func recordLeave() { leave += 1 }
     func recordRenderTargetResize() { renderTargetResize += 1 }
+    /// STG-6 (S20 15 l): every webinar link the fixture's stand-in for `HostControlsPresenter.ensureWebinarLink()` made.
+    func recordGenerateWebinarLink() { generateWebinarLink += 1 }
     func recordChime(_ kind: String) { chimes.append(kind) }
     func recordCommand(_ name: String) {
         commands.append(name)
@@ -530,6 +670,8 @@ final class StageFixtureSession {
     let renderers = RendererIdentityLedger()
     let counters = StageFixtureCounters()
     private(set) var inputs: StageInputs
+    /// STG-6, STG-8: the scripted Meeting Details and attendee inputs (empty for the stage-only states).
+    private(set) var details = StageDetailsInputs.make()
     private(set) var rolesSweepStep = 0
     private var captionStep = 0
     private var isMuted = true
@@ -593,6 +735,56 @@ final class StageFixtureSession {
         if let line = StageFixtureScript.captionLine(state) {
             stage.captionChanged(line)
         }
+        // STG-6, STG-8: the Meeting Details and attendee inputs, then the capsule tap for the Meeting Details states.
+        if let details = StageFixtureScript.detailsInputs(state) {
+            self.details = details
+            stage.applyDetails(details)
+        }
+        if StageFixtureScript.opensMeetingInfo(state) {
+            stage.openMeetingInfo()
+        }
+    }
+
+    // MARK: Meeting Details scripts (STG-6)
+
+    /// The fixture's stand-in for the S50 `HostControlsPresenter.ensureWebinarLink()` (RECONCILE R34): counts each
+    /// generation (`generateWebinarLink` in `stage.counters`), publishes the link like the server ack would, and returns
+    /// an existing link without generating again. The fixture roots pass it to `CallRoot` (HD request B5-T2 R4).
+    func ensureWebinarLink() async -> String? {
+        if !details.webinarLinkURL.isEmpty { return details.webinarLinkURL }
+        counters.recordGenerateWebinarLink()
+        details = StageDetailsInputs.make(callSession: details.callSession, roomCode: details.roomCode,
+                                          requiresInviteCode: details.requiresInviteCode,
+                                          isWebinarEnabled: details.isWebinarEnabled,
+                                          isWebinarPublicAccess: details.isWebinarPublicAccess,
+                                          webinarLinkURL: StageFixtureScript.webinarLink, webinarTitle: details.webinarTitle,
+                                          webinarAttendeeCount: details.webinarAttendeeCount,
+                                          isWebinarQaEnabled: details.isWebinarQaEnabled, webinarQaUnseen: details.webinarQaUnseen,
+                                          attendeeCanRaiseHand: details.attendeeCanRaiseHand,
+                                          connectionQuality: details.connectionQuality,
+                                          connectionHasSample: details.connectionHasSample,
+                                          connectionStatsFailed: details.connectionStatsFailed)
+        stage.applyDetails(details)
+        return StageFixtureScript.webinarLink
+    }
+
+    /// The "scripted lock while open" cell (S20 15 l): toggles the room lock; Meeting Details shows it at once.
+    func toggleRoomLock() {
+        inputs = StageFixtureScript.copy(inputs, isRoomLocked: !inputs.isRoomLocked)
+        stage.apply(inputs)
+    }
+
+    /// The `meetingInfo` readout: the row ids in order plus the connection label, or "none" while the panel is closed.
+    func meetingInfoReadout() -> String {
+        guard let info = stage.meetingInfo else { return "none" }
+        return "rows=" + MeetingInfoPolicy.rowIds(info).joined(separator: ",") + " connection=" + info.connection.rawValue
+    }
+
+    /// The `attendee` readout: the state, the feed and inset, the waiting count and the Q&A badge.
+    func attendeeReadout() -> String {
+        guard let viewer = stage.attendee else { return "none" }
+        return "state=" + viewer.state + " feed=" + viewer.feedUserId + (viewer.isShareFeed ? ":share" : "") + " inset="
+            + viewer.insetUserId + " waiting=" + String(viewer.waitingCount) + " qa=" + String(viewer.webinarQaUnseen)
     }
 
     // MARK: Notice scripts (STG-5, TRN-1)
@@ -743,6 +935,9 @@ final class StageFixtureSession {
             stage.apply(inputs)
         case .moveSelfView:
             counters.recordCommand("corner:" + command.value)
+            // STG-3: the scripted core commits the corner like the view model, so the drag snap and Move run here.
+            inputs = StageFixtureScript.copy(inputs, selfViewCorner: command.value)
+            stage.apply(inputs)
         case .flipCamera:
             inputs = StageFixtureScript.copy(inputs, isFrontCamera: !inputs.isFrontCamera)
             stage.apply(inputs)

@@ -5,8 +5,8 @@ import SwiftUI
 // the row copy. The row reads only its `PersonRowEntry`; the speaking glyph and the "Speaking" value are leaves on the
 // S20 `TileSpeakingState`, so a speaker change re-evaluates the leaf, never the row (S50 2 k). The info part is the
 // WP1-2b `ConclavePersonRow` (one combined element) with the C07 avatar in its leading slot; the trailing control is
-// its own element. PPL-2 passes the row `Menu` through `trailing`; PPL-3 replaces the name-only waiting row with Deny
-// and Admit.
+// its own element. PPL-2 passes the row `Menu` through `trailing` and the accessibility actions through `onAction`
+// (PeopleActions+iOS.swift); PPL-3 replaces the name-only waiting row with Deny and Admit.
 
 /// Row and section copy (S50 1 g, 2 g): Apple title case for titles and headers, sentence case for values.
 enum PeopleText {
@@ -119,17 +119,20 @@ struct PeopleRowView<Trailing: View>: View {
     /// The Raised Hands count, for "1 of 3 in queue".
     let queueCount: Int
     let probe: PeopleRecomposeLedger?
+    /// PPL-2 (AX4): every available menu item is a named action on the row's one element.
+    let onAction: ((PersonActionID) -> Void)?
     let trailing: (PersonRowModel) -> Trailing
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .body) private var avatarIndent = ConclaveRowMetrics.avatarDiameter + 12
 
     init(entry: PersonRowEntry, speaking: TileSpeakingState, sectionId: String, queueCount: Int, probe: PeopleRecomposeLedger?,
-         @ViewBuilder trailing: @escaping (PersonRowModel) -> Trailing) {
+         onAction: ((PersonActionID) -> Void)? = nil, @ViewBuilder trailing: @escaping (PersonRowModel) -> Trailing) {
         self.entry = entry
         self.speaking = speaking
         self.sectionId = sectionId
         self.queueCount = queueCount
         self.probe = probe
+        self.onAction = onAction
         self.trailing = trailing
     }
 
@@ -167,6 +170,7 @@ struct PeopleRowView<Trailing: View>: View {
         .accessibilityLabel(PeopleText.label(model))
         .modifier(PeopleRowValue(parts: PeopleText.valueParts(model, queueCount: queueCount, showsQueue: showsQueue),
                                  speaking: speaking))
+        .modifier(PeopleRowAccessibilityActions(model: model, onAction: onAction))
     }
 
     @ViewBuilder
@@ -186,7 +190,9 @@ struct PeopleRowView<Trailing: View>: View {
 extension PeopleRowView where Trailing == EmptyView {
     /// A row with no trailing control (PPL-1: rows carry no actions until PPL-2's policy).
     init(entry: PersonRowEntry, speaking: TileSpeakingState, sectionId: String, queueCount: Int, probe: PeopleRecomposeLedger?) {
-        self.init(entry: entry, speaking: speaking, sectionId: sectionId, queueCount: queueCount, probe: probe) { _ in EmptyView() }
+        self.init(entry: entry, speaking: speaking, sectionId: sectionId, queueCount: queueCount, probe: probe, onAction: nil) { _ in
+            EmptyView()
+        }
     }
 }
 

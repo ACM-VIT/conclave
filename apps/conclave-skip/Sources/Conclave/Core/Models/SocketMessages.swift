@@ -164,19 +164,23 @@ struct SendChatRequest: Codable {
     // The SFU also resolves DMs from "/dm <name>" and "@<name>" content.
     let recipient: String?
     let replyTo: ChatReplyPreview?
+    /// S40 CH5: present (true) only when the sender removed the composer's link preview; nil is omitted on the wire.
+    let suppressEmbeds: Bool?
 
     init(
         content: String,
         gif: ChatGifAttachment? = nil,
         image: ChatImageAttachment? = nil,
         recipient: String? = nil,
-        replyTo: ChatReplyPreview? = nil
+        replyTo: ChatReplyPreview? = nil,
+        suppressEmbeds: Bool? = nil
     ) {
         self.content = content
         self.gif = gif
         self.image = image
         self.recipient = recipient
         self.replyTo = replyTo
+        self.suppressEmbeds = suppressEmbeds
     }
 }
 
@@ -1247,6 +1251,10 @@ struct ChatMessageNotification: Codable {
     /// S40 CH3: the complete reaction set on history and live messages; absent means none. A `var` with a
     /// default so every existing memberwise call still compiles.
     var reactions: [ChatMessageReaction]? = nil
+    /// S40 CH4: present on `/tts` messages whose sender has a personal voice (SFU `normalizeTtsVoiceToken`).
+    var ttsVoiceToken: String? = nil
+    /// S40 CH5: the sender removed the link preview (history and live messages); absent means false.
+    var suppressEmbeds: Bool? = nil
 }
 
 struct ConclaveAssistantMessageNotification: Codable {
@@ -1307,7 +1315,9 @@ extension ChatMessageNotification {
             replyTo: replyTo,
             clientId: nil,
             sendStatus: nil,
-            reactions: reactions ?? []
+            reactions: reactions ?? [],
+            ttsVoiceToken: ttsVoiceToken,
+            suppressEmbeds: suppressEmbeds ?? false
         )
     }
 }
@@ -1397,6 +1407,29 @@ struct DmStateChangedNotification: Codable {
 struct ImageAttachmentsStateChangedNotification: Codable {
     let enabled: Bool
     let roomId: String?
+}
+
+/// S50 PH5: `participantMediaPermissionsChanged` (SFU `admin/controlPlane.ts:842-846`; also sent at join,
+/// `socket/handlers/joinRoom.ts:938-942`).
+struct ParticipantMediaPermissionsChangedNotification: Codable {
+    let unmuteAllowed: Bool
+    let videoAllowed: Bool
+    let roomId: String?
+}
+
+/// S50 PH5: the `setParticipantMediaPermissions` payload; a nil field is left out (the SFU keeps that permission).
+struct ParticipantMediaPermissionsRequest: Codable {
+    let unmuteAllowed: Bool?
+    let videoAllowed: Bool?
+}
+
+/// S50 PH5: the `setParticipantMediaPermissions` ack (`socket/handlers/adminHandlers.ts:1444-1478`). Its `changed`
+/// object is not decoded.
+struct ParticipantMediaPermissionsResponse: Codable {
+    let success: Bool?
+    let error: String?
+    let unmuteAllowed: Bool?
+    let videoAllowed: Bool?
 }
 
 struct TtsDisabledChangedNotification: Codable {
@@ -1695,6 +1728,10 @@ struct AdminRoomPolicySnapshot: Codable {
     let dmEnabled: Bool?
     let reactionsDisabled: Bool?
     let requiresMeetingInviteCode: Bool?
+    /// S50 PH5, PH6: the rest of the SFU policy snapshot (`admin/controlPlane.ts:67-77`).
+    let imageAttachmentsEnabled: Bool?
+    let participantUnmuteAllowed: Bool?
+    let participantVideoAllowed: Bool?
 }
 
 struct AdminRoomAppsStateSnapshot: Codable {

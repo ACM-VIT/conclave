@@ -33,7 +33,10 @@ struct StageFixtureView: View {
         ZStack(alignment: .leading) {
             CallRoot(shell: session.shell, stage: session.stage,
                      renderers: StageRendererProvider.probes(ledger: session.renderers, pattern: session.pattern),
-                     forceScreenReader: session.forceScreenReader, activitySession: session.activity)
+                     forceScreenReader: session.forceScreenReader, activitySession: session.activity,
+                     webinarLinkProvider: { await session.ensureWebinarLink() })
+                // STG-3 (S20 SL14, HD request B5-T8 R10): one renderTargetResize per settled share zoom.
+                .environment(\.stageRenderTargetResize, { session.counters.recordRenderTargetResize() })
             // Readouts and scripts sit beside the stage, never inside its subtree (PS 7.6), so refreshing them never
             // re-evaluates a tile or a renderer.
             StageFixtureControls(session: session)
@@ -67,6 +70,7 @@ private struct StageFixtureControls: View {
                 fixtureButton("Suspend Toasts", identifier: "stage.fixture.suspendToasts") { session.toggleToastSuspension(); refresh += 1 }
                 fixtureButton("Next Caption", identifier: "stage.fixture.nextCaption") { session.nextCaption(); refresh += 1 }
                 fixtureButton("Reconnect", identifier: "stage.fixture.reconnect") { session.toggleReconnecting(); refresh += 1 }
+                fixtureButton("Toggle Lock", identifier: "stage.fixture.lock") { session.toggleRoomLock(); refresh += 1 }
                 fixtureButton("Refresh", identifier: "stage.fixture.refresh") { refresh += 1 }
                 StageFixtureReadouts(session: session, refresh: refresh)
             }
@@ -104,6 +108,8 @@ private struct StageFixtureReadouts: View {
             readout(session.captionsReadout(), identifier: "stage.captions.readout")
             readout(session.activityReadout(), identifier: "game.emits")
             readout(session.panelReadout(), identifier: "panel.current")
+            readout(session.meetingInfoReadout(), identifier: "stage.meetingInfo")
+            readout(session.attendeeReadout(), identifier: "stage.attendee.readout")
             readout(session.chromeReadout(), identifier: "chrome.transient")
             readout(session.recomposeReadout(), identifier: "stage.recompose")
             readout("refresh " + String(refresh), identifier: "stage.fixture.refreshCount")

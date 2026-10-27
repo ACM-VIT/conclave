@@ -21,8 +21,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import android.content.Intent
-import android.net.Uri
 
 /*
  * S40 1 d (CHT-1): the chat panel on Android, one InCallPage in the system theme (content panels follow the system
@@ -30,7 +28,9 @@ import android.net.Uri
  * (WP1-3b2), where message actions are an anchored menu and the reactions viewer an in-pane page (R40-12), so no
  * window sheet or scrim covers the live stage. The list is lazy (`InCallPageContent.lazyList`, R40-3); the composer
  * sits in the page's composer slot with imePadding from the page. Registered in the native call root by request
- * (HD/requests/B4-T1.md R1); the panel reads only the presenter's snapshots and row entries.
+ * (HD/requests/B4-T1.md R1); the panel reads only the presenter's snapshots and row entries. CHT-4 and CHT-5: the photo
+ * viewer is a full-screen Dialog (S40 9 d); the GIF picker is a ModalBottomSheet over the overlay panel and an in-pane
+ * page in the side pane (R40-12), so no window sheet or scrim covers the live stage there.
  */
 @Composable
 internal fun ChatPanel(
@@ -69,11 +69,18 @@ internal fun ChatPanel(
     }
     // R40-12: in the side pane the viewer is an in-pane page; system Back pops it before closing the pane.
     val viewerInPane = sidePane && actions.viewerRowId.isNotEmpty()
+    // S40 7 d: in the side pane the GIF picker is an in-pane page too (the reactions viewer wins when both are asked).
+    val gifsInPane = sidePane && actions.showsGifs && !viewerInPane
+    val nestedTitle = when {
+        viewerInPane -> conclaveString("chat_reactions_title")
+        gifsInPane -> conclaveString("chat_gifs_title")
+        else -> conclaveString("chat_title")
+    }
     InCallPage(
-        title = if (viewerInPane) conclaveString("chat_reactions_title") else conclaveString("chat_title"),
+        title = nestedTitle,
         variant = variant,
         appearance = appearance,
-        hasComposer = !viewerInPane,
+        hasComposer = !viewerInPane && !gifsInPane,
         miniTile = miniTile,
         onClose = { panels.dismiss(cancelPending = true) },
         onMounted = onMounted,
@@ -82,12 +89,15 @@ internal fun ChatPanel(
         composer = { ChatComposer(presenter, actions) },
         contentMode = InCallPageContent.lazyList,
         snackbarHost = { SnackbarHost(snackbars) },
-        isNested = viewerInPane,
-        onBack = if (viewerInPane) ({ actions.closeViewer() }) else null,
+        isNested = viewerInPane || gifsInPane,
+        onBack = if (viewerInPane) ({ actions.closeViewer() }) else if (gifsInPane) ({ actions.closeGifs() }) else null,
     ) { reservation ->
         Box(Modifier.fillMaxSize().testTag("chat.panel")) {
             if (viewerInPane) {
                 ReactionsViewerContent(presenter, actions.viewerRowId)
+            } else if (gifsInPane) {
+                GifPickerContent(presenter, onPicked = { actions.closeGifs() },
+                    modifier = Modifier.testTag("chat.gifs").padding(top = reservation.calculateTopPadding()))
             } else {
                 Column(Modifier.fillMaxSize()) {
                     ChatPolicyBanner(presenter)
@@ -103,6 +113,13 @@ internal fun ChatPanel(
     }
     if (!sidePane && actions.viewerRowId.isNotEmpty()) {
         ReactionsViewerSheet(presenter, actions, actions.viewerRowId)
+    }
+    // One sheet at a time (D12): the GIF sheet never opens while the actions sheet or the reactions sheet is up.
+    if (!sidePane && actions.showsGifs && actions.menuRowId.isEmpty() && actions.viewerRowId.isEmpty()) {
+        GifPickerSheet(presenter, onDismiss = { actions.closeGifs() })
+    }
+    if (actions.photoRowId.isNotEmpty()) {
+        ChatImageViewer(presenter, actions.photoRowId, onDismiss = { actions.closePhoto() })
     }
     ChatExternalLinkDialog(actions)
 }
@@ -139,28 +156,27 @@ private fun ChatAnnouncementRegion(presenter: ChatPresenter) {
 }
 
 /**
- * D23 links: Conclave meeting links route in the app (S10 4, `ChatRowActions.openLink`); http and https keep today's
- * `ACTION_VIEW` path behind this confirmation until Custom Tabs lands (Q16, `androidx.browser` is a build-owner
- * dependency); other apps' links say "This link opens another app." (S70 R70-9).
+ * D23 links: Conclave meeting links route in the app (S10 4, `ChatRowActions.openLink`); http and https open in Custom
+ * Tabs on the call task (Q16, `ChatLinkLauncher`). This confirmation is for other apps' links ("This link opens another
+ * app.", S70 R70-9) and the fallback when no Custom Tabs browser exists; it opens through NativeExternalHandoff (SYS-8).
  */
 @Composable
 private fun ChatExternalLinkDialog(actions: ChatRowActions) {
     val url = actions.pendingExternalUrl
     if (url.isEmpty()) return
-    val context = LocalContext.current
     AlertDialog(
         onDismissRequest = { actions.pendingExternalUrl = "" },
         title = { ConclaveText(conclaveString("chat_link_title"), line = "chat.link.title") },
         text = {
             val body = if (actions.pendingExternalIsWeb) conclaveString("chat_link_body") else conclaveString("chat_link_body_app")
             // S70 R70-5: the camera line shows while the camera does not continue in the background.
-            val camera = if (actions.cameraContinuesInBackground) "" else " " + conclaveString("chat_link_camera_pauses")
+            val camera = if (actions.presenter.showsCameraLine) " " + conclaveString("chat_link_camera_pauses") else ""
             ConclaveText(body + camera, line = "chat.link.body")
         },
         confirmButton = {
             TextButton(onClick = {
                 actions.pendingExternalUrl = ""
-                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                NativeExternalHandoff.openExternalApp(url)
             }) { ConclaveText(conclaveString("chat_link_open"), line = "chat.link.open") }
         },
         dismissButton = {

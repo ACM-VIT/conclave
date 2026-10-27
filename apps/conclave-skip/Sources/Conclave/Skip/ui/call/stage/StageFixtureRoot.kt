@@ -13,6 +13,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -49,14 +50,18 @@ fun StageFixtureRoot(stateName: String, patternName: String? = null, forceScreen
         if (chatState != null) ChatFixtureDriver.installOnStage(state = chatState, shell = session.shell)
     }
     Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
-        CallRoot(
-            shell = session.shell,
-            stage = session.stage,
-            renderers = StageRenderers.probes(session.renderers, session.pattern),
-            forceScreenReader = session.forceScreenReader,
-            activitySession = session.activity,
-            onMinimize = { session.minimize() },
-        )
+        // STG-3 (S20 SL14, HD request B5-T8 R10): one renderTargetResize per settled share zoom.
+        CompositionLocalProvider(LocalStageRenderTargetResize provides { session.counters.recordRenderTargetResize() }) {
+            CallRoot(
+                shell = session.shell,
+                stage = session.stage,
+                renderers = StageRenderers.probes(session.renderers, session.pattern),
+                forceScreenReader = session.forceScreenReader,
+                activitySession = session.activity,
+                webinarLinkProvider = { session.ensureWebinarLink() },
+                onMinimize = { session.minimize() },
+            )
+        }
         HostingTheme(inCall = true) {
             StageFixtureControls(session, Modifier.align(Alignment.CenterStart))
         }
@@ -84,6 +89,7 @@ private fun StageFixtureControls(session: StageFixtureSession, modifier: Modifie
             FixtureButton("Suspend toasts", "stage.fixture.suspendToasts") { session.toggleToastSuspension(); refresh++ }
             FixtureButton("Next caption", "stage.fixture.nextCaption") { session.nextCaption(); refresh++ }
             FixtureButton("Reconnect", "stage.fixture.reconnect") { session.toggleReconnecting(); refresh++ }
+            FixtureButton("Toggle lock", "stage.fixture.lock") { session.toggleRoomLock(); refresh++ }
             FixtureButton("Refresh", "stage.fixture.refresh") { refresh++ }
             val tick = refresh
             FixtureReadout(session.renderersReadout(), "stage.renderers", tick)
@@ -94,6 +100,8 @@ private fun StageFixtureControls(session: StageFixtureSession, modifier: Modifie
             FixtureReadout(session.captionsReadout(), "stage.captions.readout", tick)
             FixtureReadout(session.activityReadout(), "game.emits", tick)
             FixtureReadout(session.panelReadout(), "panel.current", tick)
+            FixtureReadout(session.meetingInfoReadout(), "stage.meetingInfo", tick)
+            FixtureReadout(session.attendeeReadout(), "stage.attendee.readout", tick)
             FixtureReadout(session.chromeReadout(), "chrome.transient", tick)
             FixtureReadout(session.recomposeReadout(), "stage.recompose", tick)
         }

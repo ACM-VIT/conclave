@@ -13,6 +13,8 @@ enum SystemFixtureState: String, CaseIterable, Equatable {
     case presenceOnHold = "presence-on-hold"
     case presenceAttendee = "presence-attendee"
     case presenceEnded = "presence-ended"
+    /// SYS-4 (S70 SX1, 3 l2, 3 l3, 8 l2): a live call with a portrait remote speaker as the PiP target.
+    case pipSpeaker = "pip-speaker"
 }
 
 /// SX1 provider mode on iOS: `fake` drives the scripted cells, `real` uses the real `CXProvider` and
@@ -67,8 +69,14 @@ enum SystemFixtureScript {
                 live(isMuted: true, isCameraOff: true),
                 CallPresenceInputs.make(callSession: 1, sessionPhase: .home, outcome: .endedByHost, roomLabel: roomLabel)
             ]
+        case .pipSpeaker:
+            return [connecting, live(isMuted: true, isCameraOff: true)]
         }
     }
+
+    /// `pip-speaker`: a portrait remote speaker as the PiP target (720 x 1280 decoded, bounds in window px).
+    static let pipTarget = PipTargetFrame(slotId: "p:fixture-speaker", left: 0, top: 0, right: 1080, bottom: 1920,
+                                          videoWidth: 720, videoHeight: 1280)
 
     /// States that end with a system hold (the hold command, not an input).
     static func holdsAfterInputs(_ state: SystemFixtureState) -> Bool {
@@ -132,6 +140,9 @@ final class SystemFixtureSession {
         }
         if SystemFixtureScript.holdsAfterInputs(state) {
             presence.handle(.hold, source: .system, presenceSession: presence.snapshot.presenceSession)
+        }
+        if state == .pipSpeaker {
+            presence.reportPipTarget(SystemFixtureScript.pipTarget)
         }
         refreshReadouts()
     }

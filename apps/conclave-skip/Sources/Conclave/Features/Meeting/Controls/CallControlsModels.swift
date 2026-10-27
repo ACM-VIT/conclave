@@ -3,8 +3,8 @@ import Foundation
 // S30 0.5 shared controls contract (CTL-1). Everything here crosses into handwritten Kotlin, so it follows the S1C 3.6
 // rules: String raw-value enums, scalar structs and arrays of structs, no associated values, no tuples, no protocols.
 // Views read only these snapshots, never `MeetingState` or `MeetingViewModel` (F00 P1). Later slices extend the set:
-// CTL-2 the Leave and End surfaces (the `LeaveSnapshot` below is already complete), CTL-3 the route snapshot, CTL-5
-// the More snapshot, menu metrics and keyboard commands, CTL-6 the reaction palette.
+// CTL-2 added the host menu facts to `LeaveSnapshot` (LeaveControlPolicy.swift reads them), CTL-3 the route snapshot,
+// CTL-5 the More snapshot, menu metrics and keyboard commands, CTL-6 the reaction palette.
 
 /// Which controls the bar shows (S30 0.6): compact five on phones, wide eight from medium width (RECONCILE R7), the
 /// webinar attendee three.
@@ -104,25 +104,35 @@ enum EndPhase: String, CaseIterable, Equatable {
 /// stored `leave` next to `func leave()` is an invalid redeclaration (S30 0.5).
 struct LeaveSnapshot: Equatable {
     let revision: Int
+    /// S1 `session.canEndForEveryone`: a host who is not an attendee, joined and not recovering.
     let canEndForEveryone: Bool
     let leavePhase: LeavePhase
     let endPhase: EndPhase
     /// S1 `MeetingConfirmation.id`; 0 when none.
     let confirmationId: Int
-    /// `MeetingConfirmationInvoker` value ("call" or "more"); the dialog attaches to that control (R09).
+    /// `MeetingConfirmationInvoker` value ("call", "more" or "hostControls"); the dialog belongs to that surface (R09,
+    /// S50 PH17).
     let confirmationInvoker: String
-    /// CC8; false until WP8 ships the recap (S30 Q6).
+    /// CC8; false until WP8 ships the recap (S30 Q6). TRN-2 (CC8) turns it on with the recap dialog variant.
     let offersRecap: Bool
     /// S1 `MeetingActionFailure` raw value of the End row; "none" when idle.
     let endFailure: String
+    /// CTL-2: the host's End row exists (the S1 `endForEveryone` row is visible: a host who is not an attendee), so the
+    /// host Leave menu and the More row show, even while End itself is blocked (S30 4 f Recovering row). False for
+    /// guests and attendees.
+    let showsEndForEveryone: Bool
+    /// CTL-2: why End cannot be asked for right now, the S1 End row reason in the controls vocabulary: `none` when it
+    /// can; `ending` while the End ticket is in flight; `reconnecting` or `offline` (S30 4 f, 7); `leaving`.
+    let endBlockedReason: ControlBlockedReason
 
     static let idle = LeaveSnapshot(revision: 0, canEndForEveryone: false, leavePhase: LeavePhase.idle, endPhase: EndPhase.idle,
-                                    confirmationId: 0, confirmationInvoker: "", offersRecap: false, endFailure: "none")
+                                    confirmationId: 0, confirmationInvoker: "", offersRecap: false, endFailure: "none",
+                                    showsEndForEveryone: false, endBlockedReason: ControlBlockedReason.none)
 
     func withRevision(_ next: Int) -> LeaveSnapshot {
         LeaveSnapshot(revision: next, canEndForEveryone: canEndForEveryone, leavePhase: leavePhase, endPhase: endPhase,
                       confirmationId: confirmationId, confirmationInvoker: confirmationInvoker, offersRecap: offersRecap,
-                      endFailure: endFailure)
+                      endFailure: endFailure, showsEndForEveryone: showsEndForEveryone, endBlockedReason: endBlockedReason)
     }
 }
 
@@ -274,6 +284,19 @@ struct CallControlsInputs: Equatable {
                     attendeeCanRaiseHand: attendeeCanRaiseHand, moreAttention: moreAttention, isRoomLocked: isRoomLocked,
                     isWebinarEnabled: isWebinarEnabled, isBrowserActive: isBrowserActive, activeAppId: activeAppId,
                     hasOpenVote: hasOpenVote, layoutMode: layoutMode)
+    }
+
+    /// CTL-2: the same inputs with every S1-derived field re-read from the shell snapshots and the controls-only fields
+    /// kept. The presenter uses it right after its own S1 intents (the End confirmation, its cancel, a dispatched End or
+    /// Leave ticket), whose publishes change no core field, so the Leave control follows S1 in the same frame.
+    @MainActor
+    func refreshed(from shell: MeetingShellPresenter) -> CallControlsInputs {
+        CallControlsInputs.fromShell(shell, presenterName: presenterName, isMicDisabledByHost: isMicDisabledByHost,
+                                     isCameraDisabledByHost: isCameraDisabledByHost, isWebinarQaEnabled: isWebinarQaEnabled,
+                                     webinarQaUnseen: webinarQaUnseen, attendeeCanRaiseHand: attendeeCanRaiseHand,
+                                     moreAttention: moreAttention, isRoomLocked: isRoomLocked, isWebinarEnabled: isWebinarEnabled,
+                                     isBrowserActive: isBrowserActive, activeAppId: activeAppId, hasOpenVote: hasOpenVote,
+                                     layoutMode: layoutMode)
     }
 
     /// The S1 row for a control id, or nil.

@@ -6,8 +6,10 @@ import UIKit
 // redraws one row. One summary element per message (the bubble text, with the assembled label, value and the row's
 // accessibility actions); every control (quote, chips, failed marker) stays its own element. The bubble is the C23
 // component; own public rows are coral with onCoral ink, every private and peer row neutral (Q9). No `.textSelection`
-// (the context menu carries Copy). Photos, GIFs, voice and assistant markdown are CHT-4 to CHT-7; until then those
-// rows show fixed-geometry placeholders and their text.
+// (the context menu carries Copy). CHT-4 and CHT-5: photo rows show the bounded image in a fixed 240 by 180 box (the
+// viewer opens on tap, a failed load retries on tap), GIF rows animate only on screen (stickers without a bubble,
+// clips as a poster with the play glyph), and ready link cards follow the reactions. Media-only rows put the summary
+// on the media element. Voice and assistant markdown are CHT-6 and CHT-7.
 
 struct ChatRowView: View {
     let entry: ChatRowEntry
@@ -121,6 +123,12 @@ private struct ChatMessageRowView: View {
                         actions.toggle(row.id, emoji: chip.emoji)
                     }
                 }
+                // CL6: only ready cards are in the row (CH16), so each appears once and never resizes.
+                ForEach(Array(row.embedURLs.enumerated()), id: \.element) { index, url in
+                    LinkEmbedCard(entry: actions.embed(url), rowId: row.id, index: index) { target in
+                        actions.openURLString(target)
+                    }
+                }
                 ChatDeliveryLine(row: row, actions: actions)
             }
             .frame(maxWidth: .infinity, alignment: row.isOwn ? .trailing : .leading)
@@ -168,21 +176,39 @@ private struct ChatPrivateLabel: View {
     }
 }
 
-/// The bubble (C23), the context menu target (5 c), holding the quote, a media placeholder and the summary text.
+/// The bubble (C23), the context menu target (5 c), holding the quote, the photo or GIF element and the summary text.
+/// Media rows have no bubble padding (the quote and caption pad themselves); stickers have no bubble at all.
 private struct ChatBubbleContent: View {
     let row: ChatRowModel
     let actions: ChatRowActions
 
     var body: some View {
-        ConclaveChatBubble(tone: row.bubbleTone, identifier: "chat.row." + row.id + ".bubble") {
-            VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space4)) {
-                if let reply = row.reply {
-                    ChatQuote(row: row, reply: reply, actions: actions)
+        let media = ChatRowMedia.kind(row)
+        Group {
+            if media == ChatRowMedia.sticker {
+                ChatGifElement(row: row, actions: actions)
+            } else {
+                ConclaveChatBubble(tone: row.bubbleTone, isMedia: media != ChatRowMedia.none,
+                                   identifier: "chat.row." + row.id + ".bubble") {
+                    VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space4)) {
+                        if let reply = row.reply {
+                            ChatQuote(row: row, reply: reply, actions: actions)
+                                .padding(media == ChatRowMedia.none ? EdgeInsets() : ChatRowMedia.textInsets)
+                        }
+                        if media == ChatRowMedia.photo {
+                            ChatPhotoElement(row: row, actions: actions)
+                        } else if media == ChatRowMedia.gif || media == ChatRowMedia.clip {
+                            ChatGifElement(row: row, actions: actions)
+                        }
+                        if row.kind == ChatRowKind.voice {
+                            ChatVoiceControl(row: row, chat: actions.chat)
+                        }
+                        if ChatRowMedia.showsText(row, media: media) {
+                            ChatBubbleText(row: row, actions: actions)
+                                .padding(media == ChatRowMedia.none ? EdgeInsets() : ChatRowMedia.textInsets)
+                        }
+                    }
                 }
-                if row.kind == ChatRowKind.photo {
-                    ChatPhotoPlaceholder()
-                }
-                ChatBubbleText(row: row, actions: actions)
             }
         }
         .contentShape(.contextMenuPreview,
@@ -192,6 +218,132 @@ private struct ChatBubbleContent: View {
         } preview: {
             ChatBubblePreview(row: row)
         }
+    }
+}
+
+/// Which media element a row draws (3 c, f).
+enum ChatRowMedia: String {
+    case none, photo, gif, sticker, clip
+
+    static let textInsets = EdgeInsets(top: CGFloat(DesignTokens.space8), leading: CGFloat(DesignTokens.space12),
+                                       bottom: CGFloat(DesignTokens.space8), trailing: CGFloat(DesignTokens.space12))
+
+    static func kind(_ row: ChatRowModel) -> ChatRowMedia {
+        if row.kind == ChatRowKind.photo && !row.photoURL.isEmpty { return ChatRowMedia.photo }
+        if row.kind == ChatRowKind.gif {
+            // A GIF whose URL does not parse shows its title in a bubble (3 f, CV:2138-2144).
+            if URL(string: row.gifURL) == nil || row.gifURL.isEmpty { return ChatRowMedia.none }
+            switch row.gifKind {
+            case .sticker: return ChatRowMedia.sticker
+            case .clip: return ChatRowMedia.clip
+            case .gif: return ChatRowMedia.gif
+            }
+        }
+        return ChatRowMedia.none
+    }
+
+    /// The text summary shows for text rows, a photo with a caption, and a GIF that fell back to its title; media-only
+    /// rows put the summary on the media element.
+    static func showsText(_ row: ChatRowModel, media: ChatRowMedia) -> Bool {
+        if media == ChatRowMedia.none { return true }
+        if media == ChatRowMedia.photo { return !row.photoCaptionIsEmpty && !row.plainText.isEmpty }
+        return false
+    }
+}
+
+/// S40 3 c photo: a fixed 240 by 180 box (`ChatImageBox`, bounded ImageIO decode), the viewer on tap (the iOS 18 zoom
+/// source), "Couldn't load photo. Tap to retry." in the same box on failure. Labelled "Photo from Avery Lee" plus the
+/// caption, never the upload file name; for a photo without caption it is the row's summary element.
+private struct ChatPhotoElement: View {
+    let row: ChatRowModel
+    let actions: ChatRowActions
+    @Environment(\.chatPhotoNamespace) private var namespace
+
+    var body: some View {
+        let isSummary = !ChatRowMedia.showsText(row, media: ChatRowMedia.photo)
+        ChatImageBox(url: row.photoURL, width: CGFloat(ChatMediaGeometry.photoWidth), height: CGFloat(ChatMediaGeometry.photoHeight),
+                     cornerRadius: 0, failureText: ChatMediaCopy.photoLoadFailed, retriesOnTap: true,
+                     onOpen: { actions.openPhoto(row.id) })
+            .modifier(ChatPhotoZoomSource(rowId: row.id, namespace: namespace))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(ChatMediaCopy.photoLabel(row))
+            .accessibilityValue(isSummary ? ChatCopy.rowValue(row) : "")
+            .accessibilityActions {
+                if isSummary {
+                    ChatRowAccessibilityActions(row: row, actions: actions)
+                } else {
+                    Button(ChatMediaCopy.openPhoto) { actions.openPhoto(row.id) }
+                }
+            }
+            .accessibilityIdentifier("chat.row." + row.id + ".photo")
+    }
+}
+
+/// iOS 18: the row thumbnail is the zoom transition's source.
+private struct ChatPhotoZoomSource: ViewModifier {
+    let rowId: String
+    let namespace: Namespace.ID?
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *), let namespace {
+            content.matchedTransitionSource(id: rowId, in: namespace)
+        } else {
+            content
+        }
+    }
+}
+
+/// S40 3 c GIF, sticker and clip: a GIF box 220 wide (height from the aspect, 120 to 300) animated only on screen; a
+/// sticker up to 160 square without a bubble; a clip as its poster with the play glyph and the "Clip" tag, opening the
+/// clip in the in-app browser (no inline player until the playback dependency is approved, Q6). The summary element.
+private struct ChatGifElement: View {
+    let row: ChatRowModel
+    let actions: ChatRowActions
+
+    var body: some View {
+        let media = ChatRowMedia.kind(row)
+        Group {
+            if media == ChatRowMedia.clip {
+                let height = CGFloat(ChatMediaGeometry.gifHeight(aspect: row.gifAspect))
+                Button {
+                    actions.openURLString(row.gifVideoURL.isEmpty ? row.gifURL : row.gifVideoURL)
+                } label: {
+                    ZStack(alignment: .bottomLeading) {
+                        ChatImageBox(url: row.gifPreviewURL.isEmpty ? row.gifURL : row.gifPreviewURL,
+                                     width: CGFloat(ChatMediaGeometry.gifWidth), height: height, cornerRadius: 0)
+                        Image(systemName: ChatMediaSymbols.play)
+                            .font(.title3)
+                            .foregroundStyle(.primary)
+                            .padding(CGFloat(DesignTokens.space12))
+                            .background(Color(uiColor: .systemBackground), in: Circle())
+                            .frame(width: CGFloat(ChatMediaGeometry.gifWidth), height: height)
+                        Text(ChatMediaCopy.clipTag)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, CGFloat(DesignTokens.space8))
+                            .padding(.vertical, CGFloat(DesignTokens.space2))
+                            .background(Color(uiColor: .systemBackground), in: Capsule())
+                            .padding(CGFloat(DesignTokens.space8))
+                    }
+                }
+                .buttonStyle(.plain)
+            } else if media == ChatRowMedia.sticker {
+                ChatAnimatedImage(url: row.gifURL, width: CGFloat(ChatMediaGeometry.stickerWidth(aspect: row.gifAspect)),
+                                  height: CGFloat(ChatMediaGeometry.stickerHeight(aspect: row.gifAspect)), cornerRadius: 0,
+                                  placeholder: Color.clear)
+            } else {
+                ChatAnimatedImage(url: row.gifURL, width: CGFloat(ChatMediaGeometry.gifWidth),
+                                  height: CGFloat(ChatMediaGeometry.gifHeight(aspect: row.gifAspect)), cornerRadius: 0)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(ChatCopy.rowLabel(row))
+        .accessibilityValue(ChatCopy.rowValue(row))
+        .accessibilityAddTraits(media == ChatRowMedia.clip ? .isButton : .isImage)
+        .accessibilityActions {
+            ChatRowAccessibilityActions(row: row, actions: actions)
+        }
+        .accessibilityIdentifier("chat.row." + row.id + ".gif")
     }
 }
 
@@ -217,21 +369,6 @@ private struct ChatQuote: View {
                                 accessibilityHintText: "", identifier: "chat.row." + row.id + ".quote") {}
                 .disabled(true)
         }
-    }
-}
-
-/// The fixed photo box until CHT-4 brings the bounded loader (geometry identical in every phase, AGENTS).
-private struct ChatPhotoPlaceholder: View {
-    var body: some View {
-        ZStack {
-            Color(uiColor: .secondarySystemFill)
-            Image(systemName: ConclaveSymbols.photo)
-                .font(.title2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(width: 240, height: 180)
-        .clipShape(RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusSmall), style: .continuous))
-        .accessibilityHidden(true)
     }
 }
 
@@ -319,8 +456,14 @@ struct ChatRowAccessibilityActions: View {
         if row.canDelete {
             Button(ConclaveStrings.text("Delete")) { actions.delete(row.id) }
         }
+        if row.kind == ChatRowKind.voice {
+            ChatVoiceAccessibilityActions(row: row, chat: actions.chat)
+        }
         if row.canJumpToReply, let reply = row.reply {
             Button(ConclaveStrings.text("Go to Original Message")) { actions.jumpToReply(reply.messageId) }
+        }
+        if row.kind == ChatRowKind.photo && !row.photoURL.isEmpty {
+            Button(ChatMediaCopy.openPhoto) { actions.openPhoto(row.id) }
         }
     }
 }
@@ -359,7 +502,7 @@ private struct ChatDeliveryLine: View {
                     .accessibilityIdentifier("chat.row." + row.id + ".failed")
                 }
                 if ChatFailurePolicy.showsReason(row.failure) {
-                    Text(ChatCopy.failureReason(row.failure))
+                    Text(ChatMediaCopy.failureReason(row.failure))
                         .font(.caption)
                         .foregroundStyle(HostingTheme.secondaryText)
                         .multilineTextAlignment(.trailing)

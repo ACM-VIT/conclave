@@ -337,12 +337,15 @@ object PermissionHelper {
                 try {
                     beforeRequest()
                     scheduleActivePermissionTimeout(requestCode)
+                    // S70 8 d (SYS-8): the permission dialog activity is not Home; no PiP auto-enter behind it.
+                    PipManager.suppressForExternalHandoff(ExternalHandoffKind.permissionDialog)
                     ActivityCompat.requestPermissions(
                         activity,
                         arrayOf(permission),
                         requestCode
                     )
                 } catch (_: Throwable) {
+                    PipManager.restoreAutoEnterAfterExternalActivity()
                     clearActivePermissionTimeout(requestCode)
                     onMissingActivity()
                     finishRuntimePermissionRequest(requestCode)

@@ -24,6 +24,12 @@ data class PipVideoState(
  *
  * `isInCall` gates PiP entry. `pipVideoState` carries the active speaker or
  * local fallback snapshot. `inPipMode` swaps the Activity into the PiP surface.
+ *
+ * S70 3 d (SYS-4, SY7): the native call root stays composed in PiP (`nativeRootComposed`; Main.kt shows the legacy
+ * `PipContent` only while it is not), hides its chrome from the API 35 transition (`isTransitioningToPip`) or the
+ * mode change below 35 (`chromeHiddenForPip`), and lays out only the PiP target. Feedback delivery is suspended while
+ * the window is in PiP or entering it (`feedbackSuspended`, PS 9.4). The Debug readouts `sys.pip` and
+ * `sys.pipSuppressions` (S70 SX1) are observable here for the fixtures.
  */
 object PipController {
     private const val MISSING_TRACK_GRACE_MS = 900L
@@ -43,10 +49,67 @@ object PipController {
     @Volatile var muted: Boolean = true
         private set
 
+    /** The native call root is mounted (it sets this from a DisposableEffect); the legacy PiP swap then stays off. */
+    var nativeRootComposed by mutableStateOf(false)
+        private set
+
+    /** API 35 `PictureInPictureUiState.isTransitioningToPip` (D-13): the native root hides chrome before the window shrinks. */
+    var isTransitioningToPip by mutableStateOf(false)
+        private set
+
+    /** API 31 `PictureInPictureUiState.isStashed`: the window is tucked against a screen edge. */
+    var isStashed by mutableStateOf(false)
+        private set
+
+    /** `sys.pip` (S70 SX1): `aspect=w:h rect=l,t,r,b autoEnter=0/1` of the last params set. */
+    var paramsReadout by mutableStateOf("aspect=16:9 rect=none autoEnter=0")
+        private set
+
+    /** `sys.pipSuppressions` (S70 SX1, 8 l2): how many external activities suppressed auto-enter, and the last reason. */
+    var suppressionCount by mutableStateOf(0)
+        private set
+    var lastSuppressionReason by mutableStateOf("")
+        private set
+
+    /** The legacy root's minimal PiP surface (Main.kt), only while the native call root is not composed. */
+    val showsLegacyPipContent: Boolean
+        get() = inPipMode && isInCall && !nativeRootComposed
+
+    /** S70 3 d: chrome hides when the transition starts (API 35) or the mode changes (below 35). */
+    val chromeHiddenForPip: Boolean
+        get() = inPipMode || isTransitioningToPip
+
+    /** PS 9.4: no feedback while the window is in PiP or entering it; the root cursor rebaselines afterwards. */
+    val feedbackSuspended: Boolean
+        get() = PipLifetimePolicy.suspendsFeedback(isInPictureInPicture = inPipMode, isTransitioningToPip = isTransitioningToPip)
+
+    fun setNativeRootComposed(value: Boolean) {
+        if (nativeRootComposed != value) nativeRootComposed = value
+    }
+
+    fun setPictureInPictureUiState(stashed: Boolean, transitioningToPip: Boolean) {
+        if (isStashed != stashed) isStashed = stashed
+        if (isTransitioningToPip != transitioningToPip) isTransitioningToPip = transitioningToPip
+    }
+
+    internal fun recordParams(readout: String) {
+        if (paramsReadout != readout) paramsReadout = readout
+    }
+
+    internal fun recordSuppression(reason: String) {
+        suppressionCount += 1
+        lastSuppressionReason = reason
+    }
+
+    /** `sys.pipSuppressions` as the fixtures print it. */
+    val suppressionReadout: String
+        get() = ExternalHandoffPolicy.readout(count = suppressionCount, lastReason = lastSuppressionReason)
+
     fun setInCall(active: Boolean) {
         isInCall = active
         if (!active) {
             inPipMode = false
+            isTransitioningToPip = false
             cancelMissingTrackClear()
             pipVideoState = PipVideoState(surfaceVersion = pipVideoState.surfaceVersion + 1)
         }

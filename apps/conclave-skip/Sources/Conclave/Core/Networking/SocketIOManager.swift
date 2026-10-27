@@ -114,6 +114,7 @@ private enum SocketEvent {
     static let setTtsDisabled = SfuClientEvent.setTtsDisabled.rawValue
     static let setReactionsDisabled = SfuClientEvent.setReactionsDisabled.rawValue
     static let setImageAttachmentsEnabled = SfuClientEvent.setImageAttachmentsEnabled.rawValue
+    static let setParticipantMediaPermissions = SfuClientEvent.setParticipantMediaPermissions.rawValue
     static let getRoomLockStatus = SfuClientEvent.getRoomLockStatus.rawValue
     static let getChatLockStatus = SfuClientEvent.getChatLockStatus.rawValue
     static let getDmEnabledStatus = SfuClientEvent.getDmEnabledStatus.rawValue
@@ -209,6 +210,7 @@ private enum SocketEvent {
     static let noGuestsChanged = SfuServerEvent.noGuestsChanged.rawValue
     static let dmStateChanged = SfuServerEvent.dmStateChanged.rawValue
     static let imageAttachmentsStateChanged = SfuServerEvent.imageAttachmentsStateChanged.rawValue
+    static let participantMediaPermissionsChanged = SfuServerEvent.participantMediaPermissionsChanged.rawValue
     static let ttsDisabledChanged = SfuServerEvent.ttsDisabledChanged.rawValue
     static let reactionsDisabledChanged = SfuServerEvent.reactionsDisabledChanged.rawValue
     static let userRequestedJoin = SfuServerEvent.userRequestedJoin.rawValue
@@ -381,6 +383,8 @@ final class SocketIOManager {
     var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Void)?
     var onDmStateChanged: ((DmStateChangedNotification) -> Void)?
     var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Void)?
+    /// S50 PH5: the room's participant media permissions (also sent at join).
+    var onParticipantMediaPermissionsChanged: ((ParticipantMediaPermissionsChangedNotification) -> Void)?
     var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Void)?
     var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Void)?
     var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Void)?
@@ -960,8 +964,9 @@ final class SocketIOManager {
 
     // MARK: - Chat
 
-    func sendChat(content: String, gif: ChatGifAttachment? = nil, image: ChatImageAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil) async throws -> ChatMessage {
-        let request = SendChatRequest(content: content, gif: gif, image: image, recipient: recipient, replyTo: replyTo)
+    func sendChat(content: String, gif: ChatGifAttachment? = nil, image: ChatImageAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil, suppressEmbeds: Bool = false) async throws -> ChatMessage {
+        let request = SendChatRequest(content: content, gif: gif, image: image, recipient: recipient, replyTo: replyTo,
+                                      suppressEmbeds: suppressEmbeds ? true : nil)
         let data = try await emit(event: SocketEvent.sendChat, payload: request)
         let response = try JSONDecoder().decode(SendChatResponse.self, from: data)
         guard let message = response.message else {
@@ -1058,6 +1063,20 @@ final class SocketIOManager {
     func setReactionsDisabled(_ disabled: Bool) async throws -> RoomPolicyMutationResponse {
         let data = try await emit(event: SocketEvent.setReactionsDisabled, payload: ["disabled": disabled])
         return try JSONDecoder().decode(RoomPolicyMutationResponse.self, from: data)
+    }
+
+    /// S50 PH6: `setImageAttachmentsEnabled` (adminHandlers.ts:1383-1404); the ack carries `enabled`.
+    func setImageAttachmentsEnabled(_ enabled: Bool) async throws -> RoomPolicyMutationResponse {
+        let data = try await emit(event: SocketEvent.setImageAttachmentsEnabled, payload: ["enabled": enabled])
+        return try JSONDecoder().decode(RoomPolicyMutationResponse.self, from: data)
+    }
+
+    /// S50 PH5: `setParticipantMediaPermissions` (adminHandlers.ts:1444-1478); turning a permission off also closes
+    /// the matching live producers server side.
+    func setParticipantMediaPermissions(unmuteAllowed: Bool?, videoAllowed: Bool?) async throws -> ParticipantMediaPermissionsResponse {
+        let request = ParticipantMediaPermissionsRequest(unmuteAllowed: unmuteAllowed, videoAllowed: videoAllowed)
+        let data = try await emit(event: SocketEvent.setParticipantMediaPermissions, payload: request)
+        return try JSONDecoder().decode(ParticipantMediaPermissionsResponse.self, from: data)
     }
 
     func setRoomPolicies(
@@ -2280,6 +2299,14 @@ final class SocketIOManager {
                   let notification = self.decode(ImageAttachmentsStateChangedNotification.self, from: first),
                   self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
             self.onImageAttachmentsStateChanged?(notification)
+        }
+
+        socket.on(SocketEvent.participantMediaPermissionsChanged) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let notification = self.decode(ParticipantMediaPermissionsChangedNotification.self, from: first),
+                  self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
+            self.onParticipantMediaPermissionsChanged?(notification)
         }
 
         socket.on(SocketEvent.ttsDisabledChanged) { [weak self] data, _ in

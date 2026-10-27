@@ -194,17 +194,23 @@ struct StageChromeSnapshot: Equatable {
     let revision: Int
     let canFlipCamera: Bool
     let isFrontCamera: Bool
+    /// STG-3: a flip is in flight (the control is disabled, `StageCameraFlip` dispatches nothing).
+    let isFlipInFlight: Bool
+    /// STG-3: the system holds your camera; your tile shows "Camera paused".
+    let isCameraPaused: Bool
     let nowPlaying: NowPlayingChip?
     /// S30 `AudioRouteKind` raw value: speaker, receiver, bluetooth, wired, usb, hearingAid, unknown (RECONCILE R23).
     let routeKind: String
     let routeName: String
     let isAttendee: Bool
 
-    static let empty = StageChromeSnapshot(revision: 0, canFlipCamera: false, isFrontCamera: true, nowPlaying: nil,
-                                           routeKind: "unknown", routeName: "", isAttendee: false)
+    static let empty = StageChromeSnapshot(revision: 0, canFlipCamera: false, isFrontCamera: true, isFlipInFlight: false,
+                                           isCameraPaused: false, nowPlaying: nil, routeKind: "unknown", routeName: "",
+                                           isAttendee: false)
 
     func withRevision(_ next: Int) -> StageChromeSnapshot {
-        StageChromeSnapshot(revision: next, canFlipCamera: canFlipCamera, isFrontCamera: isFrontCamera, nowPlaying: nowPlaying,
+        StageChromeSnapshot(revision: next, canFlipCamera: canFlipCamera, isFrontCamera: isFrontCamera,
+                            isFlipInFlight: isFlipInFlight, isCameraPaused: isCameraPaused, nowPlaying: nowPlaying,
                             routeKind: routeKind, routeName: routeName, isAttendee: isAttendee)
     }
 }
@@ -360,6 +366,10 @@ struct StageInputs: Equatable {
     let isAloneConfirmed: Bool
     let canFlipCamera: Bool
     let isFrontCamera: Bool
+    /// STG-3 (S20 6 f, SC8): your camera flip is in flight; the flip control stays visible and disabled.
+    let isFlipInFlight: Bool
+    /// STG-3 (S20 6 f): the system holds your camera (another app, multitasking, the background, a camera error).
+    let isCameraPaused: Bool
     let routeKind: String
     let routeName: String
     let isHandRaised: Bool
@@ -402,6 +412,8 @@ struct StageInputs: Equatable {
         isAloneConfirmed: Bool = false,
         canFlipCamera: Bool = false,
         isFrontCamera: Bool = true,
+        isFlipInFlight: Bool = false,
+        isCameraPaused: Bool = false,
         routeKind: String = "unknown",
         routeName: String = "",
         isHandRaised: Bool = false,
@@ -421,6 +433,7 @@ struct StageInputs: Equatable {
                     isWebinarAttendee: isWebinarAttendee, webinarSpeakerUserId: webinarSpeakerUserId,
                     isRoomLocked: isRoomLocked, captionsOn: captionsOn, liveNotes: liveNotes,
                     isAloneConfirmed: isAloneConfirmed, canFlipCamera: canFlipCamera, isFrontCamera: isFrontCamera,
+                    isFlipInFlight: isFlipInFlight, isCameraPaused: isCameraPaused,
                     routeKind: routeKind, routeName: routeName, isHandRaised: isHandRaised,
                     handToggleInFlight: handToggleInFlight, isRecovering: isRecovering, isMediaPending: isMediaPending,
                     joinedAtMillis: joinedAtMillis, alwaysShowControls: alwaysShowControls, isEffectsOpen: isEffectsOpen)

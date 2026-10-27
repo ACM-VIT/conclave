@@ -7366,7 +7366,23 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val selectedName = preferredName ?: fallbackName ?: return null
 
         activeCameraFacing = selectedFacing
-        return enumerator.createCapturer(selectedName, null)
+        return enumerator.createCapturer(selectedName, callCameraEvents)
+    }
+
+    /** STG-3 (S20 6 f): the call camera's system pause reaches the one camera owner (any thread; it hops to main). */
+    private val callCameraEvents = object : org.webrtc.CameraVideoCapturer.CameraEventsHandler {
+        override fun onCameraError(errorDescription: String?) {
+            LocalPreviewController.shared.noteCallCameraInterruption(PreviewInterruption.cameraError)
+        }
+        override fun onCameraDisconnected() {
+            LocalPreviewController.shared.noteCallCameraInterruption(PreviewInterruption.inUseByAnotherClient)
+        }
+        override fun onCameraFreezed(errorDescription: String?) {}
+        override fun onCameraOpening(cameraName: String?) {}
+        override fun onFirstFrameAvailable() {
+            LocalPreviewController.shared.noteCallCameraResumed()
+        }
+        override fun onCameraClosed() {}
     }
 
     private fun startWebcamCapture(capturer: VideoCapturer?, action: String) {

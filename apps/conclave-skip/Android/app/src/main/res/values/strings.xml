@@ -219,6 +219,9 @@
     <string name="ds_link_copied">Link copied</string>
     <string name="ds_state_back_online">Back online</string>
     <string name="ds_tag_ai">AI</string>
+    <!-- Batch 5: components -->
+    <string name="ds_unavailable_offline">Unavailable while offline</string>
+    <string name="ds_unavailable_reconnecting">Unavailable while reconnecting</string>
 
     <!-- Call notification, notification channel and system fixture (SYS-1): sys_ -->
     <string name="sys_call_fallback_title">Conclave meeting</string>
@@ -239,6 +242,10 @@
     <string name="sys_err_hand_rate">You’re raising your hand too quickly.</string>
     <string name="sys_announce_reconnecting">Reconnecting</string>
     <string name="sys_announce_reconnected">Reconnected</string>
+    <!-- Batch 5: Picture in Picture (SYS-4) -->
+    <string name="sys_pip_content">Video of %1$s</string>
+    <string name="sys_pip_reconnecting">Reconnecting…</string>
+    <string name="sys_pip_on_hold">On hold</string>
 
     <!-- Audio route names (SYS-2): ctl_route_ -->
     <string name="ctl_route_phone">Phone</string>
@@ -287,6 +294,14 @@
     <string name="ctl_mic_denied_title">Microphone access is off</string>
     <string name="ctl_mic_denied_body">Allow microphone access in Settings so people can hear you.</string>
     <string name="ctl_open_settings">Open settings</string>
+    <!-- Batch 5: Leave and End for everyone (CTL-2) -->
+    <string name="ctl_end_for_everyone_ellipsis">End call for everyone…</string>
+    <string name="ctl_end_for_everyone">End call for everyone</string>
+    <string name="ctl_end_title">End call for everyone?</string>
+    <string name="ctl_end_message">Everyone, including people waiting to join, will be disconnected.</string>
+    <string name="ctl_end_confirm">End for everyone</string>
+    <string name="ctl_state_leaving">Leaving</string>
+    <string name="ctl_ending">Ending…</string>
 
     <!-- Premeeting Home, join sheet, switch prompt, lobby and outcome stand-ins (ENT-1, ENT-2): pm_ -->
     <string name="pm_app_title">Conclave</string>
@@ -408,6 +423,29 @@
     <string name="pm_delete_failed">Couldn’t delete your account. Check your connection and try again.</string>
     <string name="pm_retry">Retry</string>
     <string name="pm_account_deleted">Account deleted</string>
+    <!-- Batch 5: entry transition and outcome (ENT-5, ENT-6) -->
+    <string name="pm_joining">Joining…</string>
+    <string name="pm_starting">Starting…</string>
+    <string name="pm_still_connecting">Still connecting. Check your connection.</string>
+    <string name="pm_offline_waiting">You’re offline. Waiting for a connection.</string>
+    <string name="pm_fail_network">We couldn’t reach Conclave. Check your connection and try again.</string>
+    <string name="pm_fail_media">The media connection didn’t go through. Try again.</string>
+    <string name="pm_fail_server_busy">The meeting server is restarting. Try again in a moment.</string>
+    <string name="pm_fail_unknown">Something went wrong while joining. Try again.</string>
+    <string name="pm_announce_joining">Joining %1$s</string>
+    <string name="pm_announce_couldnt_join">Couldn’t join</string>
+    <string name="pm_wait_standard">You’ll join as soon as someone lets you in.</string>
+    <string name="pm_wait_locked">This meeting is locked. The host will review your request.</string>
+    <string name="pm_wait_no_host">No one is here to let you in yet. You can keep waiting.</string>
+    <string name="pm_wait_host_available">A host is here and can let you in.</string>
+    <string name="pm_wait_reconnecting">Reconnecting. You’ll keep your place.</string>
+    <string name="pm_wait_offline">You’re offline. You’ll keep your place when you’re back.</string>
+    <string name="pm_wait_server_restart">The meeting server is restarting. You’ll be reconnected automatically.</string>
+    <string name="pm_admitted">You’re in. Joining now.</string>
+    <string name="pm_stop_asking_title">Stop asking to join?</string>
+    <string name="pm_stop_asking_body">You’ll lose your place, and someone will need to let you in again.</string>
+    <string name="pm_stop_asking_confirm">Stop asking</string>
+    <string name="pm_keep_waiting">Keep waiting</string>
 
     <!-- Call stage, chrome chips and panel titles (STG-1, STG-4): stg_ -->
     <string name="stg_panel_transcript">Transcript</string>
@@ -518,6 +556,53 @@
     <string name="stg_retry">Retry</string>
     <string name="stg_show_video">Show video</string>
     <string name="stg_showing_activity">Showing activity</string>
+    <!-- Batch 5: Meeting Details, attendee viewer, PiP and share viewing (STG-6, STG-8, SYS-4, STG-3) -->
+    <string name="stg_room_code">Room code</string>
+    <string name="stg_copy_code">Copy code</string>
+    <string name="stg_code_copied">Code copied</string>
+    <string name="stg_meeting_link">Meeting link</string>
+    <string name="stg_status">Status</string>
+    <string name="stg_meeting_locked">Meeting locked</string>
+    <string name="stg_live_notes">Live notes</string>
+    <string name="stg_captions">Captions</string>
+    <string name="stg_on">On</string>
+    <string name="stg_off">Off</string>
+    <string name="stg_state_starting">Starting</string>
+    <string name="stg_state_paused">Paused</string>
+    <string name="stg_state_needs_attention">Needs attention</string>
+    <string name="stg_invite_code_required">Invite code required</string>
+    <string name="stg_share_webinar_link">Share webinar link</string>
+    <string name="stg_section_webinar">Webinar</string>
+    <string name="stg_hosts">Hosts</string>
+    <string name="stg_started">Started</string>
+    <string name="stg_your_connection">Your connection</string>
+    <string name="stg_webinar_details">Webinar details</string>
+    <string name="stg_settings">Settings</string>
+    <string name="stg_live">Live</string>
+    <string name="stg_webinar_waiting_title">The webinar will begin soon</string>
+    <plurals name="stg_webinar_waiting_count">
+        <item quantity="one">%1$d person is waiting with you</item>
+        <item quantity="other">%1$d people are waiting with you</item>
+    </plurals>
+    <string name="stg_webinar_fallback_title">Webinar</string>
+    <string name="stg_announce_demoted">You’re now watching as an attendee.</string>
+    <string name="stg_announce_webinar_live">The webinar is live.</string>
+    <string name="stg_live_video_from">Live video from %1$s</string>
+    <string name="stg_shared_screen_from">Shared screen from %1$s</string>
+    <string name="stg_pip_mute">Mute</string>
+    <string name="stg_pip_unmute">Unmute</string>
+    <string name="stg_pip_muted">Muted</string>
+    <string name="stg_reset_zoom">Reset zoom</string>
+    <string name="stg_zoom_in">Zoom in</string>
+    <string name="stg_zoom_out">Zoom out</string>
+    <string name="stg_zoom_value">Zoom %1$sx</string>
+    <string name="stg_announce_presenting">%1$s started presenting</string>
+    <string name="stg_move_top_left">Move to top left</string>
+    <string name="stg_move_top_right">Move to top right</string>
+    <string name="stg_move_bottom_left">Move to bottom left</string>
+    <string name="stg_move_bottom_right">Move to bottom right</string>
+    <string name="stg_camera_paused">Camera paused</string>
+    <string name="stg_flip_failed">Couldn’t switch cameras. Try again.</string>
 
     <!-- People actions (STG-2, S50 3 g) and the Participants panel (PPL-1): ppl_ -->
     <string name="ppl_pin">Pin</string>
@@ -550,6 +635,62 @@
     <string name="ppl_offline_footer">You’re offline. Host actions return when you reconnect.</string>
     <string name="ppl_lost_host">You’re no longer a host.</string>
     <string name="ppl_no_match">No one matches “%1$s”.</string>
+    <!-- Batch 5: people actions (PPL-2) -->
+    <string name="ppl_change_name">Change name…</string>
+    <string name="ppl_hide_messages">Hide messages from %1$s</string>
+    <string name="ppl_show_messages">Show messages from %1$s</string>
+    <string name="ppl_send_private_message">Send private message</string>
+    <string name="ppl_lower_hand">Lower hand</string>
+    <string name="ppl_mute">Mute</string>
+    <string name="ppl_turn_off_camera">Turn off camera</string>
+    <string name="ppl_stop_screen_share">Stop screen share</string>
+    <string name="ppl_stop_screen_audio">Stop screen audio</string>
+    <string name="ppl_make_cohost">Make co-host…</string>
+    <string name="ppl_make_host">Make host…</string>
+    <string name="ppl_move_to_audience">Move to audience…</string>
+    <string name="ppl_remove_from_meeting">Remove from meeting…</string>
+    <string name="ppl_remove_title">Remove %1$s?</string>
+    <string name="ppl_remove_message">%1$s will leave the meeting. They can join again with the link unless you block them.</string>
+    <string name="ppl_remove">Remove</string>
+    <string name="ppl_also_block">Also block %1$s</string>
+    <string name="ppl_block_guest_note">A blocked guest can still join from another device.</string>
+    <string name="ppl_cohost_title">Make %1$s a co-host?</string>
+    <string name="ppl_cohost_message">Co-hosts can admit people, mute or remove participants and change meeting settings. This lasts until the meeting ends.</string>
+    <string name="ppl_cohost_confirm">Make co-host</string>
+    <string name="ppl_host_title">Make %1$s the host?</string>
+    <string name="ppl_host_message">%1$s becomes the host. You stay in the meeting as a co-host.</string>
+    <string name="ppl_host_confirm">Make host</string>
+    <string name="ppl_demote_title">Move %1$s to the audience?</string>
+    <string name="ppl_demote_message">%1$s leaves the stage and keeps watching as an attendee. They can’t rejoin as a panelist while webinar mode is on.</string>
+    <string name="ppl_demote_confirm">Move to audience</string>
+    <plurals name="ppl_deny_all_title">
+        <item quantity="one">Deny %1$d person?</item>
+        <item quantity="other">Deny %1$d people?</item>
+    </plurals>
+    <string name="ppl_deny_all_message">They won’t join this meeting. They can ask to join again.</string>
+    <string name="ppl_deny_all_confirm">Deny all</string>
+    <string name="ppl_change_name_title">Change your name</string>
+    <string name="ppl_name_label">Name</string>
+    <string name="ppl_name_rules">Up to 40 characters. Everyone sees the new name.</string>
+    <string name="ppl_save">Save</string>
+    <string name="ppl_rename_rate_limited">You’re changing your name too quickly. Try again in a moment.</string>
+    <string name="ppl_rename_disabled">Name changes are turned off for this meeting.</string>
+    <string name="ppl_rename_too_long">Use 40 characters or fewer.</string>
+    <string name="ppl_fail_rename">Couldn’t change your name.</string>
+    <string name="ppl_fail_cant_remove">This person can’t be removed.</string>
+    <string name="ppl_fail_rate_limited">Too many host actions. Try again in a moment.</string>
+    <string name="ppl_fail_reconnect">Reconnect to use host controls.</string>
+    <string name="ppl_fail_already_left">That person already left.</string>
+    <string name="ppl_fail_mute">Couldn’t mute %1$s.</string>
+    <string name="ppl_fail_camera">Couldn’t turn off %1$s’s camera.</string>
+    <string name="ppl_fail_share">Couldn’t stop %1$s’s screen share.</string>
+    <string name="ppl_fail_remove">Couldn’t remove %1$s.</string>
+    <string name="ppl_fail_cohost">Couldn’t make %1$s a co-host.</string>
+    <string name="ppl_fail_host">Couldn’t make %1$s the host.</string>
+    <string name="ppl_fail_audience">Couldn’t move %1$s to the audience.</string>
+    <string name="ppl_announce_cohost">%1$s is now a co-host.</string>
+    <string name="ppl_announce_host">%1$s is now the host.</string>
+    <string name="ppl_announce_removed">%1$s was removed.</string>
 
     <!-- Chat panel, composer, message actions and reactions (CHT-1 to CHT-3): chat_ -->
     <string name="chat_title">Chat</string>
@@ -682,6 +823,70 @@
     <string name="chat_cmd_desc_camera">Turn your camera on or off</string>
     <string name="chat_cmd_desc_leave">Leave the meeting</string>
     <string name="chat_cmd_desc_clear">Clear chat on this device</string>
+    <!-- Batch 5: photos, GIFs, link cards and voice messages (CHT-4 to CHT-6) -->
+    <string name="chat_attach">Add attachment</string>
+    <string name="chat_attach_photo">Photo</string>
+    <string name="chat_attach_gif">GIFs and stickers</string>
+    <string name="chat_attachment_remove">Remove photo</string>
+    <string name="chat_attachment_preparing">Preparing…</string>
+    <string name="chat_attachment_uploading_indeterminate">Uploading…</string>
+    <string name="chat_attachment_uploading">Uploading %1$d%%</string>
+    <string name="chat_attachment_ready">Ready to send</string>
+    <string name="chat_attachment_photo">Photo</string>
+    <string name="chat_fail_photo_too_large">Photos can be up to 6 MB.</string>
+    <string name="chat_fail_photo_type">That photo type isn’t supported. Use JPEG, PNG, GIF, WebP or AVIF.</string>
+    <string name="chat_fail_photo_unavailable">Photo upload is unavailable right now.</string>
+    <string name="chat_fail_photo_blocked">Photo not sent. Our safety check flagged it as potentially harmful. Only you can see this notice.</string>
+    <string name="chat_fail_photo_rate">Too many photo uploads. Wait a moment and try again.</string>
+    <string name="chat_fail_photos_disabled">Photos are turned off by the host.</string>
+    <string name="chat_reason_photos_off">Photos are turned off by the host.</string>
+    <string name="chat_photo_failed">Couldn’t load photo. Tap to retry.</string>
+    <string name="chat_ax_retry_photo">Retry loading photo</string>
+    <string name="chat_ax_open_photo">Open photo</string>
+    <string name="chat_photo_label">Photo from %1$s</string>
+    <string name="chat_photo_subtitle">%1$s, %2$s</string>
+    <string name="chat_action_share_photo">Share photo</string>
+    <string name="chat_photo_viewer_failed">Couldn’t load photo.</string>
+    <string name="chat_photo_title">Photo</string>
+    <string name="chat_sticker">Sticker</string>
+    <string name="chat_clip">Clip</string>
+    <string name="chat_link_preview">Link preview</string>
+    <string name="chat_link_preview_remove">Remove link preview</string>
+    <string name="chat_embed_youtube">Watch on YouTube</string>
+    <string name="chat_embed_play">Play video: %1$s</string>
+    <string name="chat_embed_image">Linked image</string>
+    <string name="chat_gifs_title">GIFs</string>
+    <string name="chat_gif_kind_gifs">GIFs</string>
+    <string name="chat_gif_kind_stickers">Stickers</string>
+    <string name="chat_gif_kind_clips">Clips</string>
+    <string name="chat_gif_search_gifs">Search Klipy GIFs</string>
+    <string name="chat_gif_search_stickers">Search Klipy stickers</string>
+    <string name="chat_gif_search_clips">Search Klipy clips</string>
+    <string name="chat_gif_empty_gifs">No GIFs found</string>
+    <string name="chat_gif_empty_stickers">No stickers found</string>
+    <string name="chat_gif_empty_clips">No clips found</string>
+    <string name="chat_gif_error_gifs">Couldn’t load GIFs.</string>
+    <string name="chat_gif_error_stickers">Couldn’t load stickers.</string>
+    <string name="chat_gif_error_clips">Couldn’t load clips.</string>
+    <string name="chat_gif_more_failed">Couldn’t load more.</string>
+    <string name="chat_gif_attribution">Powered by Klipy</string>
+    <string name="chat_gif_tip_title">Stickers and clips, too</string>
+    <string name="chat_gif_tip_body">Browse Klipy stickers and short video clips right here.</string>
+    <string name="chat_gif_send_hint">Sends to everyone</string>
+    <string name="chat_voice">Voice message</string>
+    <string name="chat_voice_speaking">Speaking</string>
+    <string name="chat_voice_play">Play voice message</string>
+    <string name="chat_voice_play_hint">Only you will hear it</string>
+    <string name="chat_voice_stop">Stop speaking</string>
+    <string name="chat_voice_hint">Read aloud to everyone</string>
+    <string name="chat_voice_system">System voice</string>
+    <string name="chat_voice_personal">Your voice</string>
+    <string name="chat_voice_line">%1$s · %2$s</string>
+    <string name="chat_voice_exit">Exit voice message</string>
+    <string name="chat_placeholder_voice">Message to read aloud</string>
+    <string name="chat_send_voice">Send voice message</string>
+    <string name="chat_ax_voice">Voice message</string>
+    <string name="chat_attach_voice">Voice message</string>
 
     <!-- Activities launcher, game shell, apps and shared browser (ACT-1, ACT-2): act_, gm_, br_, app_, set_ -->
     <string name="act_action_failed">That didn’t go through. Try again.</string>
@@ -805,6 +1010,15 @@
     <string name="gm_wins_with">%1$s wins with %2$s</string>
     <string name="gm_your_answer">Your answer</string>
     <string name="set_available_when_reconnected">Available when you’re reconnected.</string>
+    <!-- Batch 5: connection quality and about (STG-6, shared with SET-1 and SET-3) -->
+    <string name="set_quality_measuring">Measuring…</string>
+    <string name="set_quality_good">Good</string>
+    <string name="set_quality_fair">Fair</string>
+    <string name="set_quality_poor">Poor</string>
+    <string name="set_quality_very_poor">Very poor</string>
+    <string name="set_quality_unavailable">Unavailable</string>
+    <string name="set_about">About</string>
+    <string name="set_version">Version</string>
     <plurals name="act_players_count">
         <item quantity="one">%1$d player</item>
         <item quantity="other">%1$d players</item>
@@ -825,4 +1039,109 @@
         <item quantity="one">%1$d second left</item>
         <item quantity="other">%1$d seconds left</item>
     </plurals>
+
+    <!-- Batch 5: Host Controls (PPL-4) -->
+    <string name="hst_announce_on">%1$s turned on by another host.</string>
+    <string name="hst_announce_off">%1$s turned off by another host.</string>
+    <string name="hst_title">Host controls</string>
+    <string name="hst_unavailable_title">Host controls unavailable</string>
+    <string name="hst_loading">Loading settings</string>
+    <string name="hst_updating">Updating</string>
+    <string name="hst_everyone">Everyone</string>
+    <string name="hst_mute_all">Mute everyone…</string>
+    <string name="hst_cameras_off">Turn off everyone’s camera…</string>
+    <string name="hst_stop_shares">Stop all screen shares…</string>
+    <string name="hst_lower_hands">Lower all hands</string>
+    <string name="hst_muting_all">Muting everyone…</string>
+    <string name="hst_cameras_off_pending">Turning off cameras…</string>
+    <string name="hst_stopping_shares">Stopping shares…</string>
+    <string name="hst_lowering_hands">Lowering hands…</string>
+    <string name="hst_mute_all_title">Mute everyone?</string>
+    <string name="hst_mute_all_message">Everyone except hosts is muted. People can unmute again unless unmuting is turned off.</string>
+    <string name="hst_mute_all_confirm">Mute everyone</string>
+    <string name="hst_cameras_off_title">Turn off everyone’s camera?</string>
+    <string name="hst_cameras_off_message">Everyone except hosts stops sending video. People can turn their camera back on unless video is turned off.</string>
+    <string name="hst_cameras_off_confirm">Turn off cameras</string>
+    <string name="hst_stop_shares_title">Stop all screen shares?</string>
+    <string name="hst_stop_shares_message">Everyone who is presenting stops sharing.</string>
+    <string name="hst_stop_shares_confirm">Stop all shares</string>
+    <string name="hst_access">Meeting access</string>
+    <string name="hst_lock">Lock meeting</string>
+    <string name="hst_allow_guests">Allow guests</string>
+    <string name="hst_invite_code">Invite code</string>
+    <string name="hst_access_list">Access list</string>
+    <string name="hst_access_summary">%1$d allowed, %2$d blocked</string>
+    <string name="hst_none">None</string>
+    <string name="hst_access_footer">When the meeting is locked, new people wait until a host admits them. Guests are people who aren’t signed in.</string>
+    <string name="hst_media">Participant media</string>
+    <string name="hst_allow_unmute">Allow participants to unmute</string>
+    <string name="hst_allow_video">Allow participants to turn on video</string>
+    <string name="hst_media_footer">Turning these off also mutes microphones or stops cameras that are on. Hosts aren’t affected.</string>
+    <string name="hst_chat">Chat and messages</string>
+    <string name="hst_allow_chat">Allow chat</string>
+    <string name="hst_private_messages">Private messages</string>
+    <string name="hst_photos">Photos in chat</string>
+    <string name="hst_voice_messages">Voice messages</string>
+    <string name="hst_reactions">Reactions</string>
+    <string name="hst_notice">Notice</string>
+    <string name="hst_send_notice">Send a notice</string>
+    <string name="hst_notice_footer">Notices appear at the top of everyone’s screen for 60 seconds.</string>
+    <string name="hst_webinar">Webinar</string>
+    <string name="hst_webinar_mode">Webinar mode</string>
+    <string name="hst_webinar_settings">Webinar settings</string>
+    <plurals name="hst_watching">
+        <item quantity="one">%1$d watching</item>
+        <item quantity="other">%1$d watching</item>
+    </plurals>
+    <string name="hst_webinar_footer">Webinar mode lets people watch from the webinar link without joining the call.</string>
+    <string name="hst_public">Public access</string>
+    <string name="hst_lock_attendees">Lock attendees</string>
+    <string name="hst_attendee_qa">Attendee Q&amp;A</string>
+    <string name="hst_fail_policy">Couldn’t update %1$s.</string>
+    <string name="hst_fail_mute_all">Couldn’t mute everyone.</string>
+    <string name="hst_fail_cameras">Couldn’t turn off cameras.</string>
+    <string name="hst_fail_shares">Couldn’t stop screen shares.</string>
+    <string name="hst_rotate_title">Rotate webinar link?</string>
+    <string name="hst_rotate_message">Anyone with the old link can no longer join. You’ll get a new link to share.</string>
+    <string name="hst_rotate_confirm">Rotate link</string>
+    <string name="hst_invite_title">Invite code</string>
+    <string name="hst_status">Status</string>
+    <string name="hst_new_code">New code</string>
+    <string name="hst_code_footer">People need this code to join. Share it with the meeting link.</string>
+    <string name="hst_save_code">Save code</string>
+    <string name="hst_remove_code">Remove code…</string>
+    <string name="hst_code_saved">Code saved</string>
+    <string name="hst_remove_code_title">Remove invite code?</string>
+    <string name="hst_remove_code_message">People can join without a code. Anyone already waiting stays in the waiting room.</string>
+    <string name="hst_remove_code_confirm">Remove code</string>
+    <string name="hst_fail_code_save">Couldn’t save the invite code.</string>
+    <string name="hst_fail_code_remove">Couldn’t remove the invite code.</string>
+    <string name="hst_access_title">Access list</string>
+    <string name="hst_key_label">User key or email</string>
+    <string name="hst_allow">Allow</string>
+    <string name="hst_block">Block…</string>
+    <string name="hst_list_footer">Allowed people skip the waiting room, even when the meeting is locked. Blocked people can’t join and are removed if they’re here.</string>
+    <string name="hst_allowed">Allowed</string>
+    <string name="hst_blocked">Blocked</string>
+    <string name="hst_also_locked">Also while locked</string>
+    <string name="hst_revoke_label">Revoke %1$s</string>
+    <string name="hst_unblock_label">Unblock %1$s</string>
+    <string name="hst_allowed_empty">No one is on the allow list.</string>
+    <string name="hst_blocked_empty">No one is blocked.</string>
+    <string name="hst_access_loading">Loading access list</string>
+    <string name="hst_key_invalid">Enter a valid user key or email.</string>
+    <string name="hst_block_title">Block %1$s?</string>
+    <string name="hst_block_message">They can’t join this meeting. If they’re here, they’re removed now.</string>
+    <string name="hst_block_confirm">Block</string>
+    <string name="hst_fail_access">Couldn’t update the access list.</string>
+    <string name="hst_message_label">Message everyone</string>
+    <string name="hst_level_info">Info</string>
+    <string name="hst_level_warning">Warning</string>
+    <string name="hst_level_urgent">Urgent</string>
+    <string name="hst_preview">Preview</string>
+    <string name="hst_preview_label">Preview: %1$s notice, %2$s</string>
+    <string name="hst_send_notice_button">Send notice</string>
+    <string name="hst_sending">Sending…</string>
+    <string name="hst_notice_sent">Notice sent</string>
+    <string name="hst_fail_notice">Couldn’t send the notice.</string>
 </resources>

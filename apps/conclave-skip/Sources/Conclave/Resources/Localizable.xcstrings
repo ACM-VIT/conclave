@@ -115,8 +115,20 @@
         }
       }
     },
+    "%@ becomes the host. You stay in the meeting as a co-host." : {
+      "comment" : "People confirmation dialog (S50 3 g): Make Host message; the person's name",
+      "extractionState" : "manual"
+    },
     "%@ ended" : {
       "comment" : "Activity card on the stage (S20 11): accessibility announcement when a game, app or the shared browser ends; %@ is its name",
+      "extractionState" : "manual"
+    },
+    "%@ is now a co-host." : {
+      "comment" : "Host result announcement for screen readers (S50 3 i, 6 f; no toast): the person's name",
+      "extractionState" : "manual"
+    },
+    "%@ is now the host." : {
+      "comment" : "Host result announcement for screen readers (S50 3 i, 6 f; no toast): the person's name",
       "extractionState" : "manual"
     },
     "%@ is presenting" : {
@@ -129,6 +141,10 @@
     },
     "%@ joined" : {
       "comment" : "In-call toast: a person joined; the argument is their name",
+      "extractionState" : "manual"
+    },
+    "%@ leaves the stage and keeps watching as an attendee. They can’t rejoin as a panelist while webinar mode is on." : {
+      "comment" : "People confirmation dialog (S50 3 g): Move to Audience message; the person's name",
       "extractionState" : "manual"
     },
     "%@ left" : {
@@ -175,12 +191,32 @@
       "comment" : "Activity card on the stage (S20 11): accessibility announcement when a game, app or the shared browser starts; %@ is its name",
       "extractionState" : "manual"
     },
+    "%@ started presenting" : {
+      "comment" : "Call stage: spoken announcement when another person starts sharing their screen; the argument is their name",
+      "extractionState" : "manual"
+    },
     "%@ tapped, %@" : {
       "comment" : "Debug component gallery: last haptic tap: feedback kind identifier, then its result",
       "extractionState" : "manual"
     },
+    "%@ turned off by another host." : {
+      "comment" : "Host result announcement for screen readers (S50 3 i, 6 f; no toast): a Host Controls setting name",
+      "extractionState" : "manual"
+    },
+    "%@ turned on by another host." : {
+      "comment" : "Host result announcement for screen readers (S50 3 i, 6 f; no toast): a Host Controls setting name",
+      "extractionState" : "manual"
+    },
     "%@ wants to join" : {
       "comment" : "In-call banner for hosts (priority 8): one person is waiting to be let in; the argument is their name",
+      "extractionState" : "manual"
+    },
+    "%@ was removed." : {
+      "comment" : "Host result announcement for screen readers (S50 3 i, 6 f; no toast): the person's name",
+      "extractionState" : "manual"
+    },
+    "%@ will leave the meeting. They can join again with the link unless you block them." : {
+      "comment" : "People confirmation dialog (S50 3 g): Remove message; the person's name",
       "extractionState" : "manual"
     },
     "%@ wins with %@" : {
@@ -258,6 +294,10 @@
           }
         }
       }
+    },
+    "%lld allowed, %lld blocked" : {
+      "comment" : "Host Controls (S50 6 g): Access List row value; allowed and blocked counts",
+      "extractionState" : "manual"
     },
     "%lld characters over the limit" : {
       "comment" : "Chat panel: Send button value when the draft is too long (iOS)",
@@ -431,12 +471,24 @@
       "comment" : "In-call control bar (iOS): value of the Participants or More button with the number of people waiting to be admitted",
       "extractionState" : "manual"
     },
+    "%lld watching" : {
+      "comment" : "Host Controls (S50 6 g) (iOS): Webinar Settings row value; number of attendees watching",
+      "extractionState" : "manual"
+    },
     "+%lld joining" : {
       "comment" : "Game shell in the activity card (S60 8): header status part, people queued for the next round",
       "extractionState" : "manual"
     },
     "5 s left" : {
       "comment" : "Game shell in the activity card (S60 8): countdown warning twin shown at 5 seconds or less",
+      "extractionState" : "manual"
+    },
+    "A blocked guest can still join from another device." : {
+      "comment" : "People confirmation dialog (S50 3 g): note added to the Remove message when the person is a guest",
+      "extractionState" : "manual"
+    },
+    "A host is here and can let you in." : {
+      "comment" : "Waiting room body when a host has arrived (S10 9 g)",
       "extractionState" : "manual"
     },
     "A host lowered your hand." : {
@@ -463,6 +515,14 @@
       "comment" : "Video tile: short tag after the name of an AI voice agent a web host brought into the call (Android only with request R10b)",
       "extractionState" : "manual"
     },
+    "About" : {
+      "comment" : "Settings: section header above the privacy policy and version rows (first used by the webinar attendee settings page)",
+      "extractionState" : "manual"
+    },
+    "Access List" : {
+      "comment" : "Host Controls (S50 6 g): row that opens the Access List page",
+      "extractionState" : "manual"
+    },
     "Access is off in Settings" : {
       "comment" : "In-call control bar: why the microphone or camera is unavailable when its system permission is denied",
       "extractionState" : "manual"
@@ -473,6 +533,10 @@
     },
     "Account, %@" : {
       "comment" : "Premeeting Home: accessibility label of the account button when signed in; the argument is the account name",
+      "extractionState" : "manual"
+    },
+    "Actions for %@" : {
+      "comment" : "People row (S50 2 i) (iOS): label of the trailing actions menu; the person's name",
       "extractionState" : "manual"
     },
     "Activities" : {
@@ -531,6 +595,10 @@
         }
       }
     },
+    "Add Attachment" : {
+      "comment" : "Chat composer: accessibility label of the attach button that opens the attachment menu",
+      "extractionState" : "manual"
+    },
     "Add Reaction" : {
       "comment" : "Chat panel: accessibility action and page title for adding a reaction",
       "extractionState" : "manual"
@@ -541,6 +609,10 @@
     },
     "Add your name to start." : {
       "comment" : "Pre-join lobby: why Start Meeting is disabled for a guest with no name",
+      "extractionState" : "manual"
+    },
+    "Adds the copied image as a photo" : {
+      "comment" : "Chat composer: accessibility hint of the system Paste control shown while the clipboard holds an image (iOS)",
       "extractionState" : "manual"
     },
     "Admit" : {
@@ -555,12 +627,48 @@
       "comment" : "Host knock banner action: lets everyone waiting in",
       "extractionState" : "manual"
     },
+    "Allow" : {
+      "comment" : "Access List page (S50 7 g): button that adds the key to the allow list",
+      "extractionState" : "manual"
+    },
+    "Allow Chat" : {
+      "comment" : "Host Controls (S50 6 g): switch",
+      "extractionState" : "manual"
+    },
+    "Allow Guests" : {
+      "comment" : "Host Controls (S50 6 g): switch",
+      "extractionState" : "manual"
+    },
+    "Allow Participants to Turn On Video" : {
+      "comment" : "Host Controls (S50 6 g): switch",
+      "extractionState" : "manual"
+    },
+    "Allow Participants to Unmute" : {
+      "comment" : "Host Controls (S50 6 g): switch",
+      "extractionState" : "manual"
+    },
     "Allow camera access in Settings to use video in meetings." : {
       "comment" : "Pre-join lobby: explanation under the camera access title, with Open Settings; Alert message in a call: how to turn camera access back on",
       "extractionState" : "manual"
     },
     "Allow microphone access in Settings so people can hear you." : {
       "comment" : "Pre-join lobby: explanation under the microphone access title, with Open Settings; Alert message in a call: how to turn microphone access back on",
+      "extractionState" : "manual"
+    },
+    "Allowed" : {
+      "comment" : "Access List page (S50 7 g): section header",
+      "extractionState" : "manual"
+    },
+    "Allowed people skip the waiting room, even when the meeting is locked. Blocked people can’t join and are removed if they’re here." : {
+      "comment" : "Access List page (S50 7 g): footer under the buttons",
+      "extractionState" : "manual"
+    },
+    "Also while locked" : {
+      "comment" : "Access List page (S50 7 g): value on an allowed key that also skips a locked meeting",
+      "extractionState" : "manual"
+    },
+    "Anyone with the old link can no longer join. You’ll get a new link to share." : {
+      "comment" : "Host Controls (S50 6 g): rotate confirmation message",
       "extractionState" : "manual"
     },
     "App" : {
@@ -605,6 +713,10 @@
     },
     "Attempt %lld of %lld" : {
       "comment" : "In-call reconnecting banner, second line: rejoin attempt number and the attempt limit",
+      "extractionState" : "manual"
+    },
+    "Attendee Q&A" : {
+      "comment" : "Host Controls (S50 6 g): webinar switch name used in announcements and failures (PPL-6 page)",
       "extractionState" : "manual"
     },
     "Attendees" : {
@@ -671,6 +783,22 @@
       "comment" : "Chat panel: empty state body",
       "extractionState" : "manual"
     },
+    "Block" : {
+      "comment" : "Access List page (S50 7 g): Block confirmation button",
+      "extractionState" : "manual"
+    },
+    "Block %@?" : {
+      "comment" : "Access List page (S50 7 g): Block confirmation title; the key",
+      "extractionState" : "manual"
+    },
+    "Blocked" : {
+      "comment" : "Access List page (S50 7 g): section header",
+      "extractionState" : "manual"
+    },
+    "Block…" : {
+      "comment" : "Access List page (S50 7 g): button that blocks the key (asks first)",
+      "extractionState" : "manual"
+    },
     "Bold Text" : {
       "comment" : "Debug component gallery: readout name for the Bold Text setting",
       "extractionState" : "manual"
@@ -681,6 +809,10 @@
     },
     "Bordered Prominent, On Coral" : {
       "comment" : "Debug component gallery: inert specimen button in the bordered prominent style with the coral fill and its label color",
+      "extractionState" : "manual"
+    },
+    "Browse Klipy stickers and short video clips right here." : {
+      "comment" : "GIF picker: body of the one-time tip",
       "extractionState" : "manual"
     },
     "Buttons" : {
@@ -755,6 +887,10 @@
       "comment" : "Call stage: status caption under the name of the other person in a one-to-one call while their camera is off (sentence case status text; the tile state value is the separate key Camera Off)",
       "extractionState" : "manual"
     },
+    "Camera paused" : {
+      "comment" : "Call stage: caption on your own video while the system or another app holds your camera",
+      "extractionState" : "manual"
+    },
     "Camera permission is off" : {
       "comment" : "Pre-join lobby: state of the Effects control while camera access is off in Settings",
       "extractionState" : "manual"
@@ -773,6 +909,10 @@
     },
     "Cancel the vote to pick a game directly." : {
       "comment" : "Activities panel (S60 7): why catalog rows are disabled during a vote",
+      "extractionState" : "manual"
+    },
+    "Captions" : {
+      "comment" : "Meeting Details panel (S20 15): status row shown while your captions are on",
       "extractionState" : "manual"
     },
     "Captions will appear here." : {
@@ -802,6 +942,14 @@
           }
         }
       }
+    },
+    "Change Name…" : {
+      "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): your own row, opens the rename dialog",
+      "extractionState" : "manual"
+    },
+    "Change Your Name" : {
+      "comment" : "Change Name dialog (S50 3 c, 3 d, 3 g): dialog title",
+      "extractionState" : "manual"
     },
     "Character Counter %lld %lld" : {
       "comment" : "Text field: visible near-limit character counter, count then limit, for example 38/40",
@@ -835,6 +983,18 @@
         }
       }
     },
+    "Chat Photo Subtitle %@ %@" : {
+      "comment" : "Photo viewer: subtitle with the sender's name (first) and the time the photo was sent (second)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, %2$@"
+          }
+        }
+      }
+    },
     "Chat Row Summary %@ %@" : {
       "comment" : "Chat panel: spoken summary of one message; the arguments are the sender's name and the message text",
       "extractionState" : "manual",
@@ -846,6 +1006,10 @@
           }
         }
       }
+    },
+    "Chat and Messages" : {
+      "comment" : "Host Controls (S50 6 g): section header",
+      "extractionState" : "manual"
     },
     "Chat cleared" : {
       "comment" : "Chat panel: system row after /clear",
@@ -891,6 +1055,14 @@
       "comment" : "Chat panel: description of the /clear command in the suggestions",
       "extractionState" : "manual"
     },
+    "Clip" : {
+      "comment" : "Chat panel and GIF picker: tag on a short video clip, and the label of a clip that has no title",
+      "extractionState" : "manual"
+    },
+    "Clips" : {
+      "comment" : "GIF picker: media type option for short video clips",
+      "extractionState" : "manual"
+    },
     "Close" : {
       "comment" : "Component: label of a sheet or panel Close button that names no title (the Account sheet, S10 R10), so it cannot be heard as deleting the account",
       "extractionState" : "manual"
@@ -923,8 +1095,20 @@
       "comment" : "Role tag shown beside a person name for a co-host (iOS title case capitalizes both parts, S50 R50-5)",
       "extractionState" : "manual"
     },
+    "Co-hosts can admit people, mute or remove participants and change meeting settings. This lasts until the meeting ends." : {
+      "comment" : "People confirmation dialog (S50 3 g): Make Co-Host message",
+      "extractionState" : "manual"
+    },
+    "Code copied" : {
+      "comment" : "Meeting Details panel (S20 15): spoken confirmation (iOS) and Android 9 to 12 snackbar after copying the room code",
+      "extractionState" : "manual"
+    },
     "Code or Link" : {
       "comment" : "Join sheet (iOS): placeholder of the field for a meeting code or link",
+      "extractionState" : "manual"
+    },
+    "Code saved" : {
+      "comment" : "Invite Code page (S50 7 g): confirmation after saving",
       "extractionState" : "manual"
     },
     "Collaborative whiteboard" : {
@@ -1008,15 +1192,19 @@
       "extractionState" : "manual"
     },
     "Copied" : {
-      "comment" : "Call stage (iOS): the Copy Link button reads this for 2 seconds after the link was copied",
+      "comment" : "Call stage (iOS): the Copy Link button reads this for 2 seconds after the link was copied; also the Meeting Details copy rows for 2 seconds after a copy (STG-6)",
       "extractionState" : "manual"
     },
     "Copy" : {
       "comment" : "Chat panel: message action that copies the message text",
       "extractionState" : "manual"
     },
+    "Copy Code" : {
+      "comment" : "Meeting Details panel (S20 15): button that copies the room code (iOS row; Android copy icon description)",
+      "extractionState" : "manual"
+    },
     "Copy Link" : {
-      "comment" : "Copies the meeting link: premeeting Home recent row menu item (ENT-1) and the call stage solo card button (STG-1); also the sample title of the text button in the Debug component gallery",
+      "comment" : "Copies the meeting link: premeeting Home recent row menu item (ENT-1) and the call stage solo card button (STG-1); also the sample title of the text button in the Debug component gallery; also the Meeting Details and webinar link copy rows (STG-6)",
       "extractionState" : "manual"
     },
     "Coral text on the call stage" : {
@@ -1039,6 +1227,30 @@
       "comment" : "Debug component gallery: sample text of the error banner",
       "extractionState" : "manual"
     },
+    "Couldn't load GIFs." : {
+      "comment" : "GIF picker: error state when GIFs cannot be loaded, above Try Again",
+      "extractionState" : "manual"
+    },
+    "Couldn't load clips." : {
+      "comment" : "GIF picker: error state when clips cannot be loaded, above Try Again",
+      "extractionState" : "manual"
+    },
+    "Couldn't load more." : {
+      "comment" : "GIF picker: shown at the end of the results when the next page failed, next to Retry",
+      "extractionState" : "manual"
+    },
+    "Couldn't load photo." : {
+      "comment" : "Photo viewer: shown when the photo cannot be loaded, above Try Again",
+      "extractionState" : "manual"
+    },
+    "Couldn't load photo. Tap to retry." : {
+      "comment" : "Chat panel: shown inside a photo message whose image failed to load; tapping retries",
+      "extractionState" : "manual"
+    },
+    "Couldn't load stickers." : {
+      "comment" : "GIF picker: error state when stickers cannot be loaded, above Try Again",
+      "extractionState" : "manual"
+    },
     "Couldn’t Join" : {
       "comment" : "Lobby failure title when joining a meeting failed",
       "extractionState" : "manual"
@@ -1059,6 +1271,10 @@
       "comment" : "In-call toast: locking or unlocking the meeting failed",
       "extractionState" : "manual"
     },
+    "Couldn’t change your name." : {
+      "comment" : "Change Name dialog (S50 3 c, 3 d, 3 g): generic rename failure",
+      "extractionState" : "manual"
+    },
     "Couldn’t delete your account. Check your connection and try again." : {
       "comment" : "Account: the account deletion request failed (iOS footer, Android snackbar with Retry)",
       "extractionState" : "manual"
@@ -1075,8 +1291,32 @@
       "comment" : "Game shell in the activity card (S60 8): failure notice in the game card",
       "extractionState" : "manual"
     },
+    "Couldn’t join" : {
+      "comment" : "Accessibility announcement when a join fails (sentence case: a description, not a title) (S10 8 g, 8 i)",
+      "extractionState" : "manual"
+    },
     "Couldn’t load sign-in options." : {
       "comment" : "Account (signed out): the sign-in providers could not be fetched; a Try Again button follows",
+      "extractionState" : "manual"
+    },
+    "Couldn’t make %@ a co-host." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry): the person's name",
+      "extractionState" : "manual"
+    },
+    "Couldn’t make %@ the host." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry): the person's name",
+      "extractionState" : "manual"
+    },
+    "Couldn’t move %@ to the audience." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry): the person's name",
+      "extractionState" : "manual"
+    },
+    "Couldn’t mute %@." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry): the person's name",
+      "extractionState" : "manual"
+    },
+    "Couldn’t mute everyone." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry)",
       "extractionState" : "manual"
     },
     "Couldn’t open that page. Try again." : {
@@ -1087,8 +1327,52 @@
       "comment" : "In-call toast: raising your hand failed",
       "extractionState" : "manual"
     },
+    "Couldn’t remove %@." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry): the person's name",
+      "extractionState" : "manual"
+    },
+    "Couldn’t remove the invite code." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry)",
+      "extractionState" : "manual"
+    },
+    "Couldn’t save the invite code." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry)",
+      "extractionState" : "manual"
+    },
+    "Couldn’t send the notice." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry)",
+      "extractionState" : "manual"
+    },
+    "Couldn’t stop %@’s screen share." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry): the person's name",
+      "extractionState" : "manual"
+    },
+    "Couldn’t stop screen shares." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry)",
+      "extractionState" : "manual"
+    },
     "Couldn’t switch audio. Try again." : {
       "comment" : "In-call toast: switching the audio output failed",
+      "extractionState" : "manual"
+    },
+    "Couldn’t switch cameras. Try again." : {
+      "comment" : "Call stage: message after switching between the front and back camera failed; it offers Retry",
+      "extractionState" : "manual"
+    },
+    "Couldn’t turn off %@’s camera." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry): the person's name",
+      "extractionState" : "manual"
+    },
+    "Couldn’t turn off cameras." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry)",
+      "extractionState" : "manual"
+    },
+    "Couldn’t update %@." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry): a Host Controls setting name",
+      "extractionState" : "manual"
+    },
+    "Couldn’t update the access list." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry)",
       "extractionState" : "manual"
     },
     "Crop to Fill" : {
@@ -1131,6 +1415,34 @@
       "comment" : "Person row: accessibility label of the Deny button, with the waiting person’s name",
       "extractionState" : "manual"
     },
+    "Deny %lld People?" : {
+      "comment" : "People confirmation dialog (S50 3 g): Deny All title (S50 4); number of people waiting",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Deny %lld Person?"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Deny %lld People?"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Deny All" : {
+      "comment" : "People confirmation dialog (S50 3 g): Deny All confirm button (S50 4)",
+      "extractionState" : "manual"
+    },
     "Disabled by the host" : {
       "comment" : "In-call control bar: why the microphone (and, on iOS, the camera) is unavailable after the host turned it off for participants",
       "extractionState" : "manual"
@@ -1159,6 +1471,18 @@
       "comment" : "Confirmation title before ending a game; %@ is the game name",
       "extractionState" : "manual"
     },
+    "End Call for Everyone" : {
+      "comment" : "In-call Leave control for hosts: the accessibility action and long-press label that ask to end the call for everyone; on iOS also the destructive confirm button of the End dialog",
+      "extractionState" : "manual"
+    },
+    "End Call for Everyone?" : {
+      "comment" : "In-call End confirmation dialog: title asking the host to confirm ending the call for every participant",
+      "extractionState" : "manual"
+    },
+    "End Call for Everyone…" : {
+      "comment" : "In-call host Leave menu (long press on the red Leave control): the destructive item that asks to end the call for everyone; the ellipsis means a confirmation follows",
+      "extractionState" : "manual"
+    },
     "End Game" : {
       "comment" : "Destructive confirmation button that ends the game for everyone",
       "extractionState" : "manual"
@@ -1183,12 +1507,20 @@
       "comment" : "In-call progress toast: ending the call for everyone",
       "extractionState" : "manual"
     },
+    "Ending…" : {
+      "comment" : "In-call host Leave menu: second line of the disabled End item while the call is being ended for everyone",
+      "extractionState" : "manual"
+    },
     "Enter a URL to continue." : {
       "comment" : "Activities panel (S60 7): shared browser URL validation, empty field",
       "extractionState" : "manual"
     },
     "Enter a valid URL." : {
       "comment" : "Activities panel (S60 7): shared browser URL validation, invalid address",
+      "extractionState" : "manual"
+    },
+    "Enter a valid user key or email." : {
+      "comment" : "Access List page (S50 7 g): error under the field",
       "extractionState" : "manual"
     },
     "Enter the code from your invite, or paste the link." : {
@@ -1200,7 +1532,15 @@
       "extractionState" : "manual"
     },
     "Everyone" : {
-      "comment" : "Chat panel: recipient choice that sends to everyone",
+      "comment" : "Chat panel: recipient choice that sends to everyone; Host Controls (S50 6 g): section header for actions on everyone",
+      "extractionState" : "manual"
+    },
+    "Everyone except hosts is muted. People can unmute again unless unmuting is turned off." : {
+      "comment" : "Host Controls (S50 6 g): bulk confirmation message",
+      "extractionState" : "manual"
+    },
+    "Everyone except hosts stops sending video. People can turn their camera back on unless video is turned off." : {
+      "comment" : "Host Controls (S50 6 g): bulk confirmation message",
       "extractionState" : "manual"
     },
     "Everyone in this call can see messages, including people who join later. Private messages stay between you and the recipient." : {
@@ -1211,8 +1551,24 @@
       "comment" : "Activities panel (S60 7): confirmation message before closing an app or the shared browser",
       "extractionState" : "manual"
     },
+    "Everyone who is presenting stops sharing." : {
+      "comment" : "Host Controls (S50 6 g): bulk confirmation message",
+      "extractionState" : "manual"
+    },
+    "Everyone, including people waiting to join, will be disconnected." : {
+      "comment" : "In-call End confirmation dialog: message under the title explaining that everyone, also people in the waiting room, leaves the call",
+      "extractionState" : "manual"
+    },
+    "Exit Voice Message" : {
+      "comment" : "Chat panel, voice messages: button that leaves voice mode in the composer",
+      "extractionState" : "manual"
+    },
     "Fails" : {
       "comment" : "Debug component gallery: contrast verdict when the ratio misses its class",
+      "extractionState" : "manual"
+    },
+    "Fair" : {
+      "comment" : "Connection quality value (shared by Meeting Details and Settings, RECONCILE R21): fair connection",
       "extractionState" : "manual"
     },
     "Feedback" : {
@@ -1245,6 +1601,14 @@
     },
     "GIF" : {
       "comment" : "Chat panel: media kind in a reply quote and the spoken row summary",
+      "extractionState" : "manual"
+    },
+    "GIFs" : {
+      "comment" : "GIF picker: title of the picker page (iOS also uses it for the GIFs media type option)",
+      "extractionState" : "manual"
+    },
+    "GIFs and Stickers" : {
+      "comment" : "Chat composer: attach menu item that opens the GIF, sticker and clip picker",
       "extractionState" : "manual"
     },
     "Game" : {
@@ -1281,6 +1645,10 @@
     },
     "Goes to the original message" : {
       "comment" : "Chat panel: VoiceOver hint of a reply quote",
+      "extractionState" : "manual"
+    },
+    "Good" : {
+      "comment" : "Connection quality value (shared by Meeting Details and Settings, RECONCILE R21): good connection",
       "extractionState" : "manual"
     },
     "Grid" : {
@@ -1320,11 +1688,19 @@
       "extractionState" : "manual"
     },
     "Host Controls" : {
-      "comment" : "In-call panel title: meeting controls for hosts",
+      "comment" : "In-call panel title: meeting controls for hosts; also the Meeting Details row that opens Host Controls (STG-6, PPL-4)",
+      "extractionState" : "manual"
+    },
+    "Host Controls Unavailable" : {
+      "comment" : "Host Controls (S50 6 g): shown after losing the host role",
       "extractionState" : "manual"
     },
     "Host actions are unavailable while reconnecting." : {
       "comment" : "Participants (S50 1 g): footer under In This Meeting for hosts while the call reconnects",
+      "extractionState" : "manual"
+    },
+    "Hosts" : {
+      "comment" : "Meeting Details panel (S20 15): row listing the names of the meeting's hosts",
       "extractionState" : "manual"
     },
     "Identity" : {
@@ -1351,8 +1727,16 @@
       "comment" : "Debug component gallery: introduction under the title",
       "extractionState" : "manual"
     },
+    "Info" : {
+      "comment" : "Notice composer (S50 8 g): notice level",
+      "extractionState" : "manual"
+    },
     "Invite Code" : {
-      "comment" : "Pre-join lobby: label of the invite code field shown after the meeting asked for one",
+      "comment" : "Pre-join lobby: label of the invite code field shown after the meeting asked for one; Host Controls (S50 6 g): row that opens the Invite Code page",
+      "extractionState" : "manual"
+    },
+    "Invite Code Required" : {
+      "comment" : "Meeting Details panel (S20 15) (hosts only): status row shown when joining needs the meeting invite code",
       "extractionState" : "manual"
     },
     "Invited on stage" : {
@@ -1372,7 +1756,7 @@
       "extractionState" : "manual"
     },
     "Join My Conclave Meeting" : {
-      "comment" : "Share sheet: subject of the meeting invitation (F00 11, RECONCILE R14)",
+      "comment" : "Share sheet: subject of the meeting invitation (F00 11, RECONCILE R14); also the Meeting Details share (STG-6)",
       "extractionState" : "manual"
     },
     "Join as a Speaker" : {
@@ -1380,7 +1764,7 @@
       "extractionState" : "manual"
     },
     "Join me in this Conclave meeting." : {
-      "comment" : "Share sheet (iOS): message sent with the meeting link",
+      "comment" : "Share sheet (iOS): message sent with the meeting link; also the Meeting Details share (STG-6)",
       "extractionState" : "manual"
     },
     "Join the Game" : {
@@ -1399,12 +1783,20 @@
       "comment" : "Lobby status while connecting to the meeting (ENT-1); also the sample title of the pending primary button in the Debug component gallery",
       "extractionState" : "manual"
     },
+    "Joining %@" : {
+      "comment" : "Accessibility announcement when a join starts; the argument is the meeting name or code (S10 8 g, 8 i)",
+      "extractionState" : "manual"
+    },
     "Joining Next Round" : {
       "comment" : "Game shell in the activity card (S60 8): header tag for a person queued for the next round",
       "extractionState" : "manual"
     },
     "Joining as" : {
       "comment" : "Pre-join lobby: small label above the signed-in account name (followed by the name on its own line)",
+      "extractionState" : "manual"
+    },
+    "Joining…" : {
+      "comment" : "Pre-join lobby: the primary button's pending label while a join is connecting (S10 8 g)",
       "extractionState" : "manual"
     },
     "Jump to Latest" : {
@@ -1463,6 +1855,10 @@
       "comment" : "Chat panel: description of the /leave command in the suggestions",
       "extractionState" : "manual"
     },
+    "Leaving" : {
+      "comment" : "In-call Leave control: accessibility state while you are leaving the call and the control shows a spinner",
+      "extractionState" : "manual"
+    },
     "Ledger" : {
       "comment" : "Debug session readout row: actions waiting for the server and the last finished one",
       "extractionState" : "manual"
@@ -1479,16 +1875,36 @@
       "comment" : "Host notice banner action: collapses a long notice",
       "extractionState" : "manual"
     },
+    "Level" : {
+      "comment" : "Notice composer (S50 8 g) (iOS): picker label for the notice level",
+      "extractionState" : "manual"
+    },
     "Light" : {
       "comment" : "Debug component gallery: readout value for light appearance",
       "extractionState" : "manual"
     },
+    "Link Preview" : {
+      "comment" : "Chat composer: label of the link preview shown above the message field",
+      "extractionState" : "manual"
+    },
     "Link copied" : {
-      "comment" : "Call stage (iOS): spoken confirmation and toast after the meeting link was copied (STG-1, STG-5)",
+      "comment" : "Call stage (iOS): spoken confirmation and toast after the meeting link was copied (STG-1, STG-5); also the Meeting Details spoken confirmation (STG-6)",
+      "extractionState" : "manual"
+    },
+    "Linked Image" : {
+      "comment" : "Chat panel: accessibility label of a link card that shows an image",
       "extractionState" : "manual"
     },
     "Live" : {
-      "comment" : "Activities panel (S60 7): status of a running app, browser or game",
+      "comment" : "Activities panel (S60 7): status of a running app, browser or game; also the second line of the webinar attendee capsule (STG-8)",
+      "extractionState" : "manual"
+    },
+    "Live Notes" : {
+      "comment" : "Meeting Details panel (S20 15): status row for the meeting's live transcript; value Off, Starting, On, Paused or Needs Attention",
+      "extractionState" : "manual"
+    },
+    "Live Video from %@" : {
+      "comment" : "Webinar attendee viewer (S20 12): accessibility label of the program feed showing a camera; the argument is the speaker's name",
       "extractionState" : "manual"
     },
     "Live captions are on." : {
@@ -1519,6 +1935,10 @@
       "comment" : "Debug component gallery: sample label of the loading state",
       "extractionState" : "manual"
     },
+    "Loading Settings" : {
+      "comment" : "Host Controls (S50 6 g): loading row after becoming host",
+      "extractionState" : "manual"
+    },
     "Loading Sign-In Options" : {
       "comment" : "Account (signed out): label of the spinner while the sign-in providers load",
       "extractionState" : "manual"
@@ -1535,6 +1955,14 @@
       "comment" : "Activities panel (S60 7): host switch that makes open apps read only for participants",
       "extractionState" : "manual"
     },
+    "Lock Attendees" : {
+      "comment" : "Host Controls (S50 6 g): webinar switch name used in announcements and failures (PPL-5 page)",
+      "extractionState" : "manual"
+    },
+    "Lock Meeting" : {
+      "comment" : "Host Controls (S50 6 g): switch; also the setting name in announcements and failures",
+      "extractionState" : "manual"
+    },
     "Locked" : {
       "comment" : "Meeting capsule: added to the capsule value when the host locked the meeting",
       "extractionState" : "manual"
@@ -1545,6 +1973,10 @@
     },
     "Lower" : {
       "comment" : "Status chip: visible short action that lowers your raised hand",
+      "extractionState" : "manual"
+    },
+    "Lower All Hands" : {
+      "comment" : "Host Controls (S50 6 g): bulk action, shown while a hand is raised",
       "extractionState" : "manual"
     },
     "Lower Hand" : {
@@ -1559,8 +1991,48 @@
       "comment" : "In-call control bar: state value while lowering your hand waits for the server",
       "extractionState" : "manual"
     },
+    "Lowering Hands…" : {
+      "comment" : "Host Controls (S50 6 g): pending label",
+      "extractionState" : "manual"
+    },
+    "Make %@ a Co-Host?" : {
+      "comment" : "People confirmation dialog (S50 3 g): Make Co-Host title; the person's name",
+      "extractionState" : "manual"
+    },
+    "Make %@ the Host?" : {
+      "comment" : "People confirmation dialog (S50 3 g): Make Host title; the person's name",
+      "extractionState" : "manual"
+    },
+    "Make Co-Host" : {
+      "comment" : "People confirmation dialog (S50 3 g): Make Co-Host confirm button",
+      "extractionState" : "manual"
+    },
+    "Make Co-Host…" : {
+      "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): grant co-host (asks first)",
+      "extractionState" : "manual"
+    },
+    "Make Host" : {
+      "comment" : "People confirmation dialog (S50 3 g): Make Host confirm button",
+      "extractionState" : "manual"
+    },
+    "Make Host…" : {
+      "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): transfer the host role (asks first)",
+      "extractionState" : "manual"
+    },
     "Mapper %@, contract %@" : {
       "comment" : "Debug component gallery: haptic row detail: the mapper token, then the contract token",
+      "extractionState" : "manual"
+    },
+    "Measuring…" : {
+      "comment" : "Connection quality value (shared by Meeting Details and Settings, RECONCILE R21): no measurement yet",
+      "extractionState" : "manual"
+    },
+    "Media Type" : {
+      "comment" : "GIF picker: accessibility label of the media type control (iOS)",
+      "extractionState" : "manual"
+    },
+    "Meeting Access" : {
+      "comment" : "Host Controls (S50 6 g): section header",
       "extractionState" : "manual"
     },
     "Meeting Code or Link" : {
@@ -1568,11 +2040,15 @@
       "extractionState" : "manual"
     },
     "Meeting Details" : {
-      "comment" : "In-call panel title: room name, link and details, opened from the meeting capsule",
+      "comment" : "In-call panel title: room name, link and details, opened from the meeting capsule; also the Meeting Details panel title opened from the capsule (STG-6)",
       "extractionState" : "manual"
     },
     "Meeting Link" : {
-      "comment" : "Pre-join lobby: small label above the meeting link in the link row",
+      "comment" : "Pre-join lobby: small label above the meeting link in the link row; also the Meeting Details link row (STG-6)",
+      "extractionState" : "manual"
+    },
+    "Meeting Locked" : {
+      "comment" : "Meeting Details panel (S20 15): status row; the value is On or Off",
       "extractionState" : "manual"
     },
     "Meetings" : {
@@ -1585,6 +2061,14 @@
     },
     "Message %@ privately" : {
       "comment" : "Chat panel: composer placeholder in private mode; the argument is the recipient's name",
+      "extractionState" : "manual"
+    },
+    "Message Everyone" : {
+      "comment" : "Notice composer (S50 8 g): text field label; also the preview text while empty",
+      "extractionState" : "manual"
+    },
+    "Message to read aloud" : {
+      "comment" : "Chat panel, voice messages: composer placeholder in voice mode",
       "extractionState" : "manual"
     },
     "Messages are visible to everyone in this call." : {
@@ -1639,12 +2123,52 @@
       "comment" : "Chat panel: reason under a failed private message",
       "extractionState" : "manual"
     },
+    "Move %@ to the Audience?" : {
+      "comment" : "People confirmation dialog (S50 3 g): Move to Audience title; the person's name",
+      "extractionState" : "manual"
+    },
+    "Move to Audience" : {
+      "comment" : "People confirmation dialog (S50 3 g): Move to Audience confirm button",
+      "extractionState" : "manual"
+    },
+    "Move to Audience…" : {
+      "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): webinar, move a panelist to the audience (asks first)",
+      "extractionState" : "manual"
+    },
+    "Move to Bottom Left" : {
+      "comment" : "Call stage: menu item and accessibility action that moves your own floating video to the bottom left corner",
+      "extractionState" : "manual"
+    },
+    "Move to Bottom Right" : {
+      "comment" : "Call stage: menu item and accessibility action that moves your own floating video to the bottom right corner",
+      "extractionState" : "manual"
+    },
+    "Move to Top Left" : {
+      "comment" : "Call stage: menu item and accessibility action that moves your own floating video to the top left corner",
+      "extractionState" : "manual"
+    },
+    "Move to Top Right" : {
+      "comment" : "Call stage: menu item and accessibility action that moves your own floating video to the top right corner",
+      "extractionState" : "manual"
+    },
     "Moved to More" : {
       "comment" : "Debug component gallery: label of the readout naming the controls that did not fit and moved to More",
       "extractionState" : "manual"
     },
     "Mute" : {
       "comment" : "Call controls: Voice Control input label of the microphone toggle while it is on",
+      "extractionState" : "manual"
+    },
+    "Mute Everyone" : {
+      "comment" : "Host Controls (S50 6 g): bulk confirmation button",
+      "extractionState" : "manual"
+    },
+    "Mute Everyone?" : {
+      "comment" : "Host Controls (S50 6 g): bulk confirmation title",
+      "extractionState" : "manual"
+    },
+    "Mute Everyone…" : {
+      "comment" : "Host Controls (S50 6 g): bulk action (asks first)",
       "extractionState" : "manual"
     },
     "Mute your microphone" : {
@@ -1659,12 +2183,32 @@
       "comment" : "Debug component gallery: spoken status of the sample person row",
       "extractionState" : "manual"
     },
+    "Muting Everyone…" : {
+      "comment" : "Host Controls (S50 6 g): pending label of Mute Everyone",
+      "extractionState" : "manual"
+    },
+    "Name" : {
+      "comment" : "Change Name dialog (S50 3 c, 3 d, 3 g): text field label",
+      "extractionState" : "manual"
+    },
+    "Name changes are turned off for this meeting." : {
+      "comment" : "Change Name dialog (S50 3 c, 3 d, 3 g): refusal shown after Save, also the disabled reason for Change Name for the rest of the session (Q14)",
+      "extractionState" : "manual"
+    },
     "Navigating" : {
       "comment" : "Activities panel (S60 7): pending label while the shared browser opens a page",
       "extractionState" : "manual"
     },
+    "Needs Attention" : {
+      "comment" : "Meeting Details panel (S20 15): live notes status value when live notes stopped with a problem",
+      "extractionState" : "manual"
+    },
     "Network interrupted" : {
       "comment" : "Video tile: reason shown under Reconnecting when the participant's network dropped",
+      "extractionState" : "manual"
+    },
+    "New Code" : {
+      "comment" : "Invite Code page (S50 7 g): text field label",
       "extractionState" : "manual"
     },
     "New Meeting" : {
@@ -1679,6 +2223,14 @@
       "comment" : "In-call control bar: value of the More button when something new waits behind it (a vote, questions, live notes)",
       "extractionState" : "manual"
     },
+    "No Clips Found" : {
+      "comment" : "GIF picker: empty state when a clip search has no results",
+      "extractionState" : "manual"
+    },
+    "No GIFs Found" : {
+      "comment" : "GIF picker: empty state when a GIF search has no results",
+      "extractionState" : "manual"
+    },
     "No Messages Yet" : {
       "comment" : "Debug component gallery: sample title of the empty state",
       "extractionState" : "manual"
@@ -1691,6 +2243,10 @@
       "comment" : "Search field: spoken when a search matches nothing; on Android also the title of the empty result list (iOS shows the system no-results view)",
       "extractionState" : "manual"
     },
+    "No Stickers Found" : {
+      "comment" : "GIF picker: empty state when a sticker search has no results",
+      "extractionState" : "manual"
+    },
     "No games are available right now." : {
       "comment" : "Activities panel (S60 7): empty catalog",
       "extractionState" : "manual"
@@ -1701,6 +2257,18 @@
     },
     "No one here yet" : {
       "comment" : "Pre-join lobby: subtitle when nobody is in the room yet",
+      "extractionState" : "manual"
+    },
+    "No one is blocked." : {
+      "comment" : "Access List page (S50 7 g): empty Blocked section",
+      "extractionState" : "manual"
+    },
+    "No one is here to let you in yet. You can keep waiting." : {
+      "comment" : "Waiting room body when no host is present yet (S10 9 g)",
+      "extractionState" : "manual"
+    },
+    "No one is on the allow list." : {
+      "comment" : "Access List page (S50 7 g): empty Allowed section",
       "extractionState" : "manual"
     },
     "No votes yet." : {
@@ -1716,7 +2284,7 @@
       "extractionState" : "manual"
     },
     "None" : {
-      "comment" : "Debug component gallery: readout value when nothing was tapped yet",
+      "comment" : "Debug component gallery: readout value when nothing was tapped yet; Host Controls (S50 6 g): Access List row value when both lists are empty",
       "extractionState" : "manual"
     },
     "Not Delivered" : {
@@ -1751,6 +2319,18 @@
       "comment" : "In-call control bar: state value of the Share Screen toggle while you are not sharing",
       "extractionState" : "manual"
     },
+    "Notice" : {
+      "comment" : "Host Controls (S50 6 g): section header",
+      "extractionState" : "manual"
+    },
+    "Notice sent" : {
+      "comment" : "Notice composer (S50 8 g): confirmation after sending",
+      "extractionState" : "manual"
+    },
+    "Notices appear at the top of everyone’s screen for 60 seconds." : {
+      "comment" : "Host Controls (S50 6 g): Notice footer",
+      "extractionState" : "manual"
+    },
     "Notifications" : {
       "comment" : "Debug component gallery: sample title of the navigation row and its page",
       "extractionState" : "manual"
@@ -1760,7 +2340,7 @@
       "extractionState" : "manual"
     },
     "Off" : {
-      "comment" : "Debug component gallery: readout value for a setting that is off",
+      "comment" : "Debug component gallery: readout value for a setting that is off; also a Meeting Details status value (STG-6)",
       "extractionState" : "manual"
     },
     "Off in audio-only mode" : {
@@ -1768,7 +2348,7 @@
       "extractionState" : "manual"
     },
     "On" : {
-      "comment" : "Debug component gallery: readout value for a setting that is on",
+      "comment" : "Debug component gallery: readout value for a setting that is on; also a Meeting Details status value (STG-6)",
       "extractionState" : "manual"
     },
     "On coral label on coral fill" : {
@@ -1791,6 +2371,10 @@
       "comment" : "Activities panel (S60 7): shared browser URL validation, other scheme",
       "extractionState" : "manual"
     },
+    "Only you will hear it" : {
+      "comment" : "Chat panel, voice messages: accessibility hint (iOS) or state description (Android) of Play voice message: the replay is local",
+      "extractionState" : "manual"
+    },
     "Open" : {
       "comment" : "Activities panel (S60 7): value of the app row that is currently open",
       "extractionState" : "manual"
@@ -1801,6 +2385,10 @@
     },
     "Open Link" : {
       "comment" : "Chat panel: button that opens the confirmed link",
+      "extractionState" : "manual"
+    },
+    "Open Photo" : {
+      "comment" : "Chat panel: accessibility action on a photo message that opens the photo viewer",
       "extractionState" : "manual"
     },
     "Open Settings" : {
@@ -1867,6 +2455,10 @@
       "comment" : "Participants section header (S50 1 g): speakers of a webinar, seen by webinar hosts",
       "extractionState" : "manual"
     },
+    "Participant Media" : {
+      "comment" : "Host Controls (S50 6 g): section header",
+      "extractionState" : "manual"
+    },
     "Participants" : {
       "comment" : "Panel title: the people in the meeting",
       "extractionState" : "manual"
@@ -1908,7 +2500,7 @@
       "extractionState" : "manual"
     },
     "Paused" : {
-      "comment" : "In-call control bar: microphone state while another call or app holds the audio",
+      "comment" : "In-call control bar: microphone state while another call or app holds the audio; also the live notes status value in Meeting Details (STG-6)",
       "extractionState" : "manual"
     },
     "People Want To Join %lld" : {
@@ -1935,12 +2527,48 @@
         }
       }
     },
+    "People can join without a code. Anyone already waiting stays in the waiting room." : {
+      "comment" : "Invite Code page (S50 7 g): confirmation message",
+      "extractionState" : "manual"
+    },
+    "People need this code to join. Share it with the meeting link." : {
+      "comment" : "Invite Code page (S50 7 g): footer under the field",
+      "extractionState" : "manual"
+    },
     "Phase" : {
       "comment" : "Debug session readout row: the meeting phase and notice (for example in call, reconnecting)",
       "extractionState" : "manual"
     },
     "Photo" : {
       "comment" : "Chat panel: media kind in a reply quote and the spoken row summary",
+      "extractionState" : "manual"
+    },
+    "Photo Library" : {
+      "comment" : "Chat composer: attach menu item that opens the system photo picker",
+      "extractionState" : "manual"
+    },
+    "Photo from %@" : {
+      "comment" : "Chat panel and photo viewer: accessibility label of a photo; the argument is the sender's name (the caption follows)",
+      "extractionState" : "manual"
+    },
+    "Photo not sent. Our safety check flagged it as potentially harmful. Only you can see this notice." : {
+      "comment" : "Chat composer and panel: a photo the server's safety check refused; only the sender sees this",
+      "extractionState" : "manual"
+    },
+    "Photo upload is unavailable right now." : {
+      "comment" : "Chat composer and panel: why a photo could not upload (service or connection problem)",
+      "extractionState" : "manual"
+    },
+    "Photos are turned off by the host." : {
+      "comment" : "Chat composer and panel: the host turned off photos; also the reason under the disabled Photo Library item (iOS)",
+      "extractionState" : "manual"
+    },
+    "Photos can be up to 6 MB." : {
+      "comment" : "Chat composer and panel: why a photo cannot be sent (too large)",
+      "extractionState" : "manual"
+    },
+    "Photos in Chat" : {
+      "comment" : "Host Controls (S50 6 g): switch",
       "extractionState" : "manual"
     },
     "Pick a game, or let the room vote." : {
@@ -1967,8 +2595,28 @@
       "comment" : "Activities panel (S60 7): switch that plays the shared browser sound on this device",
       "extractionState" : "manual"
     },
+    "Play Video: %@" : {
+      "comment" : "Chat panel: accessibility label of a YouTube link card; the argument is the video title",
+      "extractionState" : "manual"
+    },
+    "Play Voice Message" : {
+      "comment" : "Chat panel, voice messages: button and accessibility action that reads a voice message aloud again on this device only",
+      "extractionState" : "manual"
+    },
     "Players" : {
       "comment" : "Activities panel (S60 7): label of the player range on the setup page",
+      "extractionState" : "manual"
+    },
+    "Poor" : {
+      "comment" : "Connection quality value (shared by Meeting Details and Settings, RECONCILE R21): poor connection",
+      "extractionState" : "manual"
+    },
+    "Powered by Klipy" : {
+      "comment" : "GIF picker: attribution line for the GIF provider (Klipy is a brand name)",
+      "extractionState" : "manual"
+    },
+    "Preparing…" : {
+      "comment" : "Chat composer: status line of an attached photo while it is prepared for upload",
       "extractionState" : "manual"
     },
     "Presence" : {
@@ -1979,8 +2627,20 @@
       "comment" : "Video tile: state read with the tile of the person sharing their screen (FND-2); also the sample detail line under the person name in the Debug component gallery",
       "extractionState" : "manual"
     },
+    "Preview" : {
+      "comment" : "Notice composer (S50 8 g): header above the preview banner",
+      "extractionState" : "manual"
+    },
+    "Preview: %@ notice, %@" : {
+      "comment" : "Notice composer (S50 8 g): screen reader label of the preview; the level name, then the banner text",
+      "extractionState" : "manual"
+    },
     "Privacy Policy" : {
-      "comment" : "Account: row that opens the privacy policy, and the privacy policy page title",
+      "comment" : "Account: row that opens the privacy policy, and the privacy policy page title; also the Webinar Details settings page row (STG-8)",
+      "extractionState" : "manual"
+    },
+    "Private Messages" : {
+      "comment" : "Host Controls (S50 6 g): switch (RECONCILE R16 name)",
       "extractionState" : "manual"
     },
     "Private message" : {
@@ -2001,6 +2661,10 @@
     },
     "Private to %@" : {
       "comment" : "Chat panel: label above a private message you sent and the recipient chip; the argument is the recipient's name",
+      "extractionState" : "manual"
+    },
+    "Public Access" : {
+      "comment" : "Host Controls (S50 6 g): webinar switch name used in announcements and failures (PPL-5 page)",
       "extractionState" : "manual"
     },
     "Put It to a Vote" : {
@@ -2056,7 +2720,7 @@
       "extractionState" : "manual"
     },
     "Reactions" : {
-      "comment" : "Chat panel: title of the list of people who reacted",
+      "comment" : "Chat panel: title of the list of people who reacted; Host Controls (S50 6 g): switch",
       "extractionState" : "manual"
     },
     "Reactions are off" : {
@@ -2067,8 +2731,20 @@
       "comment" : "Chat panel: description of the /tts command in the suggestions",
       "extractionState" : "manual"
     },
+    "Read aloud to everyone" : {
+      "comment" : "Chat panel, voice messages: first half of the composer’s voice mode line: what a voice message does",
+      "extractionState" : "manual"
+    },
+    "Ready to send" : {
+      "comment" : "Chat composer: status line of an attached photo once it has uploaded",
+      "extractionState" : "manual"
+    },
     "Recent" : {
       "comment" : "Premeeting Home: section header above the recent meetings list",
+      "extractionState" : "manual"
+    },
+    "Reconnect to use host controls." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry): not connected",
       "extractionState" : "manual"
     },
     "Reconnected" : {
@@ -2095,6 +2771,10 @@
       "comment" : "Chat panel: status line above the composer while the call reconnects",
       "extractionState" : "manual"
     },
+    "Reconnecting. You’ll keep your place." : {
+      "comment" : "Waiting room body while the connection is restored before admission (S10 9 g)",
+      "extractionState" : "manual"
+    },
     "Recorded %lld, suppressed %lld, outcome route %lld, silent %lld" : {
       "comment" : "Debug component gallery: haptic tap counts by result. Scripts read it, so the numbers stay ASCII digits in every language",
       "extractionState" : "manual"
@@ -2105,6 +2785,10 @@
     },
     "Reduce Transparency" : {
       "comment" : "Debug component gallery: readout name for the Reduce Transparency setting",
+      "extractionState" : "manual"
+    },
+    "Refresh Access List" : {
+      "comment" : "Access List page (S50 7 g) (iOS): toolbar refresh button",
       "extractionState" : "manual"
     },
     "Refresh Readouts" : {
@@ -2123,12 +2807,44 @@
       "comment" : "Premeeting Home (iOS): trailing swipe action that removes a recent meeting",
       "extractionState" : "manual"
     },
+    "Remove %@?" : {
+      "comment" : "People confirmation dialog (S50 3 g): Remove title; the person's name",
+      "extractionState" : "manual"
+    },
+    "Remove Code" : {
+      "comment" : "Invite Code page (S50 7 g): confirmation button",
+      "extractionState" : "manual"
+    },
+    "Remove Code…" : {
+      "comment" : "Invite Code page (S50 7 g): remove button (asks first)",
+      "extractionState" : "manual"
+    },
     "Remove From Meeting" : {
       "comment" : "Debug component gallery: sample title of the destructive button",
       "extractionState" : "manual"
     },
     "Remove From Recents" : {
       "comment" : "Premeeting Home: destructive recent row menu item that removes the meeting from the local list",
+      "extractionState" : "manual"
+    },
+    "Remove Invite Code?" : {
+      "comment" : "Invite Code page (S50 7 g): confirmation title",
+      "extractionState" : "manual"
+    },
+    "Remove Link Preview" : {
+      "comment" : "Chat composer: button that removes the link preview, so the message sends without one",
+      "extractionState" : "manual"
+    },
+    "Remove Photo" : {
+      "comment" : "Chat composer: button on the attached photo chip that removes the photo before sending",
+      "extractionState" : "manual"
+    },
+    "Remove and Block" : {
+      "comment" : "People confirmation dialog (S50 3 g) (iOS): second destructive button that also blocks the person",
+      "extractionState" : "manual"
+    },
+    "Remove from Meeting…" : {
+      "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): remove this person (asks first)",
       "extractionState" : "manual"
     },
     "Removed From Meeting" : {
@@ -2171,6 +2887,10 @@
       "comment" : "Outcome screen title after the request to join was declined",
       "extractionState" : "manual"
     },
+    "Reset Zoom" : {
+      "comment" : "Call stage: chip and accessibility action on a zoomed shared screen that returns it to its normal size",
+      "extractionState" : "manual"
+    },
     "Results" : {
       "comment" : "Game shell in the activity card (S60 8): results kicker and header phase",
       "extractionState" : "manual"
@@ -2183,6 +2903,10 @@
       "comment" : "Toast action: tries the failed action again; Activity card on the stage (S20 11): tries to load an app or the shared browser again",
       "extractionState" : "manual"
     },
+    "Retry Loading Photo" : {
+      "comment" : "Chat panel: accessibility action on a photo that failed to load",
+      "extractionState" : "manual"
+    },
     "Retry Now" : {
       "comment" : "Reconnecting banner action: rejoins at once instead of waiting for the next automatic attempt",
       "extractionState" : "manual"
@@ -2191,12 +2915,28 @@
       "comment" : "Game shell in the activity card (S60 8): VoiceOver action that reveals the Imposter word",
       "extractionState" : "manual"
     },
+    "Revoke" : {
+      "comment" : "Access List page (S50 7 g) (iOS): swipe and context action that removes an allowed key",
+      "extractionState" : "manual"
+    },
     "Right to Left" : {
       "comment" : "Debug component gallery: readout value for right-to-left layout",
       "extractionState" : "manual"
     },
     "Room" : {
       "comment" : "Debug component gallery: sample title of the value row",
+      "extractionState" : "manual"
+    },
+    "Room Code" : {
+      "comment" : "Meeting Details panel (S20 15): label of the row that shows the meeting's room code",
+      "extractionState" : "manual"
+    },
+    "Rotate Link" : {
+      "comment" : "Host Controls (S50 6 g): rotate confirmation button",
+      "extractionState" : "manual"
+    },
+    "Rotate Webinar Link?" : {
+      "comment" : "Host Controls (S50 6 g): confirmation title (S50 9, PPL-5 page)",
       "extractionState" : "manual"
     },
     "Round %lld of %lld" : {
@@ -2227,12 +2967,28 @@
       "comment" : "Button title for saving native meeting settings",
       "extractionState" : "manual"
     },
+    "Save Code" : {
+      "comment" : "Invite Code page (S50 7 g): save button",
+      "extractionState" : "manual"
+    },
     "Scores and progress are lost for everyone." : {
       "comment" : "Confirmation message before ending a game",
       "extractionState" : "manual"
     },
     "Search" : {
       "comment" : "Search field: placeholder of the search field above a long list (participants, activities, GIFs, settings)",
+      "extractionState" : "manual"
+    },
+    "Search Klipy GIFs" : {
+      "comment" : "GIF picker: search field placeholder while GIFs are selected (Klipy is the provider name)",
+      "extractionState" : "manual"
+    },
+    "Search Klipy clips" : {
+      "comment" : "GIF picker: search field placeholder while clips are selected",
+      "extractionState" : "manual"
+    },
+    "Search Klipy stickers" : {
+      "comment" : "GIF picker: search field placeholder while stickers are selected",
       "extractionState" : "manual"
     },
     "Search Participants" : {
@@ -2279,6 +3035,10 @@
       "comment" : "Composer: accessibility label of the send glyph",
       "extractionState" : "manual"
     },
+    "Send Notice" : {
+      "comment" : "Notice composer (S50 8 g): send button",
+      "extractionState" : "manual"
+    },
     "Send Private Message" : {
       "comment" : "Chat panel: message action that switches the composer to a private message to the sender",
       "extractionState" : "manual"
@@ -2289,6 +3049,14 @@
     },
     "Send To" : {
       "comment" : "Chat panel: title of the recipient picker",
+      "extractionState" : "manual"
+    },
+    "Send Voice Message" : {
+      "comment" : "Chat panel, voice messages: label of the Send button in voice mode",
+      "extractionState" : "manual"
+    },
+    "Send a Notice" : {
+      "comment" : "Host Controls (S50 6 g): row that opens the notice composer; also its page title",
       "extractionState" : "manual"
     },
     "Send a private message" : {
@@ -2307,6 +3075,14 @@
       "comment" : "Chat panel: status under your message when sending takes longer than a second",
       "extractionState" : "manual"
     },
+    "Sends to everyone" : {
+      "comment" : "GIF picker: accessibility hint of a GIF, sticker or clip tile; choosing it sends it to the chat at once",
+      "extractionState" : "manual"
+    },
+    "Sends without a link preview" : {
+      "comment" : "Chat composer: accessibility hint of Remove Link Preview (iOS)",
+      "extractionState" : "manual"
+    },
     "Session" : {
       "comment" : "Activities panel (S60 7): host row naming the shared browser provider",
       "extractionState" : "manual"
@@ -2316,7 +3092,7 @@
       "extractionState" : "manual"
     },
     "Settings" : {
-      "comment" : "Meeting settings entry point title",
+      "comment" : "Meeting settings entry point title; also the Webinar Details row and page title (STG-8)",
       "extractionState" : "manual"
     },
     "Share Again" : {
@@ -2324,11 +3100,19 @@
       "extractionState" : "manual"
     },
     "Share Invite" : {
-      "comment" : "Opens the share sheet with the meeting link (F00 11, RECONCILE R14): the call stage chip and solo card button (STG-1) and the premeeting Home recent row menu item (ENT-1)",
+      "comment" : "Opens the share sheet with the meeting link (F00 11, RECONCILE R14): the call stage chip and solo card button (STG-1) and the premeeting Home recent row menu item (ENT-1); also the Meeting Details share row (STG-6)",
+      "extractionState" : "manual"
+    },
+    "Share Photo" : {
+      "comment" : "Photo viewer: toolbar button that opens the share sheet for the photo",
       "extractionState" : "manual"
     },
     "Share Screen" : {
       "comment" : "Call controls: constant accessibility label of the screen sharing toggle",
+      "extractionState" : "manual"
+    },
+    "Share Webinar Link" : {
+      "comment" : "Meeting Details panel (S20 15): row that opens the share sheet with the webinar link (hosts, or attendees of a public webinar)",
       "extractionState" : "manual"
     },
     "Share the link to invite people." : {
@@ -2337,6 +3121,10 @@
     },
     "Shared Browser" : {
       "comment" : "Activities panel (S60 7): section header, row and page title for the shared browser",
+      "extractionState" : "manual"
+    },
+    "Shared Screen from %@" : {
+      "comment" : "Call stage and webinar attendee viewer: accessibility label of a shared screen; the argument is the presenter's name",
       "extractionState" : "manual"
     },
     "Sharing" : {
@@ -2361,6 +3149,10 @@
     },
     "Show Loading" : {
       "comment" : "Debug component gallery: switch that shows the spinner specimens; off at every launch",
+      "extractionState" : "manual"
+    },
+    "Show Messages from %@" : {
+      "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): show this person's chat messages again; the name",
       "extractionState" : "manual"
     },
     "Show Self View" : {
@@ -2392,7 +3184,7 @@
       "extractionState" : "manual"
     },
     "Shows meeting details." : {
-      "comment" : "Meeting capsule (iOS): VoiceOver hint of the capsule button",
+      "comment" : "Meeting capsule (iOS): VoiceOver hint of the capsule button; also the webinar attendee capsule, which opens Webinar Details (STG-8)",
       "extractionState" : "manual"
     },
     "Sidebar" : {
@@ -2455,12 +3247,16 @@
       "comment" : "Outcome screen body after the request to join was declined",
       "extractionState" : "manual"
     },
+    "Something went wrong while joining. Try again." : {
+      "comment" : "Join failure body when the cause is unknown (S10 8 g; also a failed rejoin, 10 f)",
+      "extractionState" : "manual"
+    },
     "Speaker" : {
       "comment" : "Audio route name for the device loudspeaker in the route list, the Mic shortcut and route toasts (S30 3 g, SYS-2); also the first choice of the Debug component gallery sample single choice rows",
       "extractionState" : "manual"
     },
     "Speaking" : {
-      "comment" : "Video tile (iOS): state read with a participant tile while they speak",
+      "comment" : "Video tile (iOS): state read with a participant tile while they speak; also a voice message bubble's label while it plays (CHT-6)",
       "extractionState" : "manual"
     },
     "Spin the Wheel" : {
@@ -2503,8 +3299,20 @@
       "comment" : "Game shell in the activity card (S60 8): lobby line for the seated host",
       "extractionState" : "manual"
     },
+    "Started" : {
+      "comment" : "Meeting Details panel (S20 15): row showing the time this call started",
+      "extractionState" : "manual"
+    },
     "Starting" : {
-      "comment" : "Pending label while a game starts",
+      "comment" : "Pending label while a game starts; also the live notes status value in Meeting Details (STG-6)",
+      "extractionState" : "manual"
+    },
+    "Starting…" : {
+      "comment" : "Pre-join lobby: the primary button's pending label while a new meeting is starting (S10 8 g)",
+      "extractionState" : "manual"
+    },
+    "Status" : {
+      "comment" : "Meeting Details panel (S20 15): section header above the meeting lock, live notes and captions rows",
       "extractionState" : "manual"
     },
     "Status Views" : {
@@ -2515,12 +3323,56 @@
       "comment" : "Prompt button that keeps the current meeting and ignores the new link",
       "extractionState" : "manual"
     },
+    "Sticker" : {
+      "comment" : "Chat panel and GIF picker: accessibility label of a sticker that has no title",
+      "extractionState" : "manual"
+    },
+    "Stickers" : {
+      "comment" : "GIF picker: media type option for stickers",
+      "extractionState" : "manual"
+    },
+    "Stickers and Clips, Too" : {
+      "comment" : "GIF picker: title of the one-time tip",
+      "extractionState" : "manual"
+    },
+    "Still connecting. Check your connection." : {
+      "comment" : "Pre-join lobby: footnote under the pending button after 8 seconds of connecting (S10 8 g)",
+      "extractionState" : "manual"
+    },
     "Still starting. AI content can take a moment." : {
       "comment" : "Activities panel (S60 7): shown when a start takes longer than 5 seconds",
       "extractionState" : "manual"
     },
+    "Stop All Screen Shares?" : {
+      "comment" : "Host Controls (S50 6 g): bulk confirmation title",
+      "extractionState" : "manual"
+    },
+    "Stop All Screen Shares…" : {
+      "comment" : "Host Controls (S50 6 g): bulk action, shown while someone shares",
+      "extractionState" : "manual"
+    },
+    "Stop All Shares" : {
+      "comment" : "Host Controls (S50 6 g): bulk confirmation button",
+      "extractionState" : "manual"
+    },
+    "Stop Screen Audio" : {
+      "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): host stops this person's shared screen audio",
+      "extractionState" : "manual"
+    },
+    "Stop Screen Share" : {
+      "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): host stops this person's screen share",
+      "extractionState" : "manual"
+    },
     "Stop Sharing" : {
       "comment" : "Sharing banner action: stops your screen share; In-call control bar (iOS): extra Voice Control name of the Share Screen toggle",
+      "extractionState" : "manual"
+    },
+    "Stop Speaking" : {
+      "comment" : "Chat panel, voice messages: button and accessibility action that stops the voice message playing on this device",
+      "extractionState" : "manual"
+    },
+    "Stopping Shares…" : {
+      "comment" : "Host Controls (S50 6 g): pending label",
       "extractionState" : "manual"
     },
     "Surprised" : {
@@ -2545,6 +3397,10 @@
     },
     "System Prominent Chrome" : {
       "comment" : "Debug component gallery: section title for iOS prominent button and toolbar specimens",
+      "extractionState" : "manual"
+    },
+    "System voice" : {
+      "comment" : "Chat panel, voice messages: second half of the composer’s voice mode line: your message is read with the device’s voice",
       "extractionState" : "manual"
     },
     "Tap the game you want." : {
@@ -2575,6 +3431,10 @@
       "comment" : "Game shell in the activity card (S60 8): a move was rejected",
       "extractionState" : "manual"
     },
+    "That person already left." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry): the target left",
+      "extractionState" : "manual"
+    },
     "That person isn't in the meeting." : {
       "comment" : "Chat panel: reason under a failed private message",
       "extractionState" : "manual"
@@ -2583,12 +3443,20 @@
       "comment" : "Chat panel: reason under a failed or blocked private message",
       "extractionState" : "manual"
     },
+    "That photo type isn't supported. Use JPEG, PNG, GIF, WebP or AVIF." : {
+      "comment" : "Chat composer and panel: why a photo cannot be sent (file type)",
+      "extractionState" : "manual"
+    },
     "The %@ board clears for everyone." : {
       "comment" : "Activities panel (S60 7): replace confirmation message; %@ is the open app name",
       "extractionState" : "manual"
     },
     "The Done button uses the confirmation action placement, which iOS 26 can draw as a white label on the accent fill. It does nothing." : {
       "comment" : "Debug component gallery: explanation on the confirmation action specimen page",
+      "extractionState" : "manual"
+    },
+    "The Webinar Will Begin Soon" : {
+      "comment" : "Webinar attendee viewer (S20 12): waiting state title before anyone is on stage",
       "extractionState" : "manual"
     },
     "The board clears for everyone." : {
@@ -2627,8 +3495,16 @@
       "comment" : "In-call toast: after tapping the microphone while the host keeps microphones off",
       "extractionState" : "manual"
     },
+    "The media connection didn’t go through. Try again." : {
+      "comment" : "Join failure body: the audio and video connection failed (S10 8 g; also a failed rejoin, 10 f)",
+      "extractionState" : "manual"
+    },
     "The meeting server ended your connection. You can rejoin." : {
       "comment" : "Outcome screen body after the meeting server ended the connection",
+      "extractionState" : "manual"
+    },
+    "The meeting server is restarting. Try again in a moment." : {
+      "comment" : "Join failure body after the one automatic retry: the server is busy or restarting (S10 8 g, RECONCILE R48)",
       "extractionState" : "manual"
     },
     "The meeting server is restarting. You’ll be reconnected automatically." : {
@@ -2649,6 +3525,18 @@
     },
     "The shared browser took too long to respond. Try again." : {
       "comment" : "Activities panel (S60 7): shared browser command timed out",
+      "extractionState" : "manual"
+    },
+    "The webinar is live." : {
+      "comment" : "Webinar attendee viewer (S20 12): spoken announcement when the webinar's program feed starts",
+      "extractionState" : "manual"
+    },
+    "They can’t join this meeting. If they’re here, they’re removed now." : {
+      "comment" : "Access List page (S50 7 g): Block confirmation message",
+      "extractionState" : "manual"
+    },
+    "They won’t join this meeting. They can ask to join again." : {
+      "comment" : "People confirmation dialog (S50 3 g): Deny All message (S50 4)",
       "extractionState" : "manual"
     },
     "Thinking" : {
@@ -2679,6 +3567,10 @@
       "comment" : "Premeeting Home notice after the room closed",
       "extractionState" : "manual"
     },
+    "This meeting is locked. The host will review your request." : {
+      "comment" : "Waiting room body when the meeting is locked (S10 9 g)",
+      "extractionState" : "manual"
+    },
     "This meeting needs you to sign in." : {
       "comment" : "Pre-join lobby: issue row when the meeting does not allow guests (with a Sign In button); Account and lobby: info row when the meeting requires a signed-in account (S10 5 and 6 share this key; merge one entry if the lobby fragment adds it too)",
       "extractionState" : "manual"
@@ -2689,6 +3581,10 @@
     },
     "This permanently deletes your Conclave account and signs you out on this device. This can’t be undone." : {
       "comment" : "Account: message of the account deletion confirmation dialog",
+      "extractionState" : "manual"
+    },
+    "This person can’t be removed." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry): the target is protected",
       "extractionState" : "manual"
     },
     "This version of Conclave can no longer join meetings. Update to continue." : {
@@ -2715,6 +3611,14 @@
       "comment" : "Debug component gallery: header above contrast pairs computed from design tokens",
       "extractionState" : "manual"
     },
+    "Too many host actions. Try again in a moment." : {
+      "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry): rate limited",
+      "extractionState" : "manual"
+    },
+    "Too many photo uploads. Wait a moment and try again." : {
+      "comment" : "Chat composer and panel: photo uploads are rate limited",
+      "extractionState" : "manual"
+    },
     "Transcript" : {
       "comment" : "In-call panel title: live captions and meeting notes",
       "extractionState" : "manual"
@@ -2731,8 +3635,32 @@
       "comment" : "Audio-only banner action: turns audio-only mode off",
       "extractionState" : "manual"
     },
+    "Turn Off Camera" : {
+      "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): host turns off this person's camera",
+      "extractionState" : "manual"
+    },
+    "Turn Off Cameras" : {
+      "comment" : "Host Controls (S50 6 g): bulk confirmation button",
+      "extractionState" : "manual"
+    },
+    "Turn Off Everyone’s Camera?" : {
+      "comment" : "Host Controls (S50 6 g): bulk confirmation title",
+      "extractionState" : "manual"
+    },
+    "Turn Off Everyone’s Camera…" : {
+      "comment" : "Host Controls (S50 6 g): bulk action (asks first)",
+      "extractionState" : "manual"
+    },
     "Turn your camera on or off" : {
       "comment" : "Chat panel: description of the /camera command in the suggestions",
+      "extractionState" : "manual"
+    },
+    "Turning Off Cameras…" : {
+      "comment" : "Host Controls (S50 6 g): pending label",
+      "extractionState" : "manual"
+    },
+    "Turning these off also mutes microphones or stops cameras that are on. Hosts aren’t affected." : {
+      "comment" : "Host Controls (S50 6 g): Participant Media footer",
       "extractionState" : "manual"
     },
     "Two Facts %@ %@" : {
@@ -2763,6 +3691,22 @@
       "comment" : "Activities panel (S60 7): shared browser URL validation, spaces",
       "extractionState" : "manual"
     },
+    "Unavailable" : {
+      "comment" : "Connection quality value (shared by Meeting Details and Settings, RECONCILE R21): the connection statistics stopped reporting",
+      "extractionState" : "manual"
+    },
+    "Unavailable while offline" : {
+      "comment" : "Disabled reason under a host action or row item while the device is offline (S50 3 f, 6 f)",
+      "extractionState" : "manual"
+    },
+    "Unavailable while reconnecting" : {
+      "comment" : "Row value (sentence case on both platforms, F00 C04 g): the action cannot be used until the call reconnects; first used by the Meeting Details Host Controls row",
+      "extractionState" : "manual"
+    },
+    "Unblock" : {
+      "comment" : "Access List page (S50 7 g) (iOS): swipe and context action that unblocks a key",
+      "extractionState" : "manual"
+    },
     "Unmute" : {
       "comment" : "Call controls: Voice Control input label of the microphone toggle while it is muted",
       "extractionState" : "manual"
@@ -2783,6 +3727,10 @@
       "comment" : "Chat panel: VoiceOver rotor listing the messages after the unread divider",
       "extractionState" : "manual"
     },
+    "Up to 40 characters. Everyone sees the new name." : {
+      "comment" : "Change Name dialog (S50 3 c, 3 d, 3 g): dialog message under the title",
+      "extractionState" : "manual"
+    },
     "Update" : {
       "comment" : "Premeeting: button that opens the App Store or Play listing to update Conclave",
       "extractionState" : "manual"
@@ -2795,6 +3743,26 @@
       "comment" : "Premeeting: title of the explanation shown when this app version can no longer join meetings",
       "extractionState" : "manual"
     },
+    "Updating" : {
+      "comment" : "Host Controls (S50 6 g): value of a switch while its change is pending",
+      "extractionState" : "manual"
+    },
+    "Uploading %lld%%" : {
+      "comment" : "Chat composer: status line of an attached photo while it uploads; the argument is the percent done",
+      "extractionState" : "manual"
+    },
+    "Uploading photo" : {
+      "comment" : "Chat composer: why Send is disabled while the attached photo is still preparing or uploading (accessibility value of Send, iOS)",
+      "extractionState" : "manual"
+    },
+    "Uploading…" : {
+      "comment" : "Chat composer: status line of an attached photo while it uploads, when the progress is unknown",
+      "extractionState" : "manual"
+    },
+    "Urgent" : {
+      "comment" : "Notice composer (S50 8 g): notice level",
+      "extractionState" : "manual"
+    },
     "Usage: /camera on, off or toggle" : {
       "comment" : "Chat panel: system row after a /camera command it did not understand",
       "extractionState" : "manual"
@@ -2803,12 +3771,28 @@
       "comment" : "Chat panel: system row after an empty /tts",
       "extractionState" : "manual"
     },
+    "Use 40 characters or fewer." : {
+      "comment" : "Change Name dialog (S50 3 c, 3 d, 3 g): refusal shown after Save",
+      "extractionState" : "manual"
+    },
     "Use Audio Only" : {
       "comment" : "In-call banner action on a very poor connection (STG-5); also the sample action on the warning banner in the Debug component gallery",
       "extractionState" : "manual"
     },
+    "User Key or Email" : {
+      "comment" : "Access List page (S50 7 g): text field label",
+      "extractionState" : "manual"
+    },
     "Verify Table" : {
       "comment" : "Debug component gallery: button that compares the haptic mapper with the contract table",
+      "extractionState" : "manual"
+    },
+    "Version" : {
+      "comment" : "Settings: row showing the app version number",
+      "extractionState" : "manual"
+    },
+    "Very Poor" : {
+      "comment" : "Connection quality value (shared by Meeting Details and Settings, RECONCILE R21): very poor connection",
       "extractionState" : "manual"
     },
     "Very poor connection. Audio may cut out." : {
@@ -2817,6 +3801,10 @@
     },
     "Video" : {
       "comment" : "Pre-join lobby (iOS): Voice Control name of the camera toggle; In-call control bar (iOS): extra Voice Control name of the Camera toggle",
+      "extractionState" : "manual"
+    },
+    "Video of %@" : {
+      "comment" : "Picture in Picture window: the spoken label of the call video, with the shown person's name (S70 3 g, 3 i)",
       "extractionState" : "manual"
     },
     "Video quality is lower to keep your device cool." : {
@@ -2833,6 +3821,30 @@
     },
     "View on the Web" : {
       "comment" : "Privacy policy page: link that opens the hosted policy in the browser",
+      "extractionState" : "manual"
+    },
+    "Voice Message" : {
+      "comment" : "Chat panel, voice messages: label in a voice message bubble while it is not playing, the composer’s voice mode title and the attach menu item",
+      "extractionState" : "manual"
+    },
+    "Voice Messages" : {
+      "comment" : "Host Controls (S50 6 g): switch (RECONCILE R16 name)",
+      "extractionState" : "manual"
+    },
+    "Voice Mode Line %@ %@" : {
+      "comment" : "Chat panel, voice messages: the composer’s voice mode line; the arguments are Read aloud to everyone and the voice name, joined with a middle dot",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · %2$@"
+          }
+        }
+      }
+    },
+    "Voice message" : {
+      "comment" : "Chat panel, voice messages: spoken value part of a voice message row and the composer field’s mode value",
       "extractionState" : "manual"
     },
     "Voice messages are turned off by the host." : {
@@ -2871,8 +3883,16 @@
       "comment" : "Game shell in the activity card (S60 8): lobby title",
       "extractionState" : "manual"
     },
+    "Warning" : {
+      "comment" : "Notice composer (S50 8 g): notice level",
+      "extractionState" : "manual"
+    },
     "Watch Together" : {
       "comment" : "Name of the Watch Together app",
+      "extractionState" : "manual"
+    },
+    "Watch on YouTube" : {
+      "comment" : "Chat panel: accessibility label and title of a YouTube link card without a video title",
       "extractionState" : "manual"
     },
     "Watch-only attendees can't send messages." : {
@@ -2883,16 +3903,64 @@
       "comment" : "Game shell in the activity card (S60 8): header tag for a person without a seat",
       "extractionState" : "manual"
     },
+    "We couldn’t reach Conclave. Check your connection and try again." : {
+      "comment" : "Join failure body: the network or the server could not be reached (S10 8 g; also a failed rejoin, 10 f)",
+      "extractionState" : "manual"
+    },
     "Weak Connection" : {
       "comment" : "Video tile: state read with a participant tile whose connection is weak",
       "extractionState" : "manual"
     },
     "Webinar" : {
-      "comment" : "Premeeting Home: role tag after the time of a recent webinar you attended",
+      "comment" : "Premeeting Home: role tag after the time of a recent webinar you attended; also the Meeting Details webinar section header and the attendee title fallback (STG-6, STG-8)",
+      "extractionState" : "manual"
+    },
+    "Webinar Details" : {
+      "comment" : "Webinar Details panel for attendees (S20 12, 15): panel title",
+      "extractionState" : "manual"
+    },
+    "Webinar Mode" : {
+      "comment" : "Host Controls (S50 6 g): switch",
+      "extractionState" : "manual"
+    },
+    "Webinar Settings" : {
+      "comment" : "Host Controls (S50 6 g): row that opens Webinar Settings; also its page title",
+      "extractionState" : "manual"
+    },
+    "Webinar Waiting Count %lld" : {
+      "comment" : "Webinar attendee viewer (S20 12) (iOS): waiting state line; number of attendees waiting (shown only above 1)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld person is waiting with you"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld people are waiting with you"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Webinar mode lets people watch from the webinar link without joining the call." : {
+      "comment" : "Host Controls (S50 6 g): Webinar footer",
       "extractionState" : "manual"
     },
     "Website" : {
       "comment" : "Activities panel (S60 7): label of the shared browser address field",
+      "extractionState" : "manual"
+    },
+    "When the meeting is locked, new people wait until a host admits them. Guests are people who aren’t signed in." : {
+      "comment" : "Host Controls (S50 6 g): Meeting Access footer",
       "extractionState" : "manual"
     },
     "White glyph on the Leave red" : {
@@ -2949,6 +4017,10 @@
     },
     "You're sending messages too quickly." : {
       "comment" : "Chat panel: reason under a message the server rate limited",
+      "extractionState" : "manual"
+    },
+    "Your Connection" : {
+      "comment" : "Meeting Details panel (S20 15): row showing the quality of your own network connection",
       "extractionState" : "manual"
     },
     "Your Name" : {
@@ -3015,12 +4087,28 @@
       "comment" : "Premeeting Home notice after the session refresh found no user, and the info row at the top of Account (ENT-7)",
       "extractionState" : "manual"
     },
+    "Your voice" : {
+      "comment" : "Chat panel, voice messages: second half of the composer’s voice mode line: your message is read with your personal voice",
+      "extractionState" : "manual"
+    },
+    "You’ll join as soon as someone lets you in." : {
+      "comment" : "Waiting room body while asking to join (S10 9 g, standard)",
+      "extractionState" : "manual"
+    },
     "You’re Offline" : {
       "comment" : "Status view: title of the offline state",
       "extractionState" : "manual"
     },
+    "You’re changing your name too quickly. Try again in a moment." : {
+      "comment" : "Change Name dialog (S50 3 c, 3 d, 3 g): refusal shown after Save",
+      "extractionState" : "manual"
+    },
     "You’re in %@. Leave it and join %@?" : {
       "comment" : "Prompt body when another meeting link arrives; the first argument is the current meeting code, the second the new one",
+      "extractionState" : "manual"
+    },
+    "You’re in. Joining now." : {
+      "comment" : "Accessibility announcement when the host lets the person in (S10 9 g)",
       "extractionState" : "manual"
     },
     "You’re no longer a host." : {
@@ -3029,6 +4117,10 @@
     },
     "You’re now a host." : {
       "comment" : "In-call toast: you were made a host",
+      "extractionState" : "manual"
+    },
+    "You’re now watching as an attendee." : {
+      "comment" : "Webinar attendee viewer (S20 12): spoken announcement after a host moved you to the audience",
       "extractionState" : "manual"
     },
     "You’re offline. Connect to the internet to join." : {
@@ -3043,8 +4135,16 @@
       "comment" : "In-call toast: after tapping a control that needs the network while offline",
       "extractionState" : "manual"
     },
+    "You’re offline. Waiting for a connection." : {
+      "comment" : "Pre-join lobby: issue row when the network drops while a join is connecting (S10 8 g)",
+      "extractionState" : "manual"
+    },
     "You’re offline. We’ll reconnect when your connection is back." : {
       "comment" : "In-call banner (priority 1): the device has no network",
+      "extractionState" : "manual"
+    },
+    "You’re offline. You’ll keep your place when you’re back." : {
+      "comment" : "Waiting room body while the device is offline (S10 9 g, RECONCILE R46)",
       "extractionState" : "manual"
     },
     "You’re presenting" : {
@@ -3077,6 +4177,10 @@
     },
     "You’re watching. Roles are secret." : {
       "comment" : "Game shell in the activity card (S60 8): Imposter spectator notice",
+      "extractionState" : "manual"
+    },
+    "Zoom %@x" : {
+      "comment" : "Call stage: accessibility value of a zoomed shared screen; the argument is the zoom factor, such as 2 or 2.5",
       "extractionState" : "manual"
     },
     "and %lld others" : {

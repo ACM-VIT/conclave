@@ -6,7 +6,8 @@ package conclave.module
  * the observed property, even on a hit, so Compose stays subscribed; a snapshot rebuilds only on a new revision and an
  * unchanged control keeps its exact CallControlUi instance, so only the changed cell recomposes under key(id). Only
  * Kotlin scalars and transpiled String enums cross into the cell composables; no stability annotations on Skip
- * collections (R14). CTL-2, CTL-3, CTL-5 and CTL-6 add LeaveCache users, AudioRouteCache, MoreCache and ReactionsCache.
+ * collections (R14). CTL-2 reads LeaveCache in LeaveControl.kt; CTL-3, CTL-5 and CTL-6 add AudioRouteCache, MoreCache and
+ * ReactionsCache.
  */
 
 /** One bar control as Kotlin scalars. `gesture` is ControlBarPolicy.gestureKind for the model (S30 1 h). */
@@ -82,7 +83,10 @@ internal class ControlBarCache(private val presenter: CallControlsPresenter) {
     }
 }
 
-/** `controls.leaveState` as Kotlin values (CTL-2's Leave control, host menu and End dialog read it). */
+/**
+ * `controls.leaveState` as Kotlin values (CTL-2's Leave control, host menu and End dialog read it). `snapshot` stays the
+ * transpiled value for the shared LeaveControlPolicy (menu rows, the End action, which dialogs this control presents).
+ */
 internal data class LeaveUi(
     val revision: Int,
     val canEndForEveryone: Boolean,
@@ -92,7 +96,12 @@ internal data class LeaveUi(
     val confirmationInvoker: String,
     val offersRecap: Boolean,
     val endFailure: String,
+    val showsEndForEveryone: Boolean,
+    val endBlockedReason: ControlBlockedReason,
+    val snapshot: LeaveSnapshot,
 ) {
+    val isLeaving: Boolean get() = leavePhase == LeavePhase.leaving
+
     companion object {
         fun from(snapshot: LeaveSnapshot): LeaveUi = LeaveUi(
             revision = snapshot.revision,
@@ -103,6 +112,9 @@ internal data class LeaveUi(
             confirmationInvoker = snapshot.confirmationInvoker,
             offersRecap = snapshot.offersRecap,
             endFailure = snapshot.endFailure,
+            showsEndForEveryone = snapshot.showsEndForEveryone,
+            endBlockedReason = snapshot.endBlockedReason,
+            snapshot = snapshot,
         )
     }
 }

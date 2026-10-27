@@ -32,12 +32,15 @@ struct ConclaveTileChrome<Renderer: View, SelfViewAccessory: View>: View {
     let cornerRadius: CGFloat
     let actions: [ConclaveTileAction]
     let identifier: String
+    /// Replaces the spoken name when set (S20 12 i: the attendee program feed reads "Live Video from %@").
+    let accessibilityName: String?
     @ViewBuilder let renderer: () -> Renderer
     @ViewBuilder let selfViewAccessory: () -> SelfViewAccessory
 
     init(model: TileChromeModel, speaking: TileSpeakingState, variant: ConclaveTileVariant = .grid,
          isSpotlight: Bool = false, cornerRadius: CGFloat = CGFloat(DesignTokens.radiusTile),
-         actions: [ConclaveTileAction] = [], identifier: String, @ViewBuilder renderer: @escaping () -> Renderer,
+         actions: [ConclaveTileAction] = [], identifier: String, accessibilityName: String? = nil,
+         @ViewBuilder renderer: @escaping () -> Renderer,
          @ViewBuilder selfViewAccessory: @escaping () -> SelfViewAccessory) {
         self.model = model
         self.speaking = speaking
@@ -46,6 +49,7 @@ struct ConclaveTileChrome<Renderer: View, SelfViewAccessory: View>: View {
         self.cornerRadius = cornerRadius
         self.actions = actions
         self.identifier = identifier
+        self.accessibilityName = accessibilityName
         self.renderer = renderer
         self.selfViewAccessory = selfViewAccessory
     }
@@ -73,7 +77,7 @@ struct ConclaveTileChrome<Renderer: View, SelfViewAccessory: View>: View {
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .environment(\.colorScheme, .dark)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(ConclaveTileText.label(model))
+        .accessibilityLabel(accessibilityName ?? ConclaveTileText.label(model))
         .modifier(TileValue(model: model, speaking: speaking))
         .accessibilityActions {
             ForEach(actions) { item in

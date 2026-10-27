@@ -32,6 +32,11 @@ struct NativePremeetingProductionRoot: View {
 
 /// The S10 0.4 root: `ZStack { PremeetingRoot; if call { call branch } }`. No `.preferredColorScheme` here: the
 /// premeeting stack follows the system appearance and the call content owns its dark scope (F00 A7).
+///
+/// ENT-5 (S10 8 c, 0.6 L10): the root owns the entry transition's anchor store (the lobby card writes its frame
+/// there, the call branch reads it once) and drops the premeeting stack from the view tree once the call content
+/// covers it (its state stays in the presenter); the stack comes back, under the fading call content, the moment the
+/// 0.4 table leaves the call.
 struct NativeAppRoot<InterimCall: View>: View {
     let shell: MeetingShellPresenter
     let premeeting: PremeetingPresenter
@@ -44,10 +49,18 @@ struct NativeAppRoot<InterimCall: View>: View {
     let people: PeoplePresenter?
     /// ACT-1, ACT-2, STG-9 (HD request B4-T8 R5c): the session's activity presenters; nil in the L9 fixture.
     let activitySession: ActivitySession?
+    /// ENT-5: the interim call content is a stage surface (the L9 fixture's dark stand-in), so it takes the card
+    /// expansion like the native CallRoot; the production interim (the legacy call root) always cross-fades.
+    let interimIsStage: Bool
+    /// A caller-owned anchor store (the L9 fixture reads it for its readout); nil uses the root's own.
+    let externalAnchors: EntryTransitionAnchorStore?
     let interimCall: () -> InterimCall
+    @State private var ownAnchors = EntryTransitionAnchorStore()
+    @State private var callCoversPremeeting = false
 
     init(shell: MeetingShellPresenter, premeeting: PremeetingPresenter, usesNativeCallRoot: Bool,
          stage: StagePresenter? = nil, people: PeoplePresenter? = nil, activitySession: ActivitySession? = nil,
+         interimIsStage: Bool = false, anchors: EntryTransitionAnchorStore? = nil,
          @ViewBuilder interimCall: @escaping () -> InterimCall) {
         self.shell = shell
         self.premeeting = premeeting
@@ -55,15 +68,44 @@ struct NativeAppRoot<InterimCall: View>: View {
         self.stage = stage
         self.people = people
         self.activitySession = activitySession
+        self.interimIsStage = interimIsStage
+        self.externalAnchors = anchors
         self.interimCall = interimCall
+    }
+
+    private var anchors: EntryTransitionAnchorStore {
+        externalAnchors ?? ownAnchors
+    }
+
+    /// The premeeting stack stays composed until the call content covers it, and returns as soon as the call ends.
+    private var showsPremeeting: Bool {
+        premeeting.root.root != .call || !callCoversPremeeting
     }
 
     var body: some View {
         ZStack {
-            PremeetingRoot(shell: shell, premeeting: premeeting)
+            if showsPremeeting {
+                PremeetingRoot(shell: shell, premeeting: premeeting)
+                    .environment(\.entryTransitionAnchors, anchors)
+            }
             NativeCallBranch(shell: shell, premeeting: premeeting, usesNativeCallRoot: usesNativeCallRoot,
-                             stage: stage, people: people, activitySession: activitySession, interimCall: interimCall)
+                             stage: stage, people: people, activitySession: activitySession, anchors: anchors,
+                             interimIsStage: interimIsStage, onCovered: callDidCoverPremeeting,
+                             interimCall: interimCall)
         }
+        .onChange(of: premeeting.root.root) { _, kind in
+            if kind != .call && callCoversPremeeting {
+                callCoversPremeeting = false
+            }
+        }
+    }
+
+    private func callDidCoverPremeeting() {
+        anchors.clear()
+        guard premeeting.root.root == .call, !callCoversPremeeting else { return }
+        callCoversPremeeting = true
+        // S10 8 i: the screen changed; VoiceOver moves to the call root.
+        AccessibilityNotification.ScreenChanged().post()
     }
 }
 
@@ -72,6 +114,10 @@ struct NativeAppRoot<InterimCall: View>: View {
 /// `usesNativeCallRoot` (the Debug `call` key) is on, by HD request; until then, and always when the key is off,
 /// the interim call content shows. The switch prompt attaches here while the stage shows, so it inherits the dark
 /// call appearance (S10 4 c).
+///
+/// ENT-5 (S10 8 c, m): the way in is the card expansion into the native CallRoot (and the fixture's stage stand-in)
+/// when the lobby card recorded its frame and motion is allowed, else `ConclaveMotion.crossFade`; the interim legacy
+/// call root always cross-fades in and out; leaving a call cross-fades to the outcome or Home (no reverse expansion).
 struct NativeCallBranch<InterimCall: View>: View {
     let shell: MeetingShellPresenter
     let premeeting: PremeetingPresenter
@@ -79,20 +125,56 @@ struct NativeCallBranch<InterimCall: View>: View {
     let stage: StagePresenter?
     let people: PeoplePresenter?
     let activitySession: ActivitySession?
+    let anchors: EntryTransitionAnchorStore?
+    let interimIsStage: Bool
+    let onCovered: () -> Void
     let interimCall: () -> InterimCall
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.self) private var environment
+
+    /// Reduce Motion, or the iOS 26.4 cross-fade preference (S10 8 c).
+    private var prefersCrossFade: Bool {
+        if reduceMotion {
+            return true
+        }
+        if #available(iOS 26.4, *) {
+            return environment.accessibilityPrefersCrossFadeTransitions
+        }
+        return false
+    }
+
+    /// The card frame the expansion starts from, read only while the call shows (so the lobby snapshot is a
+    /// dependency only then); nil cross-fades.
+    private func expansionStart(expandsIntoCall: Bool) -> CGRect? {
+        guard premeeting.root.root == .call else { return nil }
+        let routeId = premeeting.lobbyStatus?.routeId ?? 0
+        let frame = anchors?.frame(forRoute: routeId)
+        let style = EntryTransitionPolicy.style(entersCall: true, expandsIntoCall: expandsIntoCall,
+                                                hasCardFrame: frame != nil, prefersCrossFade: prefersCrossFade)
+        return style == .expand ? frame : nil
+    }
 
     var body: some View {
-        if premeeting.root.root == .call, usesNativeCallRoot, let stage {
-            // STG-1 (HD request B3-T2 R5): the native call root. The control bar reads the controls presenter from the
-            // environment (CTL-1, HD request B4-T6 R9); People (PPL-1) and the activity session (ACT-1) are threaded.
-            CallRoot(shell: shell, stage: stage, people: people, renderers: .live, activitySession: activitySession)
-                .modifier(PremeetingSwitchAlert(premeeting: premeeting, isActive: true))
-                .transition(.opacity)
-        } else if premeeting.root.root == .call {
-            interimCall()
-                .modifier(PremeetingSwitchAlert(premeeting: premeeting, isActive: true))
-                .transition(.opacity)
+        let nativeStart = expansionStart(expandsIntoCall: true)
+        let interimStart = expansionStart(expandsIntoCall: interimIsStage)
+        ZStack {
+            if premeeting.root.root == .call, usesNativeCallRoot, let stage {
+                // STG-1 (HD request B3-T2 R5): the native call root. The control bar reads the controls presenter from
+                // the environment (CTL-1, HD request B4-T6 R9); People (PPL-1) and the activity session (ACT-1) are
+                // threaded.
+                CallRoot(shell: shell, stage: stage, people: people, renderers: .live, activitySession: activitySession)
+                    .entryExpansion(start: nativeStart, onCovered: onCovered)
+                    .modifier(PremeetingSwitchAlert(premeeting: premeeting, isActive: true))
+                    .transition(.asymmetric(insertion: nativeStart == nil ? .opacity : .identity, removal: .opacity))
+            } else if premeeting.root.root == .call {
+                interimCall()
+                    .entryExpansion(start: interimStart, onCovered: onCovered)
+                    .modifier(PremeetingSwitchAlert(premeeting: premeeting, isActive: true))
+                    .transition(.asymmetric(insertion: interimStart == nil ? .opacity : .identity, removal: .opacity))
+            }
         }
+        // Scoped to the root flip: the call content's insertion and removal, never the call's own updates.
+        .animation(ConclaveMotion.crossFade, value: premeeting.root.root)
     }
 }
 
@@ -133,13 +215,14 @@ struct PremeetingRoot: View {
     }
 }
 
-/// Home, or the outcome screen as the root content (S10 0.4 outcome rows; the presenter sets `path = []`).
+/// Home, or the outcome screen as the root content (S10 0.4 outcome rows; the presenter sets `path = []`): ENT-6's
+/// `OutcomeView` (S/Features/Outcome), with Rejoin and Try Again while a rejoin context exists.
 private struct PremeetingRootContent: View {
     let premeeting: PremeetingPresenter
 
     var body: some View {
         if let outcome = premeeting.outcome {
-            PremeetingOutcomeStandIn(outcome: outcome, onBackHome: { premeeting.performOutcomeAction(.backHome) })
+            OutcomeView(outcome: outcome, premeeting: premeeting)
         } else {
             HomeView(premeeting: premeeting)
         }
@@ -167,7 +250,7 @@ private struct PremeetingDestination: View {
     }
 }
 
-// MARK: - Stand-ins until their slices land
+// MARK: - Stand-ins until their slices land (the outcome screen is ENT-6's OutcomeView)
 
 /// The webinar landing stand-in (ENT-9 builds the landing).
 private struct PremeetingWebinarStandIn: View {
@@ -183,67 +266,6 @@ private struct PremeetingWebinarStandIn: View {
         .listStyle(.insetGrouped)
         .navigationTitle(route.roomId)
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-/// The outcome stand-in (ENT-6 adds Rejoin and Try Again with the rejoin context): C14 with the variant's copy and
-/// Back to Home.
-private struct PremeetingOutcomeStandIn: View {
-    let outcome: OutcomeModel
-    let onBackHome: () -> Void
-
-    var body: some View {
-        ContentUnavailableView {
-            Label(PremeetingOutcomeCopy.title(outcome.variant), systemImage: PremeetingSymbols.error)
-                .accessibilityAddTraits(.isHeader)
-        } description: {
-            VStack(spacing: 8) {
-                if !PremeetingOutcomeCopy.body(outcome.variant).isEmpty {
-                    Text(PremeetingOutcomeCopy.body(outcome.variant))
-                }
-                if !outcome.serverDetail.isEmpty {
-                    Text(outcome.serverDetail)
-                }
-            }
-        } actions: {
-            Button(ConclaveStrings.text("Back to Home"), action: onBackHome)
-                .buttonStyle(.bordered)
-                .tint(Color.primary)
-                .accessibilityIdentifier("outcome.backHome")
-        }
-        .accessibilityIdentifier("outcome." + outcome.variant.rawValue)
-    }
-}
-
-enum PremeetingOutcomeCopy {
-    static func title(_ variant: OutcomeVariant) -> String {
-        switch variant {
-        case .removed:
-            return ConclaveStrings.text("Removed From Meeting")
-        case .denied:
-            return ConclaveStrings.text("Request Declined")
-        case .connectionLost:
-            return ConclaveStrings.text("Connection Lost")
-        case .serverDisconnected:
-            return ConclaveStrings.text("You Were Disconnected")
-        case .rejoinFailed:
-            return ConclaveStrings.text("Couldn\u{2019}t Rejoin")
-        }
-    }
-
-    static func body(_ variant: OutcomeVariant) -> String {
-        switch variant {
-        case .removed:
-            return ConclaveStrings.text("The host removed you from this meeting.")
-        case .denied:
-            return ConclaveStrings.text("Someone in the meeting declined your request to join.")
-        case .connectionLost:
-            return ConclaveStrings.text("Check your connection, then rejoin.")
-        case .serverDisconnected:
-            return ConclaveStrings.text("The meeting server ended your connection. You can rejoin.")
-        case .rejoinFailed:
-            return ""
-        }
     }
 }
 
@@ -307,17 +329,20 @@ private struct PremeetingUpdatePrompt: ViewModifier {
 /// app delegate, and the self-check readout is exposed to accessibility under `premeeting.fixture.selfCheck`.
 struct PremeetingFixtureRoot: View {
     @State private var session: PremeetingFixtureSession
+    @State private var anchors = EntryTransitionAnchorStore()
 
     init(state: PremeetingFixtureState) {
         _session = State(initialValue: PremeetingFixtureSession(state: state))
     }
 
     var body: some View {
-        NativeAppRoot(shell: session.shell, premeeting: session.premeeting, usesNativeCallRoot: false) {
+        // ENT-5: the dark stand-in is a stage surface, so `connecting-to-call` shows the card expansion (S10 8 l2).
+        NativeAppRoot(shell: session.shell, premeeting: session.premeeting, usesNativeCallRoot: false,
+                      interimIsStage: true, anchors: anchors) {
             PremeetingFixtureCallStandIn()
         }
         .overlay(alignment: .bottomLeading) {
-            PremeetingFixtureReadout(session: session)
+            PremeetingFixtureReadout(session: session, anchors: anchors)
         }
         .onAppear {
             session.start()
@@ -345,13 +370,22 @@ private struct PremeetingFixtureCallStandIn: View {
 /// A one-point accessibility element carrying the ASCII self-check value; it draws nothing.
 private struct PremeetingFixtureReadout: View {
     let session: PremeetingFixtureSession
+    let anchors: EntryTransitionAnchorStore
 
     var body: some View {
-        Color.clear
-            .frame(width: 1, height: 1)
-            .accessibilityElement()
-            .accessibilityLabel(Text(verbatim: session.state.rawValue + " " + session.selfCheckReadout))
-            .accessibilityIdentifier(PremeetingFixtureScript.selfCheckKey)
+        HStack(spacing: 0) {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityElement()
+                .accessibilityLabel(Text(verbatim: session.state.rawValue + " " + session.selfCheckReadout))
+                .accessibilityIdentifier(PremeetingFixtureScript.selfCheckKey)
+            // ENT-5 (S10 8 l8): the card frame the expansion started from, re-read with each self-check update.
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityElement()
+                .accessibilityLabel(Text(verbatim: anchors.readout + " " + session.selfCheckReadout))
+                .accessibilityIdentifier(PremeetingFixtureScript.entryAnchorKey)
+        }
     }
 }
 #endif

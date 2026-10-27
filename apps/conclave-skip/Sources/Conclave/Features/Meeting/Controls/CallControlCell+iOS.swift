@@ -8,11 +8,13 @@ import SwiftUI
 // while leaving. Toggles use the TG 4.2 form of the WP1-2b call toggle (a Button with the toggle trait, a constant
 // label and the state in the value), so VoiceOver and Voice Control read the real state from `isOn`.
 
-/// Switches on the control kind.
+/// Switches on the control kind. Leave is the CTL-2 `LeaveControl` (LeaveControl+iOS.swift), which reads only
+/// `controls.leaveState`; `isAccessibilityText` is the uncapped text size the bar passes down (S30 1 c, 4 c).
 struct CallControlCell: View {
     let model: CallControlModel
     let controls: CallControlsPresenter
     let diameter: CGFloat
+    let isAccessibilityText: Bool
 
     var body: some View {
         switch model.kind {
@@ -21,7 +23,7 @@ struct CallControlCell: View {
         case .chat, .participants, .qa, .more:
             CallControlInvokerCell(model: model, controls: controls, diameter: diameter)
         case .leave:
-            CallControlLeaveCell(model: model, controls: controls, diameter: diameter)
+            LeaveControl(controls: controls, diameter: diameter, isAccessibilityText: isAccessibilityText)
         }
     }
 }
@@ -119,35 +121,6 @@ struct CallControlInvokerCell: View {
         }
         .help(CallControlsCopy.title(model.kind))
         .accessibilityIdentifier("control." + model.id)
-    }
-}
-
-/// Leave (S30 D24, F00 C04): the WP1-2b glyph-only red control, "Leave Call" (OQ3), never glass, no haptic (Q11). The
-/// host End menu and the confirmation arrive with CTL-2 (LeaveControl+iOS.swift); a leaving call shows a spinner.
-struct CallControlLeaveCell: View {
-    let model: CallControlModel
-    let controls: CallControlsPresenter
-    let diameter: CGFloat
-
-    private var isLeaving: Bool {
-        model.reason == ControlBlockedReason.leaving || model.isPending
-    }
-
-    var body: some View {
-        ConclaveLeaveButton(diameter: diameter, identifier: "control.leave") {
-            _ = controls.leave()
-        }
-        .disabled(isLeaving || model.isBlocked)
-        .overlay {
-            if isLeaving {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(HostingTheme.token(DesignTokens.neutralWhite))
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
-        }
-        .help(ConclaveStrings.text("Leave Call"))
     }
 }
 

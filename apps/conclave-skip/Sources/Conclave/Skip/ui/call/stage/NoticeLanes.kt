@@ -150,7 +150,7 @@ private fun NoticeToastLane(stage: StagePresenter, modifier: Modifier) {
 
 /** Open settings from a banner: the Wi-Fi panel for a captive portal (API 29+, else Wi-Fi settings), else the app page. */
 private fun openNoticeSettings(context: Context, notice: MeetingNotice) {
-    PipManager.suppressNextAutoEnter("notice_settings")
+    // SYS-8 (S70 8 d, HD request B5-T4 R18c): Settings never suppresses PiP auto-enter; the call stays visible over it.
     if (notice.kind == NoticeKind.captivePortal) {
         val intent = if (Build.VERSION.SDK_INT >= 29) Intent(Settings.Panel.ACTION_WIFI) else Intent(Settings.ACTION_WIFI_SETTINGS)
         val activity = UIApplication.shared.androidActivity
@@ -257,7 +257,7 @@ internal fun noticeToastMessage(notice: MeetingNotice): String = when (notice.ki
     NoticeKind.becameHost -> conclaveString("stg_toast_became_host")
     NoticeKind.lostHost -> conclaveString("stg_toast_lost_host")
     NoticeKind.routeChanged -> conclaveString("stg_toast_route", notice.name)
-    NoticeKind.actionFailed -> if (notice.detail == "hand") conclaveString("stg_toast_hand_failed") else conclaveString("stg_toast_failed_generic")
+    NoticeKind.actionFailed -> when (notice.detail) { "hand" -> conclaveString("stg_toast_hand_failed"); "flipCamera" -> conclaveString("stg_flip_failed"); else -> conclaveString("stg_toast_failed_generic") }
     NoticeKind.rateLimited -> if (notice.detail == "hand") conclaveString("sys_err_hand_rate") else conclaveString("stg_toast_reaction_rate")
     NoticeKind.voteOpened -> conclaveString("stg_toast_vote_opened", notice.name)
     NoticeKind.resumedMuted -> conclaveString("stg_toast_resumed_muted")
@@ -274,6 +274,8 @@ internal fun noticeToastMessage(notice: MeetingNotice): String = when (notice.ki
     NoticeKind.routeFailed -> conclaveString("ctl_toast_route_failed")
     NoticeKind.lockFailed -> conclaveString("ctl_toast_lock_failed")
     NoticeKind.linkCopied -> conclaveString("ds_link_copied")
+    // S50 PL14: a tile-menu People failure ("Couldn't mute Avery Lee." and the typed reasons, S50 3 g).
+    PeopleFailurePlacementPolicy.stageNoticeKind -> peopleStageToastMessage(notice)
     // S30 CC7 (CTL-1, HD request B4-T6 R4): the controls' explanation table names the blocked control's reason.
     NoticeKind.blockedExplanation ->
         ControlBarPolicy.explanation(fromNotice = notice)?.let { callControlToast(it) } ?: conclaveString("stg_toast_failed_generic")

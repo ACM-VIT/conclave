@@ -159,9 +159,8 @@ private fun StageTopRow(stage: StagePresenter, capsuleMax: Dp, onMinimize: () ->
         if (snapshot.canFlipCamera) {
             Spacer(Modifier.width(8.dp))
             ConclaveFlipCameraButton(isFront = snapshot.isFrontCamera, onClick = {
-                stage.flipCamera()
-                // RECONCILE R13: every user camera flip plays selectionChanged after the dispatch.
-                haptics.gesture(FeedbackKind.selectionChanged)
+                // RECONCILE R13: every user camera flip plays selectionChanged once after a dispatched flip (STG-3).
+                if (StageCameraFlip.perform(stage)) haptics.gesture(FeedbackKind.selectionChanged)
             }, identifier = "stage.flip")
         }
     }
@@ -171,7 +170,8 @@ private fun StageTopRow(stage: StagePresenter, capsuleMax: Dp, onMinimize: () ->
 @Composable
 private fun StageCapsule(stage: StagePresenter, maxWidth: Dp, modifier: Modifier) {
     val model = stage.capsule
-    ConclaveMeetingCapsule(title = model.title, subtitle = stageCapsuleSubtitle(model), identifier = "stage.capsule",
+    val title = if (model.subtitleKind == AttendeeViewerPolicy.capsuleLiveKind) attendeeTitle(model.title) else model.title
+    ConclaveMeetingCapsule(title = title, subtitle = stageCapsuleSubtitle(model), identifier = "stage.capsule",
         onClick = { stage.openMeetingInfo() }, modifier = modifier, locked = model.isLocked, captionsOn = model.captionsOn,
         maxWidth = maxWidth)
 }
@@ -180,6 +180,8 @@ private fun StageCapsule(stage: StagePresenter, maxWidth: Dp, modifier: Modifier
 internal fun stageCapsuleSubtitle(model: StageCapsuleModel): String = when (model.subtitleKind) {
     StageCapsuleModel.youPresentingKind -> conclaveString("stg_you_presenting")
     StageCapsuleModel.presentingKind -> conclaveString("ds_is_presenting", model.subtitleName)
+    // S20 12 d (STG-8): attendees see the webinar title and "Live", never a count.
+    AttendeeViewerPolicy.capsuleLiveKind -> attendeeCapsuleSubtitle()
     StageCapsuleModel.aloneKind -> conclaveString("stg_just_you")
     else -> conclavePlural("stg_participants_count", model.count, model.count)
 }

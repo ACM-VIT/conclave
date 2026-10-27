@@ -1,14 +1,20 @@
 #if os(iOS) && !SKIP
 import Accessibility
 import GameController
+import PhotosUI
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 // S40 6 (CHT-2): the composer on iOS, in the FND-3 composer bar (iOS 26 `safeAreaBar` with the glass cluster from
 // the one sanctioned composer glass file, Owner OQ2 (2026-10-26); the opaque bordered field under Reduce Transparency
 // and on iOS 17 to 25). Keystrokes stay in view state; the draft is written to `ChatDraftStore` after 500 ms idle and
 // on disappear (R40-7), never to the view model. Every send goes through `chat.send` (ChatComposerPolicy.route, D24);
-// no send, command or recipient haptic (Q11). Photos, GIFs, voice and the link preview are CHT-4 to CHT-6: the attach
-// control appears once `composer.attachKinds` names an item, so this slice shows the field cluster alone.
+// no send, command or recipient haptic (Q11). CHT-4 and CHT-5: the attach control joins the cluster (Photo Library and
+// GIFs and Stickers; an item unavailable in the mode stays in the menu, disabled with its reason), the attachment chip
+// and the link preview sit above the field, the system paste control appears while the pasteboard holds an image (no
+// paste prompt), iPad drops land as files, and every photo reaches the presenter as a file copied into the caches
+// directory off the main actor (CH6). Voice is CHT-6.
 
 struct ChatComposer: View {
     let chat: ChatPresenter
@@ -16,6 +22,11 @@ struct ChatComposer: View {
     @State private var text = ""
     @State private var loadedKey = ""
     @State private var hasLoaded = false
+    @State private var showsPhotoPicker = false
+    @State private var pickedItem: PhotosPickerItem? = nil
+    @State private var pasteboardHasImage = false
+    /// CHT-5: the composer preview the person removed; the next send carries `suppressEmbeds` (6 c).
+    @State private var dismissedPreviewURL = ""
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -34,15 +45,32 @@ struct ChatComposer: View {
                                          cancelTitle: ConclaveStrings.text("Cancel Reply"), identifier: "chat.composer.reply",
                                          onCancel: { chat.cancelReply() })
             }
+            ChatAttachmentRow(chat: chat, attachment: composer.attachment)
+            if pasteboardHasImage && composer.attachment.phase == ChatAttachmentPhase.none
+                && ChatComposerPolicy.attachItemReason(kind: "photo", isPrivateMode: composer.privateTo != nil,
+                                                       photosEnabled: composer.photosEnabled, voiceEnabled: composer.voiceEnabled).isEmpty
+                && composer.gate == ChatSendGate.open {
+                PasteButton(supportedContentTypes: [UTType.image]) { providers in
+                    ChatPickedImageFile.attachFirst(providers, to: chat)
+                }
+                .labelStyle(.titleAndIcon)
+                .buttonBorderShape(.capsule)
+                .accessibilityHint(ConclaveStrings.text("Adds the copied image as a photo"))
+                .accessibilityIdentifier("chat.composer.paste")
+            }
+            ChatComposerLinkPreview(chat: chat, draft: text, dismissedURL: $dismissedPreviewURL)
             ChatComposerModeRow(chat: chat, composer: composer, draft: text)
+            ChatVoiceModeRow(chat: chat, composer: composer, draft: text)
             if composer.inlineNotice != ChatFailure.none {
-                ConclaveComposerStatusLine(text: ChatCopy.failureReason(composer.inlineNotice), identifier: "chat.composer.notice")
+                ConclaveComposerStatusLine(text: ChatMediaCopy.failureReason(composer.inlineNotice), identifier: "chat.composer.notice")
             }
             if !ChatCopy.gateLine(composer.gate).isEmpty {
                 ConclaveComposerStatusLine(text: ChatCopy.gateLine(composer.gate), identifier: "chat.composer.gate")
             }
         } field: {
             ConclaveComposerField(identifier: "chat.composer.cluster") {
+                ChatAttachMenu(chat: chat, composer: composer, onPhoto: { showsPhotoPicker = true }, onGifs: { actions.openGifs() })
+            } field: {
                 TextField(ChatCopy.placeholder(composer), text: $text, axis: .vertical)
                     .lineLimit(1...ConclaveComposerMetrics.maximumLines)
                     .textInputAutocapitalization(.sentences)
@@ -60,7 +88,7 @@ struct ChatComposer: View {
                     .accessibilityHint(ConclaveStrings.text("Type @ to mention someone or / for commands."))
                     .accessibilityIdentifier("chat.composer.field")
             } send: {
-                ConclaveComposerSendButton(title: ConclaveStrings.text("Send"), isEnabled: canSend(composer),
+                ConclaveComposerSendButton(title: VoiceCopy.sendTitle(isVoiceMode: composer.isVoiceMode), isEnabled: canSend(composer),
                                            disabledReason: disabledReason(composer, count: count, limit: limit),
                                            identifier: "chat.composer.send", action: send)
             }
@@ -91,11 +119,43 @@ struct ChatComposer: View {
         }
         .onChange(of: composer.inlineNotice) { _, notice in
             guard notice != ChatFailure.none else { return }
-            postPolite(ChatCopy.failureReason(notice))
+            postPolite(ChatMediaCopy.failureReason(notice))
         }
         .onDisappear {
             chat.drafts.setText(text, for: loadedKey)
         }
+        // CH6: the picker item is loaded as a file copied into the caches directory (HEIC arrives as JPEG with the
+        // compatible encoding); cancelling the picker changes nothing.
+        .photosPicker(isPresented: $showsPhotoPicker, selection: $pickedItem, matching: .images, preferredItemEncoding: .compatible)
+        .onChange(of: pickedItem) { _, item in
+            guard let item else { return }
+            pickedItem = nil
+            Task { @MainActor in
+                guard let file = try? await item.loadTransferable(type: ChatPickedImageFile.self) else { return }
+                chat.attachPhoto(fileURL: file.url.absoluteString, mimeType: file.mimeType, fileName: file.fileName)
+            }
+        }
+        // iPad drag and drop of images, as files (CH6).
+        .dropDestination(for: ChatPickedImageFile.self) { files, _ in
+            guard let file = files.first else { return false }
+            chat.attachPhoto(fileURL: file.url.absoluteString, mimeType: file.mimeType, fileName: file.fileName)
+            return true
+        }
+        // The paste control shows only while the pasteboard holds an image; `hasImages` shows no paste prompt.
+        .task {
+            refreshPasteboard()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
+            refreshPasteboard()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            refreshPasteboard()
+        }
+    }
+
+    private func refreshPasteboard() {
+        let hasImage = UIPasteboard.general.hasImages
+        if pasteboardHasImage != hasImage { pasteboardHasImage = hasImage }
     }
 
     /// R40-7: drafts are keyed by room and recipient. A switch saves the current text under the old key and loads the
@@ -118,7 +178,8 @@ struct ChatComposer: View {
     }
 
     private func canSend(_ composer: ChatComposerSnapshot) -> Bool {
-        ChatComposerPolicy.canSend(text: text, gate: composer.gate, isVoiceMode: composer.isVoiceMode)
+        ChatComposerPolicy.canSend(text: text, gate: composer.gate, isVoiceMode: composer.isVoiceMode,
+                                   attachment: composer.attachment)
     }
 
     private func disabledReason(_ composer: ChatComposerSnapshot, count: Int, limit: Int) -> String {
@@ -127,6 +188,7 @@ struct ChatComposer: View {
             return ConclaveStrings.text("Reconnecting")
         }
         if count > limit { return ConclaveStrings.format("%lld characters over the limit", count - limit) }
+        if composer.attachment.blocksSend { return ConclaveStrings.text("Uploading photo") }
         return ConclaveStrings.text("Type a message")
     }
 
@@ -135,13 +197,16 @@ struct ChatComposer: View {
         var parts: [String] = []
         if let recipient = composer.privateTo { parts.append(ConclaveStrings.format("Private to %@", recipient.name)) }
         if let reply = composer.reply { parts.append(ChatCopy.replyTitle(reply)) }
+        if composer.isVoiceMode { parts.append(VoiceCopy.accessibilityValue) }
         return parts.joined(separator: ", ")
     }
 
     private func send() {
-        let result = chat.send(text: text)
+        let result = dismissedPreviewURL.isEmpty ? chat.send(text: text)
+            : chat.send(text: text, suppressEmbedsFor: dismissedPreviewURL)
         if result == ChatSendResult.dispatched {
             text = ""
+            dismissedPreviewURL = ""
             chat.drafts.setText("", for: loadedKey)
         }
     }
@@ -297,6 +362,127 @@ private struct ChatSuggestionList: View {
         .disabled(!row.isAvailable)
         .opacity(row.isAvailable ? 1 : HostingTheme.disabledOpacity)
         .accessibilityIdentifier("chat.suggestion." + row.id)
+    }
+}
+
+/// S40 6 c attach control: a Menu whose label is the add-attachment glyph in the 44 pt glass circle (the cluster draws
+/// the material). Items unavailable in the current mode stay in the menu, disabled, with the reason as a second line.
+private struct ChatAttachMenu: View {
+    let chat: ChatPresenter
+    let composer: ChatComposerSnapshot
+    let onPhoto: () -> Void
+    let onGifs: () -> Void
+
+    var body: some View {
+        Menu {
+            ForEach(composer.attachKinds, id: \.self) { kind in
+                item(kind)
+            }
+        } label: {
+            Image(systemName: ChatMediaSymbols.addAttachment)
+                .font(.title3)
+                .frame(width: CGFloat(ConclaveComposerMetrics.attachDiameter), height: CGFloat(ConclaveComposerMetrics.attachDiameter))
+                .contentShape(Circle())
+        }
+        .disabled(composer.gate != ChatSendGate.open)
+        .accessibilityLabel(ConclaveStrings.text("Add Attachment"))
+        .accessibilityIdentifier("chat.composer.attach")
+    }
+
+    @ViewBuilder
+    private func item(_ kind: String) -> some View {
+        let reason = ChatComposerPolicy.attachItemReason(kind: kind, isPrivateMode: composer.privateTo != nil,
+                                                         photosEnabled: composer.photosEnabled, voiceEnabled: composer.voiceEnabled)
+        if kind == "photo" {
+            Button(action: onPhoto) {
+                Text(ConclaveStrings.text("Photo Library"))
+                if !reason.isEmpty { Text(ChatMediaCopy.attachReason(reason)) }
+                Image(systemName: ChatMediaSymbols.photo)
+            }
+            .disabled(!reason.isEmpty || composer.attachment.phase != ChatAttachmentPhase.none)
+            .accessibilityIdentifier("chat.composer.attach.photo")
+        } else if kind == "gif" {
+            Button(action: onGifs) {
+                Text(ConclaveStrings.text("GIFs and Stickers"))
+                if !reason.isEmpty { Text(ChatMediaCopy.attachReason(reason)) }
+                Image(systemName: ChatMediaSymbols.gif)
+            }
+            .disabled(!reason.isEmpty)
+            .accessibilityIdentifier("chat.composer.attach.gif")
+        } else if kind == VoiceMessagePolicy.attachKind {
+            ChatVoiceAttachItem(chat: chat, composer: composer)
+        }
+    }
+}
+
+/// S40 6 c attachment chip (FND-3 component): the thumbnail from the local file, "Photo", the status line ("Preparing",
+/// "Uploading 42%", "Ready to send" or the reason), the system linear indicator while preparing or uploading, Try Again
+/// after a failure, and Remove. Absent while there is no photo.
+private struct ChatAttachmentRow: View {
+    let chat: ChatPresenter
+    let attachment: ChatAttachmentState
+
+    var body: some View {
+        if let phase = ChatAttachmentRow.componentPhase(attachment.phase) {
+            ConclaveComposerAttachmentChip(
+                title: ConclaveStrings.text("Photo"),
+                status: ChatMediaCopy.attachmentStatus(attachment),
+                phase: phase,
+                progress: attachment.phase == ChatAttachmentPhase.uploading && attachment.progress >= 0 ? attachment.progress : nil,
+                removeTitle: ConclaveStrings.text("Remove Photo"),
+                identifier: "chat.composer.attachment",
+                thumbnail: {
+                    ChatImageBox(url: attachment.thumbnailKey, width: CGFloat(ConclaveComposerMetrics.attachmentThumbnail),
+                                 height: CGFloat(ConclaveComposerMetrics.attachmentThumbnail))
+                },
+                onRemove: { chat.removeAttachment() },
+                onRetry: { chat.retryAttachment() }
+            )
+        }
+    }
+
+    static func componentPhase(_ phase: ChatAttachmentPhase) -> ConclaveAttachmentPhase? {
+        switch phase {
+        case .preparing: return ConclaveAttachmentPhase.preparing
+        case .uploading: return ConclaveAttachmentPhase.uploading
+        case .ready: return ConclaveAttachmentPhase.ready
+        case .failed: return ConclaveAttachmentPhase.failed
+        case .none: return nil
+        }
+    }
+}
+
+/// CH6: a picked, pasted or dropped image as a file. The import copies the file into the caches directory inside the
+/// transfer (off the main actor), so no image bytes ever cross the main actor; the presenter gets the file URL.
+struct ChatPickedImageFile: Transferable {
+    let url: URL
+    let mimeType: String
+    let fileName: String
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: UTType.image) { received in
+            try ChatPickedImageFile.copyIntoCaches(received.file)
+        }
+    }
+
+    static func copyIntoCaches(_ source: URL) throws -> ChatPickedImageFile {
+        let folder = URL(fileURLWithPath: ChatPhotoPreparer.outputDirectory(), isDirectory: true)
+        let ext = source.pathExtension.isEmpty ? "jpg" : source.pathExtension.lowercased()
+        let destination = folder.appendingPathComponent(UUID().uuidString + "." + ext)
+        try FileManager.default.copyItem(at: source, to: destination)
+        let mime = UTType(filenameExtension: ext)?.preferredMIMEType ?? "image/jpeg"
+        return ChatPickedImageFile(url: destination, mimeType: mime, fileName: source.lastPathComponent)
+    }
+
+    /// The paste control's payload: the first image provider's file, copied while the system's temporary file exists.
+    static func attachFirst(_ providers: [NSItemProvider], to chat: ChatPresenter) {
+        guard let provider = providers.first else { return }
+        _ = provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { url, _ in
+            guard let url, let file = try? ChatPickedImageFile.copyIntoCaches(url) else { return }
+            Task { @MainActor in
+                chat.attachPhoto(fileURL: file.url.absoluteString, mimeType: file.mimeType, fileName: file.fileName)
+            }
+        }
     }
 }
 #endif

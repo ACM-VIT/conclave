@@ -1,5 +1,7 @@
 package conclave.module
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
@@ -22,10 +24,17 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
@@ -41,9 +50,16 @@ import androidx.navigation3.ui.NavDisplay
  * ENT-1 (S10 0.4, 1 d): the Android native premeeting root, handwritten Compose Material 3 mounted by MainActivity
  * outside SkipUI behind the Debug `premeeting` route flag (PLAN-screens 2), or by the L9 fixture with standalone
  * presenters. It takes its presenters as parameters and never reads a static presenter. The premeeting stack is a
- * NavDisplay over keys built from the presenter's path (PremeetingBackStack); the call branch draws above it while
+ * NavDisplay over keys built from the presenter's path (PremeetingBackStack); the call branch replaces it while
  * the 0.4 table says call. Exactly one system-bar writer is composed at a time: ConclaveSystemBars for the
  * premeeting stack, the call content's own writer while it shows (S10 1 d).
+ *
+ * ENT-5 (S10 8 d, h, m): the root is one AnimatedContent over the 0.4 root kind, so the premeeting stack leaves
+ * composition once the call content covers it and comes back under the fading call content when the call ends. The
+ * way into the native CallRoot (and the L9 fixture's stage stand-in) is the card expansion when the lobby card
+ * recorded its bounds and animations are on; the interim legacy root (PresentationRootView in its own
+ * SaveableStateProvider, SideEffect removeState kept in MainActivity) always cross-fades, and its own bar writer is
+ * the only one composed while it is (our writer waits until the transition has settled on the premeeting side).
  */
 @Composable
 internal fun PremeetingHost(
@@ -58,27 +74,69 @@ internal fun PremeetingHost(
     people: PeoplePresenter? = null,
     // ACT-1, ACT-2, STG-9 (HD request B4-T8 R5c): the session's activity presenters; null in the L9 fixture.
     activitySession: ActivitySession? = null,
+    // ENT-5: the interim call content is a stage surface (the L9 fixture's dark stand-in), so it takes the card
+    // expansion like the native CallRoot; the production interim (the legacy root) always cross-fades.
+    interimIsStage: Boolean = false,
     callContent: @Composable () -> Unit,
 ) {
     val systemDark = isSystemInDarkTheme()
-    val inCall = premeeting.root.root == PremeetingRootKind.call
+    val rootKind = premeeting.root.root
+    val inCall = rootKind == PremeetingRootKind.call
+    val reduceMotion = rememberReduceMotion()
+    val anchors = remember { EntryTransitionAnchors() }
+    val expandsIntoCall = (usesNativeCallRoot && stage != null) || interimIsStage
+    // S10 8 c, d: the card bounds the expansion starts from, read once when the root flips to the call; null
+    // cross-fades (Reduce Motion, no recorded card, the interim legacy root).
+    val expansionStart: Rect? = remember(rootKind) {
+        if (rootKind != PremeetingRootKind.call) {
+            null
+        } else {
+            val bounds = anchors.bounds(forRoute = premeeting.lobbyStatus?.routeId ?: 0)
+            val style = EntryTransitionPolicy.style(entersCall = true, expandsIntoCall = expandsIntoCall,
+                hasCardFrame = bounds != null, prefersCrossFade = reduceMotion)
+            if (style == EntryTransitionStyle.expand) bounds else null
+        }
+    }
+    var expansionDone by remember(rootKind) { mutableStateOf(false) }
+    val rootTransition = updateTransition(targetState = rootKind, label = "premeeting.root")
+    // The call content is composed while the root is (or is still fading from) the call.
+    val callComposed = rootTransition.currentState == PremeetingRootKind.call ||
+        rootTransition.targetState == PremeetingRootKind.call
     HostingTheme {
-        Box(Modifier.fillMaxSize()) {
-            PremeetingStack(premeeting)
-            if (inCall) {
-                // CALL-ROOT SLOT: B3-T2 (STG-1) mounts its CallRoot here when `usesNativeCallRoot` (the Debug `call`
-                // key) is on (HD request B3-T2 R5); always when the key is off, the interim call content. The native
-                // call root is then the system-bar writer. The control bar reads LocalCallControls (CTL-1, HD request
-                // B4-T6 R9), which NativePremeetingHost provides.
-                if (usesNativeCallRoot && stage != null) {
-                    CallRoot(shell = shell, stage = stage, people = people, renderers = StageRenderers.live,
-                        activitySession = activitySession, onMinimize = { stageMinimizeToBackground() })
+        Box(Modifier.fillMaxSize().onGloballyPositioned { anchors.hostOrigin = it.positionInRoot() }) {
+            rootTransition.AnimatedContent(
+                modifier = Modifier.fillMaxSize(),
+                transitionSpec = {
+                    entryRootTransform(entersCall = targetState == PremeetingRootKind.call,
+                        expands = expansionStart != null, reduceMotion = reduceMotion)
+                },
+            ) { kind ->
+                if (kind == PremeetingRootKind.call) {
+                    // CALL-ROOT SLOT: B3-T2 (STG-1) mounts its CallRoot here when `usesNativeCallRoot` (the Debug
+                    // `call` key) is on (HD request B3-T2 R5); always when the key is off, the interim call content.
+                    // The native call root is then the system-bar writer. The control bar reads LocalCallControls
+                    // (CTL-1, HD request B4-T6 R9), which NativePremeetingHost provides.
+                    if (usesNativeCallRoot && stage != null) {
+                        CallRoot(shell = shell, stage = stage, people = people, renderers = StageRenderers.live,
+                            activitySession = activitySession, onMinimize = { stageMinimizeToBackground() })
+                    } else {
+                        callContent()
+                    }
                 } else {
-                    callContent()
+                    CompositionLocalProvider(LocalEntryTransitionAnchors provides anchors) {
+                        PremeetingStack(premeeting)
+                    }
                 }
             }
+            val start = expansionStart
+            if (start != null && !expansionDone) {
+                EntryExpansionLayer(start = start, hostOrigin = anchors.hostOrigin, onFinished = {
+                    expansionDone = true
+                    anchors.clear()
+                })
+            }
         }
-        if (!inCall) {
+        if (!callComposed) {
             ConclaveSystemBars(SystemBarPolicy.resolve(rootDark = systemDark, overlayVisible = false, overlayInCall = false,
                 bottomStripInCall = false, systemDark = systemDark))
         }
@@ -105,9 +163,19 @@ private fun PremeetingStack(premeeting: PremeetingPresenter) {
     if (premeeting.isJoinSheetPresented) {
         JoinCodeSheet(premeeting)
     }
+    StopAskingHost(premeeting)
 }
 
-/** Back from the top page: the outcome's secondary path, Cancel while connecting or waiting, else a pop. */
+/** ENT-5 (S10 9 d): the waiting room's Back confirmation, in its own scope so its flag recomposes nothing else. */
+@Composable
+private fun StopAskingHost(premeeting: PremeetingPresenter) {
+    if (premeeting.isStopAskingPresented) {
+        StopAskingDialog(premeeting)
+    }
+}
+
+/** Back from the top page: the outcome's secondary path, Cancel while connecting, the Stop asking confirmation while
+ *  waiting (S10 9 d), else a pop. */
 private fun premeetingBack(premeeting: PremeetingPresenter) {
     if (premeeting.outcome != null) {
         premeeting.performOutcomeAction(OutcomeAction.backHome)
@@ -119,10 +187,15 @@ private fun premeetingBack(premeeting: PremeetingPresenter) {
         return
     }
     val status = premeeting.lobbyStatus
-    if (top != null && top.kind == PremeetingRouteKind.lobby && status != null && status.routeId == top.id &&
-        (status.mode == LobbyMode.connecting || status.mode == LobbyMode.waiting)) {
-        premeeting.cancelJoin()
-        return
+    if (top != null && top.kind == PremeetingRouteKind.lobby && status != null && status.routeId == top.id) {
+        if (status.mode == LobbyMode.connecting) {
+            premeeting.cancelJoin()
+            return
+        }
+        if (status.mode == LobbyMode.waiting) {
+            premeeting.requestStopAsking()
+            return
+        }
     }
     premeeting.setPath(skip.lib.Array(PremeetingBackStack.popped(premeeting.path.toList())))
 }
@@ -139,12 +212,13 @@ private fun PremeetingPage(premeeting: PremeetingPresenter, key: PremeetingKey) 
             onOpenPrivacy = { premeeting.openPrivacyPolicy() },
         )
         is PremeetingKey.PrivacyKey -> PrivacyPolicyScreen(onBack = { premeetingBack(premeeting) })
-        is PremeetingKey.OutcomeKey -> OutcomeStandInPage(premeeting)
+        is PremeetingKey.OutcomeKey -> OutcomeScreen(premeeting)
     }
 }
 
-// MARK: Stand-ins until their slices land (ENT-6 outcome, ENT-9 webinar landing; the lobby is ENT-3's LobbyScreen in
-// K/ui/lobby, Account and Privacy are ENT-7's AccountScreen and PrivacyPolicyScreen in K/ui/account)
+// MARK: Stand-ins until their slices land (ENT-9 webinar landing; the lobby is ENT-3's LobbyScreen in K/ui/lobby,
+// Account and Privacy are ENT-7's AccountScreen and PrivacyPolicyScreen in K/ui/account, the outcome is ENT-6's
+// OutcomeScreen in K/ui/outcome)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -182,38 +256,6 @@ private fun WebinarStandInPage(premeeting: PremeetingPresenter, key: PremeetingK
             supportingContent = { Text(key.roomId) },
             colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
             modifier = Modifier.testTag("webinar.room"),
-        )
-    }
-}
-
-/** The outcome stand-in: C14 with the variant copy and Back to home (Back does the same, S10 10 i). */
-@Composable
-private fun OutcomeStandInPage(premeeting: PremeetingPresenter) {
-    val outcome = premeeting.outcome ?: return
-    val title = when (outcome.variant) {
-        OutcomeVariant.removed -> conclaveString("pm_removed_title")
-        OutcomeVariant.denied -> conclaveString("pm_denied_title")
-        OutcomeVariant.connectionLost -> conclaveString("pm_lost_title")
-        OutcomeVariant.serverDisconnected -> conclaveString("pm_disconnected_title")
-        OutcomeVariant.rejoinFailed -> conclaveString("pm_couldnt_rejoin")
-    }
-    val body = when (outcome.variant) {
-        OutcomeVariant.removed -> conclaveString("pm_removed_body")
-        OutcomeVariant.denied -> conclaveString("pm_denied_body")
-        OutcomeVariant.connectionLost -> conclaveString("pm_lost_body")
-        OutcomeVariant.serverDisconnected -> conclaveString("pm_disconnected_body")
-        OutcomeVariant.rejoinFailed -> ""
-    }
-    val detail = outcome.serverDetail
-    val text = if (detail.isEmpty()) body else if (body.isEmpty()) detail else body + "\n\n" + detail
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface), contentAlignment = Alignment.Center) {
-        ConclaveErrorStatus(
-            title = title,
-            body = text,
-            icon = PremeetingIcons.Error,
-            identifier = "outcome." + outcome.variant.rawValue,
-            onRetry = { premeeting.performOutcomeAction(OutcomeAction.backHome) },
-            retryTitle = conclaveString("pm_back_home"),
         )
     }
 }
@@ -344,6 +386,9 @@ internal fun PremeetingRootFeedback(premeeting: PremeetingPresenter) {
             records = FeedbackDeliveryRecords.shared,
         )
     }
+    // SYS-4 (PS 9.4): PiP (and the API 35 transition into it) suspends delivery; resuming rebaselines, nothing replays.
+    val pipSuspended = PipController.feedbackSuspended
+    LaunchedEffect(delivery, pipSuspended) { delivery.updateSuspended(pipSuspended) }
     NativeFeedbackConsumer(delivery, mount = 0)
 }
 
@@ -367,7 +412,8 @@ fun PremeetingFixtureHost(stateName: String) {
         }
     }
     Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
-        PremeetingHost(session.shell, session.premeeting, usesNativeCallRoot = false) {
+        // ENT-5: the dark stand-in is a stage surface, so `connecting-to-call` shows the card expansion (S10 8 l2).
+        PremeetingHost(session.shell, session.premeeting, usesNativeCallRoot = false, interimIsStage = true) {
             HostingTheme(inCall = true) {
                 Box(Modifier.fillMaxSize().background(LocalConclaveExtendedColors.current.stage).testTag("premeeting.fixture.call"))
             }

@@ -36,6 +36,10 @@ struct ConclaveRootFeedback: ViewModifier {
 
     func body(content: Content) -> some View {
         content.modifier(ConclaveFeedbackConsumer(delivery: shellDelivery, mount: 1))
+            // SYS-4 (PS 9.4): PiP suspends delivery; resuming rebaselines the cursor, so nothing replays.
+            .onChange(of: PipWindowState.shared.suspendsFeedback, initial: true) { _, suspended in
+                shellDelivery.setSuspended(suspended)
+            }
     }
 }
 
@@ -54,6 +58,10 @@ struct ConclavePremeetingFeedback: ViewModifier {
 
     func body(content: Content) -> some View {
         content.modifier(ConclaveFeedbackConsumer(delivery: premeetingDelivery, mount: 1))
+            // SYS-4 (PS 9.4): PiP suspends delivery; resuming rebaselines the cursor, so nothing replays.
+            .onChange(of: PipWindowState.shared.suspendsFeedback, initial: true) { _, suspended in
+                premeetingDelivery.setSuspended(suspended)
+            }
     }
 }
 

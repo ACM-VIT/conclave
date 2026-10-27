@@ -65,6 +65,9 @@ final class CallPresence {
     @ObservationIgnored private var isInPictureInPicture = false
     @ObservationIgnored private var foregroundServiceHoldsCamera = false
     @ObservationIgnored private var foregroundServiceHoldsMicrophone = false
+    /// S20 SC11 / S70 R70-10: the stage's PiP target (slot bounds plus the decoded frame size), reported by the view
+    /// model from each changed `StageVisibilityReport`.
+    @ObservationIgnored private var pipTarget: PipTargetFrame? = nil
     @ObservationIgnored private var presenceSessionCounter = 0
     @ObservationIgnored private var endReason: CallEndReason = .none
     @ObservationIgnored private var recentCommands: [String] = []
@@ -94,6 +97,7 @@ final class CallPresence {
         inputs = CallPresenceInputs.make()
         interruption = .none
         isInPictureInPicture = false
+        pipTarget = nil
         foregroundServiceHoldsCamera = false
         foregroundServiceHoldsMicrophone = false
         recompute()
@@ -162,6 +166,14 @@ final class CallPresence {
         recompute()
     }
 
+    /// The stage's PiP target (S70 0.5 inputs table: `pipTarget`); equality guarded, so an unchanged frame fans out
+    /// nothing. Android params (3 d) and the iOS `preferredContentSize` (3 c) read it.
+    func reportPipTarget(_ target: PipTargetFrame?) {
+        guard pipTarget != target else { return }
+        pipTarget = target
+        recompute()
+    }
+
     // MARK: - Snapshot
 
     /// Adapters may report back (a surface status, an echo) while they handle a change. Such a report is applied
@@ -209,7 +221,14 @@ final class CallPresence {
         }
         let joinedAtMillis = isInProgress ? inputs.joinedAtMillis : current.joinedAtMillis
         let isCameraOn = !inputs.isCameraOff
-        let cameraContinues = isCameraOn && (inputs.multitaskingCameraAccessEnabled || foregroundServiceHoldsCamera)
+        // S70 8 c, 8 d: iOS needs multitasking camera access AND an eligible (or showing) PiP window; Android the
+        // camera foreground-service type.
+        let cameraContinues = CameraContinuityPolicy.continuesInBackground(
+            isCameraOn: isCameraOn,
+            multitaskingCameraAccessEnabled: inputs.multitaskingCameraAccessEnabled,
+            pip: pip,
+            foregroundServiceHoldsCamera: foregroundServiceHoldsCamera
+        )
 
         let next = CallPresenceSnapshot(
             revision: current.revision,
@@ -228,7 +247,7 @@ final class CallPresence {
             interruption: interruption,
             pip: pip,
             isInPictureInPicture: isInPictureInPicture,
-            pipTarget: nil,
+            pipTarget: isInProgress ? pipTarget : nil,
             keepsScreenAwake: isInProgress,
             proximityArmed: false,
             cameraContinuesInBackground: cameraContinues,

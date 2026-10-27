@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider paths (androidx.core.content.FileProvider, authority ${applicationId}.fileprovider in
+     AndroidManifest.xml). Cache directories only, never internal files or external storage.
+     chat_photos: S40 CH18, the chat image viewer's share copies (cache/chat-photos/share/) and prepared photos.
+     exports: reserved for transcript and diagnostics exports (TRN-2, SYS-15), cache/exports/. -->
+<paths>
+    <cache-path name="chat_photos" path="chat-photos/" />
+    <cache-path name="exports" path="exports/" />
+</paths>

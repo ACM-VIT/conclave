@@ -82,6 +82,7 @@ private struct ControlsFixtureReadouts: View {
             readout(session.compositionReadout(), identifier: "controls.composition")
             readout(session.explanationReadout(), identifier: "controls.explanation")
             readout(session.leaveReadout(), identifier: "controls.leave")
+            readout(session.noticesReadout(), identifier: "stage.notices")
             readout(session.panelReadout(), identifier: "panel.current")
             readout(session.chromeReadout(), identifier: "chrome.transient")
             readout(session.renderersReadout(), identifier: "stage.renderers")

@@ -2101,6 +2101,9 @@ final class WebRTCClient: NSObject, ObservableObject {
         currentCameraPosition == .front ? .front : .back
     }
     var captureSession: AVCaptureSession?
+    /// S70 3 c (SYS-4): the camera keeps publishing in PiP and in a non-frontmost iPad window (iOS 16+, no entitlement
+    /// at the iOS 17 floor). CallPresence reads it for `cameraContinuesInBackground`.
+    private(set) var isMultitaskingCameraAccessEnabled = false
     private var currentVideoQuality: VideoQuality = .standard
     private var currentLocalBandwidthQuality: ConnectionQuality = .unknown
     private var configuredCameraWidth = 1_280
@@ -2799,6 +2802,12 @@ final class WebRTCClient: NSObject, ObservableObject {
         let format = try selectFormat(for: camera, targetWidth: profile.width, targetHeight: profile.height)
         let fps = try selectFPS(for: format, targetFPS: profile.fps)
 
+        // Must be set before the session starts running (AVCaptureSession.h).
+        let session = capturer.captureSession
+        if !session.isRunning && session.isMultitaskingCameraAccessSupported && !session.isMultitaskingCameraAccessEnabled {
+            session.isMultitaskingCameraAccessEnabled = true
+        }
+        isMultitaskingCameraAccessEnabled = session.isMultitaskingCameraAccessEnabled
         capturer.startCapture(with: camera, format: format, fps: Int(fps))
     }
 

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -77,11 +78,19 @@ internal fun StageCanvas(stage: StagePresenter, renderers: StageRenderers, chrom
             leading = if (direction == LayoutDirection.Ltr) left else right,
             trailing = if (direction == LayoutDirection.Ltr) right else left,
         )
+        // SYS-4 (S70 3 d): in PiP the slots and their renderers stay exactly as they were (the tiny window never reaches
+        // the presenter, so no slot drops out and no renderer is disposed); only the PiP target is laid out, full bleed.
+        val inPip = PipController.inPipMode
+        val pipSlotId = stage.pipTarget.slotId
         // Equality guarded in the presenter: only real size or inset changes reach it.
-        SideEffect { stage.setViewport(viewport) }
+        SideEffect { if (!inPip) stage.setViewport(viewport) }
         val snapshot = stage.layout
-        val frames = remember(snapshot, viewport) {
-            StageLayoutPolicy.frames(viewport = viewport, kind = snapshot.kind, slots = snapshot.slots, selfCorner = snapshot.selfCorner)
+        val frames = remember(snapshot, viewport, inPip, pipSlotId) {
+            if (inPip) {
+                PipStageLayoutPolicy.frames(targetSlotId = pipSlotId, width = maxWidth.value.toDouble(), height = maxHeight.value.toDouble())
+            } else {
+                StageLayoutPolicy.frames(viewport = viewport, kind = snapshot.kind, slots = snapshot.slots, selfCorner = snapshot.selfCorner)
+            }
         }
         val seeds = remember(snapshot) { snapshot.overflowSeeds.toList() }
         Layout(
@@ -93,9 +102,12 @@ internal fun StageCanvas(stage: StagePresenter, renderers: StageRenderers, chrom
                 })
             },
             content = {
-                for (slot in snapshot.slots) {
-                    key(slot.id) {
-                        SlotView(slot, stage, renderers, snapshot.overflowCount, seeds, Modifier.layoutId(slot.id))
+                // STG-3: the share slot's single tap and the landscape strip read chrome and the viewport.
+                CompositionLocalProvider(LocalStageChromeVisibility provides chrome, LocalStageViewport provides viewport) {
+                    for (slot in snapshot.slots) {
+                        key(slot.id) {
+                            SlotView(slot, stage, renderers, snapshot.overflowCount, seeds, Modifier.layoutId(slot.id))
+                        }
                     }
                 }
             },

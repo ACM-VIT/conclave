@@ -155,9 +155,13 @@ enum StageAnnouncementText {
         // STG-9 (S20 11 g, i; HD request B4-T8 R7): activity start and end, with the app's localized name.
         case ActivityStagePolicy.startedAnnouncement, ActivityStagePolicy.endedAnnouncement:
             return ActivityStageCopy.announcement(kind: announcement.kind, name: announcement.name) ?? announcement.name
+        // STG-8 (S20 12 f, i): "You're now watching as an attendee." and "The webinar is live." (B5-T2 R5).
+        case AttendeeViewerPolicy.demotedAnnouncement, AttendeeViewerPolicy.webinarLiveAnnouncement:
+            return AttendeeViewerCopy.announcement(kind: announcement.kind) ?? announcement.name
         default:
-            // STG-2 pin announcements (TileMenu+iOS.swift; HD request B4-T5 R8).
-            return TileAnnouncementText.text(announcement) ?? announcement.name
+            // STG-2 pin announcements (TileMenu+iOS.swift; HD request B4-T5 R8), then STG-3's "%@ started presenting"
+            // (ShareZoom+iOS.swift; HD request B5-T8 R12).
+            return TileAnnouncementText.text(announcement) ?? ShareZoomText.announcement(announcement) ?? announcement.name
         }
     }
 }
@@ -186,7 +190,9 @@ struct StageCapsuleButton: View {
 
     var body: some View {
         let model = stage.capsule
-        ConclaveMeetingCapsule(title: model.title, subtitle: StageCapsuleText.subtitle(model), isLocked: model.isLocked,
+        let isAttendee = model.subtitleKind == AttendeeViewerPolicy.capsuleLiveKind
+        ConclaveMeetingCapsule(title: isAttendee ? AttendeeViewerCopy.title(model.title) : model.title,
+                               subtitle: StageCapsuleText.subtitle(model), isLocked: model.isLocked,
                                captionsOn: model.captionsOn, maxWidth: maxWidth, identifier: "stage.capsule") {
             stage.openMeetingInfo()
         }
@@ -202,6 +208,9 @@ enum StageCapsuleText {
             return ConclaveStrings.text("You’re presenting")
         case StageCapsuleModel.presentingKind:
             return ConclaveStrings.format("%@ is presenting", model.subtitleName)
+        case AttendeeViewerPolicy.capsuleLiveKind:
+            // S20 12 c (STG-8): attendees see the webinar title and "Live", never a count.
+            return AttendeeViewerCopy.capsuleSubtitle()
         case StageCapsuleModel.aloneKind:
             return ConclaveStrings.text("Just you")
         default:

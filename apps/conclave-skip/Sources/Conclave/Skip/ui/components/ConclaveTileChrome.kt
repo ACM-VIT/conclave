@@ -66,10 +66,12 @@ internal fun ConclaveTileChrome(
     selfViewAccessory: @Composable () -> Unit = {},
     /** S20 3 d: the TalkBack long-click action (label "Show actions") that opens the caller's menu. */
     accessibilityLongPressLabel: String? = null, onAccessibilityLongPress: (() -> Unit)? = null,
+    /** Replaces the spoken name when set (S20 12 i: the attendee program feed reads "Live video from %1$s"). */
+    accessibilityName: String? = null,
     renderer: @Composable () -> Unit,
 ) {
     val shape = RoundedCornerShape(cornerRadius)
-    val name = when {
+    val name = accessibilityName ?: when {
         model.isLocal -> conclaveString("ds_you")
         model.isVoiceAgent -> model.displayName + ", " + conclaveString("ds_tag_ai")
         model.isHost -> model.displayName + ", " + conclaveString("ds_tag_host")

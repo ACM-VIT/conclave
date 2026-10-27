@@ -204,6 +204,40 @@ struct RTCVideoViewRepresentable: UIViewRepresentable {
     }
 }
 
+// MARK: - PiP sample-buffer sink (S70 3 c; SYS-4)
+
+/// The renderer adapter of the iOS video-call PiP window: it attaches the one `PipSampleBufferRenderer` to the PiP
+/// target's track and swaps it when the target or its consumer changes. Main thread only, so a sink is never added or
+/// removed inside a frame callback (`apps/conclave-skip/AGENTS.md` media invariants: the decode thread holds the
+/// broadcaster lock while it renders). The track is held weakly like the stage renderers' coordinators; a released
+/// track renders nothing more.
+@MainActor
+final class PipVideoTrackSink {
+    let renderer: PipSampleBufferRenderer
+    private(set) weak var track: RTCVideoTrack?
+    /// How many times the sink moved to another track (diagnostics; a target switch swaps, never recreates).
+    private(set) var swapCount = 0
+
+    init(renderer: PipSampleBufferRenderer) {
+        self.renderer = renderer
+    }
+
+    var isAttached: Bool { track != nil }
+
+    /// Moves the renderer to `next` (nil detaches). Equal tracks are a no-op.
+    func attach(_ next: RTCVideoTrack?) {
+        if track === next { return }
+        track?.remove(renderer)
+        track = next
+        next?.add(renderer)
+        swapCount += 1
+    }
+
+    func detach() {
+        attach(nil)
+    }
+}
+
 // MARK: - Renderer frame size (S20 SC11, S70 R70-10; STG-7)
 
 /// Reports one renderer's decoded frame size into the stage's `RendererFrameSizeStore`, which the PiP target frame

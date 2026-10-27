@@ -37,6 +37,10 @@ internal data class LobbyStatusUi(
     val isPrimaryPending: Boolean,
     val reason: LobbyPrimaryReason,
     val isReconnecting: Boolean,
+    // ENT-5 (S10 8 c, 9 f): the slow footnote, the waiting body's kind and its clean server sentence.
+    val showsSlowNotice: Boolean,
+    val waitingKind: WaitingKind,
+    val waitingText: String,
 ) {
     val isBusy: Boolean
         get() = mode == LobbyMode.connecting || mode == LobbyMode.waiting
@@ -91,6 +95,9 @@ internal class LobbyUiCache {
             isPrimaryPending = status.isPrimaryPending,
             reason = LobbyPrimaryReason(rawValue = status.primaryReason) ?: LobbyPrimaryReason.none,
             isReconnecting = status.waitingKind == WaitingKind.reconnecting,
+            showsSlowNotice = status.showsSlowNotice,
+            waitingKind = status.waitingKind,
+            waitingText = status.waitingText,
         )
         builds += 1
         lastStatus = status

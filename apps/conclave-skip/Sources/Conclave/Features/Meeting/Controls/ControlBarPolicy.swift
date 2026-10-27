@@ -187,10 +187,12 @@ enum ControlBarPolicy {
                          appliesAfterReconnect: false, badge: count, dot: count == 0 && inputs.moreAttention)
         case .leave:
             guard let row = inputs.row(MeetingControlID.leave) else { return nil }
+            // CTL-2: the host Leave menu exists whenever the host's End row does, also while End is blocked (S30 4 f).
+            let hostMenu = inputs.row(MeetingControlID.endForEveryone)?.isVisible ?? false
             return CallControlModel(id: kind.rawValue, kind: kind, isOn: false, visual: CallControlVisual.on, isBlocked: !row.isEnabled,
                                     isPending: row.isPending, reason: ControlBarPolicy.controlReason(row.blockedReason), reasonName: "",
                                     appliesAfterReconnect: false, badgeCount: 0, showsDot: false,
-                                    hasShortcut: inputs.canEndForEveryone)
+                                    hasShortcut: hostMenu)
         }
     }
 
@@ -207,7 +209,8 @@ enum ControlBarPolicy {
     }
 
     /// CTL-2's Leave and End state from the S1 rows and confirmation (R09: Leave stays available while End is pending
-    /// or failed; `postingRecap` waits for CC8).
+    /// or failed; `postingRecap` waits for CC8, so `offersRecap` stays false until TRN-2). `showsEndForEveryone` and
+    /// `endBlockedReason` come from the S1 End row, so a recovering host keeps the menu with End disabled (S30 4 f).
     static func leaveSnapshot(inputs: CallControlsInputs, revision: Int) -> LeaveSnapshot {
         let leaveRow = inputs.row(MeetingControlID.leave)
         let endRow = inputs.row(MeetingControlID.endForEveryone)
@@ -220,10 +223,16 @@ enum ControlBarPolicy {
         } else if let failure = endRow?.failure, failure != MeetingActionFailure.none {
             endPhase = EndPhase.failed
         }
+        let showsEnd = endRow?.isVisible ?? false
+        var endReason = ControlBlockedReason.none
+        if let row = endRow, showsEnd, !row.isEnabled {
+            endReason = ControlBarPolicy.controlReason(row.blockedReason)
+        }
         return LeaveSnapshot(revision: revision, canEndForEveryone: inputs.canEndForEveryone,
                              leavePhase: leaving ? LeavePhase.leaving : LeavePhase.idle, endPhase: endPhase,
                              confirmationId: inputs.confirmationId, confirmationInvoker: inputs.confirmationInvoker,
-                             offersRecap: false, endFailure: endRow?.failure.rawValue ?? MeetingActionFailure.none.rawValue)
+                             offersRecap: false, endFailure: endRow?.failure.rawValue ?? MeetingActionFailure.none.rawValue,
+                             showsEndForEveryone: showsEnd, endBlockedReason: endReason)
     }
 
     private static func isCurrent(_ kind: CallControlKind, inputs: CallControlsInputs) -> Bool {
