@@ -170,8 +170,10 @@ enum ChatPhotoPreparer {
 
     /// The caches directory for chat photos, created on demand ("" when it cannot be created).
     static func outputDirectory() -> String {
-        guard let caches = FileManager.default.urls(for: FileManager.SearchPathDirectory.cachesDirectory,
-                                                    in: FileManager.SearchPathDomainMask.userDomainMask).first else { return "" }
+        // `url(for:in:appropriateFor:create:)` (not `urls(for:in:)`, which Skip lacks) is the app caches directory on both.
+        guard let caches = try? FileManager.default.url(for: FileManager.SearchPathDirectory.cachesDirectory,
+                                                        in: FileManager.SearchPathDomainMask.userDomainMask,
+                                                        appropriateFor: nil, create: true) else { return "" }
         let folder = caches.appendingPathComponent(directoryName, isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: nil)
         return folder.path

@@ -410,9 +410,9 @@ struct PPL2PeopleActionTests {
         }
     }
 }
-#endif
 
 private func ppl2Source(_ packageRelativePath: String) throws -> String {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     return try String(contentsOf: root.appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
 }
+#endif

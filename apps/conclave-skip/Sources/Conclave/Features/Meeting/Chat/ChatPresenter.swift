@@ -464,7 +464,7 @@ final class ChatPresenter {
     }
 
     func stopVoice() {
-        onCommand?(ChatCommandRequest.make(ChatCommandKind.stopVoice))
+        if let onCommand = onCommand { onCommand(ChatCommandRequest.make(ChatCommandKind.stopVoice)) }
     }
 
     /// SYS-8 (HD request B5-T4 R17a): the view model's camera line input (see `showsCameraLine`).

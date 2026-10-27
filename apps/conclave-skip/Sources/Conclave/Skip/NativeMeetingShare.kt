@@ -150,7 +150,7 @@ object NativeExternalHandoff {
     fun openSettings(intent: Intent): Boolean = start(intent, ExternalHandoffKind.systemSettings)
 
     /** Starts an external activity with the hand-off's suppression; a failed start restores auto-enter at once. */
-    fun start(intent: Intent, kind: ExternalHandoffKind): Boolean {
+    internal fun start(intent: Intent, kind: ExternalHandoffKind): Boolean {
         val activity: Activity? = UIApplication.shared.androidActivity
         val context: Context = activity ?: ProcessInfo.processInfo.androidContext.applicationContext
         if (activity == null) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

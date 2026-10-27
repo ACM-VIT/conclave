@@ -71,8 +71,9 @@ enum ChatFixtureAssets {
     }
 
     private static func directory() -> URL? {
-        guard let caches = FileManager.default.urls(for: FileManager.SearchPathDirectory.cachesDirectory,
-                                                    in: FileManager.SearchPathDomainMask.userDomainMask).first else { return nil }
+        guard let caches = try? FileManager.default.url(for: FileManager.SearchPathDirectory.cachesDirectory,
+                                                        in: FileManager.SearchPathDomainMask.userDomainMask,
+                                                        appropriateFor: nil, create: true) else { return nil }
         return caches.appendingPathComponent(directoryName, isDirectory: true)
     }
 
@@ -622,7 +623,7 @@ final class ChatFixtureDriver {
                                                 reply: replyRef(rowId: request.rowId), delivery: ChatDelivery.sending,
                                                 gifURL: gif.url, gifTitle: gif.title, isHistory: false, gifKind: gif.kind ?? "gif",
                                                 gifPreviewURL: gif.previewUrl ?? "", gifVideoURL: gif.videoUrl ?? "",
-                                                gifWidth: gif.width ?? 0, gifHeight: gif.height ?? 0)
+                                                gifWidth: gif.width ?? 0.0, gifHeight: gif.height ?? 0.0)
         var messages = inputs.messages
         messages.append(sending)
         replace(messages: messages)

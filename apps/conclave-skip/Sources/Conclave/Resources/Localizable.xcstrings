@@ -790,7 +790,8 @@
     },
     "Block" : {
       "comment" : "Access List page (S50 7 g): Block confirmation button",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Block %@?" : {
       "comment" : "Access List page (S50 7 g): Block confirmation title; the key",
@@ -802,7 +803,8 @@
     },
     "Block…" : {
       "comment" : "Access List page (S50 7 g): button that blocks the key (asks first)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Bold Text" : {
       "comment" : "Debug component gallery: readout name for the Bold Text setting",
@@ -867,7 +869,8 @@
     },
     "Camera Paused" : {
       "comment" : "Pre-join lobby: label over your preview while another app or the system has taken the camera",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Camera access is off. Turn it on in Settings." : {
       "comment" : "In-call banner (priority 16): camera permission was revoked during the call",
@@ -896,7 +899,8 @@
     },
     "Camera paused" : {
       "comment" : "Call stage: caption on your own video while the system or another app holds your camera",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Camera permission is off" : {
       "comment" : "Pre-join lobby: state of the Effects control while camera access is off in Settings",
@@ -1262,7 +1266,8 @@
     },
     "Couldn’t Join" : {
       "comment" : "Lobby failure title when joining a meeting failed",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Couldn’t Open %@" : {
       "comment" : "Activity card on the stage (S20 11): an app or the shared browser failed to load in the card; %@ is its name",
@@ -1302,7 +1307,8 @@
     },
     "Couldn’t join" : {
       "comment" : "Accessibility announcement when a join fails (sentence case: a description, not a title) (S10 8 g, 8 i)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Couldn’t load sign-in options." : {
       "comment" : "Account (signed out): the sign-in providers could not be fetched; a Try Again button follows",
@@ -1482,15 +1488,18 @@
     },
     "End Call for Everyone" : {
       "comment" : "In-call Leave control for hosts: the accessibility action and long-press label that ask to end the call for everyone; on iOS also the destructive confirm button of the End dialog",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "End Call for Everyone?" : {
       "comment" : "In-call End confirmation dialog: title asking the host to confirm ending the call for every participant",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "End Call for Everyone…" : {
       "comment" : "In-call host Leave menu (long press on the red Leave control): the destructive item that asks to end the call for everyone; the ellipsis means a confirmation follows",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "End Game" : {
       "comment" : "Destructive confirmation button that ends the game for everyone",
@@ -1793,7 +1802,8 @@
     },
     "Joining" : {
       "comment" : "Lobby status while connecting to the meeting (ENT-1); also the sample title of the pending primary button in the Debug component gallery",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Joining %@" : {
       "comment" : "Accessibility announcement when a join starts; the argument is the meeting name or code (S10 8 g, 8 i)",
@@ -1809,7 +1819,8 @@
     },
     "Joining…" : {
       "comment" : "Pre-join lobby: the primary button's pending label while a join is connecting (S10 8 g)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Jump to Latest" : {
       "comment" : "Chat panel: pill that scrolls to the newest message",
@@ -2017,19 +2028,23 @@
     },
     "Make Co-Host" : {
       "comment" : "People confirmation dialog (S50 3 g): Make Co-Host confirm button",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Make Co-Host…" : {
       "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): grant co-host (asks first)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Make Host" : {
       "comment" : "People confirmation dialog (S50 3 g): Make Host confirm button",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Make Host…" : {
       "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): transfer the host role (asks first)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Mapper %@, contract %@" : {
       "comment" : "Debug component gallery: haptic row detail: the mapper token, then the contract token",
@@ -2141,11 +2156,13 @@
     },
     "Move to Audience" : {
       "comment" : "People confirmation dialog (S50 3 g): Move to Audience confirm button",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Move to Audience…" : {
       "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): webinar, move a panelist to the audience (asks first)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Move to Bottom Left" : {
       "comment" : "Call stage: menu item and accessibility action that moves your own floating video to the bottom left corner",
@@ -2173,15 +2190,18 @@
     },
     "Mute Everyone" : {
       "comment" : "Host Controls (S50 6 g): bulk confirmation button",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Mute Everyone?" : {
       "comment" : "Host Controls (S50 6 g): bulk confirmation title",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Mute Everyone…" : {
       "comment" : "Host Controls (S50 6 g): bulk action (asks first)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Mute your microphone" : {
       "comment" : "Chat panel: description of the /mute command in the suggestions",
@@ -2827,15 +2847,18 @@
     },
     "Remove Code" : {
       "comment" : "Invite Code page (S50 7 g): confirmation button",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Remove Code…" : {
       "comment" : "Invite Code page (S50 7 g): remove button (asks first)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Remove From Meeting" : {
       "comment" : "Debug component gallery: sample title of the destructive button",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Remove From Recents" : {
       "comment" : "Premeeting Home: destructive recent row menu item that removes the meeting from the local list",
@@ -2859,7 +2882,8 @@
     },
     "Remove from Meeting…" : {
       "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): remove this person (asks first)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Removed From Meeting" : {
       "comment" : "Outcome screen title after a host removed the person",
@@ -3319,11 +3343,13 @@
     },
     "Starting" : {
       "comment" : "Pending label while a game starts; also the live notes status value in Meeting Details (STG-6)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Starting…" : {
       "comment" : "Pre-join lobby: the primary button's pending label while a new meeting is starting (S10 8 g)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Status" : {
       "comment" : "Meeting Details panel (S20 15): section header above the meeting lock, live notes and captions rows",
@@ -3359,11 +3385,13 @@
     },
     "Stop All Screen Shares?" : {
       "comment" : "Host Controls (S50 6 g): bulk confirmation title",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Stop All Screen Shares…" : {
       "comment" : "Host Controls (S50 6 g): bulk action, shown while someone shares",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Stop All Shares" : {
       "comment" : "Host Controls (S50 6 g): bulk confirmation button",
@@ -3659,11 +3687,13 @@
     },
     "Turn Off Everyone’s Camera?" : {
       "comment" : "Host Controls (S50 6 g): bulk confirmation title",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Turn Off Everyone’s Camera…" : {
       "comment" : "Host Controls (S50 6 g): bulk action (asks first)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Turn your camera on or off" : {
       "comment" : "Chat panel: description of the /camera command in the suggestions",
@@ -3839,7 +3869,8 @@
     },
     "Voice Message" : {
       "comment" : "Chat panel, voice messages: label in a voice message bubble while it is not playing, the composer’s voice mode title and the attach menu item",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Voice Messages" : {
       "comment" : "Host Controls (S50 6 g): switch (RECONCILE R16 name)",
@@ -3859,7 +3890,8 @@
     },
     "Voice message" : {
       "comment" : "Chat panel, voice messages: spoken value part of a voice message row and the composer field’s mode value",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Voice messages are turned off by the host." : {
       "comment" : "Chat panel: reason under a failed voice message",

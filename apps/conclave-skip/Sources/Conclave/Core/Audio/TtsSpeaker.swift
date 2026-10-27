@@ -42,7 +42,9 @@ final class TtsSpeaker {
         queue.activeMessageId
     }
 
-    init(queue: TtsPlaybackQueue = TtsPlaybackQueue()) {
+    init(queue: TtsPlaybackQueue? = nil) {
+        // A default argument runs outside the main actor, so the main-actor queue is made here.
+        let queue = queue ?? TtsPlaybackQueue()
         self.queue = queue
         queue.onStart = { [weak self] item, token in
             self?.start(item, token: token)
@@ -280,7 +282,8 @@ final class TtsSpeaker {
         queue.activeMessageId
     }
 
-    init(queue: TtsPlaybackQueue = TtsPlaybackQueue()) {
+    init(queue: TtsPlaybackQueue? = nil) {
+        let queue = queue ?? TtsPlaybackQueue()
         self.queue = queue
         queue.onStart = { [weak queue] _, token in
             queue?.finished(token: token)

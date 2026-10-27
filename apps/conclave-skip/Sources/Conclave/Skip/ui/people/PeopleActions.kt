@@ -237,7 +237,7 @@ internal fun PeopleRenameDialog(people: PeoplePresenter) {
     val context = LocalContext.current
     var draft by rememberSaveable(rename.id) { mutableStateOf(rename.draft) }
     val model = ConclaveTextEntryDialogModel(
-        kind = ConclaveTextEntryKind.name,
+        kind = ConclaveTextEntryKind.name_,
         title = conclaveString("ppl_change_name_title"),
         message = conclaveString("ppl_name_rules"),
         fieldLabel = conclaveString("ppl_name_label"),

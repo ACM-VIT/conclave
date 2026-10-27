@@ -50,6 +50,8 @@ object PipController {
         private set
 
     /** The native call root is mounted (it sets this from a DisposableEffect); the legacy PiP swap then stays off. */
+    // The private setter gets its own JVM name: `setNativeRootComposed(Boolean)` below is the public entry point.
+    @set:JvmName("updateNativeRootComposed")
     var nativeRootComposed by mutableStateOf(false)
         private set
 

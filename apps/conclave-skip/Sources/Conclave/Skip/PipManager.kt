@@ -64,7 +64,7 @@ object PipManager {
      * the snapshot: each change re-derives the params model, and the model's equality guard decides whether the
      * params are set again.
      */
-    fun presenceAdapter(presence: CallPresence): CallPresenceAdapter {
+    internal fun presenceAdapter(presence: CallPresence): CallPresenceAdapter {
         this.presence = presence
         return CallPresenceAdapter(name = "pictureInPicture", presenceDidChange = { old, new -> presenceDidChange(old, new) })
     }
@@ -279,7 +279,7 @@ object PipManager {
     // MARK: External activities (S70 8; SYS-8)
 
     /** Every external activity Conclave starts goes through here (ExternalHandoffPolicy: never for Settings). */
-    fun suppressForExternalHandoff(kind: ExternalHandoffKind) {
+    internal fun suppressForExternalHandoff(kind: ExternalHandoffKind) {
         if (!ExternalHandoffPolicy.suppressesAutoEnter(kind)) return
         suppressNextAutoEnter(ExternalHandoffPolicy.reason(kind))
     }

@@ -39,6 +39,6 @@ enum EntryJoinRetry {
 
     /// The wait in nanoseconds for a delay in seconds (the view model's `Task.sleep`).
     static func nanoseconds(forSeconds seconds: Int) -> UInt64 {
-        UInt64(max(0, seconds)) * 1_000_000_000
+        UInt64(max(0, seconds)) * UInt64(1_000_000_000)
     }
 }
