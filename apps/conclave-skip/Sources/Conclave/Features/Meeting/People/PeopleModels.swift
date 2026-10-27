@@ -151,7 +151,9 @@ struct PeopleSection: Equatable, Identifiable {
 
 /// Host Controls row value (S50 1 f): locked wins, then signed-in only, else open.
 enum PeopleAccessSummary: String, CaseIterable, Equatable {
-    case locked, signedInOnly, open
+    case locked, signedInOnly
+    // `open` is a Kotlin modifier keyword, so the open summary is `openToAll` (raw value unchanged).
+    case openToAll = "open"
 }
 
 /// Container and section structure only (S50 0.5); rows live in the stores.
@@ -184,7 +186,7 @@ struct PeopleSnapshot: Equatable {
                                       isPrimaryHost: false, canUseHostActions: false,
                                       blockedReason: MeetingBlockedReason.notJoined.rawValue, inviteLink: "", roomLabel: "",
                                       webinarEnabled: false, webinarLink: "", webinarPublic: false,
-                                      accessSummary: PeopleAccessSummary.open.rawValue, qaVisible: false,
+                                      accessSummary: PeopleAccessSummary.openToAll.rawValue, qaVisible: false,
                                       webinarQueueKnown: false, showsLostHostNotice: false)
 
     func withRevision(_ next: Int) -> PeopleSnapshot {

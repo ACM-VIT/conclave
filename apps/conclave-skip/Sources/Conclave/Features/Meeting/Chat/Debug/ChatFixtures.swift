@@ -99,7 +99,7 @@ enum ChatFixtureScript {
     }
 
     static func inputs(for state: ChatFixtureState, nowMillis: Double) -> ChatInputs {
-        var gate = ChatSendGate.open
+        var gate = ChatSendGate.allowed
         var isLocked = false
         var isHost = false
         switch state {

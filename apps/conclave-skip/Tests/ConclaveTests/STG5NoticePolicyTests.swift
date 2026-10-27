@@ -522,7 +522,7 @@ struct STG5NoticePolicyTests {
         let callRoot = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/CallRoot.kt"))
         #expect(callRoot.contains("NoticeLanes(stage, forceScreenReader, installsSound = !renderers.usesProbes)"))
         #expect(callRoot.contains("val suspended = coverage == PanelStageCoverage.full"))
-        let player = try stageSource("Sources/Conclave/Skip/NoticeSoundPlayer.kt")
+        let player = try stageSource("Sources/Conclave/Skip/NativeNoticeSound.kt")
         #expect(player.contains("AudioAttributes.USAGE_VOICE_COMMUNICATION_SIGNALLING"))
         #expect(player.contains("conclave/module/Resources/$name.mp3"))
         #expect(!player.contains("Vibrat"))

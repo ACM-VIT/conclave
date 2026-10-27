@@ -200,7 +200,7 @@ enum PeopleRowPolicy {
     static func accessSummary(isRoomLocked: Bool, isNoGuests: Bool) -> PeopleAccessSummary {
         if isRoomLocked { return PeopleAccessSummary.locked }
         if isNoGuests { return PeopleAccessSummary.signedInOnly }
-        return PeopleAccessSummary.open
+        return PeopleAccessSummary.openToAll
     }
 
     /// Q&A shows on the panel only for hosts and co-hosts with webinar and Q&A on (S50 1 j, RECONCILE R18).

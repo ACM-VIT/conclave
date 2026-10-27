@@ -112,7 +112,7 @@ enum ChatComposerPolicy {
 
     /// Send is enabled with text, an open gate and the draft within its limit.
     static func canSend(text: String, gate: ChatSendGate, isVoiceMode: Bool) -> Bool {
-        if gate != ChatSendGate.open { return false }
+        if gate != ChatSendGate.allowed { return false }
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
         return !isOverLimit(text: text, isVoiceMode: isVoiceMode)
     }

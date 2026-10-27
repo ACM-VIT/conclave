@@ -93,7 +93,7 @@ enum ActivityFixtureScript {
             ActivityGameInput(id: "trivia", name: "Trivia", detail: "Quick-fire quiz", minPlayers: 1, maxPlayers: 24, options: [
                 topicOption,
                 ActivityOptionInput.make(id: "questions", type: "number", label: "Questions", min: 3, max: 15, defaultNumber: 7,
-                                         presets: [5, 7, 10]),
+                                         presets: [5.0, 7.0, 10.0]),
                 ActivityOptionInput.make(id: "pace", type: "select", label: "Pace", defaultString: "normal",
                                          choices: [choice("relaxed", "Relaxed"), choice("normal", "Normal"), choice("fast", "Fast")]),
             ]),
@@ -113,16 +113,16 @@ enum ActivityFixtureScript {
                               ])]),
             ActivityGameInput(id: "wordle", name: "Wordle", detail: "Guess a hidden five-letter word", minPlayers: 1, maxPlayers: 32,
                               options: [ActivityOptionInput.make(id: "timeLimitMinutes", type: "number", label: "Time limit", min: 1,
-                                                                 max: 10, defaultNumber: 3, presets: [1, 2, 3, 5, 10], suffix: "min")]),
+                                                                 max: 10, defaultNumber: 3, presets: [1.0, 2.0, 3.0, 5.0, 10.0], suffix: "min")]),
             ActivityGameInput(id: "chess", name: "Chess", detail: "Duel a friend, split into teams, or take on the computer",
                               minPlayers: 1, maxPlayers: 32, options: chessOptions()),
             ActivityGameInput(id: "zip", name: "Zip", detail: "Draw one path through every cell", minPlayers: 1, maxPlayers: 32, options: [
                 ActivityOptionInput.make(id: "gridSize", type: "select", label: "Grid", defaultString: "6",
                                          choices: [choice("6", "6\u{00D7}6 Easy"), choice("7", "7\u{00D7}7 Medium"),
                                                    choice("8", "8\u{00D7}8 Hard"), choice("9", "9\u{00D7}9 Expert")]),
-                ActivityOptionInput.make(id: "rounds", type: "number", label: "Rounds", min: 1, max: 5, defaultNumber: 1, presets: [1, 3, 5]),
+                ActivityOptionInput.make(id: "rounds", type: "number", label: "Rounds", min: 1, max: 5, defaultNumber: 1, presets: [1.0, 3.0, 5.0]),
                 ActivityOptionInput.make(id: "timeLimitMinutes", type: "number", label: "Time limit", min: 1, max: 10, defaultNumber: 3,
-                                         presets: [1, 2, 3, 5, 10], suffix: "min"),
+                                         presets: [1.0, 2.0, 3.0, 5.0, 10.0], suffix: "min"),
             ]),
         ]
     }
@@ -296,6 +296,7 @@ enum ActivityFixtureScript {
     /// Feeds the activity session for a fixture name and wires its commands to the recording owner. Returns nil for a
     /// name that is not an activity fixture (the stage fixture keeps its own state).
     @discardableResult
+    @MainActor
     static func apply(named raw: String, session: ActivitySession, owner: ActivityFixtureOwner) -> ActivityFixtureState? {
         guard let state = state(named: raw) else { return nil }
         session.activities.onCommand = { [weak owner] command in

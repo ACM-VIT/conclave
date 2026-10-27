@@ -1040,7 +1040,7 @@ final class PremeetingPresenter {
         ))
         refreshMediaSnapshot()
         refreshPresenceSnapshot()
-        setLobbyIdentity(LobbySnapshotPolicy.identity(
+        publishLobbyIdentity(LobbySnapshotPolicy.identity(
             routeId: target.routeId,
             isSignedIn: inputs.isSignedIn,
             accountName: inputs.accountName,
@@ -1048,7 +1048,7 @@ final class PremeetingPresenter {
             guestName: guestNameDraft,
             formIssue: formIssue
         ))
-        setLobbyLink(LobbySnapshotPolicy.link(routeId: target.routeId, intent: target.intent, roomId: target.roomId,
+        publishLobbyLink(LobbySnapshotPolicy.link(routeId: target.routeId, intent: target.intent, roomId: target.roomId,
                                               title: target.title, clientId: target.clientId))
         refreshAudioSnapshot()
         updatePresencePolling()
@@ -1087,11 +1087,11 @@ final class PremeetingPresenter {
         }
         visibleLobbyRouteId = 0
         publishLobbyStatus(nil)
-        setLobbyMedia(nil)
-        setLobbyPresence(nil)
-        setLobbyIdentity(nil)
-        setLobbyLink(nil)
-        setLobbyAudio(nil)
+        publishLobbyMedia(nil)
+        publishLobbyPresence(nil)
+        publishLobbyIdentity(nil)
+        publishLobbyLink(nil)
+        publishLobbyAudio(nil)
         updatePreviewDemand()
     }
 
@@ -1124,7 +1124,7 @@ final class PremeetingPresenter {
         guard lobbyRouteId != 0 else { return }
         let name = LobbySnapshotPolicy.avatarName(isSignedIn: inputs.isSignedIn, accountName: inputs.accountName,
                                                   guestName: guestNameDraft)
-        setLobbyMedia(LobbySnapshotPolicy.media(
+        publishLobbyMedia(LobbySnapshotPolicy.media(
             routeId: lobbyRouteId,
             micIntentOn: inputs.micIntentOn,
             cameraIntentOn: inputs.cameraIntentOn,
@@ -1139,13 +1139,13 @@ final class PremeetingPresenter {
         let mode = root.lobbyMode ?? LobbyMode.editing
         let kind = LobbyPresencePolicy.kind(hasResult: presenceHasResult, count: presenceCount, intent: target.intent,
                                             mode: mode)
-        setLobbyPresence(LobbyPresenceSnapshot(routeId: lobbyRouteId, kind: kind,
+        publishLobbyPresence(LobbyPresenceSnapshot(routeId: lobbyRouteId, kind: kind,
                                                count: kind == .count ? (presenceCount ?? 0) : 0))
     }
 
     private func refreshAudioSnapshot() {
         guard lobbyRouteId != 0 else { return }
-        setLobbyAudio(LobbyAudioPolicy.snapshot(routeId: lobbyRouteId, device: device, chosenOutputKind: chosenOutputKind,
+        publishLobbyAudio(LobbyAudioPolicy.snapshot(routeId: lobbyRouteId, device: device, chosenOutputKind: chosenOutputKind,
                                                 chosenInputId: chosenInputId))
     }
 
@@ -1354,31 +1354,31 @@ final class PremeetingPresenter {
         publishCount += 1
     }
 
-    private func setLobbyMedia(_ value: LobbyMediaSnapshot?) {
+    private func publishLobbyMedia(_ value: LobbyMediaSnapshot?) {
         guard value != lobbyMedia else { return }
         lobbyMedia = value
         publishCount += 1
     }
 
-    private func setLobbyPresence(_ value: LobbyPresenceSnapshot?) {
+    private func publishLobbyPresence(_ value: LobbyPresenceSnapshot?) {
         guard value != lobbyPresence else { return }
         lobbyPresence = value
         publishCount += 1
     }
 
-    private func setLobbyIdentity(_ value: LobbyIdentitySnapshot?) {
+    private func publishLobbyIdentity(_ value: LobbyIdentitySnapshot?) {
         guard value != lobbyIdentity else { return }
         lobbyIdentity = value
         publishCount += 1
     }
 
-    private func setLobbyLink(_ value: LobbyLinkSnapshot?) {
+    private func publishLobbyLink(_ value: LobbyLinkSnapshot?) {
         guard value != lobbyLink else { return }
         lobbyLink = value
         publishCount += 1
     }
 
-    private func setLobbyAudio(_ value: LobbyAudioSnapshot?) {
+    private func publishLobbyAudio(_ value: LobbyAudioSnapshot?) {
         guard value != lobbyAudio else { return }
         lobbyAudio = value
         publishCount += 1

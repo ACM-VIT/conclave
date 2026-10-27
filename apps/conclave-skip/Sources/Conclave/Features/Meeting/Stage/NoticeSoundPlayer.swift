@@ -7,7 +7,7 @@ import Foundation
 // while the call is on hold or the audio is paused, no vibration. The knock banner and the hand toast are the visual
 // alternative. Shared and platform free: the platform output is a closure the native call root installs (iOS plays
 // the bundled file on the active call session, `NoticeLanes+iOS.swift`; Android plays it on the voice communication
-// signalling stream, `K/NoticeSoundPlayer.kt`). Tests and the stage fixture install a recording closure, so no silent
+// signalling stream, `K/NativeNoticeSound.kt`). Tests and the stage fixture install a recording closure, so no silent
 // run ever plays audio.
 
 enum NoticeSoundKind {

@@ -94,8 +94,8 @@ struct CHT2ComposerPolicyTests {
         #expect(ChatComposerPolicy.limit(text: voice, isVoiceMode: false) == 500)
         #expect(ChatComposerPolicy.isOverLimit(text: voice, isVoiceMode: false))
         #expect(ChatComposerPolicy.limit(text: "anything", isVoiceMode: true) == 500)
-        #expect(!ChatComposerPolicy.canSend(text: thumbs, gate: .open, isVoiceMode: false))
-        #expect(ChatComposerPolicy.canSend(text: "hi", gate: .open, isVoiceMode: false))
+        #expect(!ChatComposerPolicy.canSend(text: thumbs, gate: .allowed, isVoiceMode: false))
+        #expect(ChatComposerPolicy.canSend(text: "hi", gate: .allowed, isVoiceMode: false))
         #expect(!ChatComposerPolicy.canSend(text: "hi", gate: .offline, isVoiceMode: false))
         #expect(ConclaveComposerCounterPolicy.visibleFrom(limit: 1000) == 900)
     }

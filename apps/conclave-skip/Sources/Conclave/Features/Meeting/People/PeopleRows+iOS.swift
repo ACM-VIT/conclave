@@ -88,7 +88,7 @@ enum PeopleText {
         switch PeopleAccessSummary(rawValue: raw) {
         case .locked: return ConclaveStrings.text("Locked")
         case .signedInOnly: return ConclaveStrings.text("Signed-in only")
-        case .open, nil: return ConclaveStrings.text("Open to all")
+        case .openToAll, nil: return ConclaveStrings.text("Open to all")
         }
     }
 

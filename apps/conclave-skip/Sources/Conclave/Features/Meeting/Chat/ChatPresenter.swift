@@ -197,7 +197,7 @@ final class ChatPresenter {
     func send(text: String, suppressEmbedsFor url: String = "") -> ChatSendResult {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return ChatSendResult.empty }
-        if inputs.gate != ChatSendGate.open { return ChatSendResult.blocked }
+        if inputs.gate != ChatSendGate.allowed { return ChatSendResult.blocked }
         if ChatComposerPolicy.isOverLimit(text: trimmed, isVoiceMode: false) {
             setInlineNotice(ChatComposerPolicy.limit(text: trimmed, isVoiceMode: false) == ChatComposerPolicy.voiceLimit
                             ? ChatFailure.voiceTooLong : ChatFailure.tooLong)
@@ -436,7 +436,7 @@ final class ChatPresenter {
                 if lastDayKey != -1 || dayKey != todayKey {
                     built.append(ChatRowModel(id: "day:" + String(dayKey), kind: ChatRowKind.daySeparator,
                                               timestampMillis: item.timestampMillis))
-                    builtMessageIds.append([])
+                    builtMessageIds.append([String]())
                     previousForGrouping = nil
                 }
                 lastDayKey = dayKey
@@ -446,7 +446,7 @@ final class ChatPresenter {
                 let rowId = rowIdFor(message)
                 if !firstUnreadId.isEmpty && rowId == firstUnreadId {
                     built.append(ChatRowModel(id: "unread", kind: ChatRowKind.unreadDivider, timestampMillis: item.timestampMillis))
-                    builtMessageIds.append([])
+                    builtMessageIds.append([String]())
                     previousForGrouping = nil
                 }
                 let draft = messageRow(message, rowId: rowId, isGroupStart: true, isGroupEnd: true, messageToRow: messageToRow,
@@ -470,7 +470,7 @@ final class ChatPresenter {
                                           plainText: local.text,
                                           systemTone: local.isError ? ChatSystemTone.error : ChatSystemTone.info,
                                           notice: local.notice))
-                builtMessageIds.append([])
+                builtMessageIds.append([String]())
                 previousForGrouping = nil
             } else {
                 let userId = hiddenSenderIds[item.index]
@@ -478,7 +478,7 @@ final class ChatPresenter {
                 built.append(ChatRowModel(id: "hidden:" + userId, kind: ChatRowKind.system, senderId: userId, senderName: name,
                                           timestampMillis: item.timestampMillis, plainText: name, notice: ChatNotice.senderHidden,
                                           noticeArgument: name))
-                builtMessageIds.append([])
+                builtMessageIds.append([String]())
                 previousForGrouping = nil
             }
         }
@@ -535,7 +535,7 @@ final class ChatPresenter {
             privateName = message.senderName
         }
         let gate = inputs.gate
-        let writable = gate == ChatSendGate.open
+        let writable = gate == ChatSendGate.allowed
         let serverId = message.serverId
         let delivered = message.delivery == ChatDelivery.delivered
         var delivery = message.delivery

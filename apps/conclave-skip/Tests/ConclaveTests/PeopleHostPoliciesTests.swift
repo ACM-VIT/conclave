@@ -245,7 +245,7 @@ struct PeopleHostPoliciesTests {
     @Test func accessSummaryInviteLinkAndQuestionsVisibility() {
         #expect(PeopleRowPolicy.accessSummary(isRoomLocked: true, isNoGuests: true) == .locked)
         #expect(PeopleRowPolicy.accessSummary(isRoomLocked: false, isNoGuests: true) == .signedInOnly)
-        #expect(PeopleRowPolicy.accessSummary(isRoomLocked: false, isNoGuests: false) == .open)
+        #expect(PeopleRowPolicy.accessSummary(isRoomLocked: false, isNoGuests: false) == .openToAll)
         #expect(PeopleRowPolicy.qaVisible(viewerRole: .host, isWebinarEnabled: true, isWebinarQaEnabled: true))
         #expect(PeopleRowPolicy.qaVisible(viewerRole: .coHost, isWebinarEnabled: true, isWebinarQaEnabled: true))
         #expect(!PeopleRowPolicy.qaVisible(viewerRole: .participant, isWebinarEnabled: true, isWebinarQaEnabled: true))

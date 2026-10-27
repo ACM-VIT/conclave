@@ -428,7 +428,7 @@ enum GameProjectionJSON {
 
     static func bool(_ dict: [String: Any], _ key: String) -> Bool {
         if let value = dict[key] as? Bool { return value }
-        if let value = number(dict[key]) { return value != 0 }
+        if let value = number(dict[key]) { return value != 0.0 }
         return false
     }
 
@@ -579,7 +579,7 @@ enum GameProjectionParser {
         case GameSceneKind.zip:
             deadline = GameProjectionJSON.double(view, "roundEndsAt")
             let started = GameProjectionJSON.double(view, "roundStartedAt")
-            duration = deadline > 0 && started > 0 ? deadline - started : 0
+            duration = deadline > 0 && started > 0 ? deadline - started : 0.0
             round = GameProjectionJSON.int(view, "currentRound")
             total = GameProjectionJSON.int(view, "totalRounds")
             acted = GameProjectionJSON.int(view, "finishedCount")

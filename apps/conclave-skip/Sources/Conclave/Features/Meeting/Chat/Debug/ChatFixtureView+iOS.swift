@@ -7,6 +7,7 @@ import SwiftUI
 // and readouts in a bar above its content (the panel covers the stage controls on iPhone). Standalone presenters
 // only: no view model, socket, network, audio or capture. Labels are Debug-only verbatim text.
 
+@MainActor
 enum ChatFixtureLaunch {
     static func state(environment: [String: String] = ProcessInfo.processInfo.environment) -> ChatFixtureState? {
         ChatFixtureDriver.state(named: environment["CONCLAVE_CHAT_FIXTURE"])

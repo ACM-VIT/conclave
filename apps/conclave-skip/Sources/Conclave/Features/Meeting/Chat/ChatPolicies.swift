@@ -292,7 +292,7 @@ enum ChatReactionRules {
     static func canReact(serverId: String, isDirect: Bool, gate: ChatSendGate, reactionsEnabled: Bool, isHost: Bool) -> Bool {
         if serverId.isEmpty || serverId.hasPrefix("local-") || serverId.hasPrefix("optimistic-") { return false }
         if isDirect { return false }
-        if gate != ChatSendGate.open { return false }
+        if gate != ChatSendGate.allowed { return false }
         return reactionsEnabled || isHost
     }
 

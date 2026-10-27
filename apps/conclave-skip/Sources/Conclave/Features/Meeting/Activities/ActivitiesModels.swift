@@ -227,8 +227,8 @@ struct ActivityOptionInput: Equatable {
                      defaultNumber: Double = 0, defaultString: String = "", presets: [Double] = [], suffix: String = "",
                      choices: [GameChoiceModel] = [], placeholder: String = "", maxLength: Int = 0,
                      showWhenId: String = "", showWhenEquals: [String] = []) -> ActivityOptionInput {
-        ActivityOptionInput(id: id, type: type, label: label, hasMin: min != nil, min: min ?? 0, hasMax: max != nil,
-                            max: max ?? 0, defaultNumber: defaultNumber, defaultString: defaultString, presets: presets,
+        ActivityOptionInput(id: id, type: type, label: label, hasMin: min != nil, min: min ?? 0.0, hasMax: max != nil,
+                            max: max ?? 0.0, defaultNumber: defaultNumber, defaultString: defaultString, presets: presets,
                             suffix: suffix, choices: choices, placeholder: placeholder, maxLength: maxLength,
                             showWhenId: showWhenId, showWhenEquals: showWhenEquals)
     }

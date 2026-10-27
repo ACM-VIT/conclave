@@ -7758,7 +7758,7 @@ final class MeetingViewModel {
             }
             options.append(ActivityOptionInput.make(
                 id: option.id, type: option.type, label: option.label, min: option.min, max: option.max,
-                defaultNumber: option.defaultNumber ?? option.min ?? 0, defaultString: option.defaultString ?? "",
+                defaultNumber: option.defaultNumber ?? option.min ?? 0.0, defaultString: option.defaultString ?? "",
                 presets: option.presets ?? [], suffix: option.suffix ?? "", choices: choices,
                 placeholder: option.placeholder ?? "", maxLength: option.maxLength ?? 0,
                 showWhenId: option.showWhen?.id ?? "", showWhenEquals: option.showWhen?.equals ?? []))
@@ -7838,7 +7838,7 @@ final class MeetingViewModel {
         if let values = publicState.config {
             for key in values.keys.sorted() {
                 guard let value = values[key] else { continue }
-                config.append(ActivityOptionValue(id: key, isNumber: value.numberValue != nil, number: value.numberValue ?? 0,
+                config.append(ActivityOptionValue(id: key, isNumber: value.numberValue != nil, number: value.numberValue ?? 0.0,
                                                   text: value.stringValue ?? ""))
             }
         }
@@ -11252,8 +11252,8 @@ final class MeetingViewModel {
             gifPreviewURL: message.gif?.previewUrl ?? "",
             gifVideoURL: message.gif?.videoUrl ?? "",
             gifKind: message.gif?.kind ?? "",
-            gifWidth: message.gif?.width ?? 0,
-            gifHeight: message.gif?.height ?? 0,
+            gifWidth: message.gif?.width ?? 0.0,
+            gifHeight: message.gif?.height ?? 0.0,
             gifTitle: message.gif?.title ?? "",
             delivery: delivery,
             failure: failure,
@@ -11307,7 +11307,7 @@ final class MeetingViewModel {
         if state.isNetworkOffline { return ChatSendGate.offline }
         if state.isRecoveringConnection || state.connectionState == ConnectionState.reconnecting { return ChatSendGate.reconnecting }
         if state.connectionState != ConnectionState.joined { return ChatSendGate.notJoined }
-        return ChatSendGate.open
+        return ChatSendGate.allowed
     }
 
     /// The chat presenter's `onCommand` (S40 0.5 action mapping). Hide and show sender are presenter-local.
@@ -11332,7 +11332,7 @@ final class MeetingViewModel {
     /// or a system row, never `state.errorMessage`.
     private func sendNativeChat(_ text: String, route: ChatRouteKind, replyTo: ChatReplyPreview?, privateTargetId: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, chatSendGate() == ChatSendGate.open else { return }
+        guard !trimmed.isEmpty, chatSendGate() == ChatSendGate.allowed else { return }
         switch route {
         case .command:
             // CH11: the guarded directional branches of `executeChatCommand` (`setMuted`, `setCameraCommandState`,
@@ -11440,7 +11440,7 @@ final class MeetingViewModel {
 
     /// CH2: Try Again sends the same wire text again from the same row.
     func retryChatSend(clientId: String) {
-        guard chatSendGate() == ChatSendGate.open,
+        guard chatSendGate() == ChatSendGate.allowed,
               let index = state.chatMessages.firstIndex(where: { $0.clientId == clientId }),
               state.chatMessages[index].delivery == ChatMessageDelivery.failed else { return }
         let message = state.chatMessages[index]
@@ -11469,7 +11469,7 @@ final class MeetingViewModel {
     /// CH3: optimistic toggle (web `applyLocalReactionToggle`, cap 12), then `chat:react`; the acknowledgement's set
     /// is authoritative; a failure rolls back (while the optimistic set is still shown) and adds the system row.
     func toggleChatReaction(messageId: String, emoji: String) {
-        guard !messageId.isEmpty, chatSendGate() == ChatSendGate.open,
+        guard !messageId.isEmpty, chatSendGate() == ChatSendGate.allowed,
               !state.isReactionsDisabled || state.isAdmin,
               let index = state.chatMessages.firstIndex(where: { $0.id == messageId }) else { return }
         let previous = state.chatMessages[index].reactions

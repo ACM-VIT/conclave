@@ -23,7 +23,7 @@ struct ChatPoliciesTests {
         ]
     }
 
-    static func inputs(_ messages: [ChatMessageInput], localRows: [ChatLocalRow] = [], gate: ChatSendGate = .open,
+    static func inputs(_ messages: [ChatMessageInput], localRows: [ChatLocalRow] = [], gate: ChatSendGate = .allowed,
                        isLocked: Bool = false, isHost: Bool = false, reactionsEnabled: Bool = true,
                        privateEnabled: Bool = true) -> ChatInputs {
         ChatInputs.make(callSession: 1, roomId: "room-a", localUserId: local, localName: "Jordan Lee", messages: messages,
@@ -269,7 +269,7 @@ struct ChatPoliciesTests {
         #expect(chat.timeline.isEmpty && chat.drafts.count == 0 && chat.hiddenSenderIds.isEmpty)
         chat.apply(Self.inputs([Self.peer("s-1", "hi", at: 0)]), change: .messages)
         let next = ChatInputs.make(callSession: 2, roomId: "room-b", localUserId: Self.local, localName: "Jordan Lee",
-                                   gate: .open, roster: Self.roster())
+                                   gate: .allowed, roster: Self.roster())
         chat.apply(next, change: .messages)
         #expect(chat.timeline.isEmpty)
     }

@@ -28,12 +28,12 @@ struct CHT3MessageActionsTests {
         }
         #expect(ChatReactionRules.toggled(full, emoji: "👍", userId: "me") == full)
         #expect(ChatReactionRules.toggled(full, emoji: "e3", userId: "me").first(where: { $0.emoji == "e3" })?.userIds == ["x", "me"])
-        #expect(ChatReactionRules.canReact(serverId: "s-1", isDirect: false, gate: .open, reactionsEnabled: true, isHost: false))
-        #expect(!ChatReactionRules.canReact(serverId: "optimistic-1", isDirect: false, gate: .open, reactionsEnabled: true, isHost: false))
-        #expect(!ChatReactionRules.canReact(serverId: "local-1", isDirect: false, gate: .open, reactionsEnabled: true, isHost: false))
-        #expect(!ChatReactionRules.canReact(serverId: "s-1", isDirect: true, gate: .open, reactionsEnabled: true, isHost: false))
+        #expect(ChatReactionRules.canReact(serverId: "s-1", isDirect: false, gate: .allowed, reactionsEnabled: true, isHost: false))
+        #expect(!ChatReactionRules.canReact(serverId: "optimistic-1", isDirect: false, gate: .allowed, reactionsEnabled: true, isHost: false))
+        #expect(!ChatReactionRules.canReact(serverId: "local-1", isDirect: false, gate: .allowed, reactionsEnabled: true, isHost: false))
+        #expect(!ChatReactionRules.canReact(serverId: "s-1", isDirect: true, gate: .allowed, reactionsEnabled: true, isHost: false))
         #expect(!ChatReactionRules.canReact(serverId: "s-1", isDirect: false, gate: .locked, reactionsEnabled: true, isHost: false))
-        #expect(ChatReactionRules.canReact(serverId: "s-1", isDirect: false, gate: .open, reactionsEnabled: false, isHost: true))
+        #expect(ChatReactionRules.canReact(serverId: "s-1", isDirect: false, gate: .allowed, reactionsEnabled: false, isHost: true))
         #expect(ChatReactionRules.nameKey("🤔") == "thinking" && ChatReactionRules.nameKey("🔥").isEmpty)
     }
 

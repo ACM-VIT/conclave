@@ -33,7 +33,7 @@ class ChatBridgeTests {
     ))
 
     private fun inputs(messages: List<ChatMessageInput>) = ChatInputs.make(callSession = 1, roomId = "room-a", localUserId = local,
-        localName = "Jordan Lee", messages = skip.lib.Array(messages), gate = ChatSendGate.open, roster = roster(),
+        localName = "Jordan Lee", messages = skip.lib.Array(messages), gate = ChatSendGate.allowed, roster = roster(),
         assistant = AssistantAvailability.available)
 
     private fun peer(id: String, text: String, offset: Double, reactions: List<ChatReactionInput> = emptyList()) =

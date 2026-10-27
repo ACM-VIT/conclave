@@ -260,7 +260,7 @@ final class GameStagePresenter {
 
         var nextCountdown: CountdownModel? = nil
         if inputs.isActive && !inputs.isFinished && common.deadlineMillis > 0 {
-            let offset = common.serverNowMillis > 0 && pushReceivedAtMillis > 0 ? pushReceivedAtMillis - common.serverNowMillis : 0
+            let offset = common.serverNowMillis > 0 && pushReceivedAtMillis > 0 ? pushReceivedAtMillis - common.serverNowMillis : 0.0
             nextCountdown = CountdownModel(deadlineMillis: common.deadlineMillis, serverOffsetMillis: offset, durationMillis: common.durationMillis)
         }
         if nextCountdown != countdown { countdown = nextCountdown }

@@ -98,6 +98,8 @@ enum MediaPermissionStatusProvider {
         }
         #elseif SKIP
         _ = PermissionHelper.openAppSettings()
+        // A second statement keeps the transpiled body a block (a lone call becomes a Boolean expression body).
+        return
         #endif
     }
 }

@@ -129,7 +129,8 @@
     },
     "%@ joined" : {
       "comment" : "In-call toast: a person joined; the argument is their name",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "%@ left" : {
       "comment" : "In-call toast: a person left; the argument is their name",
@@ -214,6 +215,7 @@
     "%lld New Messages" : {
       "comment" : "Chat panel: jump to latest pill with the number of unseen messages (iOS)",
       "extractionState" : "manual",
+      "generatesSymbol" : false,
       "localizations" : {
         "en" : {
           "variations" : {
@@ -290,6 +292,7 @@
     "%lld new messages" : {
       "comment" : "Chat panel: spoken announcement for several new messages arriving together (iOS)",
       "extractionState" : "manual",
+      "generatesSymbol" : false,
       "localizations" : {
         "en" : {
           "variations" : {
@@ -317,11 +320,13 @@
     },
     "%lld of %lld Characters" : {
       "comment" : "Text field: spoken value of the character counter, for example 38 of 40 characters",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "%lld of %lld characters" : {
       "comment" : "Activities panel (S60 7): character counter under a text option near its limit",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "%lld of %lld in queue" : {
       "comment" : "Participants row (S50 2 g): spoken position of a raised hand, for example 1 of 3 in queue; first the position, then the queue size",
@@ -725,7 +730,8 @@
     },
     "Camera Off" : {
       "comment" : "Video tile: state read with a participant tile while their camera is off",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Camera Paused" : {
       "comment" : "Pre-join lobby: label over your preview while another app or the system has taken the camera",
@@ -753,7 +759,8 @@
     },
     "Camera off" : {
       "comment" : "Call stage: status caption under the name of the other person in a one-to-one call while their camera is off (sentence case status text; the tile state value is the separate key Camera Off)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Camera permission is off" : {
       "comment" : "Pre-join lobby: state of the Effects control while camera access is off in Settings",
@@ -897,7 +904,8 @@
     },
     "Close %@" : {
       "comment" : "Panel shell: accessibility label of the Close button, with the panel title",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Close %@ for Everyone?" : {
       "comment" : "Activities panel (S60 7): confirmation title before closing an app; %@ is the app name",
@@ -905,7 +913,8 @@
     },
     "Close %@…" : {
       "comment" : "Activities panel (S60 7): destructive row that opens the close confirmation for an app; %@ is the app name",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Close Shared Browser…" : {
       "comment" : "Activities panel (S60 7): destructive row that opens the close confirmation for the shared browser",
@@ -1161,7 +1170,8 @@
     },
     "End Game" : {
       "comment" : "Destructive confirmation button that ends the game for everyone",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "End Game for Everyone" : {
       "comment" : "Game shell in the activity card (S60 8): VoiceOver label of the End button",
@@ -1169,7 +1179,8 @@
     },
     "End Game…" : {
       "comment" : "Destructive control that opens the End Game confirmation",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "End Now" : {
       "comment" : "Recap posting banner action: ends the call for everyone now",
@@ -1393,7 +1404,8 @@
     },
     "Joined %@" : {
       "comment" : "Call stage: spoken announcement when the call stage appears; the argument is the room name",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Joining" : {
       "comment" : "Lobby status while connecting to the meeting (ENT-1); also the sample title of the pending primary button in the Debug component gallery",
@@ -1721,7 +1733,8 @@
     },
     "Not Delivered" : {
       "comment" : "Chat panel: label of the failed marker and the line under a failed message",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Not Now" : {
       "comment" : "Dialog: dismiss button of an alert that explains a decision, for example a permission alert with Open Settings",
@@ -1733,7 +1746,8 @@
     },
     "Not delivered" : {
       "comment" : "Chat panel: spoken status of a failed message",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Not enough people are here yet." : {
       "comment" : "Activities panel (S60 7): generic below-range reason when no setup is shown",
@@ -3065,11 +3079,13 @@
     },
     "You’re the Only One Here" : {
       "comment" : "Call stage: heading of the card shown while you are alone in the meeting with your camera off",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "You’re the only one here." : {
       "comment" : "Participants (S50 1 g): footer under In This Meeting when nobody else is in the call",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "You’re watching this round." : {
       "comment" : "Game shell in the activity card (S60 8): spectator notice, also the not-seated move failure",

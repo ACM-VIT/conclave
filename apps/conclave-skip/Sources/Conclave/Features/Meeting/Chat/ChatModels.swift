@@ -29,7 +29,9 @@ enum ChatFailure: String, CaseIterable {
 }
 
 enum ChatSendGate: String, CaseIterable {
-    case open, notJoined, reconnecting, offline, locked, attendee
+    // `open` is a Kotlin modifier keyword, so the open gate is `allowed` (raw value unchanged).
+    case allowed = "open"
+    case notJoined, reconnecting, offline, locked, attendee
 }
 
 enum ChatGifKind: String, CaseIterable {
