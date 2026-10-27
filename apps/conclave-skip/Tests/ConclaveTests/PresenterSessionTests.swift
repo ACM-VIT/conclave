@@ -892,7 +892,8 @@ struct PresenterSessionViewModelTests {
         #expect(source.contains("outcome: .roomClosed)"))
         #expect(source.contains("recordTerminalOutcome(outcome, serverText: message)\n        state.connectionState = ConnectionState.error"))
         // WP2-S2a: the join failure keeps only clean server text (S70 7 c, S10 10 j).
-        #expect(source.contains("recordTerminalOutcome(outcome, serverText: classification.serverText)\n        state.connectionState = ConnectionState.error"))
+        // Batch 5 integrator (HD request B5-T5 R3d): the outcome carries the pre-cleanup rejoin context.
+        #expect(source.contains("recordTerminalOutcome(outcome, serverText: classification.serverText, joinContext: preservedJoinContext)\n        state.connectionState = ConnectionState.error"))
         #expect(source.contains("recordTerminalOutcome(.left, serverText: \"\")"))
         // MUTE (S1C 3.3): the guarded strings stay byte-identical.
         #expect(source.contains("state.isMuted = muted ? true : previousMuted"))

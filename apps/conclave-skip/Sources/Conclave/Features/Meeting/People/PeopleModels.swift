@@ -3,10 +3,11 @@ import Observation
 
 // S50 0.5 shared presenter contract (PPL-1, transpiled). Everything here crosses into handwritten Kotlin, so it is
 // String raw-value enums, scalar structs and arrays of structs: no associated values, no tuples, no protocols (S1C 3.6).
-// PPL-1 lands the roster half (rows, sections, search, the panel lifecycle and the destination scroll). The action
-// half (PersonActionModel lists from PeopleActionPolicy, the HostActionLedger, confirmations and failure placement)
-// arrives with PPL-2; admissions and the hand queue actions with PPL-3; Host Controls with PPL-4; the webinar
-// sections and Q&A with PPL-5 and PPL-6; the role-change rules with PPL-7. Their fields join these types then.
+// PPL-1 landed the roster half (rows, sections, search, the panel lifecycle and the destination scroll); PPL-2 adds the
+// action half (`PersonActionModel` lists from `PeopleActionPolicy`, the row-anchored confirmation and the inputs the
+// action table reads; the ledger, commands and failures are in PeopleActionModels.swift); admissions and the hand
+// queue actions arrive with PPL-3; Host Controls with PPL-4 (S/Features/Meeting/Host); the webinar sections and Q&A
+// with PPL-5 and PPL-6; the role-change rules with PPL-7.
 
 /// The role a row shows (S50 0.5): `host` is the primary host (`MeetingState.hostUserId`), `coHost` any other id in
 /// `hostUserIds`, `attendee` a webinar attendee (never a roster row, PH12).
@@ -90,11 +91,13 @@ struct PersonRowModel: Equatable, Identifiable {
 }
 
 /// One observable row (S50 0.5): a mute or a hand change re-evaluates this row only, on both platforms (F00 P2).
-/// Writes are equality guarded. PPL-2 adds the row-anchored `confirmation`.
+/// Writes are equality guarded. `confirmation` is set only on the target row for the row sources (row menu, swipe,
+/// accessibility; S50 3 j), so the iOS dialog anchors to this row and no other row re-evaluates.
 @MainActor
 @Observable
 final class PersonRowEntry {
     private(set) var model: PersonRowModel
+    private(set) var confirmation: PeopleConfirmation? = nil
 
     init(model: PersonRowModel) {
         self.model = model
@@ -102,6 +105,10 @@ final class PersonRowEntry {
 
     func update(_ next: PersonRowModel) {
         if model != next { model = next }
+    }
+
+    func setConfirmation(_ next: PeopleConfirmation?) {
+        if confirmation != next { confirmation = next }
     }
 }
 
@@ -246,17 +253,30 @@ struct PeopleParticipantInput: Equatable {
     let raisedAtMillis: Double
     /// S40 CH21: this sender's messages are hidden for you.
     let messagesHidden: Bool
+    /// PH13: the user key the SFU blocks by (`participantUserKeys`, else the part before "#"); "" when unknown, which
+    /// hides "Remove and Block" (Q7).
+    let userKey: String
 
     static func make(userId: String, displayName: String = "", isLocal: Bool = false, isMuted: Bool = true,
                      isCameraOff: Bool = true, isHandRaised: Bool = false, isScreenSharing: Bool = false,
                      hasScreenAudio: Bool = false, isLeaving: Bool = false, isReconnecting: Bool = false,
                      isWebinarAttendee: Bool = false, joinSerial: Int = 0, raisedAtMillis: Double = 0.0,
-                     messagesHidden: Bool = false) -> PeopleParticipantInput {
+                     messagesHidden: Bool = false, userKey: String = "") -> PeopleParticipantInput {
         PeopleParticipantInput(userId: userId, displayName: displayName, isLocal: isLocal, isMuted: isMuted,
                                isCameraOff: isCameraOff, isHandRaised: isHandRaised, isScreenSharing: isScreenSharing,
                                hasScreenAudio: hasScreenAudio, isLeaving: isLeaving, isReconnecting: isReconnecting,
                                isWebinarAttendee: isWebinarAttendee, joinSerial: joinSerial, raisedAtMillis: raisedAtMillis,
-                               messagesHidden: messagesHidden)
+                               messagesHidden: messagesHidden, userKey: userKey)
+    }
+
+    /// The same person with the S40 hide state folded in (the chat presenter is the source of truth, CH21).
+    func withMessagesHidden(_ hidden: Bool) -> PeopleParticipantInput {
+        if hidden == messagesHidden { return self }
+        return PeopleParticipantInput(userId: userId, displayName: displayName, isLocal: isLocal, isMuted: isMuted,
+                                      isCameraOff: isCameraOff, isHandRaised: isHandRaised, isScreenSharing: isScreenSharing,
+                                      hasScreenAudio: hasScreenAudio, isLeaving: isLeaving, isReconnecting: isReconnecting,
+                                      isWebinarAttendee: isWebinarAttendee, joinSerial: joinSerial,
+                                      raisedAtMillis: raisedAtMillis, messagesHidden: hidden, userKey: userKey)
     }
 }
 
@@ -271,6 +291,8 @@ struct PeopleWaitingInput: Equatable {
 /// levels, connection quality or chat arrays: a speaker change publishes no People revision.
 struct PeopleInputs: Equatable {
     let callSession: Int
+    /// S1C ATT: the attempt of the current call session; a change interrupts pending host actions (PH2).
+    let attempt: Int
     /// `MeetingPhaseKind` raw value from the S1 session snapshot (S1C PHASE).
     let phase: String
     let isNetworkOffline: Bool
@@ -299,9 +321,18 @@ struct PeopleInputs: Equatable {
     /// PH10 `isWebinarQaEnabled`; false until PPL-6 decodes it.
     let isWebinarQaEnabled: Bool
     let webinarAttendeeCount: Int
+    /// S50 3 f: Send Private Message shows for everyone while DMs are on (hosts always).
+    let isDmEnabled: Bool
+    /// The pinned person's canonical id (Pin or Unpin), "" when none.
+    let pinnedUserId: String
+    /// Q14 (RECONCILE R38): the one session flag after a "Display name updates are disabled" refusal anywhere.
+    let isRenameDisabled: Bool
+    /// PH8 (PPL-5): the demote emitter exists, so Move to Audience may show.
+    let supportsMoveToAudience: Bool
 
     static func make(
         callSession: Int = 0,
+        attempt: Int = 0,
         phase: String = MeetingPhaseKind.home.rawValue,
         isNetworkOffline: Bool = false,
         localUserId: String = "",
@@ -320,14 +351,20 @@ struct PeopleInputs: Equatable {
         isWebinarPublic: Bool = false,
         webinarLink: String = "",
         isWebinarQaEnabled: Bool = false,
-        webinarAttendeeCount: Int = 0
+        webinarAttendeeCount: Int = 0,
+        isDmEnabled: Bool = true,
+        pinnedUserId: String = "",
+        isRenameDisabled: Bool = false,
+        supportsMoveToAudience: Bool = false
     ) -> PeopleInputs {
-        PeopleInputs(callSession: callSession, phase: phase, isNetworkOffline: isNetworkOffline, localUserId: localUserId,
-                     participants: participants, isRosterLoaded: isRosterLoaded, isAdmin: isAdmin, hostUserId: hostUserId,
-                     hostUserIds: hostUserIds, isWebinarAttendee: isWebinarAttendee, waiting: waiting,
+        PeopleInputs(callSession: callSession, attempt: attempt, phase: phase, isNetworkOffline: isNetworkOffline,
+                     localUserId: localUserId, participants: participants, isRosterLoaded: isRosterLoaded, isAdmin: isAdmin,
+                     hostUserId: hostUserId, hostUserIds: hostUserIds, isWebinarAttendee: isWebinarAttendee, waiting: waiting,
                      meetingLink: meetingLink, roomLabel: roomLabel, isRoomLocked: isRoomLocked, isNoGuests: isNoGuests,
                      isWebinarEnabled: isWebinarEnabled, isWebinarPublic: isWebinarPublic, webinarLink: webinarLink,
-                     isWebinarQaEnabled: isWebinarQaEnabled, webinarAttendeeCount: webinarAttendeeCount)
+                     isWebinarQaEnabled: isWebinarQaEnabled, webinarAttendeeCount: webinarAttendeeCount,
+                     isDmEnabled: isDmEnabled, pinnedUserId: pinnedUserId, isRenameDisabled: isRenameDisabled,
+                     supportsMoveToAudience: supportsMoveToAudience)
     }
 
     /// The roster person with `userId`, ignoring leaving entries.

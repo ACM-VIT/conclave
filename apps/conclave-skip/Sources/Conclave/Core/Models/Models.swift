@@ -422,6 +422,14 @@ struct ChatMessage: Identifiable, Equatable {
     let sendStatus: ChatSendStatus?
     /// S40 CH3: the complete server set (meeting-core `ChatMessage.reactions`), replaced, never merged.
     let reactions: [ChatMessageReaction]
+    /// S40 CH4: a voice message (`/tts`), decided by the core's normalization (the SFU sends the raw content). The
+    /// stored content stays `TTS: <full text>` for the legacy chat; native rows strip the prefix.
+    let isTts: Bool
+    /// S40 CH4: the sender's personal voice token (web-minted, SFU-relayed); nil for the system voice.
+    let ttsVoiceToken: String?
+    /// S40 CH5: the sender removed the link preview, so this message shows no embed cards for anyone (web parity,
+    /// meeting-core `ChatMessage.suppressEmbeds`).
+    let suppressEmbeds: Bool
 
     init(
         id: String = UUID().uuidString,
@@ -438,7 +446,10 @@ struct ChatMessage: Identifiable, Equatable {
         replyTo: ChatReplyPreview? = nil,
         clientId: String? = nil,
         sendStatus: ChatSendStatus? = nil,
-        reactions: [ChatMessageReaction] = []
+        reactions: [ChatMessageReaction] = [],
+        isTts: Bool = false,
+        ttsVoiceToken: String? = nil,
+        suppressEmbeds: Bool = false
     ) {
         self.id = id
         self.userId = userId
@@ -455,6 +466,9 @@ struct ChatMessage: Identifiable, Equatable {
         self.clientId = clientId
         self.sendStatus = sendStatus
         self.reactions = reactions
+        self.isTts = isTts
+        self.ttsVoiceToken = ttsVoiceToken
+        self.suppressEmbeds = suppressEmbeds
     }
 
     /// The delivery state with nil read as delivered.

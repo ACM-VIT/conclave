@@ -3004,6 +3004,8 @@ struct JoinView: View {
                     viewModel.state.joinFormErrorMessage = nil
                     return
                 }
+                // S20 SC22 (STG-8): the attendee capsule and Webinar Details read the landing title.
+                viewModel.state.webinarTitle = trimWhitespaceAndNewlines(webinar.title ?? "")
             }
 
             guard !Task.isCancelled,

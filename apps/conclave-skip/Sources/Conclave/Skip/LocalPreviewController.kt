@@ -27,6 +27,12 @@ import skip.ui.UIApplication
  * camera): that release closes the publish latch (releasedByCall), exactly like handOffToCall(). The PreviewView uses
  * the TextureView implementation so the last frame stays on screen after the unbind (the hand-off still, Q16 B), and
  * the bitmap is kept as lastFrame for the stage self view.
+ *
+ * STG-3 (S20 SC8, S60 C6-2, S20 6 f): the same members as the Swift file for the one camera facing and the call camera's
+ * system pause. The call's camera reports its facing after a flip or a start (adoptCallFacing) and the WebRTC client's
+ * camera events report the pause (noteCallCameraInterruption and noteCallCameraResumed, from any thread; they hop to
+ * the main thread here). onCallCameraChange tells the core, which mirrors both into MeetingState once. None of this
+ * starts, stops or restarts a capture while the latch is closed.
  */
 internal class LocalPreviewController internal constructor() {
     companion object {
@@ -34,6 +40,9 @@ internal class LocalPreviewController internal constructor() {
     }
 
     internal var onChange: (() -> Unit)? = null
+
+    /** STG-3: called on the main thread after the facing or the call camera's pause changes (S20 SC8, S60 C6-2). */
+    internal var onCallCameraChange: (() -> Unit)? = null
 
     internal var machine: LocalPreviewMachine = LocalPreviewMachine.initial
         private set
@@ -50,6 +59,11 @@ internal class LocalPreviewController internal constructor() {
     internal val sessionId: Int get() = machine.sessionId
     internal val isPublishLatched: Boolean get() = machine.isLatched
     internal val interruption: PreviewInterruption get() = machine.interruption
+
+    /** STG-3 (S20 6 f): why the system holds the call's camera right now; none while it runs. */
+    internal var callCameraInterruption: PreviewInterruption = PreviewInterruption.none
+        private set
+    internal val isCallCameraPaused: Boolean get() = LocalCameraPublication.isPaused(callCameraInterruption)
 
     /** The hand-off still (Q16 B): the last preview frame, kept until the latch reopens. */
     internal var lastFrame: Bitmap? = null
@@ -77,6 +91,7 @@ internal class LocalPreviewController internal constructor() {
     fun start(facing: LocalCameraFacing) {
         val facingChanged = facing != this.facing
         this.facing = facing
+        if (facingChanged) onCallCameraChange?.invoke()
         val current = machine.state
         if (current == PreviewState.live || current == PreviewState.starting || current == PreviewState.interrupted) {
             if (facingChanged) restartCapture()
@@ -107,6 +122,42 @@ internal class LocalPreviewController internal constructor() {
         facing = facing.next
         if (LocalPreviewPolicy.mayCapture(machine)) restartCapture()
         publish()
+        onCallCameraChange?.invoke()
+    }
+
+    // MARK: The call's camera (STG-3: S20 SC8, S60 C6-2, S20 6 f)
+
+    /**
+     * The call's camera reports the facing it resolved after a flip or a start, so the lobby after the call, the
+     * Settings preview and the stage read one facing. Equal reports publish nothing; a closed latch keeps the capture
+     * untouched, an open running preview follows the new facing. Main thread (the core calls it).
+     */
+    fun adoptCallFacing(reported: LocalCameraFacing): Boolean {
+        if (!LocalCameraPublication.publishes(current = facing, reported = reported)) return false
+        facing = reported
+        if (LocalPreviewPolicy.mayCapture(machine)) restartCapture()
+        publish()
+        onCallCameraChange?.invoke()
+        return true
+    }
+
+    /** The system took (or, with none, returned) the call's camera. Any thread; equal reports publish nothing. */
+    fun noteCallCameraInterruption(reason: PreviewInterruption) {
+        onMain {
+            if (reason != callCameraInterruption) {
+                callCameraInterruption = reason
+                onCallCameraChange?.invoke()
+            }
+        }
+    }
+
+    fun noteCallCameraResumed() {
+        noteCallCameraInterruption(PreviewInterruption.none)
+    }
+
+    /** The call ended or your camera turned off: no pause carries into the next call or camera start. */
+    fun resetCallCamera() {
+        noteCallCameraInterruption(PreviewInterruption.none)
     }
 
     fun handOffToCall() {
@@ -202,9 +253,12 @@ internal class LocalPreviewController internal constructor() {
                 CameraPreviewController.markBound(provider, preview)
                 isMirrored = selection.mirrored
                 previewView?.scaleX = if (isMirrored) -1f else 1f
-                facing = LocalCameraFacing.resolvedPreviewFacing(rawValue = selection.facing)
+                val resolved = LocalCameraFacing.resolvedPreviewFacing(rawValue = selection.facing)
+                val facingChanged = LocalCameraPublication.publishes(current = facing, reported = resolved)
+                facing = resolved
                 observeCameraState(camera, activity, generation)
                 apply(LocalPreviewEvent.bound)
+                if (facingChanged) onCallCameraChange?.invoke()
             } catch (error: Throwable) {
                 debugLog("[LocalPreview] Bind failed: ${error}")
                 unbindCurrent()

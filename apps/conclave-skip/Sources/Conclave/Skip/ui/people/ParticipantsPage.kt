@@ -12,6 +12,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarHost
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -84,9 +86,15 @@ internal fun peopleListItems(snapshot: PeopleSnapshot, sections: List<PeopleSect
 
 internal fun peopleHeaderKey(sectionId: String): String = "h:$sectionId"
 
-/** The page title for the page on top of the stack: Participants at the root, the host page title above it. */
-internal fun peoplePageTitleName(top: String?): String =
-    if (top == null || top == PeopleRoute.root.rawValue) "native_panel_participants" else "ppl_host_controls"
+/**
+ * The page title for the page on top of the stack: Participants at the root, Host controls for the pushed Host
+ * Controls page, and the access or notice page title above it (PPL-4, S50 7 g, 8 g).
+ */
+internal fun peoplePageTitleName(top: String?): String = when (top) {
+    null, PeopleRoute.root.rawValue -> "native_panel_participants"
+    PeopleRoute.hostControls.rawValue -> "ppl_host_controls"
+    else -> hostPageTitleName(top)
+}
 
 @Composable
 internal fun ParticipantsPage(
@@ -102,6 +110,8 @@ internal fun ParticipantsPage(
 ) {
     val pages = LocalPanelPageStack.current
     val top = pages?.top
+    // PL14 `panelSnackbar`: one snackbar slot per page (R40-3); the root and each host page report there.
+    val snackbar = remember { SnackbarHostState() }
     InCallPage(
         title = conclaveString(peoplePageTitleName(top)),
         variant = variant,
@@ -114,6 +124,8 @@ internal fun ParticipantsPage(
             // The presentation lifecycle (S50 1 d): the page mounts once per presentation; an overlay to side pane move
             // keeps it composed, so the destination scrolls once.
             people.panelDidOpen(destination = request.destination, presentationID = request.presentationID)
+            // PL14: panel-origin failures use the page snackbar on Android.
+            people.platform = NoticePlatform.android
         },
         onDisposed = {
             // The coordinator callback closes it first in production; this keeps a host without that hook correct.
@@ -122,6 +134,7 @@ internal fun ParticipantsPage(
         },
         miniTileVideo = miniTileVideo,
         contentMode = InCallPageContent.lazyList,
+        snackbarHost = { SnackbarHost(snackbar) },
         hideMiniTileWithIme = true,
         isNested = pages?.isNested == true,
         onBack = { pages?.pop() },
@@ -129,8 +142,15 @@ internal fun ParticipantsPage(
         PeoplePageEffects(people, pages, variant, onHostPage = top != null)
         if (top == null) {
             PeopleRoot(people, reservation, onOpenHostControls = { pages?.push(PeopleRoute.hostControls.rawValue) })
+            // S50 3 j: the People root leaf for row, accessibility and section-header confirmations; the PL10 rename
+            // dialog; and the page snackbar for panel failures (PL14).
+            PeopleConfirmationHost(people)
+            PeopleRenameDialog(people)
+            PeopleFailureSnackbar(people, snackbar)
         } else {
-            PeopleHostPagePlaceholder(top, reservation)
+            // PPL-4 (S50 6 to 8): Host controls and its pages on the same stack (R50-2); the host pages compose their
+            // own confirmation leaf and snackbar reporter.
+            HostPageContent(people, top, reservation, snackbar, onPush = { pages?.push(it) })
         }
     }
 }
@@ -201,8 +221,8 @@ private fun PeopleRoot(people: PeoplePresenter, reservation: PaddingValues, onOp
                     PeopleItemKind.Header -> ConclaveSectionHeader(title = conclaveString(peopleSectionTitleName(item.sectionId)),
                         identifier = "people.section.${item.sectionId}.header", count = item.count)
                     // Only Raised Hands rows read the queue size, so a hand change never recomposes the others.
-                    PeopleItemKind.Person -> PersonRow(people.rows.entry(item.rowKey), people.speaking.state(item.rowKey),
-                        item.sectionId, if (item.sectionId == PeopleSectionID.raisedHands.rawValue) queueCount else 0, people.recompose)
+                    PeopleItemKind.Person -> PeopleActionRow(people, item.rowKey, item.sectionId,
+                        if (item.sectionId == PeopleSectionID.raisedHands.rawValue) queueCount else 0)
                     PeopleItemKind.Waiting -> PeopleWaitingNameRow(people.waiting.entry(item.rowKey), people.recompose)
                     PeopleItemKind.Loading -> ConclaveLoadingStatus(identifier = "people.loading", label = conclaveString("ppl_loading"))
                     PeopleItemKind.Footer -> ConclaveSectionFooter(text = conclaveString(peopleFooterName(item.rowKey)),
@@ -281,10 +301,26 @@ private fun PeopleQaNewCount(people: PeoplePresenter) {
 }
 
 /**
- * The pushed pages of the Participants stack (R50-2). PPL-4 fills Host controls and the meeting access pages; until
- * then the push, the title, Back and predictive pop behave as they will (S50 1 l4, l10).
+ * One person with the PPL-2 actions (S50 3 d): tap or long press opens the row DropdownMenu (built when it opens,
+ * F00 C16 k), the same items are TalkBack custom actions on the merged node (AX4), and a row without actions stays a
+ * plain node. Reads only its own entry.
  */
 @Composable
-private fun PeopleHostPagePlaceholder(route: String, reservation: PaddingValues) {
-    LazyColumn(Modifier.fillMaxSize().testTag("people.page.$route"), contentPadding = reservation) {}
+private fun PeopleActionRow(people: PeoplePresenter, rowKey: String, sectionId: String, queueCount: Int) {
+    val entry = people.rows.entry(rowKey)
+    val model = entry.model
+    val context = LocalContext.current
+    var expanded by remember(rowKey) { mutableStateOf(false) }
+    val actions = remember(model) {
+        peopleRowAccessibilityActions(context, model) { action ->
+            people.perform(action, rowId = model.id, source = PeopleActionSource.a11y)
+        }
+    }
+    val hasActions = !model.actions.isEmpty
+    PersonRow(
+        entry, people.speaking.state(rowKey), sectionId, queueCount, people.recompose,
+        onOpenMenu = if (hasActions) { { expanded = true } } else null,
+        actions = actions,
+        menu = { if (hasActions) PeopleRowMenu(people, model, sectionId, expanded, onDismiss = { expanded = false }) },
+    )
 }

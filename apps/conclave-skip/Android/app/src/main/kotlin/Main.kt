@@ -138,7 +138,9 @@ open class MainActivity: AppCompatActivity {
                 // ENT-1: the premeeting stream, the second production delivery (launch-time route, never remounted).
                 NativePremeetingRootFeedback()
             }
-            if (PipController.inPipMode && PipController.isInCall) {
+            // S70 3 d (SYS-4): the legacy PiP surface only while the native call root is not composed; the native root
+            // stays composed in PiP and draws its own PiP slot (renderers survive, PS 9.4).
+            if (PipController.showsLegacyPipContent) {
                 PipContent()
             } else if (systemFixture != null && !PipController.isInCall) {
                 SystemFixtureRoot(systemFixture)
@@ -259,6 +261,15 @@ open class MainActivity: AppCompatActivity {
         if (isInPictureInPictureMode) {
             CallActionDispatcher.pictureInPictureEntered()
         }
+    }
+
+    @androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.S)
+    override fun onPictureInPictureUiStateChanged(pipState: android.app.PictureInPictureUiState) {
+        super.onPictureInPictureUiStateChanged(pipState)
+        // S70 3 d (D-13): API 35 reports the transition before the window shrinks, so the native root hides chrome
+        // first; API 31 to 34 report stashing only (chrome hides on the mode change there).
+        val transitioning = android.os.Build.VERSION.SDK_INT >= 35 && pipState.isTransitioningToPip
+        PipManager.handlePictureInPictureUiStateChanged(stashed = pipState.isStashed, transitioningToPip = transitioning)
     }
 
     override fun onDestroy() {

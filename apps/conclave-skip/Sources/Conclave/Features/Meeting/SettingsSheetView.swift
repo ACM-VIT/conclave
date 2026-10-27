@@ -178,7 +178,6 @@ struct SettingsSheetView: View {
     var onOpenCameraSettings: (() -> Void)? = nil
     var onOpenSpeakerSettings: (() -> Void)? = nil
     var onOpenPrivacyPolicy: (() -> Void)? = nil
-    @State private var displayNameInput = ""
     @State private var meetingInviteCodeInput = ""
     @State private var webinarInviteCodeInput = ""
     @State private var webinarMaxAttendeesInput = ""
@@ -188,22 +187,12 @@ struct SettingsSheetView: View {
     @State private var didCopyWebinarLink = false
     @State private var webinarLinkCopyFeedbackGeneration = 0
     @State private var webinarLinkActionGeneration = 0
-    @State private var displayNameAutoSaveGeneration = 0
     @State private var signOutGeneration = 0
     @State private var webinarLinkCopyFeedbackTask: Task<Void, Never>?
     @State private var webinarLinkActionTask: Task<Void, Never>?
-    @State private var displayNameAutoSaveTask: Task<Void, Never>?
-    @State private var queuedDisplayNameAutoSave: String?
-    @State private var queuedDisplayNameAutoSaveRoomId: String?
-    @State private var shouldFlushQueuedDisplayNameAfterUpdate = false
     @State private var isConfirmingWebinarLinkRotation = false
     @State private var isSigningOut = false
-    @State private var isUpdatingDisplayName = false
     @State private var settingsRefreshTask: Task<Void, Never>?
-
-    private var displayNameDraft: String {
-        NativeDisplayNameNormalizer.normalize(displayNameInput)
-    }
 
     private var isMeetingInviteCodeEmpty: Bool {
         meetingInviteCodeInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1157,7 +1146,11 @@ struct SettingsSheetView: View {
                 androidTint: "muted"
             )
 
-            TextField("", text: $displayNameInput, prompt: Text("Display name").foregroundStyle(ACMColors.textFaint))
+            // S60 C6-10 (PPL-2): the field runs on the shared DisplayNameEditor (650 ms autosave, single flight, queue and
+            // flush on close, PH16 refusals and the S50 Q14 session flag); SET-1 replaces this legacy row.
+            TextField("", text: Binding(get: { viewModel.displayNameEditor.draft },
+                                        set: { viewModel.displayNameEditor.setDraft($0) }),
+                      prompt: Text("Display name").foregroundStyle(ACMColors.textFaint))
                 .textFieldStyle(.plain)
                 .font(ACMFont.trial(15))
                 .foregroundStyle(ACMColors.text)
@@ -1168,169 +1161,14 @@ struct SettingsSheetView: View {
 #endif
 #endif
                 .autocorrectionDisabled(true)
-                .disabled(viewModel.state.connectionState != .joined || viewModel.state.isWebinarAttendee)
+                .disabled(viewModel.state.connectionState != .joined || viewModel.state.isWebinarAttendee
+                           || viewModel.displayNameEditor.isDisabledForSession)
                 .onAppear {
-                    syncDisplayNameInputFromServerIfIdle(viewModel.state.displayName)
+                    viewModel.displayNameEditor.syncFromServerIfIdle()
                 }
         }
         .padding(.horizontal, ACMSpacing.sm)
         .frame(height: 52)
-    }
-
-    private func canSaveDisplayName(_ value: String) -> Bool {
-        SettingsDisplayNameAutoSavePolicy.canSave(
-            value,
-            currentDisplayName: viewModel.state.displayName,
-            connectionState: viewModel.state.connectionState,
-            isWebinarAttendee: viewModel.state.isWebinarAttendee
-        )
-    }
-
-    private func shouldAutoSaveDisplayName(_ value: String) -> Bool {
-        !isUpdatingDisplayName && canSaveDisplayName(value)
-    }
-
-    private func shouldSyncDisplayNameInputFromServer() -> Bool {
-        SettingsDisplayNameAutoSavePolicy.shouldSyncInputFromServer(
-            hasInFlightUpdate: isUpdatingDisplayName,
-            hasPendingAutoSave: displayNameAutoSaveTask != nil || queuedDisplayNameAutoSave != nil,
-            hasLocalSavableDraft: canSaveDisplayName(displayNameInput)
-        )
-    }
-
-    private func syncDisplayNameInputFromServerIfIdle(_ name: String) {
-        guard shouldSyncDisplayNameInputFromServer() else { return }
-        displayNameInput = name
-    }
-
-    private func queueDisplayNameAutoSave(_ value: String, flushAfterCurrentUpdate: Bool = false) {
-        guard canSaveDisplayName(value) else {
-            queuedDisplayNameAutoSave = nil
-            queuedDisplayNameAutoSaveRoomId = nil
-            shouldFlushQueuedDisplayNameAfterUpdate = false
-            return
-        }
-        queuedDisplayNameAutoSave = value
-        queuedDisplayNameAutoSaveRoomId = viewModel.state.roomId
-        if flushAfterCurrentUpdate {
-            shouldFlushQueuedDisplayNameAfterUpdate = true
-        }
-    }
-
-    private func consumeQueuedDisplayNameAutoSave() -> (name: String, roomId: String?, shouldFlush: Bool)? {
-        let queuedName = queuedDisplayNameAutoSave
-        let queuedRoomId = queuedDisplayNameAutoSaveRoomId
-        let shouldFlush = shouldFlushQueuedDisplayNameAfterUpdate
-        queuedDisplayNameAutoSave = nil
-        queuedDisplayNameAutoSaveRoomId = nil
-        shouldFlushQueuedDisplayNameAfterUpdate = false
-        guard let queuedName else { return nil }
-        return (queuedName, queuedRoomId, shouldFlush)
-    }
-
-    private func scheduleDisplayNameAutoSave() {
-        displayNameAutoSaveTask?.cancel()
-        displayNameAutoSaveTask = nil
-        displayNameAutoSaveGeneration += 1
-        if isUpdatingDisplayName {
-            queueDisplayNameAutoSave(displayNameInput)
-            return
-        }
-        guard shouldAutoSaveDisplayName(displayNameInput) else { return }
-        let pendingName = displayNameInput
-        let generation = displayNameAutoSaveGeneration
-        displayNameAutoSaveTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: SettingsTimingPolicy.displayNameAutoSaveNanoseconds)
-            guard !Task.isCancelled,
-                  SettingsTimingPolicy.shouldApply(
-                    generation: generation,
-                    currentGeneration: displayNameAutoSaveGeneration
-                  ) else { return }
-            displayNameAutoSaveTask = nil
-            await submitDisplayNameUpdate(pendingName, generation: generation)
-        }
-    }
-
-    private func submitDisplayNameUpdate(
-        _ name: String,
-        generation: Int? = nil,
-        rescheduleIfNeeded: Bool = true
-    ) async {
-        if let generation,
-           !SettingsTimingPolicy.shouldApply(
-               generation: generation,
-               currentGeneration: displayNameAutoSaveGeneration
-           ) {
-            return
-        }
-        if isUpdatingDisplayName {
-            queueDisplayNameAutoSave(name)
-            return
-        }
-        guard shouldAutoSaveDisplayName(name) else { return }
-        isUpdatingDisplayName = true
-        let updated = await viewModel.updateDisplayName(name)
-        isUpdatingDisplayName = false
-        let isCurrentGeneration = generation.map {
-            SettingsTimingPolicy.shouldApply(
-                generation: $0,
-                currentGeneration: displayNameAutoSaveGeneration
-            )
-        } ?? true
-        if updated,
-           isCurrentGeneration,
-           NativeDisplayNameNormalizer.normalize(name) == displayNameDraft {
-            displayNameInput = viewModel.state.displayName
-        }
-        if let queued = consumeQueuedDisplayNameAutoSave(),
-           SettingsDisplayNameAutoSavePolicy.shouldApplyForRoom(
-               actionRoomId: queued.roomId,
-               currentRoomId: viewModel.state.roomId
-           ),
-           canSaveDisplayName(queued.name) {
-            if queued.shouldFlush {
-                await submitDisplayNameUpdate(queued.name, rescheduleIfNeeded: false)
-            } else if rescheduleIfNeeded {
-                displayNameInput = queued.name
-                scheduleDisplayNameAutoSave()
-            }
-            return
-        }
-        if rescheduleIfNeeded, shouldAutoSaveDisplayName(displayNameInput) {
-            scheduleDisplayNameAutoSave()
-        }
-    }
-
-    private func cancelDisplayNameAutoSave() {
-        displayNameAutoSaveTask?.cancel()
-        displayNameAutoSaveTask = nil
-        displayNameAutoSaveGeneration += 1
-    }
-
-    private func resetDisplayNameAutoSaveForRoomChange() {
-        cancelDisplayNameAutoSave()
-        queuedDisplayNameAutoSave = nil
-        queuedDisplayNameAutoSaveRoomId = nil
-        shouldFlushQueuedDisplayNameAfterUpdate = false
-        displayNameInput = viewModel.state.displayName
-    }
-
-    private func flushPendingDisplayNameAutoSave() {
-        let pendingName = displayNameInput
-        let pendingRoomId = viewModel.state.roomId
-        cancelDisplayNameAutoSave()
-        if isUpdatingDisplayName {
-            queueDisplayNameAutoSave(pendingName, flushAfterCurrentUpdate: true)
-            return
-        }
-        guard shouldAutoSaveDisplayName(pendingName) else { return }
-        Task { @MainActor in
-            guard SettingsDisplayNameAutoSavePolicy.shouldApplyForRoom(
-                actionRoomId: pendingRoomId,
-                currentRoomId: viewModel.state.roomId
-            ) else { return }
-            await submitDisplayNameUpdate(pendingName, rescheduleIfNeeded: false)
-        }
     }
 
     @ViewBuilder
@@ -2095,7 +1933,7 @@ struct SettingsSheetView: View {
             scheduleSettingsRefreshIfReady()
         }
         .onDisappear {
-            flushPendingDisplayNameAutoSave()
+            viewModel.displayNameEditor.flush()
             settingsRefreshTask?.cancel()
             settingsRefreshTask = nil
             cancelWebinarLinkAction()
@@ -2123,15 +1961,12 @@ struct SettingsSheetView: View {
             isConfirmingWebinarLinkRotation = false
         }
         .onChange(of: viewModel.state.roomId) {
-            resetDisplayNameAutoSaveForRoomChange()
+            viewModel.displayNameEditor.roomChanged()
             resetSignOutAction()
             scheduleSettingsRefreshIfReady()
         }
-        .onChange(of: displayNameInput) {
-            scheduleDisplayNameAutoSave()
-        }
         .onChange(of: viewModel.state.displayName) {
-            syncDisplayNameInputFromServerIfIdle(viewModel.state.displayName)
+            viewModel.displayNameEditor.syncFromServerIfIdle()
         }
 #if SKIP
         .onChange(of: viewModel.state.meetingRequiresInviteCode ? "required" : "not-required") {

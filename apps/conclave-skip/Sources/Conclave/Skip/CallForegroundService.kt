@@ -214,13 +214,15 @@ class CallForegroundService : Service() {
  */
 class CallActionReceiver : BroadcastReceiver() {
     companion object {
-        /** PiP RemoteAction (PipManager.kt), still a toggle until SY7 makes it absolute. */
+        /** Legacy PiP RemoteAction (windows posted before SY7); PipManager now posts absolute actions. */
         const val ACTION_TOGGLE_MUTE = "conclave.app.action.CALL_TOGGLE_MUTE"
-        /** PiP RemoteAction "Leave call" (PipManager.kt). */
+        /** Legacy PiP RemoteAction (windows posted before SY7); PipManager now posts absolute actions. */
         const val ACTION_LEAVE = "conclave.app.action.CALL_LEAVE"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        // SYS-4 (S70 3 d): the absolute PiP RemoteActions (PIP_MUTE, PIP_UNMUTE, PIP_LEAVE) with their presence session.
+        if (PipManager.handleActionIntent(intent)) return
         val session = intent.getIntExtra(CallNotificationModel.EXTRA_PRESENCE_SESSION, -1)
         when (intent.action) {
             CallNotificationBuilder.ACTION_MUTE ->

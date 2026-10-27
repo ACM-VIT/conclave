@@ -216,6 +216,7 @@ enum PendingPreAckRoomPolicyEvent {
     case chatLockChanged(ChatLockChangedNotification)
     case dmStateChanged(DmStateChangedNotification)
     case imageAttachmentsStateChanged(ImageAttachmentsStateChangedNotification)
+    case participantMediaPermissionsChanged(ParticipantMediaPermissionsChangedNotification)
     case ttsDisabledChanged(TtsDisabledChangedNotification)
     case reactionsDisabledChanged(ReactionsDisabledChangedNotification)
 }
@@ -462,6 +463,8 @@ final class MeetingViewModel {
             bindControlsInputs()
             oldValue.onPeopleInputChanged = nil
             bindPeopleInputs()
+            oldValue.onHostInputChanged = nil
+            bindHostControlsInputs()
             oldValue.onActivityInputChanged = nil
             oldValue.onActivityGameChanged = nil
             bindActivityInputs()
@@ -485,6 +488,9 @@ final class MeetingViewModel {
     /// session (it resets itself when `PeopleInputs.callSession` changes). Fed only through `requestPeopleRefresh()`
     /// (PH1); its speaking leaves read `stage.speaking`.
     let people: PeoplePresenter
+    /// S60 C6-10, RECONCILE R38: the one rename intent (Settings Name field and People "Change Name..."), with the S50 Q14
+    /// session flag. Installed in `init` (`bindDisplayNameEditor()`).
+    let displayNameEditor = DisplayNameEditor()
     /// S60 0.5 (ACT-1, ACT-2): the session-owned Activities launcher and game shell, created with the shell and the
     /// stage. Fed only through `requestActivityRefresh()` and `refreshActivityGame()`; the native call root reads it.
     let activitySession: ActivitySession
@@ -506,9 +512,34 @@ final class MeetingViewModel {
     private var premeetingIsSigningIn = false
     /// S1C ID: bumps for a new meeting intent only (`MeetingCallSessionPolicy`), never for a recovery or admission.
     private(set) var callSessionSerial = 0 {
-        didSet { state.resetParticipantJoinSerials(); requestShellRefresh(); requestStageRefresh(); requestPeopleRefresh() }
+        didSet {
+            state.resetParticipantJoinSerials()
+            // S50 PH13 and Q14: user keys and the rename session flag are per call session.
+            state.participantUserKeys = [:]
+            displayNameEditor.resetSession()
+            requestShellRefresh(); requestStageRefresh(); requestPeopleRefresh()
+        }
     }
     private var terminalOutcomeSerial = 0
+    /// S10 0.8 C3 (HD request B5-T5 R3): the last call's join target and media intent for Rejoin and Try Again, captured
+    /// before `cleanup()` clears `lastJoinContext` (`RejoinContextPolicy`); kept through a failed rejoin.
+    private(set) var rejoinContext: JoinContext? = nil {
+        didSet { requestShellRefresh() }
+    }
+    private var rejoinMicOn = false
+    private var rejoinCameraOn = false
+    /// S10 10 l6 (Debug): `rejoinLastMeeting()` calls that reached a join.
+    private(set) var rejoinJoinCount = 0
+    /// Host tests only: when set, `rejoinLastMeeting()` hands the context here instead of joining (no network).
+    var rejoinJoinOverride: ((JoinContext) -> Void)? = nil
+    /// S10 8 f (HD request B5-T5 R3): the classifier's answer for the last join failure, for the lobby's failed block
+    /// and a failed rejoin's body. The code is written first, so the category's refresh carries both.
+    private var lastJoinFailureCode = ""
+    private var lastJoinFailureCategory = "" {
+        didSet { requestShellRefresh() }
+    }
+    /// S10 8 l7b (Debug, HD request B5-T5 R2): automatic Retry-After retries (C18).
+    private(set) var joinAutomaticRetryCount = 0
     /// S70 5 c (O2): the camera is paused by a CallKit hold; never written to `isCameraOff` or the camera intent.
     private var isCameraSuspendedForHold = false
     /// While above zero, hooked writes do not refresh; the batch end refreshes once (S1C ID, A19).
@@ -525,6 +556,9 @@ final class MeetingViewModel {
     private var transcriptLastPhase: MeetingPhaseKind = .home
     /// S30 CC1: while above zero, controls hooks do not refresh; the batch end refreshes once.
     private var controlsRefreshBatchDepth = 0
+    /// CTL-2: true while `requestShellRefresh()` applies fresh inputs to the shell, so `shell.onPublish` skips the
+    /// publishes the refresh itself refreshes the controls for (CC1 stays one refresh per field).
+    private var isApplyingShellInputs = false
     /// Test seam and diagnostic: how many times controls inputs were built and applied.
     private(set) var controlsRefreshCount = 0
     /// S50 PH1: while above zero, People hooks do not refresh; the batch end refreshes once.
@@ -533,6 +567,11 @@ final class MeetingViewModel {
     private(set) var peopleRefreshCount = 0
     /// PH1: the S1 phase and offline flag People last saw; connection fields reach People through the S1 publish.
     private var lastPeopleConnectionKey = ""
+    /// S50 PPL-4: how many times Host Controls inputs were built and applied (test seam and diagnostic).
+    private(set) var hostControlsRefreshCount = 0
+    /// S50 PH14: true from becoming host until both config refreshes return (`HostControlsSnapshot.isConfigLoading`).
+    private var isHostConfigLoading = false
+    private var hostConfigRefreshToken = 0
     /// SC1 E4: the last game presence the stage saw.
     private var stageGamePresence = false
     /// SC1 E4 (STG-9): the last game name the stage saw (the chip and the announcements name the game).
@@ -551,6 +590,11 @@ final class MeetingViewModel {
         didSet { requestShellRefresh(); requestStageRefresh() }
     }
     private var cachedScreenShareSupport: Bool? = nil
+    /// S20 SC15 (STG-6, RECONCILE R21): the inputs of the one `ConnectionQualityLabelPolicy`: a usable quality sample
+    /// arrived in this call session, and how many unknown samples followed the last usable one. Reset per call session
+    /// only, so a recovery rejoin keeps them (the label stays stable across rejoins).
+    private var connectionLabelHasSample = false
+    private var connectionUnknownSampleStreak = 0
 
     // MARK: - Reactions
 
@@ -630,6 +674,17 @@ final class MeetingViewModel {
     private var nativeChatPanelIsCurrent = false
     /// CH2: the wire text of each retained own send (with its private or voice prefix), for Try Again.
     private var retainedChatWireTexts: [String: String] = [:]
+    /// S40 CH6 (CHT-4): the composer photo's prepare and upload. One photo at a time; a newer pick, Remove, a send or
+    /// leaving bumps the generation, so a late answer changes nothing.
+    private var chatPhotoTask: Task<Void, Never>? = nil
+    private var chatPhotoGeneration = 0
+    /// The picked file and the picker's hints, for Try Again.
+    private var chatPhotoSourceURL = ""
+    private var chatPhotoSourceMimeType = ""
+    private var chatPhotoSourceName = ""
+    /// The uploaded attachment the next send carries, with the picked file URL the presenter names it by.
+    private var chatUploadedImage: ChatImageAttachment? = nil
+    private var chatUploadedImageFileURL = ""
     // Connection-recovery watchdog (see ConnectionRecoveryWatchdogPolicy):
     // observable timestamps + a periodic tick that un-strands a recovery whose
     // fire-and-forget tasks died holding the in-flight guards.
@@ -645,6 +700,7 @@ final class MeetingViewModel {
     private var pendingChatLockChanged: ChatLockChangedNotification?
     private var pendingDmStateChanged: DmStateChangedNotification?
     private var pendingImageAttachmentsStateChanged: ImageAttachmentsStateChangedNotification?
+    private var pendingParticipantMediaPermissionsChanged: ParticipantMediaPermissionsChangedNotification?
     private var pendingTtsDisabledChanged: TtsDisabledChangedNotification?
     private var pendingReactionsDisabledChanged: ReactionsDisabledChangedNotification?
     private var pendingMeetingConfigSnapshot: MeetingConfigSnapshot?
@@ -663,7 +719,6 @@ final class MeetingViewModel {
     private var pendingGameVoteClear = false
     private var webRTCJoinAttemptId: UUID?
     private var pendingProducerRetryTask: Task<Void, Never>?
-    private var ttsHighlightTask: Task<Void, Never>?
     // A mic, camera, screen-share, hand or camera-switch toggle is in flight
     // while the token it set is current; see releaseLocalToggleGuards().
     private var muteToggleToken: UUID? = nil {
@@ -773,6 +828,12 @@ final class MeetingViewModel {
     // Meeting-entry takeover timing (see beginMeetingEntry).
     private var meetingEntryRevealTask: Task<Void, Never>?
     private var meetingEntrySafetyTask: Task<Void, Never>?
+    /// S10 0.8 C6 (HD request B5-T5 R1): `.native` behind the native premeeting root (`PremeetingAppWiring`); the legacy
+    /// overlay, its 12 s safety task and the reveal timers then never arm (the lobby and the entry transition present
+    /// the entry). The legacy route keeps `.legacyOverlay`.
+    var entryPresentation: EntryPresentation = EntryPresentation.legacyOverlay
+    /// S10 8 l7 (Debug, tests): whether the legacy entry safety task is armed.
+    var isMeetingEntrySafetyTaskArmed: Bool { meetingEntrySafetyTask != nil }
     private let meetingEntryMinDisplaySeconds: Double = 1.3
     private let meetingEntrySettleNanoseconds = UInt64(700_000_000)
     private let goodBandwidthRestoreSeconds: TimeInterval = 5
@@ -796,6 +857,22 @@ final class MeetingViewModel {
         )
         let sampledReceiveQuality = combinedConnectionQuality(sample.receiveQuality)
         let sampledOverallQuality = combinedConnectionQuality(sample.overallQuality)
+        // STG-6 (SC15): the shared label reads "Measuring…" before the first usable sample and "Unavailable" once stats
+        // stop reporting (ConnectionQualityLabelPolicy.statsFailed); refresh the stage only when either input flips.
+        let hadSampleBefore = connectionLabelHasSample
+        let failedBefore = ConnectionQualityLabelPolicy.statsFailed(hasSample: connectionLabelHasSample,
+                                                                    consecutiveUnknownSamples: connectionUnknownSampleStreak)
+        if sample.overallQuality == .unknown {
+            connectionUnknownSampleStreak += 1
+        } else {
+            connectionLabelHasSample = true
+            connectionUnknownSampleStreak = 0
+        }
+        let failedAfter = ConnectionQualityLabelPolicy.statsFailed(hasSample: connectionLabelHasSample,
+                                                                   consecutiveUnknownSamples: connectionUnknownSampleStreak)
+        if failedBefore != failedAfter || hadSampleBefore != connectionLabelHasSample {
+            requestStageRefresh()
+        }
 
         publishConnectionQuality = publishConnectionQualityStabilizer.update(
             with: sampledPublishQuality
@@ -1152,6 +1229,13 @@ final class MeetingViewModel {
         shell.onCommand = { [weak self] command, ticket in
             self?.performShellCommand(command, ticket: ticket)
         }
+        // S30 4 c and CC7 (CTL-2): S1 publishes an intent or a ticket result causes (the End confirmation, its cancel, the
+        // End, hand and Leave results, the stage's Retry) change no MeetingState field, so they refresh the controls here;
+        // the core's own shell refresh already refreshes them once at its end (CC1).
+        shell.onPublish = { [weak self] _, _, _ in
+            guard let self, !self.isApplyingShellInputs else { return }
+            self.requestControlsRefresh()
+        }
         callPresence.onCommand = { [weak self] command in
             self?.performSystemCallCommand(command)
         }
@@ -1170,6 +1254,8 @@ final class MeetingViewModel {
             guard let self else { return }
             self.setStageObscuredByOverlay(report.coverage == StageVisibilityPolicy.coverageFull)
             self.scheduleRemoteConsumerBandwidthPolicyUpdate()
+            // SYS-4 (S70 0.5, R70-10): the PiP target frame reaches CallPresence (Android params, iOS content size).
+            self.callPresence.reportPipTarget(report.pipTarget)
         }
         // S30 CC18: the stage folds a panel into its blocker; the controls derive Engaged on Chat, Participants and Q&A.
         shell.panels.onSnapshotChanged = { [weak self] in
@@ -1184,6 +1270,17 @@ final class MeetingViewModel {
         }
         bindStageInputs()
         bindPeopleInputs()
+        // S50 PH2 (PPL-2, PPL-4): People and Host Controls commands land in one switch; every exit ends in
+        // `people.finish(ticket, result)`.
+        people.onCommand = { [weak self] command, ticket in
+            self?.performPeopleCommand(command, ticket)
+        }
+        // RECONCILE R34: the one webinar link owner calls the core's generator; the presenter keeps it single flight.
+        people.host.linkProvider = { [weak self] in
+            await self?.generateWebinarLink()
+        }
+        bindDisplayNameEditor()
+        bindHostControlsInputs()
         // S30 CC1 (CTL-1): the controls' own hook and commands. Blocked-tap toasts need no wiring: the presenter posts
         // them to the stage itself (CC7, `StagePresenter.postLocal`).
         controls.onCommand = { [weak self] command in
@@ -1202,6 +1299,15 @@ final class MeetingViewModel {
         // S40 0.5, CH13: the chat presenter's commands and its own refresh hook.
         chat.onCommand = { [weak self] request in
             self?.performChatCommand(request)
+        }
+        // S40 CH19, CH16 (CHT-5): the picker's cancellable paged Klipy search and the link cards, both through the app
+        // backend (the Klipy key and the participants' addresses never reach a third party from the client). The chat
+        // fixture installs canned closures instead.
+        chat.gifSearch = { kind, query, page in
+            await KlipyService.searchPage(kind: kind, query: query, page: page)
+        }
+        chat.embeds.fetcher = { url in
+            await LinkEmbedService.fetchPreview(url: url)
         }
         bindChatInputs()
     }
@@ -1466,7 +1572,9 @@ final class MeetingViewModel {
             let eventContext = self.currentSocketEventContext()
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
+                let wasAdmin = self.state.isAdmin
                 self.state.isAdmin = true
+                if !wasAdmin { self.beginHostConfigRefresh() }
                 self.applyHostSnapshot(
                     hostUserId: notification.hostUserId ?? self.state.userId,
                     hostUserIds: nil,
@@ -1499,11 +1607,14 @@ final class MeetingViewModel {
             let eventContext = self.currentSocketEventContext()
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
+                let wasAdmin = self.state.isAdmin
                 self.applyHostSnapshot(
                     hostUserId: nil,
                     hostUserIds: notification.hostUserIds ?? [],
                     updateAdminFromSnapshot: true
                 )
+                // S50 PH14: becoming host refreshes the configs once.
+                if !wasAdmin && self.state.isAdmin { self.beginHostConfigRefresh() }
             }
         }
 
@@ -1925,6 +2036,19 @@ final class MeetingViewModel {
             }
         }
 
+        socketManager.onParticipantMediaPermissionsChanged = { [weak self] notification in
+            guard let self = self else { return }
+            let eventContext = self.currentSocketEventContext()
+            Task { @MainActor in
+                guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
+                if self.shouldBufferRoomSnapshotDuringJoin {
+                    self.pendingParticipantMediaPermissionsChanged = notification
+                    return
+                }
+                self.applyParticipantMediaPermissions(notification)
+            }
+        }
+
         socketManager.onTtsDisabledChanged = { [weak self] notification in
             guard let self = self else { return }
             let eventContext = self.currentSocketEventContext()
@@ -2228,6 +2352,13 @@ final class MeetingViewModel {
                 defer { self.testLocalMediaReportHandled?() }
                 #endif
                 self.setLocalCameraOffState(!enabled)
+                if enabled {
+                    // S20 SC8 (STG-3): the started camera may have resolved another facing (Android fallback).
+                    self.publishLocalCameraFacing()
+                } else {
+                    // S20 6 f: no pause carries past your camera turning off.
+                    LocalPreviewController.shared.resetCallCamera()
+                }
             }
         }
 
@@ -2629,6 +2760,9 @@ final class MeetingViewModel {
     /// post-join device-init hiccups. A safety timeout guarantees the overlay is
     /// never a dead end if the join stalls.
     func beginMeetingEntry(action: MeetingEntryAction) {
+        // S10 0.8 C6 (HD request B5-T5 R1): the native root presents the entry itself; admission (`onJoinApproved`) and
+        // resume (`restorePersistedMeetingIfNeeded`) call this, so one guard covers both sites.
+        guard entryPresentation.armsLegacyOverlay else { return }
         PerformanceDiagnostics.event("meeting_entry_begin", details: "action=\(action)")
         meetingEntryRevealTask?.cancel()
         meetingEntryRevealTask = nil
@@ -2655,7 +2789,7 @@ final class MeetingViewModel {
     /// for media/transports, plus a minimum overlay display so the Lottie reads as
     /// intentional rather than a flash.
     private func scheduleMeetingEntryReveal() {
-        guard state.isEnteringMeeting else { return }
+        guard entryPresentation.armsLegacyOverlay, state.isEnteringMeeting else { return }
         meetingEntryRevealTask?.cancel()
         let started = state.meetingEntryStartedAt ?? Date()
         let generation = state.meetingEntryGeneration
@@ -2885,6 +3019,7 @@ final class MeetingViewModel {
         countedAssistantAnswerIds.removeAll()
         clearedOptimisticChatIds.removeAll()
         retainedChatWireTexts.removeAll()
+        resetChatPhoto()
         state.systemMessages.removeAll()
         clearChatOverlayMessages()
         state.unreadChatCount = 0
@@ -2935,6 +3070,8 @@ final class MeetingViewModel {
             state.isNoGuests = false
             state.isDmEnabled = true
             state.isImageAttachmentsEnabled = true
+            state.isParticipantUnmuteAllowed = true
+            state.isParticipantVideoAllowed = true
             applyTtsDisabled(false)
             state.isReactionsDisabled = false
             state.meetingRequiresInviteCode = false
@@ -3100,6 +3237,9 @@ final class MeetingViewModel {
         if let pendingImageAttachmentsStateChanged {
             events.append(.imageAttachmentsStateChanged(pendingImageAttachmentsStateChanged))
         }
+        if let pendingParticipantMediaPermissionsChanged {
+            events.append(.participantMediaPermissionsChanged(pendingParticipantMediaPermissionsChanged))
+        }
         if let pendingTtsDisabledChanged {
             events.append(.ttsDisabledChanged(pendingTtsDisabledChanged))
         }
@@ -3127,6 +3267,9 @@ final class MeetingViewModel {
             case .imageAttachmentsStateChanged(let notification):
                 guard isCurrentRoomEvent(notification.roomId) else { continue }
                 state.isImageAttachmentsEnabled = notification.enabled
+            case .participantMediaPermissionsChanged(let notification):
+                guard isCurrentRoomEvent(notification.roomId) else { continue }
+                applyParticipantMediaPermissions(notification)
             case .ttsDisabledChanged(let notification):
                 guard isCurrentRoomEvent(notification.roomId) else { continue }
                 applyTtsDisabled(notification.disabled)
@@ -3135,6 +3278,12 @@ final class MeetingViewModel {
                 state.isReactionsDisabled = notification.disabled
             }
         }
+    }
+
+    /// S50 PH5: the room's participant media permissions (the bar reads them for non-hosts, S30 CC10).
+    private func applyParticipantMediaPermissions(_ notification: ParticipantMediaPermissionsChangedNotification) {
+        state.isParticipantUnmuteAllowed = notification.unmuteAllowed
+        state.isParticipantVideoAllowed = notification.videoAllowed
     }
 
     private func applyHandRaisedSnapshot(_ snapshot: HandRaisedSnapshotNotification) {
@@ -3269,6 +3418,7 @@ final class MeetingViewModel {
         pendingChatLockChanged = nil
         pendingDmStateChanged = nil
         pendingImageAttachmentsStateChanged = nil
+        pendingParticipantMediaPermissionsChanged = nil
         pendingTtsDisabledChanged = nil
         pendingReactionsDisabledChanged = nil
         pendingMeetingConfigSnapshot = nil
@@ -3376,6 +3526,7 @@ final class MeetingViewModel {
         pendingChatLockChanged = nil
         pendingDmStateChanged = nil
         pendingImageAttachmentsStateChanged = nil
+        pendingParticipantMediaPermissionsChanged = nil
         pendingTtsDisabledChanged = nil
         pendingReactionsDisabledChanged = nil
         pendingMeetingConfigSnapshot = nil
@@ -4487,6 +4638,16 @@ final class MeetingViewModel {
             if let requiresInviteCode = policies.requiresMeetingInviteCode {
                 state.meetingRequiresInviteCode = requiresInviteCode
             }
+            // S50 PH5, PH6.
+            if let imageAttachmentsEnabled = policies.imageAttachmentsEnabled {
+                state.isImageAttachmentsEnabled = imageAttachmentsEnabled
+            }
+            if let unmuteAllowed = policies.participantUnmuteAllowed {
+                state.isParticipantUnmuteAllowed = unmuteAllowed
+            }
+            if let videoAllowed = policies.participantVideoAllowed {
+                state.isParticipantVideoAllowed = videoAllowed
+            }
         }
 
         if let access = snapshot.access {
@@ -4535,6 +4696,10 @@ final class MeetingViewModel {
             snapshotUserIds.insert(userId)
             for key in stableKeys {
                 snapshotUserKeys.insert(key)
+            }
+            // S50 PH13: the key "Remove and Block" blocks for this participant.
+            if let explicitUserKey, state.participantUserKeys[userId] != explicitUserKey {
+                state.participantUserKeys[userId] = explicitUserKey
             }
             let displayName = NativeDisplayNameNormalizer.normalize(snapshot.displayName)
             let isWebinarAttendee = snapshot.role == "attendee" || snapshot.mode == JoinMode.webinarAttendee.rawValue
@@ -6035,6 +6200,8 @@ final class MeetingViewModel {
             previousConnectionState: previousConnectionState
         ) {
             callSessionSerial += 1
+            connectionLabelHasSample = false
+            connectionUnknownSampleStreak = 0
             if !redirectContinuationPending {
                 presenceJoinedAtMillis = 0
             }
@@ -6081,6 +6248,9 @@ final class MeetingViewModel {
         self.state.errorMessage = nil
         self.state.meetingEndedNoticeMessage = nil
         self.state.terminalOutcome = nil
+        // S10 8 f (HD request B5-T5 R3): a new attempt starts without the last failure's class.
+        self.lastJoinFailureCode = ""
+        self.lastJoinFailureCategory = ""
         self.isIntentionalLeave = false
         self.isIntentionalTeardownInProgress = false
         self.shouldRejoinAfterReconnect = false
@@ -6128,19 +6298,36 @@ final class MeetingViewModel {
                 if !canReuseConnectedSocket {
                     let clientId = clientId ?? SfuJoinService.resolveClientId()
                     let fetchStartedAt = Date()
-                    let joinInfo = try await SfuJoinService.fetchJoinInfo(
-                        roomId: roomId,
-                        sessionId: state.sessionId,
-                        user: userPayload,
-                        isHost: isHost,
-                        clientId: clientId,
-                        allowRoomCreation: isHost || allowRoomCreation,
-                        joinMode: joinMode,
-                        meetingInviteCode: meetingInviteCode,
-                        webinarInviteCode: webinarInviteCode
+                    // S10 0.8 C18 (RECONCILE R48, HD request B5-T5 R2): an initial join retries once after Retry-After
+                    // (at most 10 s) while the lobby stays in Connecting; recovery joins keep their own schedule.
+                    let fetchedJoinInfo = try await EntryJoinRetry.fetchJoinInfo(
+                        allowsRetry: !isRecoveryJoin,
+                        isNetworkOffline: { self.state.isNetworkOffline },
+                        isCurrent: { self.activeJoinAttemptId == joinAttemptId },
+                        wait: { seconds in
+                            let nanoseconds = EntryJoinRetry.nanoseconds(forSeconds: seconds)
+                            try? await Task.sleep(nanoseconds: nanoseconds)
+                        },
+                        onRetryScheduled: { seconds in
+                            self.joinAutomaticRetryCount += 1
+                            PerformanceDiagnostics.event("join_retry_after", details: "seconds=\(seconds)")
+                        },
+                        fetch: {
+                            try await SfuJoinService.fetchJoinInfo(
+                                roomId: roomId,
+                                sessionId: self.state.sessionId,
+                                user: userPayload,
+                                isHost: isHost,
+                                clientId: clientId,
+                                allowRoomCreation: isHost || allowRoomCreation,
+                                joinMode: joinMode,
+                                meetingInviteCode: meetingInviteCode,
+                                webinarInviteCode: webinarInviteCode
+                            )
+                        }
                     )
                     PerformanceDiagnostics.timing("join_fetch_info", startedAt: fetchStartedAt, details: "room=\(roomId)")
-                    guard self.activeJoinAttemptId == joinAttemptId else {
+                    guard let joinInfo = fetchedJoinInfo, self.activeJoinAttemptId == joinAttemptId else {
                         await self.cleanupAbandonedJoinAttempt()
                         return
                     }
@@ -7198,6 +7385,8 @@ final class MeetingViewModel {
         let preservedDisplayName = state.displayName
         let preservedIsMuted = state.isMuted
         let preservedIsCameraOff = state.isCameraOff
+        // S10 0.8 C3 (HD request B5-T5 R3): cleanup() clears lastJoinContext; the rejoin context needs it.
+        let preservedJoinContext = lastJoinContext
 
         isIntentionalLeave = true
         shouldRejoinAfterReconnect = false
@@ -7214,7 +7403,10 @@ final class MeetingViewModel {
         state.displayName = preservedDisplayName
         state.isMuted = preservedIsMuted
         state.isCameraOff = preservedIsCameraOff
-        recordTerminalOutcome(outcome, serverText: classification.serverText)
+        // S10 8 f (HD request B5-T5 R3): the failed block's class, then the outcome with the pre-cleanup rejoin context.
+        lastJoinFailureCode = classification.diagnosticCode
+        lastJoinFailureCategory = classification.category.rawValue
+        recordTerminalOutcome(outcome, serverText: classification.serverText, joinContext: preservedJoinContext)
         state.connectionState = ConnectionState.error
         state.errorMessage = MeetingErrorLegacyCopy.message(classification) ?? "Failed to join the meeting."
     }
@@ -7262,7 +7454,9 @@ final class MeetingViewModel {
     /// session snapshot the shell just published). Suppressed inside a refresh batch; the batch end refreshes once.
     private func requestShellRefresh() {
         guard shellRefreshBatchDepth == 0 else { return }
+        isApplyingShellInputs = true
         shell.apply(makeShellInputs())
+        isApplyingShellInputs = false
         callPresence.apply(makeCallPresenceInputs())
         // S10 0.8 C8: the premeeting presenter reads the snapshot the shell just published (equality-guarded).
         premeeting.apply(makePremeetingInputs())
@@ -7283,6 +7477,8 @@ final class MeetingViewModel {
             lastPeopleConnectionKey = peopleKey
             requestPeopleRefresh()
         }
+        // S50 PPL-4: End for Everyone's availability and pending state come from the S1 publish.
+        requestHostControlsRefresh()
         // S30 CC1: every S1-hooked field reaches the controls once, after S1 published (equality guarded there).
         requestControlsRefresh()
         // TRN-1 (SC13, C6-11): the transcript stream follows the published phase and the attendee role.
@@ -7376,6 +7572,11 @@ final class MeetingViewModel {
             self?.refreshStageGamePresence()
             self?.refreshActivityGame()
         }
+        // S20 SC8, S60 C6-2, S20 6 f (STG-3): the one camera owner reports facing and pause changes.
+        LocalPreviewController.shared.onCallCameraChange = { [weak self] in
+            self?.syncLocalCameraState()
+        }
+        syncLocalCameraState()
         requestStageRefresh()
     }
 
@@ -7385,6 +7586,8 @@ final class MeetingViewModel {
         stageRefreshCount += 1
         stage.apply(makeStageInputs())
         stage.applyNotices(makeStageNoticeInputs())
+        // STG-6, STG-8 (S20 15 j, 12 j): Meeting Details and the attendee viewer inputs (B5-T2 R1).
+        stage.applyDetails(makeStageDetailsInputs())
         // SC18: a role change after the presence snapshot posts becameHost or lostHost once.
         if stageLastIsAdmin != state.isAdmin {
             if state.hasInitialPresenceSnapshot && presenceJoinedAtMillis > 0 {
@@ -7478,8 +7681,10 @@ final class MeetingViewModel {
             captionsOn: CaptionsPreference.isOn(),
             liveNotes: transcriptState.liveNotes,
             isAloneConfirmed: isAloneConfirmed,
-            canFlipCamera: canSwitchLocalCamera(),
-            isFrontCamera: localCameraFacing == .front,
+            canFlipCamera: canOfferLocalCameraFlip(),
+            isFrontCamera: state.localCameraFacing == .front,
+            isFlipInFlight: isCameraSwitchInFlight,
+            isCameraPaused: state.isLocalCameraPaused,
             routeKind: routeKind,
             routeName: routeName,
             isHandRaised: state.isHandRaised,
@@ -7530,6 +7735,27 @@ final class MeetingViewModel {
         )
     }
 
+    /// S20 15 j and 12 j (STG-6, STG-8): what Meeting Details and the attendee viewer read beyond `StageInputs`. Never
+    /// calls the async `copyableWebinarLink()` (it can generate server state; only the link actions generate, through
+    /// the S50 `HostControlsPresenter.ensureWebinarLink()`, RECONCILE R34). Q&A and the attendee hand capability keep
+    /// their defaults until S50 PH7 (PPL-6) and PPL-5 (batch 6) publish them.
+    func makeStageDetailsInputs() -> StageDetailsInputs {
+        StageDetailsInputs.make(
+            callSession: callSessionSerial,
+            roomCode: state.roomId,
+            requiresInviteCode: state.meetingRequiresInviteCode,
+            isWebinarEnabled: state.isWebinarEnabled,
+            isWebinarPublicAccess: state.isWebinarPublicAccess,
+            webinarLinkURL: state.webinarLinkURL ?? "",
+            webinarTitle: state.webinarTitle,
+            webinarAttendeeCount: state.webinarAttendeeCount,
+            connectionQuality: state.connectionQuality,
+            connectionHasSample: connectionLabelHasSample,
+            connectionStatsFailed: ConnectionQualityLabelPolicy.statsFailed(hasSample: connectionLabelHasSample,
+                                                                            consecutiveUnknownSamples: connectionUnknownSampleStreak)
+        )
+    }
+
     /// STG-5: the notice actions the core performs (S20 10 j).
     private func performNoticeCommand(_ command: NoticeCommand) {
         switch command.actionId {
@@ -7554,6 +7780,11 @@ final class MeetingViewModel {
             break
         case NoticeCommand.dismissHostNotice:
             dismissAdminNotice()
+        case NoticeAction.retry:
+            // S50 PL14: a stage-origin People failure (tile menu) retries its own command.
+            if command.noticeKind == PeopleFailurePlacementPolicy.stageNoticeKind {
+                people.retry(failureId: PeopleFailurePlacementPolicy.stageFailureId(command.detail))
+            }
         default:
             // endNow (S30 CC8, CTL-2) and Retry for the route and lock failures (CTL-3, PPL) land with their owners.
             break
@@ -7610,6 +7841,9 @@ final class MeetingViewModel {
         return CallControlsInputs.fromShell(
             shell,
             presenterName: presenterName,
+            // S50 PH5 feeds S30 CC10: hosts are never blocked by participant permissions.
+            isMicDisabledByHost: !state.isAdmin && !state.isParticipantUnmuteAllowed,
+            isCameraDisabledByHost: !state.isAdmin && !state.isParticipantVideoAllowed,
             isRoomLocked: state.isRoomLocked,
             isWebinarEnabled: state.isWebinarEnabled,
             isBrowserActive: state.isBrowserActive,
@@ -7665,7 +7899,8 @@ final class MeetingViewModel {
             isMuted: state.isMuted,
             isCameraOff: state.isCameraOff,
             isHandRaised: state.isHandRaised,
-            isScreenSharing: state.isScreenSharing
+            isScreenSharing: state.isScreenSharing,
+            userKey: state.userKey(for: localId)
         ))
         for participant in state.mergedRemoteParticipants {
             guard !participant.isLeaving, let id = state.canonicalStageUserId(participant.id), id != localId else { continue }
@@ -7680,7 +7915,10 @@ final class MeetingViewModel {
                 hasScreenAudio: screenAudioUsers[id] == true,
                 isReconnecting: participant.connectionStatus?.state == .reconnecting,
                 isWebinarAttendee: participant.isWebinarAttendee,
-                joinSerial: state.participantJoinSerials[id] ?? 0
+                joinSerial: state.participantJoinSerials[id] ?? 0,
+                // S40 CH21 and S50 PH13: the hide state and the key "Remove and Block" blocks.
+                messagesHidden: chat.isSenderHidden(id),
+                userKey: state.userKey(for: participant.id)
             ))
         }
         var hostIds: [String] = []
@@ -7694,8 +7932,11 @@ final class MeetingViewModel {
         for row in state.pendingUserRows {
             waiting.append(PeopleWaitingInput(id: row.id, displayName: row.displayName))
         }
+        let rawPinned = state.pinnedUserId ?? ""
+        let pinnedId = rawPinned.isEmpty ? "" : (state.canonicalStageUserId(rawPinned) ?? rawPinned)
         return PeopleInputs.make(
             callSession: callSessionSerial,
+            attempt: sessionIdentity.attempt,
             phase: shell.session.phase.rawValue,
             isNetworkOffline: state.isNetworkOffline,
             localUserId: localId,
@@ -7714,8 +7955,242 @@ final class MeetingViewModel {
             isWebinarEnabled: state.isWebinarEnabled,
             isWebinarPublic: state.isWebinarPublicAccess,
             webinarLink: state.webinarLinkURL ?? "",
-            webinarAttendeeCount: state.webinarAttendeeCount
+            webinarAttendeeCount: state.webinarAttendeeCount,
+            isDmEnabled: state.isDmEnabled,
+            pinnedUserId: pinnedId,
+            isRenameDisabled: displayNameEditor.isDisabledForSession,
+            // PH8 (PPL-5) adds the demote emitter; until then Move to Audience stays out of the action table.
+            supportsMoveToAudience: false
         )
+    }
+
+    // MARK: - Host Controls (S50 6 to 8, PPL-4) and the People command seam (PH2)
+
+    /// PH1 (host presenter path): Host Controls' own hook (policies, access lists, webinar config), then one publish.
+    private func bindHostControlsInputs() {
+        state.onHostInputChanged = { [weak self] in
+            self?.requestHostControlsRefresh()
+        }
+        requestHostControlsRefresh()
+    }
+
+    /// Equality guarded: only changed inputs reach the presenter.
+    private func requestHostControlsRefresh() {
+        guard peopleRefreshBatchDepth == 0 else { return }
+        let next = makeHostControlsInputs()
+        guard next != people.host.inputs || people.host.applyCount == 0 else { return }
+        hostControlsRefreshCount += 1
+        people.host.apply(next)
+    }
+
+    func makeHostControlsInputs() -> HostControlsInputs {
+        let endRow = shell.controls.rows.first(where: { $0.id == MeetingControlID.endForEveryone.rawValue })
+        return HostControlsInputs.make(
+            callSession: callSessionSerial,
+            isRoomLocked: state.isRoomLocked,
+            isNoGuests: state.isNoGuests,
+            isParticipantUnmuteAllowed: state.isParticipantUnmuteAllowed,
+            isParticipantVideoAllowed: state.isParticipantVideoAllowed,
+            isChatLocked: state.isChatLocked,
+            isDmEnabled: state.isDmEnabled,
+            isImageAttachmentsEnabled: state.isImageAttachmentsEnabled,
+            isTtsDisabled: state.isTtsDisabled,
+            isReactionsDisabled: state.isReactionsDisabled,
+            meetingRequiresInviteCode: state.meetingRequiresInviteCode,
+            allowedKeys: state.adminAllowedUserKeys,
+            lockedAllowedKeys: state.adminLockedAllowedUserKeys,
+            blockedKeys: state.adminBlockedUserKeys,
+            isAccessListRefreshing: state.isAdminAccessListRefreshing,
+            isWebinarEnabled: state.isWebinarEnabled,
+            isWebinarPublic: state.isWebinarPublicAccess,
+            isWebinarLocked: state.isWebinarLocked,
+            webinarRequiresCode: state.webinarRequiresInviteCode,
+            webinarMaxAttendees: state.webinarMaxAttendees,
+            webinarLinkSlug: state.webinarLinkSlug ?? "",
+            webinarLinkURL: state.webinarLinkURL ?? "",
+            webinarAttendeeCount: state.webinarAttendeeCount,
+            isConfigLoading: isHostConfigLoading,
+            canEndForEveryone: shell.session.canEndForEveryone,
+            isEnding: endRow?.isPending ?? false
+        )
+    }
+
+    /// S50 PH14: on becoming host, refresh the meeting and the webinar config once (web PPL-16); Host Controls shows
+    /// "Loading Settings" until both return.
+    private func beginHostConfigRefresh() {
+        hostConfigRefreshToken += 1
+        let token = hostConfigRefreshToken
+        isHostConfigLoading = true
+        requestHostControlsRefresh()
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await self.refreshMeetingConfigNow()
+            _ = await self.refreshWebinarConfigNow()
+            guard token == self.hostConfigRefreshToken else { return }
+            self.isHostConfigLoading = false
+            self.requestHostControlsRefresh()
+        }
+    }
+
+    /// C6-10: the rename editor reads the core through `context` and saves through the typed rename; a session flag
+    /// change refreshes People (the Change Name item, Q14).
+    private func bindDisplayNameEditor() {
+        displayNameEditor.context = { [weak self] in
+            guard let self else { return DisplayNameEditorContext.empty }
+            return DisplayNameEditorContext(displayName: self.state.displayName, connectionState: self.state.connectionState,
+                                            isWebinarAttendee: self.state.isWebinarAttendee, roomId: self.state.roomId)
+        }
+        displayNameEditor.save = { [weak self] name in
+            guard let self else { return HostActionResult.cancelled }
+            return await self.updateDisplayNameResult(name)
+        }
+        displayNameEditor.onSessionFlagChanged = { [weak self] in
+            self?.requestPeopleRefresh()
+        }
+    }
+
+    /// S50 PH2: the one switch from `PeopleCommand` to the core calls in the S50 0.5 mapping table. Every exit reports
+    /// through `people.finish(ticket, result)`; the presenter owns the ledger, pending state and failure placement.
+    func performPeopleCommand(_ command: PeopleCommand, _ ticket: HostActionTicket) {
+        let finish: (HostActionResult) -> Void = { [weak self] result in
+            _ = self?.people.finish(ticket, result)
+        }
+        let target = command.targetId
+        switch command.kind {
+        case .admit:
+            admitUser(userId: target, onResult: finish)
+        case .deny:
+            Task { await self.removeUser(userId: target, onResult: finish) }
+        case .admitAll:
+            admitAllPending(onResult: finish)
+        case .denyAll:
+            rejectAllPending(onResult: finish)
+        case .mute:
+            muteParticipant(userId: target, onResult: finish)
+        case .turnOffCamera:
+            turnOffParticipantCamera(userId: target, onResult: finish)
+        case .stopScreenShare:
+            stopParticipantScreenShare(userId: target, onResult: finish)
+        case .stopScreenAudio:
+            // Resolved inside the core: the presenter never sees producer ids (ticket key stopScreenAudio:<userId>).
+            guard let producerId = remoteScreenShareAudioProducerId(for: target) else {
+                finish(HostActionResult.failed(HostActionFailure.notFound))
+                return
+            }
+            stopRemoteProducer(producerId: producerId, onResult: finish)
+        case .remove:
+            Task { await self.removeUser(userId: target, onResult: finish) }
+        case .block:
+            // The server kicks present sessions and rejects pending ones (adminHandlers.ts:975-1031), so no kick here.
+            let key = command.text.isEmpty ? state.userKey(for: target) : command.text
+            blockAccessUserKey(key, onResult: finish)
+        case .makeCoHost:
+            Task { await self.makeHost(userId: target, onResult: finish) }
+        case .makeHost:
+            Task { await self.transferHost(userId: target, onResult: finish) }
+        case .changeName:
+            Task {
+                let result = await self.displayNameEditor.rename(command.text)
+                finish(result)
+            }
+        case .setPolicy:
+            performHostPolicyCommand(command, finish: finish)
+        case .bulk:
+            guard let bulk = HostBulkID(rawValue: command.text) else {
+                finish(HostActionResult.failed(HostActionFailure.invalidInput))
+                return
+            }
+            switch bulk {
+            case .muteAll:
+                muteAllParticipants(onResult: finish)
+            case .camerasOff:
+                turnOffAllParticipantCameras(onResult: finish)
+            case .stopAllShares:
+                stopAllScreenShares(onResult: finish)
+            case .lowerAllHands:
+                clearAllRaisedHands(onResult: finish)
+            }
+        case .setMeetingInviteCode:
+            setMeetingInviteCode(command.text, onResult: finish)
+        case .clearMeetingInviteCode:
+            clearMeetingInviteCode(onResult: finish)
+        case .refreshAccessLists:
+            // Fire and forget (S50 7 c): progress is `isAdminAccessListRefreshing`.
+            refreshAdminAccessLists()
+            finish(HostActionResult.completed)
+        case .allowKey:
+            allowAccessUserKey(target, onResult: finish)
+        case .blockKey:
+            blockAccessUserKey(target, onResult: finish)
+        case .unblockKey:
+            unblockAccessUserKey(target, onResult: finish)
+        case .revokeKey:
+            revokeAllowedAccessUserKey(target, onResult: finish)
+        case .sendNotice:
+            let level = AdminNoticeLevel(rawValue: target) ?? AdminNoticeLevel.info
+            Task {
+                _ = await self.broadcastAdminNotice(message: command.text, level: level, onResult: finish)
+            }
+        case .setMaxAttendees:
+            setWebinarMaxAttendees(command.number, onResult: finish)
+        case .setAttendeeCode:
+            setWebinarInviteCode(command.text, onResult: finish)
+        case .clearAttendeeCode:
+            clearWebinarInviteCode(onResult: finish)
+        case .setLinkSlug:
+            setWebinarLinkSlug(command.text, onResult: finish)
+        case .clearLinkSlug:
+            clearWebinarLinkSlug(onResult: finish)
+        case .generateLink:
+            Task { _ = await self.generateWebinarLink(onResult: finish) }
+        case .rotateLink:
+            Task { _ = await self.rotateWebinarLink(onResult: finish) }
+        case .moveToAudience, .bringOnStage, .cancelStageInvite, .declineStage, .qaSubmit, .qaUpvote, .qaModerate:
+            // PH7 to PH9 (PPL-5, PPL-6) add these emitters; the action table does not offer them yet.
+            finish(HostActionResult.failed(HostActionFailure.notAllowed))
+        }
+    }
+
+    /// `setPolicy`: the presenter dispatched only on a change, so each toggle flips to the requested value.
+    private func performHostPolicyCommand(_ command: PeopleCommand, finish: @escaping (HostActionResult) -> Void) {
+        guard let policy = HostPolicyID(rawValue: command.text) else {
+            finish(HostActionResult.failed(HostActionFailure.invalidInput))
+            return
+        }
+        let on = command.flag
+        if HostControlsPolicy.isOn(policy, inputs: makeHostControlsInputs()) == on {
+            finish(HostActionResult.completed)
+            return
+        }
+        switch policy {
+        case .lockMeeting:
+            toggleRoomLock(onResult: finish)
+        case .allowGuests:
+            toggleNoGuests(onResult: finish)
+        case .allowUnmute:
+            setParticipantMediaPermissions(unmuteAllowed: on, videoAllowed: nil, onResult: finish)
+        case .allowVideo:
+            setParticipantMediaPermissions(unmuteAllowed: nil, videoAllowed: on, onResult: finish)
+        case .allowChat:
+            toggleChatLock(onResult: finish)
+        case .directMessages:
+            toggleDmEnabled(onResult: finish)
+        case .photos:
+            toggleImageAttachmentsEnabled(onResult: finish)
+        case .readAloud:
+            toggleTtsDisabled(onResult: finish)
+        case .reactions:
+            toggleReactionsDisabled(onResult: finish)
+        case .webinarMode:
+            toggleWebinarEnabled(onResult: finish)
+        case .webinarPublic:
+            toggleWebinarPublicAccess(onResult: finish)
+        case .webinarLocked:
+            toggleWebinarLocked(onResult: finish)
+        case .webinarQa:
+            // PH10 (PPL-6) adds `setWebinarQaEnabled(_:)`.
+            finish(HostActionResult.failed(HostActionFailure.notAllowed))
+        }
     }
 
     // MARK: - Activities and games (S60 7, 8; ACT-1, ACT-2)
@@ -7984,6 +8459,11 @@ final class MeetingViewModel {
     /// SY1: the presence inputs from the S1 session snapshot plus the media fields (S70 0.5 inputs table).
     func makeCallPresenceInputs() -> CallPresenceInputs {
         let session = shell.session
+        #if os(iOS) && !SKIP
+        let multitaskingCamera = webRTCClient.isMultitaskingCameraAccessEnabled
+        #else
+        let multitaskingCamera = false
+        #endif
         return CallPresenceInputs(
             callSession: session.identity.callSession,
             sessionPhase: session.phase,
@@ -7996,7 +8476,7 @@ final class MeetingViewModel {
             joinedAtMillis: presenceJoinedAtMillis,
             isMicrophonePending: isMuteToggleInFlight,
             isAppActive: appForegroundAllowsRemoteVideoReceive,
-            multitaskingCameraAccessEnabled: false,
+            multitaskingCameraAccessEnabled: multitaskingCamera,
             isRedirectContinuation: redirectContinuationPending
         )
     }
@@ -8012,7 +8492,11 @@ final class MeetingViewModel {
     }
 
     /// S1C E7: the typed outcome, recorded before the terminal phase write. Legacy text is unchanged.
-    private func recordTerminalOutcome(_ kind: MeetingTerminalOutcomeKind, serverText: String) {
+    private func recordTerminalOutcome(_ kind: MeetingTerminalOutcomeKind, serverText: String,
+                                       joinContext: JoinContext? = nil) {
+        // S10 0.8 C3 (HD request B5-T5 R3): the rejoin target, before the outcome publishes and before cleanup(). The
+        // other callers record before cleanup(), so `lastJoinContext` is still set for them.
+        captureRejoinContext(kind, joinContext: joinContext ?? lastJoinContext)
         terminalOutcomeSerial += 1
         redirectContinuationPending = false
         state.terminalOutcome = MeetingTerminalOutcome(
@@ -8025,6 +8509,54 @@ final class MeetingViewModel {
         // refuses every kind the root consumer delivers as a token (WP2-S2b: denied, removed, joinFailed and
         // connectionLost), so each outcome plays through exactly one route.
         ConclaveHapticFeedback.legacyOutcome(MeetingLegacyHapticPolicy.feedbackKind(for: kind))
+    }
+
+    /// S10 0.8 C3 (HD request B5-T5 R3): captured for left (after an admission), connection lost, server disconnect and
+    /// a failed rejoin; cleared for removed, denied, ended and closed; an initial failure keeps an earlier context.
+    private func captureRejoinContext(_ kind: MeetingTerminalOutcomeKind, joinContext: JoinContext?) {
+        let decision = RejoinContextPolicy.decision(kind: kind, entryOrigin: shell.session.entryOrigin,
+                                                    hasBeenAdmittedThisSession: shell.session.hasBeenAdmittedThisSession)
+        switch decision {
+        case .capture:
+            guard let joinContext else { return }
+            rejoinMicOn = !state.isMuted
+            rejoinCameraOn = !state.isCameraOff
+            rejoinContext = joinContext
+        case .clear:
+            rejoinContext = nil
+        case .keep:
+            break
+        }
+    }
+
+    /// S10 0.8 C3, RECONCILE R4 (HD request B5-T5 R3): Rejoin on Home and the outcome screen, Try Again after a failed
+    /// rejoin and Join in a `rejoin` lobby: exactly one `joinRoom` with the last call's room, invite codes, client id
+    /// and room creation rule, restoring its media intent (the flags the join reads; a Rejoin is a deliberate tap). The
+    /// entry overlay is never armed here. The context is kept, so a failed rejoin can try again.
+    func rejoinLastMeeting() {
+        guard let context = rejoinContext else { return }
+        guard state.connectionState == ConnectionState.disconnected
+            || state.connectionState == ConnectionState.error else { return }
+        state.pendingEntryMediaIntent = nil
+        state.isMuted = !rejoinMicOn
+        state.isCameraOff = !rejoinCameraOn
+        rejoinJoinCount += 1
+        if let override = rejoinJoinOverride {
+            override(context)
+            return
+        }
+        joinRoom(
+            roomId: context.roomId,
+            displayName: context.displayName,
+            socketDisplayName: context.socketDisplayName,
+            user: context.user,
+            isHost: context.isHost,
+            joinMode: context.joinMode,
+            meetingInviteCode: context.meetingInviteCode,
+            webinarInviteCode: context.webinarInviteCode,
+            clientId: context.clientId,
+            allowRoomCreation: context.allowRoomCreation
+        )
     }
 
     /// S1C E8: each shell intent reaches the existing implementation; the presenter never owns media state.
@@ -8209,7 +8741,13 @@ final class MeetingViewModel {
             isNetworkOffline: state.isNetworkOffline,
             isAppActive: premeetingIsAppActive,
             micIntentOn: state.pendingEntryMediaIntent?.mic ?? !state.isMuted,
-            cameraIntentOn: state.pendingEntryMediaIntent?.camera ?? !state.isCameraOff
+            cameraIntentOn: state.pendingEntryMediaIntent?.camera ?? !state.isCameraOff,
+            // ENT-5 and ENT-6 (HD request B5-T5 R3): the rejoin target's room, the waiting room's restart notice and the
+            // last join failure's class.
+            rejoinRoomId: rejoinContext?.roomId ?? "",
+            serverRestartText: state.serverRestartNotice ?? "",
+            joinFailureCategory: lastJoinFailureCategory,
+            joinFailureCode: lastJoinFailureCode
         ))
     }
 
@@ -8286,6 +8824,9 @@ final class MeetingViewModel {
             shell.leave()
         case .dismissOutcome:
             shell.dismissOutcome()
+        case .rejoinLastMeeting:
+            // ENT-6 (S10 0.8 C3, HD request B5-T5 R3).
+            rejoinLastMeeting()
         }
     }
 
@@ -8306,11 +8847,22 @@ final class MeetingViewModel {
         // AudioActivationPolicy and hands a refused call to the fallback activation (S70 5 c).
         callPresence.adapters = CallPresenceAdapters([
             CallKitPresenceAdapter.shared.makeAdapter(for: callPresence),
-            CallAudioSession.shared.makePresenceAdapter()
+            CallAudioSession.shared.makePresenceAdapter(),
+            // SYS-4 (S70 3 c, SX4): video-call PiP over the native stage root's anchor.
+            VideoCallPictureInPicture.shared.makeAdapter(for: callPresence, stage: stage)
         ])
         #elseif SKIP
         callPresence.adapters = CallNotificationBridge.presenceAdapters(presence: callPresence)
         #endif
+        // SYS-8 (S70 8, RECONCILE R25, S70 R70-5): the S40 D23 camera line follows cameraContinuesInBackground; the chat
+        // presenter gets it as its own input (S70 0.5 Observation), from one more adapter on both platforms.
+        let platformAdapters = callPresence.adapters.adapters
+        callPresence.adapters = CallPresenceAdapters(platformAdapters + [
+            CallPresenceAdapter(name: "chatCameraLine", presenceDidChange: { [weak self] _, new in
+                self?.shell.chat.setCameraLine(CameraContinuityPolicy.showsCameraLine(
+                    isCameraOn: new.isCameraOn, cameraContinuesInBackground: new.cameraContinuesInBackground))
+            })
+        ])
         // SYS-2: the route owner is the only interruption reporter (S70 0.5); it reads holds from the presence and
         // reports through the VM so the S1 microphone row refreshes with it (R29).
         AudioRouteOwner.shared.presence = callPresence
@@ -8726,8 +9278,11 @@ final class MeetingViewModel {
         resetReconnectRetryState()
         cancelPendingMediaLifecycleWork()
         deactivateCallPresence()
+        LocalPreviewController.shared.resetCallCamera()
         stopActiveSpeakerPoll()
         stopTtsPlayback()
+        // S40 CH4 (CHT-6): the queue forgets the call's message ids; Android releases the TextToSpeech binding.
+        ttsSpeaker.reset()
         #if canImport(UIKit) && !SKIP
         // Clear the external-stop callback before stopping capture so a late
         // broadcast-stopped signal from a dying extension cannot tear down a
@@ -8776,6 +9331,7 @@ final class MeetingViewModel {
         countedAssistantAnswerIds.removeAll()
         clearedOptimisticChatIds.removeAll()
         retainedChatWireTexts.removeAll()
+        resetChatPhoto()
         // S40 1 f: leaving drops the presenter's rows, drafts, hidden senders and reply and private targets.
         chat.reset()
         clearChatOverlayMessages()
@@ -8808,6 +9364,11 @@ final class MeetingViewModel {
         state.isNoGuests = false
         state.isDmEnabled = true
         state.isImageAttachmentsEnabled = true
+        state.isParticipantUnmuteAllowed = true
+        state.isParticipantVideoAllowed = true
+        state.participantUserKeys = [:]
+        isHostConfigLoading = false
+        hostConfigRefreshToken += 1
         state.isTtsDisabled = false
         state.isReactionsDisabled = false
         state.meetingRequiresInviteCode = false
@@ -8826,6 +9387,7 @@ final class MeetingViewModel {
         state.webinarLinkURL = nil
         state.webinarFeedMode = "active-speaker"
         state.webinarSpeakerUserId = nil
+        state.webinarTitle = ""
         clearBrowserState()
         clearAppsState()
         clearGameState(clearCatalog: false)
@@ -9264,6 +9826,35 @@ final class MeetingViewModel {
 
     func setPreferredLocalCameraFacing(_ facing: LocalCameraFacing) {
         webRTCClient.setPreferredCameraFacing(facing)
+        publishLocalCameraFacing()
+    }
+
+    /// S20 6 f (STG-3): the stage keeps the flip control while a flip is in flight (disabled, `isFlipInFlight`), so the
+    /// control never disappears for the length of a flip; `switchLocalCamera()` keeps its own guard.
+    private func canOfferLocalCameraFlip() -> Bool {
+        state.connectionState == .joined
+            && !state.isAudioOnlyMode
+            && !state.mediaPublishingDisabled
+            && webRTCClient.canSwitchCamera()
+    }
+
+    /// S20 SC8, S60 C6-2 (STG-3): the call camera's facing goes to the one camera owner first (RECONCILE R22); its
+    /// `onCallCameraChange` mirrors it into `MeetingState` (see `syncLocalCameraState()`).
+    private func publishLocalCameraFacing() {
+        LocalPreviewController.shared.adoptCallFacing(webRTCClient.currentCameraFacing)
+        syncLocalCameraState()
+    }
+
+    /// Mirrors the camera owner's facing and the call camera's pause into `MeetingState` (equality guarded).
+    private func syncLocalCameraState() {
+        let camera = LocalPreviewController.shared
+        if state.localCameraFacing != camera.facing {
+            state.localCameraFacing = camera.facing
+        }
+        let paused = LocalCameraPublication.isPaused(camera.callCameraInterruption)
+        if state.isLocalCameraPaused != paused {
+            state.isLocalCameraPaused = paused
+        }
     }
 
     func canSwitchLocalCamera() -> Bool {
@@ -9279,10 +9870,13 @@ final class MeetingViewModel {
         let actionContext = currentCallActionContext()
         let switchToken = UUID()
         cameraSwitchToken = switchToken
+        // S20 6 f (STG-3): the stage shows the flip control disabled while this flip is in flight.
+        requestStageRefresh()
         Task { @MainActor in
             defer {
                 if cameraSwitchToken == switchToken {
                     cameraSwitchToken = nil
+                    requestStageRefresh()
                 }
                 #if os(macOS) && !SKIP
                 testLocalToggleEnded?("switchLocalCamera")
@@ -9294,6 +9888,8 @@ final class MeetingViewModel {
                 // An orphaned switch refreshes nothing for the attempt that
                 // replaced it.
                 guard isCurrentJoinedCall(actionContext) else { return }
+                // S20 SC8 (STG-3): the mirror and the flip value change in one publish.
+                publishLocalCameraFacing()
                 #if SKIP
                 refreshPipVideo(requestKeyFrame: true)
                 #endif
@@ -9301,6 +9897,9 @@ final class MeetingViewModel {
                 guard isCurrentJoinedCall(actionContext) else { return }
                 // A camera flip failure is copy only: the camera row keeps its state and failure.
                 reportMediaFailure(error, kind: nil)
+                // S20 6 f (STG-3): the native stage's toast, with Retry ("Couldn't switch cameras. Try again.").
+                publishLocalCameraFacing()
+                stage.post(StageEvent.make(kind: StageEventKind.actionFailed, detail: "flipCamera"))
             }
         }
     }
@@ -10420,7 +11019,10 @@ final class MeetingViewModel {
             replyTo: incoming.replyTo ?? existing.replyTo,
             clientId: incoming.clientId ?? existing.clientId,
             sendStatus: incoming.sendStatus ?? existing.sendStatus,
-            reactions: incoming.reactions.isEmpty ? existing.reactions : incoming.reactions
+            reactions: incoming.reactions.isEmpty ? existing.reactions : incoming.reactions,
+            isTts: incoming.isTts || existing.isTts,
+            ttsVoiceToken: incoming.ttsVoiceToken ?? existing.ttsVoiceToken,
+            suppressEmbeds: incoming.suppressEmbeds || existing.suppressEmbeds
         )
     }
 
@@ -10430,7 +11032,8 @@ final class MeetingViewModel {
         gif: ChatGifAttachment? = nil,
         image: ChatImageAttachment? = nil,
         replyTo: ChatReplyPreview? = nil,
-        directTargetUserId: String = ""
+        directTargetUserId: String = "",
+        suppressEmbeds: Bool = false
     ) -> ChatMessage? {
         let normalizedSfuUserId = state.sfuUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let userId = normalizedSfuUserId.isEmpty ? state.userId : normalizedSfuUserId
@@ -10450,7 +11053,8 @@ final class MeetingViewModel {
             roomId: state.roomId,
             replyTo: replyTo,
             clientId: optimisticId,
-            sendStatus: ChatSendStatus.sending
+            sendStatus: ChatSendStatus.sending,
+            suppressEmbeds: suppressEmbeds
         )
         let appended = appendChatMessage(message)
         if let appended {
@@ -10512,14 +11116,18 @@ final class MeetingViewModel {
         return normalized
     }
 
+    /// S40 CH4: received and acknowledged voice messages join the speaker's queue (6 waiting, 250 ms gaps) with the
+    /// full text and the sender's voice token; own messages play even while Play Voice Messages is off (C6-22). The
+    /// queue speaks a message id once, so the echo and the acknowledgement never double it.
     private func playTtsIfNeeded(for message: ChatMessage, sourceContent: String, shouldSpeakTts: Bool) {
         guard shouldSpeakTts,
               !message.isDirect,
               !state.isTtsDisabled,
-              let text = ttsText(from: sourceContent) else {
+              let text = VoiceMessageText.fullText(from: sourceContent) else {
             return
         }
-        playTtsMessage(message, text: text)
+        ttsSpeaker.enqueue(messageId: message.id, userId: message.userId, displayName: message.displayName, text: text,
+                           voiceToken: message.ttsVoiceToken ?? "", isOwn: state.isLocalIdentityUserId(message.userId))
     }
 
     private func isVisibleChatMessage(_ message: ChatMessage) -> Bool {
@@ -10536,7 +11144,7 @@ final class MeetingViewModel {
         let targetDisplayName = resolvedDirectMessageTargetDisplayName(message)
         let replyTo = resolvedReplyPreview(message.replyTo)
         let content: String
-        guard !message.isDirect, let text = ttsText(from: message.content) else {
+        guard !message.isDirect, let text = VoiceMessageText.fullText(from: message.content) else {
             return ChatMessage(
                 id: message.id,
                 userId: message.userId,
@@ -10552,10 +11160,13 @@ final class MeetingViewModel {
                 replyTo: replyTo,
                 clientId: message.clientId,
                 sendStatus: message.sendStatus,
-                reactions: message.reactions
+                reactions: message.reactions,
+                isTts: message.isTts,
+                ttsVoiceToken: message.ttsVoiceToken,
+                suppressEmbeds: message.suppressEmbeds
             )
         }
-        content = "TTS: \(text)"
+        content = VoiceMessageText.normalizedContent(text: text)
         return ChatMessage(
             id: message.id,
             userId: message.userId,
@@ -10571,7 +11182,10 @@ final class MeetingViewModel {
             replyTo: replyTo,
             clientId: message.clientId,
             sendStatus: message.sendStatus,
-            reactions: message.reactions
+            reactions: message.reactions,
+            isTts: true,
+            ttsVoiceToken: message.ttsVoiceToken,
+            suppressEmbeds: message.suppressEmbeds
         )
     }
 
@@ -10607,7 +11221,10 @@ final class MeetingViewModel {
             replyTo: replyTo,
             clientId: message.clientId,
             sendStatus: message.sendStatus,
-            reactions: message.reactions
+            reactions: message.reactions,
+            isTts: message.isTts,
+            ttsVoiceToken: message.ttsVoiceToken,
+            suppressEmbeds: message.suppressEmbeds
         )
     }
 
@@ -10653,38 +11270,10 @@ final class MeetingViewModel {
         ChatMessageContentPolicy.ttsText(from: content)
     }
 
-    private func playTtsMessage(_ message: ChatMessage, text: String) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        ttsHighlightTask?.cancel()
-        state.ttsSpeakerId = message.userId
-        ttsSpeaker.speak(text: trimmed, userId: message.userId, displayName: message.displayName)
-
-        let speechText = trimmed
-            .replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\t", with: " ")
-        let wordCount = speechText
-            .components(separatedBy: " ")
-            .filter { !$0.isEmpty }
-            .count
-        let estimatedNanoseconds = UInt64(
-            min(15.0, max(2.0, Double(wordCount) * 0.42)) * 1_000_000_000
-        )
-        ttsHighlightTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: estimatedNanoseconds)
-            guard let self, !Task.isCancelled else { return }
-            if self.state.ttsSpeakerId == message.userId {
-                self.state.ttsSpeakerId = nil
-            }
-        }
-    }
-
     private func stopTtsPlayback() {
-        ttsHighlightTask?.cancel()
-        ttsHighlightTask = nil
-        state.ttsSpeakerId = nil
         ttsSpeaker.stop()
+        state.ttsSpeakerId = nil
+        state.activeTtsMessageId = ""
     }
 
     private func applyTtsDisabled(_ disabled: Bool) {
@@ -11099,6 +11688,13 @@ final class MeetingViewModel {
         state.onChatInputChanged = { [weak self] change in
             self?.requestChatRefresh(change)
         }
+        // S40 CH4: the speaker reports what plays; the stage speaking highlight and the voice rows follow it.
+        ttsSpeaker.onPlaybackChanged = { [weak self] messageId, userId in
+            guard let self = self else { return }
+            if self.state.activeTtsMessageId != messageId { self.state.activeTtsMessageId = messageId }
+            let speaker: String? = userId.isEmpty ? nil : userId
+            if self.state.ttsSpeakerId != speaker { self.state.ttsSpeakerId = speaker }
+        }
         lastChatRoster = []
         requestChatRefresh(ChatInputChange.messages)
     }
@@ -11183,7 +11779,10 @@ final class MeetingViewModel {
             gate: chatSendGate(),
             isHost: state.isAdmin,
             roster: roster,
-            assistant: AssistantAvailability.available
+            assistant: AssistantAvailability.available,
+            attachment: state.chatAttachment,
+            activeTtsMessageId: state.activeTtsMessageId,
+            voiceKind: VoicePreferences.composerVoiceKind().rawValue
         )
     }
 
@@ -11260,7 +11859,9 @@ final class MeetingViewModel {
             failureServerText: serverText,
             isRetryable: isRetryable,
             reactions: reactions,
-            isHistory: chatHistoryMessageIds.contains(message.id)
+            isHistory: chatHistoryMessageIds.contains(message.id),
+            suppressEmbeds: message.suppressEmbeds,
+            isTts: message.isTts
         )
     }
 
@@ -11316,23 +11917,59 @@ final class MeetingViewModel {
         case .send:
             let route = ChatRouteKind(rawValue: request.emoji) ?? ChatRouteKind.publicText
             sendNativeChat(request.text, route: route, replyTo: chatReplyPreview(forMessageId: request.messageId),
-                           privateTargetId: request.userId)
+                           privateTargetId: request.userId, photoFileURL: request.fileURL, suppressEmbeds: request.flag)
+        case .sendGif:
+            // S40 CH19: `text` is the GIF id; the attachment itself stays in the presenter (scalar requests).
+            if let gif = chat.takeSentGif(id: request.text) {
+                sendNativeChatGif(gif, replyTo: chatReplyPreview(forMessageId: request.messageId))
+            }
+        case .attachPhoto:
+            // S40 CH6: `fileURL` is the copy in the caches directory, `text` the picker's name, `emoji` its MIME type.
+            prepareChatPhoto(fileURL: request.fileURL, mimeType: request.emoji, fileName: request.text)
+        case .retryAttachment:
+            if !chatPhotoSourceURL.isEmpty {
+                prepareChatPhoto(fileURL: chatPhotoSourceURL, mimeType: chatPhotoSourceMimeType, fileName: chatPhotoSourceName)
+            }
+        case .removeAttachment:
+            resetChatPhoto()
         case .retry:
             retryChatSend(clientId: request.rowId)
         case .discard:
             discardChatSend(clientId: request.rowId)
         case .react:
             toggleChatReaction(messageId: request.messageId, emoji: request.emoji)
+        case .hideSender, .showSender:
+            // S40 CH21 and S50 3 f: People's Hide or Show Messages item and "Messages hidden" follow the chat.
+            requestPeopleRefresh()
+        case .playVoice:
+            replayVoiceMessage(messageId: request.messageId, rowId: request.rowId)
+        case .stopVoice:
+            stopTtsPlayback()
         default:
             break
         }
     }
 
+    /// S40 CH4: local replay from a voice bubble ("only you will hear it"); the current message stops, the queue
+    /// continues after it. Nothing plays while the host turned voice messages off.
+    private func replayVoiceMessage(messageId: String, rowId: String) {
+        guard !state.isTtsDisabled,
+              let message = state.chatMessages.first(where: {
+                  (!messageId.isEmpty && $0.id == messageId) || $0.id == rowId || $0.clientId == rowId
+              }),
+              message.isTts else { return }
+        let text = VoiceMessageText.spokenText(normalizedContent: message.content)
+        ttsSpeaker.replay(messageId: message.id, userId: message.userId, displayName: message.displayName, text: text,
+                          voiceToken: message.ttsVoiceToken ?? "")
+    }
+
     /// D24 routes already decided by `ChatComposerPolicy.route`. Chat failures stay in the panel (D20): a failed row
     /// or a system row, never `state.errorMessage`.
-    private func sendNativeChat(_ text: String, route: ChatRouteKind, replyTo: ChatReplyPreview?, privateTargetId: String) {
+    private func sendNativeChat(_ text: String, route: ChatRouteKind, replyTo: ChatReplyPreview?, privateTargetId: String,
+                                photoFileURL: String = "", suppressEmbeds: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, chatSendGate() == ChatSendGate.allowed else { return }
+        // A ready photo sends alone or with a caption (S40 6 f); the presenter names it by its picked file URL.
+        guard !trimmed.isEmpty || !photoFileURL.isEmpty, chatSendGate() == ChatSendGate.allowed else { return }
         switch route {
         case .command:
             // CH11: the guarded directional branches of `executeChatCommand` (`setMuted`, `setCameraCommandState`,
@@ -11346,7 +11983,8 @@ final class MeetingViewModel {
             }
         case .privateText:
             let body = ChatCommandParser.parseDirectMessage(trimmed)?.body ?? trimmed
-            sendRetainedChat(wireText: trimmed, displayText: body, replyTo: replyTo, directTargetUserId: privateTargetId)
+            sendRetainedChat(wireText: trimmed, displayText: body, suppressEmbeds: suppressEmbeds, replyTo: replyTo,
+                             directTargetUserId: privateTargetId)
         case .publicText:
             // An implicit private draft ("@avery hi") that resolved shows private from the first frame; the SFU strips
             // the prefix, so the row shows the body like the echo will.
@@ -11354,7 +11992,21 @@ final class MeetingViewModel {
             if !privateTargetId.isEmpty, let parsed = ChatCommandParser.parseDirectMessage(trimmed) {
                 display = parsed.body
             }
-            sendRetainedChat(wireText: trimmed, displayText: display, replyTo: replyTo, directTargetUserId: privateTargetId)
+            // S40 CH6: the uploaded photo goes with this send; the SFU uses its file name as the content when there is
+            // no caption, so the optimistic row (and its echo signature) does the same.
+            var image: ChatImageAttachment? = nil
+            if !photoFileURL.isEmpty {
+                guard let uploaded = chatUploadedImage, chatUploadedImageFileURL == photoFileURL else { return }
+                image = uploaded
+                if display.isEmpty { display = uploaded.fileName }
+                chatPhotoGeneration += 1
+                chatUploadedImage = nil
+                chatUploadedImageFileURL = ""
+                chatPhotoSourceURL = ""
+                state.chatAttachment = ChatAttachmentState.none
+            }
+            sendRetainedChat(wireText: trimmed, displayText: display, image: image, suppressEmbeds: suppressEmbeds,
+                             replyTo: replyTo, directTargetUserId: privateTargetId)
         case .voice:
             sendRetainedChat(wireText: trimmed, displayText: trimmed, replyTo: replyTo, directTargetUserId: "")
         case .blocked:
@@ -11364,18 +12016,24 @@ final class MeetingViewModel {
 
     /// CH1, CH2: the optimistic row appears at once with its client id and stays through the acknowledgement; a
     /// failure keeps it with its text, Try Again and Delete.
-    private func sendRetainedChat(wireText: String, displayText: String, replyTo: ChatReplyPreview?, directTargetUserId: String) {
+    private func sendRetainedChat(wireText: String, displayText: String, gif: ChatGifAttachment? = nil,
+                                  image: ChatImageAttachment? = nil, suppressEmbeds: Bool = false,
+                                  replyTo: ChatReplyPreview?, directTargetUserId: String) {
         let context = currentCallActionContext()
-        guard let optimistic = appendOptimisticChatMessage(content: displayText, replyTo: replyTo,
-                                                           directTargetUserId: directTargetUserId) else { return }
+        guard let optimistic = appendOptimisticChatMessage(content: displayText, gif: gif, image: image, replyTo: replyTo,
+                                                           directTargetUserId: directTargetUserId,
+                                                           suppressEmbeds: suppressEmbeds) else { return }
         let clientId = optimistic.id
         retainedChatWireTexts[clientId] = wireText
         Task {
-            await deliverRetainedChat(clientId: clientId, wireText: wireText, replyTo: replyTo, context: context)
+            await deliverRetainedChat(clientId: clientId, wireText: wireText, gif: gif, image: image,
+                                      suppressEmbeds: suppressEmbeds, replyTo: replyTo, context: context)
         }
     }
 
-    private func deliverRetainedChat(clientId: String, wireText: String, replyTo: ChatReplyPreview?, context: CallActionContext) async {
+    private func deliverRetainedChat(clientId: String, wireText: String, gif: ChatGifAttachment? = nil,
+                                     image: ChatImageAttachment? = nil, suppressEmbeds: Bool = false,
+                                     replyTo: ChatReplyPreview?, context: CallActionContext) async {
         guard isCurrentJoinedCall(context) else {
             // A context change before the emit marks the row failed instead of letting it vanish (CH2).
             if isCurrentRoomContext(context.roomId) {
@@ -11386,7 +12044,8 @@ final class MeetingViewModel {
             return
         }
         do {
-            let message = try await socketManager.sendChat(content: wireText, gif: nil, image: nil, replyTo: replyTo)
+            let message = try await socketManager.sendChat(content: wireText, gif: gif, image: image, replyTo: replyTo,
+                                                           suppressEmbeds: suppressEmbeds)
             guard isCurrentRoomContext(context.roomId) else {
                 removeOptimisticChatMessage(id: clientId)
                 return
@@ -11455,7 +12114,8 @@ final class MeetingViewModel {
         let context = currentCallActionContext()
         let replyTo = message.replyTo
         Task {
-            await deliverRetainedChat(clientId: clientId, wireText: wireText, replyTo: replyTo, context: context)
+            await deliverRetainedChat(clientId: clientId, wireText: wireText, gif: message.gif, image: message.image,
+                                      suppressEmbeds: message.suppressEmbeds, replyTo: replyTo, context: context)
         }
     }
 
@@ -11464,6 +12124,101 @@ final class MeetingViewModel {
         pendingOptimisticChatSends.removeAll { $0.id == clientId }
         retainedChatWireTexts.removeValue(forKey: clientId)
         state.chatMessages.removeAll { $0.clientId == clientId && $0.delivery == ChatMessageDelivery.failed }
+    }
+
+    /// S40 CH19 (CHT-5): a picked GIF, sticker or clip sends at once as a retained own row with the current reply (web
+    /// parity, S40 7 a); Try Again resends the same attachment.
+    private func sendNativeChatGif(_ gif: ChatGifAttachment, replyTo: ChatReplyPreview?) {
+        guard chatSendGate() == ChatSendGate.allowed else { return }
+        let title = gif.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = title.isEmpty ? "GIF" : title
+        sendRetainedChat(wireText: content, displayText: content, gif: gif, replyTo: replyTo, directTargetUserId: "")
+    }
+
+    /// S40 CH6 (CHT-4): prepare off the main actor (`ChatPhotoPreparer`: sniff, HEIC to JPEG, downscale above 6 MB),
+    /// authorize, upload; the composer chip follows `state.chatAttachment`, and the next send carries the upload.
+    /// Failures are chip states (`ChatPhotoFailurePolicy`), never `state.errorMessage` (D20).
+    private func prepareChatPhoto(fileURL: String, mimeType: String, fileName: String) {
+        guard !fileURL.isEmpty else { return }
+        chatPhotoTask?.cancel()
+        chatPhotoGeneration += 1
+        let generation = chatPhotoGeneration
+        chatPhotoSourceURL = fileURL
+        chatPhotoSourceMimeType = mimeType
+        chatPhotoSourceName = fileName
+        chatUploadedImage = nil
+        chatUploadedImageFileURL = ""
+        state.chatAttachment = ChatAttachmentState(phase: ChatAttachmentPhase.preparing, progress: -1, thumbnailKey: fileURL,
+                                                   failure: ChatFailure.none)
+        let context = currentCallActionContext()
+        chatPhotoTask = Task { [weak self] in
+            let prepared = await ChatPhotoPreparer.prepare(fileURL: fileURL, mimeType: mimeType, fileName: fileName)
+            guard let self = self, self.chatPhotoGeneration == generation, !Task.isCancelled else { return }
+            if !prepared.isReady {
+                self.failChatPhoto(prepared.failure, fileURL: fileURL)
+                return
+            }
+            guard self.isCurrentJoinedCall(context) else {
+                self.failChatPhoto(ChatFailure.notConnected, fileURL: fileURL)
+                return
+            }
+            guard self.state.isImageAttachmentsEnabled else {
+                self.failChatPhoto(ChatFailure.photosDisabled, fileURL: fileURL)
+                return
+            }
+            self.state.chatAttachment = ChatAttachmentState(phase: ChatAttachmentPhase.uploading, progress: -1,
+                                                            thumbnailKey: fileURL, failure: ChatFailure.none)
+            do {
+                let authorization = try await self.socketManager.authorizeChatImageUpload()
+                guard self.chatPhotoGeneration == generation else { return }
+                guard prepared.byteCount <= authorization.maxBytes else {
+                    self.failChatPhoto(ChatFailure.photoTooLarge, fileURL: fileURL)
+                    return
+                }
+                guard let preparedURL = URL(string: prepared.fileURL) else {
+                    self.failChatPhoto(ChatFailure.photoUnavailable, fileURL: fileURL)
+                    return
+                }
+                let data = try await Task.detached(priority: .userInitiated) {
+                    try Data(contentsOf: preparedURL)
+                }.value
+                let image = try await self.uploadChatImage(data: data, fileName: prepared.fileName,
+                                                           mimeType: prepared.mimeType, authorization: authorization)
+                guard self.chatPhotoGeneration == generation, self.isCurrentJoinedCall(context) else { return }
+                self.chatUploadedImage = image
+                self.chatUploadedImageFileURL = fileURL
+                self.state.chatAttachment = ChatAttachmentState(phase: ChatAttachmentPhase.ready, progress: 1,
+                                                                thumbnailKey: fileURL, failure: ChatFailure.none)
+            } catch let error as ChatImageUploadError {
+                guard self.chatPhotoGeneration == generation else { return }
+                self.failChatPhoto(ChatPhotoFailurePolicy.failure(serverMessage: error.message, code: ""), fileURL: fileURL)
+            } catch {
+                guard self.chatPhotoGeneration == generation else { return }
+                // CH10: the authorize ack's server text (rate limit, lock, attendee) or a transport failure.
+                self.failChatPhoto(ChatPhotoFailurePolicy.failure(serverMessage: error.localizedDescription, code: ""),
+                                   fileURL: fileURL)
+            }
+        }
+    }
+
+    private func failChatPhoto(_ failure: ChatFailure, fileURL: String) {
+        chatUploadedImage = nil
+        chatUploadedImageFileURL = ""
+        state.chatAttachment = ChatAttachmentState(phase: ChatAttachmentPhase.failed, progress: 0, thumbnailKey: fileURL,
+                                                   failure: failure)
+    }
+
+    /// Remove, leave and a fresh join: cancels the prepare or upload and clears the chip.
+    private func resetChatPhoto() {
+        chatPhotoTask?.cancel()
+        chatPhotoTask = nil
+        chatPhotoGeneration += 1
+        chatPhotoSourceURL = ""
+        chatPhotoSourceMimeType = ""
+        chatPhotoSourceName = ""
+        chatUploadedImage = nil
+        chatUploadedImageFileURL = ""
+        if state.chatAttachment != ChatAttachmentState.none { state.chatAttachment = ChatAttachmentState.none }
     }
 
     /// CH3: optimistic toggle (web `applyLocalReactionToggle`, cap 12), then `chat:react`; the acknowledgement's set
@@ -11531,7 +12286,10 @@ final class MeetingViewModel {
             replyTo: message.replyTo,
             clientId: clientId,
             sendStatus: sendStatus,
-            reactions: reactions
+            reactions: reactions,
+            isTts: message.isTts,
+            ttsVoiceToken: message.ttsVoiceToken,
+            suppressEmbeds: message.suppressEmbeds
         )
     }
 
@@ -11647,194 +12405,339 @@ final class MeetingViewModel {
         adminActionsInFlight.removeValue(forKey: key)
     }
 
+    /// S50 PH2, PH16: a native caller (`onResult` set) gets a typed failure and no legacy banner text; legacy callers
+    /// keep `applyActionError`. A context change after the dispatch is `interrupted`, never a failure.
+    private func reportHostError(_ error: Error, context: CallActionContext, onResult: ((HostActionResult) -> Void)?) {
+        guard let onResult else {
+            applyActionError(error, context: context)
+            return
+        }
+        guard isSameCallContext(context) else {
+            onResult(HostActionResult.interrupted)
+            return
+        }
+        let result = HostActionFailurePolicy.result(for: error)
+        debugLog("[Meeting] Host action failed: \(result.failure)")
+        onResult(result)
+    }
+
+    /// The legacy Bool contract (Settings, the join flows), unchanged: true when the name is applied or unchanged.
     @discardableResult
     func updateDisplayName(_ name: String) async -> Bool {
+        let result = await updateDisplayNameResult(name, reportsLegacyErrors: true)
+        return result.kind == HostActionResultKind.completed
+    }
+
+    /// S50 PH16 and S60 C6-10: the typed rename. Refusals map to `renameRateLimited`, `renameDisabled` and
+    /// `renameTooLong`; a success updates `lastJoinContext`, so a reconnect keeps the new name. One single flight
+    /// (`isDisplayNameUpdateInFlight`) serves Settings and People; an overlapping save is `cancelled`.
+    func updateDisplayNameResult(_ name: String, reportsLegacyErrors: Bool = false) async -> HostActionResult {
         let trimmed = NativeDisplayNameNormalizer.normalize(name)
-        guard !trimmed.isEmpty else { return false }
+        guard !trimmed.isEmpty else { return HostActionResult.failed(HostActionFailure.invalidInput) }
         guard state.connectionState == .joined else {
-            state.errorMessage = "Reconnect before updating your display name."
-            return false
+            if reportsLegacyErrors { state.errorMessage = "Reconnect before updating your display name." }
+            return HostActionResult.failed(HostActionFailure.notJoined)
         }
         guard !state.isWebinarAttendee else {
-            state.errorMessage = "Watch-only attendees cannot update display names."
-            return false
+            if reportsLegacyErrors { state.errorMessage = "Watch-only attendees cannot update display names." }
+            return HostActionResult.failed(HostActionFailure.notAllowed)
         }
-        guard trimmed != state.displayName else { return true }
-        guard !isDisplayNameUpdateInFlight else { return false }
+        guard trimmed != state.displayName else { return HostActionResult.completed }
+        guard !isDisplayNameUpdateInFlight else { return HostActionResult.cancelled }
         isDisplayNameUpdateInFlight = true
         let actionContext = currentCallActionContext()
         defer { isDisplayNameUpdateInFlight = false }
-        guard isCurrentJoinedCall(actionContext) else { return false }
+        guard isCurrentJoinedCall(actionContext) else { return HostActionResult.interrupted }
 
         do {
             try await socketManager.updateDisplayName(trimmed)
-            guard isCurrentJoinedCall(actionContext) else { return false }
+            guard isCurrentJoinedCall(actionContext) else { return HostActionResult.interrupted }
             applyLocalDisplayName(trimmed)
-            return true
+            updateLastJoinContextDisplayName(trimmed)
+            return HostActionResult.completed
         } catch {
-            applyActionError(error, context: actionContext)
-            return false
+            if reportsLegacyErrors {
+                applyActionError(error, context: actionContext)
+            }
+            guard isSameCallContext(actionContext) else { return HostActionResult.interrupted }
+            return HostActionFailurePolicy.result(for: error)
         }
     }
 
-    func toggleRoomLock() {
+    /// C6-10: the next join or recovery rejoin sends the renamed name.
+    private func updateLastJoinContextDisplayName(_ displayName: String) {
+        guard let context = lastJoinContext, context.displayName != displayName else { return }
+        lastJoinContext = JoinContext(
+            roomId: context.roomId,
+            displayName: displayName,
+            socketDisplayName: Self.socketDisplayNameOverride(displayName, isAdmin: context.isHost),
+            isHost: context.isHost,
+            joinMode: context.joinMode,
+            meetingInviteCode: context.meetingInviteCode,
+            webinarInviteCode: context.webinarInviteCode,
+            clientId: context.clientId,
+            allowRoomCreation: context.allowRoomCreation,
+            user: context.user
+        )
+    }
+
+    /// S50 PH4: transfer the host role over `admin:transferHost`. Nothing is written optimistically: roles change only
+    /// on `hostChanged` and `adminUsersChanged` (D10); the previous host stays a co-host (adminHandlers.ts:750-812).
+    func transferHost(userId: String, onResult: ((HostActionResult) -> Void)? = nil) async {
+        guard state.isAdmin, !state.isWebinarAttendee, !state.isLocalIdentityUserId(userId) else {
+            onResult?(HostActionResult.cancelled)
+            return
+        }
+        let actionKey = "transferHost:\(userId)"
+        guard let actionToken = beginAdminAction(actionKey) else {
+            onResult?(HostActionResult.cancelled)
+            return
+        }
+        let actionContext = currentCallActionContext()
+        defer { finishAdminAction(actionKey, token: actionToken) }
+        guard isCurrentJoinedCall(actionContext) else {
+            onResult?(HostActionResult.interrupted)
+            return
+        }
+        do {
+            let response = try await socketManager.transferHost(userId: userId)
+            guard isCurrentJoinedCall(actionContext) else {
+                onResult?(HostActionResult.interrupted)
+                return
+            }
+            if let error = response.error?.trimmingCharacters(in: .whitespacesAndNewlines), !error.isEmpty {
+                throw MeetingActionResponseError(message: error)
+            }
+            if response.success == false {
+                throw MeetingActionResponseError(message: "Failed to transfer host.")
+            }
+            onResult?(HostActionResult.completed)
+        } catch {
+            reportHostError(error, context: actionContext, onResult: onResult)
+        }
+    }
+
+    /// S50 PH5: participant media permissions (`setParticipantMediaPermissions`). Server state arrives through the ack
+    /// and `participantMediaPermissionsChanged`; nothing is written before the ack.
+    func setParticipantMediaPermissions(unmuteAllowed: Bool?, videoAllowed: Bool?, onResult: ((HostActionResult) -> Void)? = nil) {
+        let actionKey = "mediaPermissions"
+        guard let actionToken = beginAdminAction(actionKey) else {
+            onResult?(HostActionResult.cancelled)
+            return
+        }
+        let actionContext = currentCallActionContext()
+        Task {
+            defer { finishAdminAction(actionKey, token: actionToken) }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
+            do {
+                let response = try await socketManager.setParticipantMediaPermissions(unmuteAllowed: unmuteAllowed,
+                                                                                       videoAllowed: videoAllowed)
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
+                if let error = response.error?.trimmingCharacters(in: .whitespacesAndNewlines), !error.isEmpty {
+                    throw MeetingActionResponseError(message: error)
+                }
+                if response.success == false {
+                    throw MeetingActionResponseError(message: "Failed to update participant media permissions.")
+                }
+                if let allowed = response.unmuteAllowed { state.isParticipantUnmuteAllowed = allowed }
+                if let allowed = response.videoAllowed { state.isParticipantVideoAllowed = allowed }
+                onResult?(HostActionResult.completed)
+            } catch {
+                reportHostError(error, context: actionContext, onResult: onResult)
+            }
+        }
+    }
+
+    /// S50 PH6: Photos in Chat (`setImageAttachmentsEnabled`); the ack applies `isImageAttachmentsEnabled`.
+    func toggleImageAttachmentsEnabled(onResult: ((HostActionResult) -> Void)? = nil) {
+        let actionKey = "imageAttachments"
+        guard let actionToken = beginAdminAction(actionKey) else {
+            onResult?(HostActionResult.cancelled)
+            return
+        }
+        let actionContext = currentCallActionContext()
+        let next = !state.isImageAttachmentsEnabled
+        Task {
+            defer { finishAdminAction(actionKey, token: actionToken) }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
+            do {
+                let response = try await socketManager.setImageAttachmentsEnabled(next)
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
+                try requireRoomPolicyMutationSuccess(response, fallbackMessage: "Failed to update photos in chat.")
+                state.isImageAttachmentsEnabled = response.policies?.imageAttachmentsEnabled ?? response.enabled ?? next
+                onResult?(HostActionResult.completed)
+            } catch {
+                reportHostError(error, context: actionContext, onResult: onResult)
+            }
+        }
+    }
+
+    func toggleRoomLock(onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "roomLock"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         let nextLocked = !state.isRoomLocked
 
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let response = try await socketManager.lockRoom(nextLocked)
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 try requireRoomPolicyMutationSuccess(response, fallbackMessage: "Failed to update room lock.")
                 state.isRoomLocked = response.policies?.locked ?? response.locked ?? nextLocked
+                onResult?(HostActionResult.completed)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func toggleChatLock() {
+    func toggleChatLock(onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "chatLock"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         let nextLocked = !state.isChatLocked
 
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let response = try await socketManager.lockChat(nextLocked)
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 try requireRoomPolicyMutationSuccess(response, fallbackMessage: "Failed to update chat lock.")
                 state.isChatLocked = response.policies?.chatLocked ?? response.locked ?? nextLocked
+                onResult?(HostActionResult.completed)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func toggleNoGuests() {
+    func toggleNoGuests(onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "noGuests"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         let next = !state.isNoGuests
 
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let response = try await socketManager.setNoGuests(next)
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 try requireRoomPolicyMutationSuccess(response, fallbackMessage: "Failed to update guest access.")
                 state.isNoGuests = response.policies?.noGuests ?? response.noGuests ?? next
+                onResult?(HostActionResult.completed)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func toggleDmEnabled() {
+    func toggleDmEnabled(onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "dmEnabled"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         let next = !state.isDmEnabled
 
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let response = try await socketManager.setDmEnabled(next)
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 try requireRoomPolicyMutationSuccess(response, fallbackMessage: "Failed to update direct messages.")
                 state.isDmEnabled = response.policies?.dmEnabled ?? response.enabled ?? next
+                onResult?(HostActionResult.completed)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func toggleTtsDisabled() {
+    func toggleTtsDisabled(onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "ttsDisabled"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         let next = !state.isTtsDisabled
 
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let response = try await socketManager.setTtsDisabled(next)
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 try requireRoomPolicyMutationSuccess(response, fallbackMessage: "Failed to update text to speech.")
                 applyTtsDisabled(response.policies?.ttsDisabled ?? response.disabled ?? next)
+                onResult?(HostActionResult.completed)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func toggleReactionsDisabled() {
+    func toggleReactionsDisabled(onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "reactionsDisabled"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         let next = !state.isReactionsDisabled
 
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let response = try await socketManager.setReactionsDisabled(next)
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 try requireRoomPolicyMutationSuccess(response, fallbackMessage: "Failed to update reactions.")
                 state.isReactionsDisabled = response.policies?.reactionsDisabled ?? response.disabled ?? next
+                onResult?(HostActionResult.completed)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
     @discardableResult
-    func setMeetingInviteCode(_ code: String) -> Bool {
-        guard state.isAdmin else { return false }
+    func setMeetingInviteCode(_ code: String, onResult: ((HostActionResult) -> Void)? = nil) -> Bool {
+        guard state.isAdmin else { onResult?(HostActionResult.cancelled); return false }
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
+        guard !trimmed.isEmpty else { onResult?(HostActionResult.failed(HostActionFailure.invalidInput)); return false }
         let actionKey = "meetingInviteCode"
-        guard let actionToken = beginAdminAction(actionKey) else { return false }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return false }
         let actionContext = currentCallActionContext()
 
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let snapshot = try await socketManager.updateMeetingConfig(inviteCode: trimmed)
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 applyMeetingConfigSnapshot(snapshot)
+                onResult?(HostActionResult.completed)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
         return true
     }
 
     @discardableResult
-    func clearMeetingInviteCode() -> Bool {
+    func clearMeetingInviteCode(onResult: ((HostActionResult) -> Void)? = nil) -> Bool {
         let actionKey = "meetingInviteCode"
-        guard let actionToken = beginAdminAction(actionKey) else { return false }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return false }
         let actionContext = currentCallActionContext()
 
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let snapshot = try await socketManager.updateMeetingConfig(inviteCode: nil)
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 applyMeetingConfigSnapshot(snapshot)
+                onResult?(HostActionResult.completed)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
         return true
@@ -11949,74 +12852,82 @@ final class MeetingViewModel {
         }
     }
 
-    func toggleWebinarEnabled() {
+    func toggleWebinarEnabled(onResult: ((HostActionResult) -> Void)? = nil) {
         let next = !state.isWebinarEnabled
-        updateWebinarConfig(actionKey: "webinarEnabled") {
+        updateWebinarConfig(actionKey: "webinarEnabled", onResult: onResult, operation: {
             try await self.socketManager.updateWebinarEnabled(next)
-        }
+        })
     }
 
-    func toggleWebinarPublicAccess() {
+    func toggleWebinarPublicAccess(onResult: ((HostActionResult) -> Void)? = nil) {
         let next = !state.isWebinarPublicAccess
-        updateWebinarConfig(actionKey: "webinarPublicAccess") {
+        updateWebinarConfig(actionKey: "webinarPublicAccess", onResult: onResult, operation: {
             try await self.socketManager.updateWebinarPublicAccess(next)
-        }
+        })
     }
 
-    func toggleWebinarLocked() {
+    func toggleWebinarLocked(onResult: ((HostActionResult) -> Void)? = nil) {
         let next = !state.isWebinarLocked
-        updateWebinarConfig(actionKey: "webinarLocked") {
+        updateWebinarConfig(actionKey: "webinarLocked", onResult: onResult, operation: {
             try await self.socketManager.updateWebinarLocked(next)
-        }
+        })
     }
 
     @discardableResult
-    func setWebinarMaxAttendees(_ maxAttendees: Int) -> Bool {
-        guard state.isAdmin else { return false }
+    func setWebinarMaxAttendees(_ maxAttendees: Int, onResult: ((HostActionResult) -> Void)? = nil) -> Bool {
+        guard state.isAdmin else { onResult?(HostActionResult.cancelled); return false }
         guard (1...5000).contains(maxAttendees) else {
-            state.errorMessage = "Webinar attendee cap must be between 1 and 5000."
+            if let onResult {
+                onResult(HostActionResult.failed(HostActionFailure.invalidInput))
+            } else {
+                state.errorMessage = "Webinar attendee cap must be between 1 and 5000."
+            }
             return false
         }
-        return updateWebinarConfig(actionKey: "webinarMaxAttendees") {
+        return updateWebinarConfig(actionKey: "webinarMaxAttendees", onResult: onResult, operation: {
             try await self.socketManager.updateWebinarMaxAttendees(maxAttendees)
-        }
+        })
     }
 
     @discardableResult
-    func setWebinarInviteCode(_ code: String) -> Bool {
-        guard state.isAdmin else { return false }
+    func setWebinarInviteCode(_ code: String, onResult: ((HostActionResult) -> Void)? = nil) -> Bool {
+        guard state.isAdmin else { onResult?(HostActionResult.cancelled); return false }
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-        return updateWebinarConfig(actionKey: "webinarInviteCode") {
+        guard !trimmed.isEmpty else { onResult?(HostActionResult.failed(HostActionFailure.invalidInput)); return false }
+        return updateWebinarConfig(actionKey: "webinarInviteCode", onResult: onResult, operation: {
             try await self.socketManager.updateWebinarInviteCode(trimmed)
-        }
+        })
     }
 
     @discardableResult
-    func clearWebinarInviteCode() -> Bool {
-        return updateWebinarConfig(actionKey: "webinarInviteCode") {
+    func clearWebinarInviteCode(onResult: ((HostActionResult) -> Void)? = nil) -> Bool {
+        return updateWebinarConfig(actionKey: "webinarInviteCode", onResult: onResult, operation: {
             try await self.socketManager.updateWebinarInviteCode(nil)
-        }
+        })
     }
 
     @discardableResult
-    func setWebinarLinkSlug(_ slug: String) -> Bool {
-        guard state.isAdmin else { return false }
+    func setWebinarLinkSlug(_ slug: String, onResult: ((HostActionResult) -> Void)? = nil) -> Bool {
+        guard state.isAdmin else { onResult?(HostActionResult.cancelled); return false }
         let trimmed = slug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard isValidWebinarLinkSlug(trimmed) else {
-            state.errorMessage = "Use 3-32 lowercase letters, numbers, or hyphens for the webinar link."
+            if let onResult {
+                onResult(HostActionResult.failed(HostActionFailure.invalidInput))
+            } else {
+                state.errorMessage = "Use 3-32 lowercase letters, numbers, or hyphens for the webinar link."
+            }
             return false
         }
-        return updateWebinarConfig(actionKey: "webinarLinkSlug") {
+        return updateWebinarConfig(actionKey: "webinarLinkSlug", onResult: onResult, operation: {
             try await self.socketManager.updateWebinarLinkSlug(trimmed)
-        }
+        })
     }
 
     @discardableResult
-    func clearWebinarLinkSlug() -> Bool {
-        return updateWebinarConfig(actionKey: "webinarLinkSlug") {
+    func clearWebinarLinkSlug(onResult: ((HostActionResult) -> Void)? = nil) -> Bool {
+        return updateWebinarConfig(actionKey: "webinarLinkSlug", onResult: onResult, operation: {
             try await self.socketManager.updateWebinarLinkSlug(nil)
-        }
+        })
     }
 
     func copyableWebinarLink() async -> String? {
@@ -12026,36 +12937,40 @@ final class MeetingViewModel {
         return await generateWebinarLink()
     }
 
-    func generateWebinarLink() async -> String? {
-        guard state.isAdmin else { return nil }
+    func generateWebinarLink(onResult: ((HostActionResult) -> Void)? = nil) async -> String? {
+        guard state.isAdmin else { onResult?(HostActionResult.cancelled); return nil }
         let actionKey = "webinarGenerateLink"
-        guard let actionToken = beginAdminAction(actionKey) else { return nil }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return nil }
         let actionContext = currentCallActionContext()
         defer { finishAdminAction(actionKey, token: actionToken) }
-        guard isCurrentJoinedCall(actionContext) else { return nil }
+        guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return nil }
         do {
             let response = try await socketManager.generateWebinarLink()
-            guard isCurrentJoinedCall(actionContext) else { return nil }
-            return try applyWebinarLinkResponse(response)
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return nil }
+            let link = try applyWebinarLinkResponse(response)
+            onResult?(HostActionResult.completed)
+            return link
         } catch {
-            applyActionError(error, context: actionContext)
+            reportHostError(error, context: actionContext, onResult: onResult)
             return nil
         }
     }
 
-    func rotateWebinarLink() async -> String? {
-        guard state.isAdmin else { return nil }
+    func rotateWebinarLink(onResult: ((HostActionResult) -> Void)? = nil) async -> String? {
+        guard state.isAdmin else { onResult?(HostActionResult.cancelled); return nil }
         let actionKey = "webinarRotateLink"
-        guard let actionToken = beginAdminAction(actionKey) else { return nil }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return nil }
         let actionContext = currentCallActionContext()
         defer { finishAdminAction(actionKey, token: actionToken) }
-        guard isCurrentJoinedCall(actionContext) else { return nil }
+        guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return nil }
         do {
             let response = try await socketManager.rotateWebinarLink()
-            guard isCurrentJoinedCall(actionContext) else { return nil }
-            return try applyWebinarLinkResponse(response)
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return nil }
+            let link = try applyWebinarLinkResponse(response)
+            onResult?(HostActionResult.completed)
+            return link
         } catch {
-            applyActionError(error, context: actionContext)
+            reportHostError(error, context: actionContext, onResult: onResult)
             return nil
         }
     }
@@ -12684,18 +13599,23 @@ final class MeetingViewModel {
     }
 
     @discardableResult
-    private func updateWebinarConfig(actionKey: String, _ operation: @escaping () async throws -> WebinarConfigSnapshot) -> Bool {
-        guard let actionToken = beginAdminAction(actionKey) else { return false }
+    private func updateWebinarConfig(
+        actionKey: String,
+        onResult: ((HostActionResult) -> Void)? = nil,
+        operation: @escaping () async throws -> WebinarConfigSnapshot
+    ) -> Bool {
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return false }
         let actionContext = currentCallActionContext()
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let snapshot = try await operation()
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 applyWebinarConfigSnapshot(snapshot)
+                onResult?(HostActionResult.completed)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
         return true
@@ -12724,56 +13644,62 @@ final class MeetingViewModel {
     }
 
     @discardableResult
-    func allowAccessUserKey(_ userKey: String) -> Bool {
-        updateAdminAccessList(userKey: userKey, actionPrefix: "allowUserKey") { normalizedKey in
+    func allowAccessUserKey(_ userKey: String, onResult: ((HostActionResult) -> Void)? = nil) -> Bool {
+        updateAdminAccessList(userKey: userKey, actionPrefix: "allowUserKey", onResult: onResult, operation: { normalizedKey in
             try await self.socketManager.allowUsers([normalizedKey], allowWhenLocked: true)
-        }
+        })
     }
 
     @discardableResult
-    func blockAccessUserKey(_ userKey: String) -> Bool {
-        updateAdminAccessList(userKey: userKey, actionPrefix: "blockUserKey") { normalizedKey in
+    func blockAccessUserKey(_ userKey: String, onResult: ((HostActionResult) -> Void)? = nil) -> Bool {
+        updateAdminAccessList(userKey: userKey, actionPrefix: "blockUserKey", onResult: onResult, operation: { normalizedKey in
             try await self.socketManager.blockUsers([normalizedKey], kickPresent: true, reason: "Blocked by host")
-        }
+        })
     }
 
     @discardableResult
-    func unblockAccessUserKey(_ userKey: String) -> Bool {
-        updateAdminAccessList(userKey: userKey, actionPrefix: "unblockUserKey") { normalizedKey in
+    func unblockAccessUserKey(_ userKey: String, onResult: ((HostActionResult) -> Void)? = nil) -> Bool {
+        updateAdminAccessList(userKey: userKey, actionPrefix: "unblockUserKey", onResult: onResult, operation: { normalizedKey in
             try await self.socketManager.unblockUsers([normalizedKey])
-        }
+        })
     }
 
     @discardableResult
-    func revokeAllowedAccessUserKey(_ userKey: String) -> Bool {
-        updateAdminAccessList(userKey: userKey, actionPrefix: "revokeUserKey") { normalizedKey in
+    func revokeAllowedAccessUserKey(_ userKey: String, onResult: ((HostActionResult) -> Void)? = nil) -> Bool {
+        updateAdminAccessList(userKey: userKey, actionPrefix: "revokeUserKey", onResult: onResult, operation: { normalizedKey in
             try await self.socketManager.revokeAllowedUsers([normalizedKey], revokeLocked: true)
-        }
+        })
     }
 
     @discardableResult
     private func updateAdminAccessList(
         userKey: String,
         actionPrefix: String,
-        _ operation: @escaping (String) async throws -> AdminAccessListSnapshot
+        onResult: ((HostActionResult) -> Void)? = nil,
+        operation: @escaping (String) async throws -> AdminAccessListSnapshot
     ) -> Bool {
         guard let normalizedKey = normalizedAdminAccessUserKey(userKey) else {
-            state.errorMessage = "Enter a valid user key or email."
+            if let onResult {
+                onResult(HostActionResult.failed(HostActionFailure.invalidInput))
+            } else {
+                state.errorMessage = "Enter a valid user key or email."
+            }
             return false
         }
         let actionKey = "\(actionPrefix):\(normalizedKey)"
-        guard let actionToken = beginAdminAction(actionKey) else { return false }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return false }
         let actionContext = currentCallActionContext()
 
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let access = try await operation(normalizedKey)
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 applyAdminAccessListSnapshot(access)
+                onResult?(HostActionResult.completed)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
         return true
@@ -12803,88 +13729,95 @@ final class MeetingViewModel {
         return normalized
     }
 
-    func admitUser(userId: String) {
+    func admitUser(userId: String, onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "admit:\(userId)"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
 
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 try await socketManager.admitUser(userId: userId)
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 state.pendingUsers.removeValue(forKey: userId)
+                onResult?(HostActionResult.completed)
             } catch {
                 if removeStalePendingUserIfNeeded(userId: userId, error: error, context: actionContext) {
+                    onResult?(HostActionResult.cancelled)
                     return
                 }
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func removeUser(userId: String) async {
-        guard state.isAdmin else { return }
-        guard !state.isLocalIdentityUserId(userId) else { return }
+    func removeUser(userId: String, onResult: ((HostActionResult) -> Void)? = nil) async {
+        guard state.isAdmin else { onResult?(HostActionResult.cancelled); return }
+        guard !state.isLocalIdentityUserId(userId) else { onResult?(HostActionResult.cancelled); return }
         let actionKey = "remove:\(userId)"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         let wasPendingUser = state.pendingUsers[userId] != nil
         defer { finishAdminAction(actionKey, token: actionToken) }
-        guard isCurrentJoinedCall(actionContext) else { return }
+        guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
 
         do {
             if state.pendingUsers[userId] != nil {
                 try await socketManager.rejectUser(userId: userId)
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 state.pendingUsers.removeValue(forKey: userId)
+                onResult?(HostActionResult.completed)
             } else {
-                guard state.participant(for: userId) != nil else { return }
+                guard state.participant(for: userId) != nil else { onResult?(HostActionResult.failed(HostActionFailure.notFound)); return }
                 try await socketManager.kickUser(userId: userId)
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
+                onResult?(HostActionResult.completed)
             }
         } catch {
             if wasPendingUser,
                removeStalePendingUserIfNeeded(userId: userId, error: error, context: actionContext) {
+                onResult?(HostActionResult.cancelled)
                 return
             }
-            applyActionError(error, context: actionContext)
+            reportHostError(error, context: actionContext, onResult: onResult)
         }
     }
 
-    func stopRemoteProducer(producerId: String) {
+    func stopRemoteProducer(producerId: String, onResult: ((HostActionResult) -> Void)? = nil) {
         let trimmedProducerId = producerId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedProducerId.isEmpty else { return }
+        guard !trimmedProducerId.isEmpty else { onResult?(HostActionResult.failed(HostActionFailure.notFound)); return }
         let actionKey = "closeProducer:\(trimmedProducerId)"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
 
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let response = try await socketManager.closeRemoteProducer(producerId: trimmedProducerId)
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 try requireCloseRemoteProducerSuccess(response, fallbackMessage: "Couldn’t stop that stream.")
                 applyCloseRemoteProducerResponse(response, producerId: trimmedProducerId)
+                onResult?(HostActionResult.completed)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func muteParticipant(userId: String) {
+    func muteParticipant(userId: String, onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "mute:\(userId)"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let response = try await socketManager.muteUserAudio(userId: userId)
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 try requireAdminMediaSuccess(response, fallbackMessage: "Failed to mute participant.")
+                onResult?(HostActionResult.completed)
                 await applyAdminMediaActionResponse(
                     response,
                     fallbackUserId: userId,
@@ -12892,36 +13825,37 @@ final class MeetingViewModel {
                     fallbackProducerType: ProducerType.webcam.rawValue
                 )
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func muteAllParticipants() {
+    func muteAllParticipants(onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "muteAll"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let response = try await socketManager.muteAll()
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 try requireAdminBulkMediaSuccess(response, fallbackMessage: "Failed to mute participants.")
+                onResult?(HostActionResult.completed)
                 await applyAdminBulkMediaActionResponse(response, action: .mute)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func turnOffParticipantCamera(userId: String) {
+    func turnOffParticipantCamera(userId: String, onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "closeVideo:\(userId)"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let response = try await socketManager.closeUserMedia(
                     userId: userId,
@@ -12929,8 +13863,9 @@ final class MeetingViewModel {
                     types: [ProducerType.webcam.rawValue],
                     reason: "Camera turned off by host"
                 )
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 try requireAdminMediaSuccess(response, fallbackMessage: "Failed to turn off participant camera.")
+                onResult?(HostActionResult.completed)
                 await applyAdminMediaActionResponse(
                     response,
                     fallbackUserId: userId,
@@ -12938,18 +13873,18 @@ final class MeetingViewModel {
                     fallbackProducerType: ProducerType.webcam.rawValue
                 )
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func stopParticipantScreenShare(userId: String) {
+    func stopParticipantScreenShare(userId: String, onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "stopScreen:\(userId)"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let response = try await socketManager.closeUserMedia(
                     userId: userId,
@@ -12957,8 +13892,9 @@ final class MeetingViewModel {
                     types: [ProducerType.screen.rawValue],
                     reason: "Screen share stopped by host"
                 )
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 try requireAdminMediaSuccess(response, fallbackMessage: "Failed to stop participant screen share.")
+                onResult?(HostActionResult.completed)
                 await applyAdminMediaActionResponse(
                     response,
                     fallbackUserId: userId,
@@ -12966,79 +13902,83 @@ final class MeetingViewModel {
                     fallbackProducerType: ProducerType.screen.rawValue
                 )
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func turnOffAllParticipantCameras() {
+    func turnOffAllParticipantCameras(onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "closeAllVideo"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let response = try await socketManager.closeAllVideo()
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 try requireAdminBulkMediaSuccess(response, fallbackMessage: "Failed to turn off participant cameras.")
+                onResult?(HostActionResult.completed)
                 await applyAdminBulkMediaActionResponse(response, action: .camera)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func stopAllScreenShares() {
+    func stopAllScreenShares(onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "stopAllScreenShares"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 let response = try await socketManager.stopAllScreenShares()
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 try requireAdminBulkMediaSuccess(response, fallbackMessage: "Failed to stop screen shares.")
+                onResult?(HostActionResult.completed)
                 await applyAdminBulkMediaActionResponse(response, action: .screen)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func clearAllRaisedHands() {
+    func clearAllRaisedHands(onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "clearRaisedHands"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 try await socketManager.clearRaisedHands()
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 clearRaisedHands()
+                onResult?(HostActionResult.completed)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func broadcastAdminNotice(message: String, level: AdminNoticeLevel) async -> Bool {
+    func broadcastAdminNotice(message: String, level: AdminNoticeLevel, onResult: ((HostActionResult) -> Void)? = nil) async -> Bool {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
+        guard !trimmed.isEmpty else { onResult?(HostActionResult.failed(HostActionFailure.invalidInput)); return false }
         let actionKey = "adminNotice"
-        guard let actionToken = beginAdminAction(actionKey) else { return false }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return false }
         let actionContext = currentCallActionContext()
         defer { finishAdminAction(actionKey, token: actionToken) }
-        guard isCurrentJoinedCall(actionContext) else { return false }
+        guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return false }
         do {
             let response = try await socketManager.broadcastAdminNotice(message: trimmed, level: level)
-            guard isCurrentJoinedCall(actionContext) else { return false }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return false }
             try requireAdminNoticeSuccess(response, fallbackMessage: "Failed to send notice.")
+            onResult?(HostActionResult.completed)
             return true
         } catch {
-            applyActionError(error, context: actionContext)
+            reportHostError(error, context: actionContext, onResult: onResult)
             return false
         }
     }
@@ -13078,50 +14018,52 @@ final class MeetingViewModel {
         }
     }
 
-    func admitAllPending() {
+    func admitAllPending(onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "admitAllPending"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 try await socketManager.admitAllPending()
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 state.pendingUsers.removeAll()
+                onResult?(HostActionResult.completed)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func rejectAllPending() {
+    func rejectAllPending(onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "rejectAllPending"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         Task {
             defer { finishAdminAction(actionKey, token: actionToken) }
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             do {
                 try await socketManager.rejectAllPending()
-                guard isCurrentJoinedCall(actionContext) else { return }
+                guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
                 state.pendingUsers.removeAll()
+                onResult?(HostActionResult.completed)
             } catch {
-                applyActionError(error, context: actionContext)
+                reportHostError(error, context: actionContext, onResult: onResult)
             }
         }
     }
 
-    func makeHost(userId: String) async {
-        guard state.canPromoteHost(userId: userId) else { return }
+    func makeHost(userId: String, onResult: ((HostActionResult) -> Void)? = nil) async {
+        guard state.canPromoteHost(userId: userId) else { onResult?(HostActionResult.failed(HostActionFailure.notAllowed)); return }
         let actionKey = "promoteHost:\(userId)"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { onResult?(HostActionResult.cancelled); return }
         let actionContext = currentCallActionContext()
         defer { finishAdminAction(actionKey, token: actionToken) }
-        guard isCurrentJoinedCall(actionContext) else { return }
+        guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
         do {
             let response = try await socketManager.promoteHost(userId: userId)
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else { onResult?(HostActionResult.interrupted); return }
             if let error = response.error?.trimmingCharacters(in: .whitespacesAndNewlines),
                !error.isEmpty {
                 throw MeetingActionResponseError(message: error)
@@ -13134,8 +14076,9 @@ final class MeetingViewModel {
                 hostUserIds: response.hostUserIds ?? [userId],
                 updateAdminFromSnapshot: true
             )
+            onResult?(HostActionResult.completed)
         } catch {
-            applyActionError(error, context: actionContext)
+            reportHostError(error, context: actionContext, onResult: onResult)
         }
     }
 

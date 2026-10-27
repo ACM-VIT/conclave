@@ -1,7 +1,8 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// ENT-3 (S10 6 c, f, g, i, k; 8 and 9 in-place states until ENT-5): the iOS pre-join lobby, the `.lobby` destination
+// ENT-3 (S10 6 c, f, g, i, k) and ENT-5 (S10 8, 9: the in-place connecting, waiting and failed states of
+// `EntryStatusBlock`): the iOS pre-join lobby, the `.lobby` destination
 // of the premeeting NavigationStack. System appearance with the dark preview card; a plain `ScrollView { VStack }` so
 // the card is never a lazy cell (F00 P5). Each leaf reads one of the six lobby snapshots: the card `lobbyMedia`, the
 // bottom block `lobbyStatus`, the subtitle `lobbyPresence`, the identity rows `lobbyIdentity`, the link row
@@ -76,7 +77,7 @@ private struct LobbyIssueSection: View {
     let premeeting: PremeetingPresenter
 
     var body: some View {
-        if let status = premeeting.lobbyStatus, status.mode == .editing, let text = LobbyIssueCopy.text(status) {
+        if let status = premeeting.lobbyStatus, LobbyIssueCopy.showsRow(status), let text = LobbyIssueCopy.text(status) {
             LobbyGroupedSection {
                 LobbyGroupedRow {
                     VStack(alignment: .leading, spacing: 8) {
@@ -105,10 +106,18 @@ private struct LobbyIssueSection: View {
 }
 
 enum LobbyIssueCopy {
+    /// Issue rows show while editing; while connecting only the offline row (S10 8 f: the pending primary stays).
+    static func showsRow(_ status: LobbyStatusSnapshot) -> Bool {
+        status.mode == .editing || (status.mode == .connecting && status.issue == .offline)
+    }
+
     /// The issue row text, or nil when the issue has no row (invite code issues live in the invite field's footer).
     static func text(_ status: LobbyStatusSnapshot) -> String? {
         switch status.issue {
         case .offline:
+            if status.mode == .connecting {
+                return ConclaveStrings.text("You\u{2019}re offline. Waiting for a connection.")
+            }
             return ConclaveStrings.text("You\u{2019}re offline. Connect to the internet to join.")
         case .roomNotFound:
             return ConclaveStrings.text("No meeting found with this code. Check it and try again.")
@@ -297,7 +306,7 @@ private struct LobbyInviteCodeSection: View {
     }
 }
 
-// MARK: - Bottom block (S10 6 c EntryStatusBlock in editing; 8 and 9 in place until ENT-5)
+// MARK: - Bottom block (S10 6 c, 8 c, 9 c: ENT-5's EntryStatusBlock in all four modes)
 
 private struct LobbyBottomBar: ViewModifier {
     let premeeting: PremeetingPresenter
@@ -306,71 +315,13 @@ private struct LobbyBottomBar: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content.safeAreaBar(edge: .bottom) {
-                LobbyEntryStatusBlock(premeeting: premeeting, routeId: routeId)
+                EntryStatusBlock(premeeting: premeeting, routeId: routeId)
             }
         } else {
             content.safeAreaInset(edge: .bottom, spacing: 0) {
-                LobbyEntryStatusBlock(premeeting: premeeting, routeId: routeId)
+                EntryStatusBlock(premeeting: premeeting, routeId: routeId)
                     .background(Color(uiColor: .systemGroupedBackground))
             }
-        }
-    }
-}
-
-private struct LobbyEntryStatusBlock: View {
-    let premeeting: PremeetingPresenter
-    let routeId: Int
-
-    var body: some View {
-        if let status = premeeting.lobbyStatus, status.routeId == routeId {
-            VStack(spacing: 8) {
-                switch status.mode {
-                case .editing:
-                    ConclaveButton(LobbyPrimaryCopy.title(status.intent), role: .primary,
-                                   isEnabled: status.isPrimaryEnabled, isPending: status.isPrimaryPending,
-                                   identifier: "lobby.primary") {
-                        premeeting.startOrJoin()
-                    }
-                    .frame(maxWidth: .infinity)
-                    if let reason = LobbyPrimaryCopy.reason(status.primaryReason) {
-                        Text(reason)
-                            .font(.footnote)
-                            .foregroundStyle(HostingTheme.secondaryText)
-                            .multilineTextAlignment(.center)
-                            .accessibilityIdentifier("lobby.primary.reason")
-                    }
-                case .connecting, .waiting:
-                    HStack(spacing: 12) {
-                        ProgressView()
-                            .accessibilityHidden(true)
-                        Text(LobbyPrimaryCopy.progress(status))
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("lobby.status")
-                case .failed:
-                    VStack(alignment: .leading, spacing: 4) {
-                        Label(status.intent == .newMeeting ? ConclaveStrings.text("Couldn\u{2019}t Start")
-                                                           : ConclaveStrings.text("Couldn\u{2019}t Join"),
-                              systemImage: ConclaveSymbols.exclamationmarkOctagonFill)
-                            .foregroundStyle(Color(uiColor: .systemRed))
-                        if !status.issueServerText.isEmpty {
-                            Text(status.issueServerText)
-                                .font(.subheadline)
-                                .foregroundStyle(HostingTheme.secondaryText)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("lobby.status")
-                    ConclaveButton(ConclaveStrings.text("Try Again"), role: .primary, identifier: "lobby.retry") {
-                        premeeting.retryJoin()
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
     }
 }
@@ -399,26 +350,21 @@ enum LobbyPrimaryCopy {
             return nil
         }
     }
-
-    static func progress(_ status: LobbyStatusSnapshot) -> String {
-        if status.waitingKind == .reconnecting {
-            return ConclaveStrings.text("Reconnecting")
-        }
-        return status.mode == .waiting ? ConclaveStrings.text("Asking to Join") : ConclaveStrings.text("Joining")
-    }
 }
 
 // MARK: - Title, presence and chrome
 
-/// The inline title (room label) and the presence subtitle: iOS 26 `navigationSubtitle`; iOS 17 to 25 a principal
-/// item with title and caption. Presence changes are not announced (S10 6 i).
+/// The inline title (room label) and the subtitle: presence while editing, "Joining" or "Reconnecting" while
+/// connecting, nothing while waiting (S10 8 c, 9 c); iOS 26 `navigationSubtitle`; iOS 17 to 25 a principal item with
+/// title and caption. Presence changes are not announced (S10 6 i).
 private struct LobbyTitle: ViewModifier {
     let premeeting: PremeetingPresenter
     let route: PremeetingRoute
 
     func body(content: Content) -> some View {
         let title = premeeting.lobbyLink?.roomLabel ?? route.roomId
-        let subtitle = LobbyPresenceCopy.text(premeeting.lobbyPresence)
+        let status = premeeting.lobbyStatus?.routeId == route.id ? premeeting.lobbyStatus : nil
+        let subtitle = EntryStatusCopy.subtitle(status: status, presence: premeeting.lobbyPresence)
         if #available(iOS 26.0, *) {
             content
                 .navigationTitle(title)

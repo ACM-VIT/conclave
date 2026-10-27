@@ -37,7 +37,8 @@ struct ParticipantsPanel: View {
                    onPromoteToLarge: { adapter.promoteToLarge() }) {
             ParticipantsList(people: people, query: $query, isSearching: $isSearching)
                 .navigationDestination(for: PeopleRoute.self) { page in
-                    PeopleHostPage(route: page)
+                    // PPL-4 (S50 6 to 8): Host Controls and its pages, pushed inside this panel's one stack.
+                    HostPageView(people: people, page: page, link: { $0 })
                 }
         }
         // The presentation lifecycle, not the root List's onAppear: a pop never re-runs it, and a repeat for the same
@@ -45,6 +46,12 @@ struct ParticipantsPanel: View {
         .task(id: presentation.request.presentationID) {
             people.panelDidOpen(destination: presentation.request.destination,
                                 presentationID: presentation.request.presentationID)
+            // PL14: panel-origin failures render inline on iOS.
+            people.platform = NoticePlatform.ios
+        }
+        // RECONCILE R34: every push of Host Controls content into a medium sheet promotes it to large.
+        .onChange(of: route.count) { _, count in
+            if count > 0 { adapter.promoteToLarge() }
         }
         .background {
             PeoplePanelLeaves(people: people, panels: shell.panels, adapter: adapter, resolved: resolved,
@@ -70,6 +77,8 @@ private struct ParticipantsList: View {
         let queueCount = snapshot.section(PeopleSectionID.raisedHands)?.count ?? 0
         ScrollViewReader { proxy in
             List {
+                // PL14: the one inline failure slot for row actions (the lost-host banner slot).
+                PeopleFailureBannerSection(people: people)
                 if snapshot.showsLostHostNotice {
                     Section {
                         ConclaveBanner(kind: .info, text: ConclaveStrings.text("You\u{2019}re no longer a host."), surface: .app,
@@ -132,6 +141,7 @@ private struct ParticipantsList: View {
                     AccessibilityRotorEntry(Text(entry.label), id: entry.id, in: rotorNamespace)
                 }
             }
+            .modifier(PeopleRenameAlertHost(people: people))
             .accessibilityIdentifier("people.list")
         }
     }
@@ -166,9 +176,16 @@ private struct PeopleSectionRow: View {
         if sectionId == PeopleSectionID.waiting.rawValue {
             PeopleWaitingRowView(entry: people.waiting.entry(for: key), probe: people.recompose)
         } else {
-            PeopleRowView(entry: people.rows.entry(for: key), speaking: people.speaking.state(for: key), sectionId: sectionId,
-                          queueCount: queueCount, probe: people.recompose)
-                .accessibilityRotorEntry(id: sectionId + ":" + key, in: rotorNamespace)
+            let entry = people.rows.entry(for: key)
+            // PPL-2 (S50 3 c): the trailing Menu, the accessibility actions, the context menu, the swipe and the
+            // row-anchored confirmation, all from the row's own entry.
+            PeopleRowView(entry: entry, speaking: people.speaking.state(for: key), sectionId: sectionId,
+                          queueCount: queueCount, probe: people.recompose,
+                          onAction: { action in people.perform(action, rowId: key, source: PeopleActionSource.a11y) }) { model in
+                PeopleRowMenu(people: people, model: model, sectionId: sectionId)
+            }
+            .modifier(PeopleRowActionsModifier(people: people, entry: entry, sectionId: sectionId))
+            .accessibilityRotorEntry(id: sectionId + ":" + key, in: rotorNamespace)
         }
     }
 }
@@ -230,8 +247,8 @@ private struct PeopleQaNewCount: View {
     }
 }
 
-/// The pushed pages of the Participants stack (R50-2). PPL-4 fills Host Controls and the meeting access pages; until
-/// then the push, the title, Back and the panel's detent behave as they will (S50 1 l4, l10).
+/// An empty host page for callers that hold no presenter (kept for the Meeting Details stand-in, HD request B5-T2 R6);
+/// Participants pushes `HostPageView` (PPL-4).
 struct PeopleHostPage: View {
     let route: PeopleRoute
 

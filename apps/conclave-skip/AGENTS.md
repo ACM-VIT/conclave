@@ -407,8 +407,9 @@ MeetingViewModel.swift; the Kotlin decoders `decodeChatMessageObject` /
 `toChatMessage` and `decodeChatReactionsArray` in SocketIOManager+Android.kt
 (hand-rolled JSON, NOT transpiled); and the test fixtures. The image field was
 dropped by `normalizedChatMessage` on every receive until 2026-07-17. The
-`ChatMessage` fields `clientId`, `sendStatus` and `reactions` (S40 CH1 to CH3)
-must survive every site above.
+`ChatMessage` fields `clientId`, `sendStatus` and `reactions` (S40 CH1 to CH3),
+`isTts` and `ttsVoiceToken` (S40 CH4) and `suppressEmbeds` (S40 CH5) must survive
+every site above.
 
 ## Media Threading And Lifecycle Invariants
 

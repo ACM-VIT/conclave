@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,7 +33,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
-import skip.ui.UIApplication
 
 /*
  * S20 1 d (STG-1): the native call root, always dark (HostingTheme(inCall = true)). The panel host owns the panels and
@@ -51,6 +51,12 @@ internal fun CallRoot(
     renderers: StageRenderers,
     forceScreenReader: Boolean = false,
     activitySession: ActivitySession? = null,
+    /**
+     * STG-6 (RECONCILE R34): who generates a missing webinar link for Meeting details. null on the live route, which
+     * uses the People presenter's S50 HostControlsPresenter.ensureWebinarLink(); the stage fixture passes its counting
+     * stand-in (StageFixtureSession.ensureWebinarLink).
+     */
+    webinarLinkProvider: (suspend () -> String?)? = null,
     onMinimize: () -> Unit,
     onRoute: () -> Unit = {},
 ) {
@@ -61,6 +67,11 @@ internal fun CallRoot(
         val readout = remember { PanelHostReadout() }
         val chrome = remember(stage) { StageChromeVisibilityState() }
         val systemDark = isSystemInDarkTheme()
+        // SYS-4 (S70 3 d): while this root is mounted, Main.kt never swaps to the legacy PipContent.
+        DisposableEffect(Unit) {
+            PipController.setNativeRootComposed(true)
+            onDispose { PipController.setNativeRootComposed(false) }
+        }
         // PiP or moveTaskToBack, never a leave (S20 1 a); enabled only with no panel open (AND 10.2 item 4).
         BackHandler(enabled = panels.current == null) { onMinimize() }
         val ledger = renderers.ledger
@@ -76,12 +87,13 @@ internal fun CallRoot(
                         overlayInCall = inputs.overlayInCall, bottomStripInCall = true, systemDark = systemDark))
                 },
                 stage = { coverage ->
-                    StageSurface(shell, stage, renderers, chrome, coverage, forceScreenReader, onMinimize, onRoute)
+                    StageSurface(shell, stage, renderers, chrome, coverage, forceScreenReader, onMinimize, onRoute, people)
                 },
                 panel = { session, request, decision, variant ->
                     CallPanelContent(shell, stage, people, renderers, session, request, decision, variant,
                         onMounted = { lifetime.mounted(session, request.presentationID) },
-                        onDisposed = { lifetime.disposed(session, request.presentationID) })
+                        onDisposed = { lifetime.disposed(session, request.presentationID) },
+                        webinarLinkProvider = callRootWebinarLinkProvider(webinarLinkProvider, people))
                 },
             )
         }
@@ -102,20 +114,38 @@ internal fun CallRoot(
 }
 
 /**
- * Back with no panel open (S20 1 a): the call moves to the background and keeps running; it never leaves. SYS-4 (S70)
- * adds Picture in Picture entry here when the device and the call allow it.
+ * Back with no panel open (S20 1 a): the call moves to the background and keeps running; it never leaves. PiP entry
+ * comes from PipManager (SYS-4).
  */
 internal fun stageMinimizeToBackground() {
-    UIApplication.shared.androidActivity?.moveTaskToBack(true)
+    // SYS-4 (S70 D9): PiP when the call is eligible and the person allows it, else the task moves to the back.
+    PipManager.minimizeCurrent()
+}
+
+/**
+ * STG-6 (RECONCILE R34): the one owner of webinar link generation is the S50 HostControlsPresenter (PPL-4); the root
+ * forwards to it unless a fixture passed its own stand-in. Without either, the webinar link rows stay disabled.
+ */
+internal fun callRootWebinarLinkProvider(
+    override: (suspend () -> String?)?,
+    people: PeoplePresenter?,
+): (suspend () -> String?)? {
+    if (override != null) return override
+    val owner = people ?: return null
+    return suspend { owner.host.ensureWebinarLink() }
 }
 
 @Composable
 private fun StageSurface(
     shell: MeetingShellPresenter, stage: StagePresenter, renderers: StageRenderers, chrome: StageChromeVisibilityState,
     coverage: PanelStageCoverage, forceScreenReader: Boolean, onMinimize: () -> Unit, onRoute: () -> Unit,
+    people: PeoplePresenter? = null,
 ) {
     val ext = LocalConclaveExtendedColors.current
-    val paneTitle = conclaveString("stg_pane_call", stage.capsule.title)
+    // STG-8: an attendee's pane is named for the webinar (the capsule title is the webinar title, or the fallback).
+    val capsule = stage.capsule
+    val paneName = if (capsule.subtitleKind == AttendeeViewerPolicy.capsuleLiveKind) attendeeTitle(capsule.title) else capsule.title
+    val paneTitle = conclaveString("stg_pane_call", paneName)
     // A full overlay hides the stage from TalkBack (PS 8.3); the stage container only.
     val covered = coverage == PanelStageCoverage.full
     // STG-7: the stage's position in the window, for the PiP target in window px (S70 R70-10).
@@ -131,11 +161,22 @@ private fun StageSurface(
         },
     ) {
         StageCanvas(stage, renderers, chrome)
-        StageSoloLayer(stage, Modifier.fillMaxSize())
-        ReactionBurstLayer(stage)
-        StageChrome(shell, stage, chrome, forceScreenReader, onMinimize, onRoute)
-        // STG-5: banner, captions and toast lanes over the chrome; the notice sound output only on the live route.
-        NoticeLanes(stage, forceScreenReader, installsSound = !renderers.usesProbes)
+        if (PipController.chromeHiddenForPip) {
+            // SYS-4 (S70 3 b, 3 d): in PiP (or entering it on API 35) the canvas shows only the target (R9); this layer
+            // adds its name pill, avatar, solo text and Reconnecting pill. Chrome, lanes and reactions are not composed.
+            NativePipOverlay(stage, CallPresencePhasePolicy.phase(sessionPhase = shell.session.phase,
+                interruption = AudioInterruptionKind.none))
+        } else {
+            StageSoloLayer(stage, Modifier.fillMaxSize())
+            // STG-8 (S20 12 d): the attendee waiting state; reads only stage.attendee.
+            AttendeeWaitingLayer(stage, Modifier.attendeeLayer())
+            ReactionBurstLayer(stage)
+            // PPL-2 (S50 3 j, R50-9): tile-menu confirmations over the stage, HostingTheme(inCall = true) inside.
+            StagePeopleConfirmationHost(people)
+            StageChrome(shell, stage, chrome, forceScreenReader, onMinimize, onRoute)
+            // STG-5: banner, captions and toast lanes over the chrome; the notice sound output only on the live route.
+            NoticeLanes(stage, forceScreenReader, installsSound = !renderers.usesProbes)
+        }
         NoticeLaneSuspension(stage, coverage)
         StageAnnouncementRegion(stage)
         StageVisibilityReporter(stage, coverage, chrome, origin)
@@ -177,9 +218,13 @@ private fun stageAnnouncementText(announcement: StageAnnouncement): String = whe
     // S70 R70-1 (STG-5): recovery starts and ends on the same one-shot channel.
     StageNoticeAnnouncementKind.reconnecting -> conclaveString("sys_announce_reconnecting")
     StageNoticeAnnouncementKind.reconnected -> conclaveString("sys_announce_reconnected")
+    // STG-8 (S20 12 f, i): "You're now watching as an attendee." and "The webinar is live."
+    AttendeeViewerPolicy.demotedAnnouncement, AttendeeViewerPolicy.webinarLiveAnnouncement ->
+        attendeeAnnouncementText(announcement.kind) ?: announcement.name
     // STG-2 pin announcements (TileMenu.kt, HD request B4-T5 R9), then STG-9 activity start and end (ActivityStage.kt,
     // HD request B4-T8 R5b).
-    else -> tileAnnouncementText(announcement) ?: activityStageAnnouncement(announcement.kind, announcement.name) ?: announcement.name
+    else -> tileAnnouncementText(announcement) ?: shareAnnouncementText(announcement)
+        ?: activityStageAnnouncement(announcement.kind, announcement.name) ?: announcement.name
 }
 
 /** SL15: what the stage shows, from the laid-out frames, the panel coverage and the chrome state, debounced 150 ms. */
@@ -187,20 +232,21 @@ private fun stageAnnouncementText(announcement: StageAnnouncement): String = whe
 private fun StageVisibilityReporter(stage: StagePresenter, coverage: PanelStageCoverage, chrome: StageChromeVisibilityState, origin: Offset) {
     val layout = stage.layout
     val hidden = chrome.state.isHidden
-    // STG-7 (S20 SC11): the PiP target in window px from dp through the density (S70 R70-10); `isInPip` stays false
-    // until SYS-4 keeps the native root composed in PiP (S70 3 d).
+    val inPip = PipController.inPipMode
+    // STG-7 (S20 SC11): the PiP target in window px from dp through the density (S70 R70-10); `isInPip` follows
+    // PipController (SYS-4); SC11 keeps only the target's video in PiP.
     val choice = stage.pipTarget
     val sizeRevision = stage.frameSizes.revision
     val density = LocalDensity.current.density.toDouble()
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-    val report = remember(layout, coverage, hidden, choice, sizeRevision, density, rtl, origin) {
+    val report = remember(layout, coverage, hidden, inPip, choice, sizeRevision, density, rtl, origin) {
         val viewport = stage.viewport
         val frames = StageLayoutPolicy.frames(viewport = viewport, kind = layout.kind, slots = layout.slots, selfCorner = layout.selfCorner)
         val pipTarget = PipTargetPolicy.frame(choice = choice, frames = frames, canvasWidth = viewport.width,
             originX = origin.x.toDouble(), originY = origin.y.toDouble(), scale = density, isRightToLeft = rtl,
             frameSize = stage.frameSizes.size(slotId = choice.slotId))
         StageVisibilityPolicy.report(frames = frames, slots = layout.slots, viewport = viewport, kind = layout.kind,
-            coverage = coverage.rawValue, chromeHidden = hidden, isInPip = false, pipTarget = pipTarget)
+            coverage = coverage.rawValue, chromeHidden = hidden, isInPip = inPip, pipTarget = pipTarget)
     }
     LaunchedEffect(report) {
         delay(StageVisibilityPolicy.debounceMillis.toLong())
@@ -217,6 +263,7 @@ private fun StageVisibilityReporter(stage: StagePresenter, coverage: PanelStageC
 private fun CallPanelContent(
     shell: MeetingShellPresenter, stage: StagePresenter, people: PeoplePresenter?, renderers: StageRenderers, session: Int,
     request: PanelRequest, decision: PanelHostDecision, variant: InCallPageVariant, onMounted: () -> Unit, onDisposed: () -> Unit,
+    webinarLinkProvider: (suspend () -> String?)? = null,
 ) {
     val miniTileVideo: (@Composable () -> Unit)? = if (renderers.usesProbes) {
         @Composable {
@@ -224,6 +271,24 @@ private fun CallPanelContent(
                 modifier = Modifier.fillMaxSize(), pattern = renderers.pattern)
         }
     } else null
+    if (request.panel == MeetingPanel.meetingInfo) {
+        // STG-6 (S20 15 d): Meeting details, or Webinar details for an attendee (RECONCILE R44); Host controls and the
+        // attendee Settings push on the host's page stack.
+        MeetingDetailsPage(
+            stage = stage,
+            request = request,
+            variant = variant,
+            appearance = if (decision.inCallAppearance) PanelAppearance.inCall else PanelAppearance.system,
+            miniTile = if (decision.showsMiniTile) stageMiniTileModel(stage) else null,
+            onClose = { shell.panels.dismiss(cancelPending = true) },
+            onMounted = onMounted,
+            onDisposed = onDisposed,
+            miniTileVideo = miniTileVideo,
+            webinarLinkProvider = webinarLinkProvider,
+            people = people,
+        )
+        return
+    }
     if (request.panel == MeetingPanel.chat) {
         // CHT-1 (S40 1): the chat page passes hasComposer and the lazyList content mode to InCallPage itself.
         ChatPanel(
@@ -242,6 +307,22 @@ private fun CallPanelContent(
     if (request.panel == MeetingPanel.participants && people != null) {
         // PPL-1 (S50 1 d): the native Participants page, InCallPage in lazyList mode with the host's page stack.
         ParticipantsPage(
+            people = people,
+            request = request,
+            variant = variant,
+            appearance = if (decision.inCallAppearance) PanelAppearance.inCall else PanelAppearance.system,
+            miniTile = if (decision.showsMiniTile) stageMiniTileModel(stage) else null,
+            onClose = { shell.panels.dismiss(cancelPending = true) },
+            onMounted = onMounted,
+            onDisposed = onDisposed,
+            miniTileVideo = miniTileVideo,
+        )
+        return
+    }
+    if (request.panel == MeetingPanel.hostControls && people != null) {
+        // PPL-4 (S50 6 a): Host controls as a root page, InCallPage in lazyList mode whose page stack starts at Host
+        // controls (R50-2); the access, notice and webinar pages push on the same stack.
+        HostControlsPage(
             people = people,
             request = request,
             variant = variant,

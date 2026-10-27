@@ -52,6 +52,35 @@ enum PremeetingFixtureState: String, CaseIterable, Equatable {
     case accountGoogleOnly = "account-google-only"
     case accountAppleOnly = "account-apple-only"
     case accountProvidersFailed = "account-providers-failed"
+    // ENT-5 (S10 8 l, 9 l): the entry states on scripted timelines (no network, no media, no VM).
+    /// 8 l4: an initial failure the classifier reads as the network; the failed block with Try Again.
+    case failedNetwork = "failed-network"
+    /// 8 l7b: two 503 answers; after the one automatic retry the failed block says the server is restarting.
+    case failedServerBusy = "failed-server-busy"
+    /// 8 l7b: a 503 with Retry-After 2 then success: Connecting throughout, the call after 2 s.
+    case retryAfter = "retry-after"
+    /// 8 l5: a drop before the first admission stays in the lobby with "Reconnecting".
+    case recoveringBeforeAdmission = "recovering-before-admission"
+    /// 9 l1, l6: one fixture per waiting body.
+    case waitingLocked = "waiting-locked"
+    case waitingNoHost = "waiting-no-host"
+    case waitingHostAvailable = "waiting-host-available"
+    case waitingReconnecting = "waiting-reconnecting"
+    case waitingOffline = "waiting-offline"
+    case waitingServerRestarting = "waiting-server-restarting"
+    /// 9 l2: waiting, admitted after 3 s (Connecting), the call 1 s later.
+    case waitingToAdmitted = "waiting-to-admitted"
+    /// 9 l3: waiting, declined after 3 s: the outcome screen replaces the lobby.
+    case waitingDenied = "waiting-denied"
+    // ENT-6 (S10 10 l): every outcome row.
+    case outcomeDenied = "outcome-denied"
+    case outcomeServerDisconnected = "outcome-server-disconnected"
+    case outcomeRejoinFailed = "outcome-rejoin-failed"
+    /// 10 f `roomClosed`: the Home notice, no outcome screen.
+    case noticeRoomClosed = "notice-room-closed"
+    /// 2 j, RECONCILE R4: the Rejoin card with the view model's rejoin context; Rejoin connects with the previous
+    /// intent (microphone on, camera off) instead of opening an editable lobby.
+    case homeRejoin = "home-rejoin"
 }
 
 /// One scripted step: shell inputs and the premeeting-only inputs, applied after `delayMillis` from the previous step.
@@ -65,6 +94,8 @@ enum PremeetingFixtureScript {
     static let roomLabel = "rose-sora-luffy"
     static let selfCheckMillis = 10000
     static let selfCheckKey = "premeeting.fixture.selfCheck"
+    /// ENT-5 (S10 8 l8): the iOS readout of the card frame the entry expansion started from.
+    static let entryAnchorKey = "premeeting.fixture.entryAnchor"
     static let stateKey = "premeeting.fixture.state"
 
     static func state(named raw: String) -> PremeetingFixtureState? {
@@ -73,18 +104,46 @@ enum PremeetingFixtureScript {
 
     static let identity = MeetingSessionIdentity(callSession: 1, attempt: 1, attemptToken: "fixture-1")
 
-    static func base(updateRequired: Bool = false, resumeInFlight: Bool = false, guestName: String = "") -> PremeetingInputs {
+    static func base(updateRequired: Bool = false, resumeInFlight: Bool = false, guestName: String = "",
+                     isNetworkOffline: Bool = false, rejoinRoomId: String = "", serverRestartText: String = "",
+                     joinFailureCategory: String = "", joinFailureCode: String = "") -> PremeetingInputs {
         PremeetingInputs.make(
             currentRoomId: roomLabel,
             currentJoinMode: .meeting,
             accountName: guestName,
+            isNetworkOffline: isNetworkOffline,
             isAppActive: true,
             resumeInFlight: resumeInFlight,
             resumeRoomId: resumeInFlight ? roomLabel : "",
             updateRequired: updateRequired,
-            storeURL: updateRequired ? "https://apps.apple.com/app/id0" : ""
+            storeURL: updateRequired ? "https://apps.apple.com/app/id0" : "",
+            rejoinRoomId: rejoinRoomId,
+            serverRestartText: serverRestartText,
+            joinFailureCategory: joinFailureCategory,
+            joinFailureCode: joinFailureCode
         )
     }
+
+    /// The waiting room with a server sentence (S10 9 f triggers).
+    static func waiting(message: String? = nil, isRecoveringConnection: Bool = false) -> MeetingShellInputs {
+        MeetingShellInputs.make(identity: identity,
+                                connectionState: isRecoveringConnection ? ConnectionState.reconnecting : ConnectionState.waiting,
+                                isRecoveringConnection: isRecoveringConnection, waitingMessage: message,
+                                roomId: roomLabel, displayName: "Avery")
+    }
+
+    /// A drop before or after an admission (the shell's `recovering` phase).
+    static func recovering() -> MeetingShellInputs {
+        MeetingShellInputs.make(identity: identity, connectionState: .reconnecting, isRecoveringConnection: true,
+                                roomId: roomLabel, displayName: "Avery")
+    }
+
+    /// A clean server restart notice while waiting (S10 9 f `serverRestarting` shows the server text when present).
+    static let restartSentence = "Conclave is updating. Hang on for a moment."
+
+    /// ENT-6 (R4): the previous session's intent the scripted rejoin restores.
+    static let rejoinMicOn = true
+    static let rejoinCameraOn = false
 
     static func connecting(isMuted: Bool = true, isCameraOff: Bool = true) -> MeetingShellInputs {
         MeetingShellInputs.make(identity: identity, connectionState: .connecting, roomId: roomLabel, displayName: "Avery",
@@ -149,7 +208,8 @@ enum PremeetingFixtureScript {
             return [
                 PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: plain),
                 PremeetingFixtureStep(delayMillis: 0, shell: joined(), base: plain),
-                PremeetingFixtureStep(delayMillis: 0, shell: ended(.connectionLost, connectionState: .error), base: plain)
+                PremeetingFixtureStep(delayMillis: 0, shell: ended(.connectionLost, connectionState: .error),
+                                      base: base(rejoinRoomId: roomLabel))
             ]
         case .joinFailed:
             return [
@@ -160,6 +220,90 @@ enum PremeetingFixtureScript {
             return [PremeetingFixtureStep(delayMillis: 0, shell: home(), base: base(guestName: lobbyGuestName))]
         case .lobbyNameMissing:
             return [PremeetingFixtureStep(delayMillis: 0, shell: home(), base: plain)]
+        case .failedNetwork:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: plain),
+                PremeetingFixtureStep(delayMillis: 0, shell: ended(.joinFailed, connectionState: .error),
+                                      base: base(joinFailureCategory: MeetingErrorCategory.serverUnreachable.rawValue,
+                                                 joinFailureCode: "url.unreachable"))
+            ]
+        case .failedServerBusy:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: plain),
+                PremeetingFixtureStep(delayMillis: 2000, shell: ended(.joinFailed, connectionState: .error),
+                                      base: base(joinFailureCategory: MeetingErrorCategory.serverBusy.rawValue,
+                                                 joinFailureCode: "http.503"))
+            ]
+        case .retryAfter:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: plain),
+                PremeetingFixtureStep(delayMillis: 2000, shell: joined(), base: plain)
+            ]
+        case .recoveringBeforeAdmission:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: plain),
+                PremeetingFixtureStep(delayMillis: 0, shell: recovering(), base: plain)
+            ]
+        case .waitingLocked:
+            return [PremeetingFixtureStep(delayMillis: 0,
+                                          shell: waiting(message: "This meeting is locked. Waiting for the host to let you in."),
+                                          base: plain)]
+        case .waitingNoHost:
+            return [PremeetingFixtureStep(delayMillis: 0, shell: waiting(message: "No one to let you in."), base: plain)]
+        case .waitingHostAvailable:
+            return [PremeetingFixtureStep(delayMillis: 0, shell: waiting(message: "A host is available to let you in."),
+                                          base: plain)]
+        case .waitingReconnecting:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: waiting(), base: plain),
+                PremeetingFixtureStep(delayMillis: 0, shell: recovering(), base: plain)
+            ]
+        case .waitingOffline:
+            return [PremeetingFixtureStep(delayMillis: 0, shell: waiting(), base: base(isNetworkOffline: true))]
+        case .waitingServerRestarting:
+            return [PremeetingFixtureStep(delayMillis: 0, shell: waiting(),
+                                          base: base(serverRestartText: restartSentence))]
+        case .waitingToAdmitted:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: waiting(), base: plain),
+                PremeetingFixtureStep(delayMillis: 3000, shell: connecting(), base: plain),
+                PremeetingFixtureStep(delayMillis: 1000, shell: joined(), base: plain)
+            ]
+        case .waitingDenied:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: waiting(), base: plain),
+                PremeetingFixtureStep(delayMillis: 3000, shell: ended(.denied, connectionState: .error), base: plain)
+            ]
+        case .outcomeDenied:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: waiting(), base: plain),
+                PremeetingFixtureStep(delayMillis: 0, shell: ended(.denied, connectionState: .error), base: plain)
+            ]
+        case .outcomeServerDisconnected:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: plain),
+                PremeetingFixtureStep(delayMillis: 0, shell: joined(), base: plain),
+                PremeetingFixtureStep(delayMillis: 0, shell: ended(.serverDisconnected, connectionState: .disconnected),
+                                      base: base(rejoinRoomId: roomLabel))
+            ]
+        case .outcomeRejoinFailed:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: plain),
+                PremeetingFixtureStep(delayMillis: 0, shell: joined(), base: plain),
+                PremeetingFixtureStep(delayMillis: 0, shell: recovering(), base: plain),
+                PremeetingFixtureStep(delayMillis: 0, shell: ended(.joinFailed, connectionState: .error),
+                                      base: base(rejoinRoomId: roomLabel,
+                                                 joinFailureCategory: MeetingErrorCategory.offline.rawValue,
+                                                 joinFailureCode: "url.offline"))
+            ]
+        case .noticeRoomClosed:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: plain),
+                PremeetingFixtureStep(delayMillis: 0, shell: joined(), base: plain),
+                PremeetingFixtureStep(delayMillis: 0, shell: ended(.roomClosed, connectionState: .error), base: plain)
+            ]
+        case .homeRejoin:
+            return [PremeetingFixtureStep(delayMillis: 0, shell: home(), base: base(rejoinRoomId: roomLabel))]
         }
     }
 
@@ -377,6 +521,13 @@ final class PremeetingFixtureSession {
         case .leave, .dismissOutcome:
             // Scripted, never a view model: the session goes Home.
             apply(PremeetingFixtureStep(delayMillis: 0, shell: PremeetingFixtureScript.home(), base: lastBase))
+        case .rejoinLastMeeting:
+            // ENT-6 (R4): the scripted context rejoins with the previous intent and shows Connecting; nothing joins.
+            let mic = PremeetingFixtureScript.rejoinMicOn
+            let camera = PremeetingFixtureScript.rejoinCameraOn
+            apply(PremeetingFixtureStep(delayMillis: 0,
+                                        shell: PremeetingFixtureScript.connecting(isMuted: !mic, isCameraOff: !camera),
+                                        base: lastBase.withMediaIntent(micIntentOn: mic, cameraIntentOn: camera)))
         }
     }
 

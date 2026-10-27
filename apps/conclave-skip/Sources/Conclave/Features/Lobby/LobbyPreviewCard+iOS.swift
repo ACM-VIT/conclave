@@ -40,6 +40,8 @@ struct LobbyPreviewCard: View {
                     .strokeBorder(HostingTheme.inCallBorder, lineWidth: 1)
             )
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { cardWidth = $0 }
+            // ENT-5 (S10 8 c, L10): the entry expansion starts from this frame (a non-observed store write).
+            .entryTransitionAnchor(routeId: media.routeId)
             .conclaveInCallRegion()
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("lobby.card")

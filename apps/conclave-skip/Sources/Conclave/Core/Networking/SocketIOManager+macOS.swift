@@ -69,6 +69,8 @@ final class SocketIOManager {
     var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Void)?
     var onDmStateChanged: ((DmStateChangedNotification) -> Void)?
     var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Void)?
+    /// S50 PH5.
+    var onParticipantMediaPermissionsChanged: ((ParticipantMediaPermissionsChangedNotification) -> Void)?
     var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Void)?
     var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Void)?
     var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Void)?
@@ -87,6 +89,8 @@ final class SocketIOManager {
     /// Host-test seams for chat (S40 CH2, CH3): a send or reaction acknowledgement that fails, and the reaction set
     /// a successful `chat:react` returns.
     var testSendChatError: Error?
+    /// S40 CH5 (CHT-5): whether the last send carried `suppressEmbeds`.
+    var testLastSendSuppressedEmbeds = false
     var testChatReactionError: Error?
     var testChatReactionResult: [ChatMessageReaction]?
 
@@ -167,9 +171,11 @@ final class SocketIOManager {
     func toggleCamera(producerId: String, paused: Bool) async throws { }
     func closeProducer(producerId: String) async throws { }
 
-    func sendChat(content: String, gif: ChatGifAttachment? = nil, image: ChatImageAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil) async throws -> ChatMessage {
+    func sendChat(content: String, gif: ChatGifAttachment? = nil, image: ChatImageAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil, suppressEmbeds: Bool = false) async throws -> ChatMessage {
         if let error = testSendChatError { throw error }
-        return ChatMessage(userId: "local", displayName: "You", content: content, gif: gif, image: image, replyTo: replyTo)
+        testLastSendSuppressedEmbeds = suppressEmbeds
+        return ChatMessage(userId: "local", displayName: "You", content: content, gif: gif, image: image, replyTo: replyTo,
+                           suppressEmbeds: suppressEmbeds)
     }
     func toggleChatReaction(messageId: String, emoji: String) async throws -> [ChatMessageReaction] {
         try await testCallGate?("toggleChatReaction(\(emoji))")
@@ -228,9 +234,20 @@ final class SocketIOManager {
                 ttsDisabled: ttsDisabled,
                 dmEnabled: dmEnabled,
                 reactionsDisabled: reactionsDisabled,
-                requiresMeetingInviteCode: nil
+                requiresMeetingInviteCode: nil,
+                imageAttachmentsEnabled: nil,
+                participantUnmuteAllowed: nil,
+                participantVideoAllowed: nil
             )
         )
+    }
+    /// S50 PH6.
+    func setImageAttachmentsEnabled(_ enabled: Bool) async throws -> RoomPolicyMutationResponse {
+        RoomPolicyMutationResponse(success: true, error: nil, changed: nil, locked: nil, noGuests: nil, disabled: nil, enabled: enabled, policies: nil)
+    }
+    /// S50 PH5.
+    func setParticipantMediaPermissions(unmuteAllowed: Bool?, videoAllowed: Bool?) async throws -> ParticipantMediaPermissionsResponse {
+        ParticipantMediaPermissionsResponse(success: true, error: nil, unmuteAllowed: unmuteAllowed, videoAllowed: videoAllowed)
     }
     func getRoomLockStatus() async throws -> Bool { false }
     func getChatLockStatus() async throws -> Bool { false }

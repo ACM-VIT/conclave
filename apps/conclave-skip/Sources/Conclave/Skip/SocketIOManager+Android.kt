@@ -70,6 +70,7 @@ internal object SocketEvent {
     val setTtsDisabled = SfuClientEvent.setTtsDisabled.rawValue
     val setReactionsDisabled = SfuClientEvent.setReactionsDisabled.rawValue
     val setImageAttachmentsEnabled = SfuClientEvent.setImageAttachmentsEnabled.rawValue
+    val setParticipantMediaPermissions = SfuClientEvent.setParticipantMediaPermissions.rawValue
     val getRoomLockStatus = SfuClientEvent.getRoomLockStatus.rawValue
     val getChatLockStatus = SfuClientEvent.getChatLockStatus.rawValue
     val getDmEnabledStatus = SfuClientEvent.getDmEnabledStatus.rawValue
@@ -165,6 +166,7 @@ internal object SocketEvent {
     val noGuestsChanged = SfuServerEvent.noGuestsChanged.rawValue
     val dmStateChanged = SfuServerEvent.dmStateChanged.rawValue
     val imageAttachmentsStateChanged = SfuServerEvent.imageAttachmentsStateChanged.rawValue
+    val participantMediaPermissionsChanged = SfuServerEvent.participantMediaPermissionsChanged.rawValue
     val ttsDisabledChanged = SfuServerEvent.ttsDisabledChanged.rawValue
     val reactionsDisabledChanged = SfuServerEvent.reactionsDisabledChanged.rawValue
     val userRequestedJoin = SfuServerEvent.userRequestedJoin.rawValue
@@ -318,6 +320,8 @@ internal class SocketIOManager {
     internal var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Unit)? = null
     internal var onDmStateChanged: ((DmStateChangedNotification) -> Unit)? = null
     internal var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Unit)? = null
+    /** S50 PH5: the room's participant media permissions (also sent at join). */
+    internal var onParticipantMediaPermissionsChanged: ((ParticipantMediaPermissionsChangedNotification) -> Unit)? = null
     internal var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Unit)? = null
     internal var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Unit)? = null
     internal var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Unit)? = null
@@ -946,9 +950,11 @@ internal class SocketIOManager {
         gif: ChatGifAttachment? = null,
         image: ChatImageAttachment? = null,
         recipient: String? = null,
-        replyTo: ChatReplyPreview? = null
+        replyTo: ChatReplyPreview? = null,
+        suppressEmbeds: Boolean = false
     ): ChatMessage {
-        val request = SendChatRequest(content = content, gif = gif, image = image, recipient = recipient, replyTo = replyTo)
+        val request = SendChatRequest(content = content, gif = gif, image = image, recipient = recipient, replyTo = replyTo,
+            suppressEmbeds = if (suppressEmbeds) true else null)
         val data = emit(SocketEvent.sendChat, request)
         val response = JSONDecoder().decode(SendChatResponse::class, from = data)
         val notification = response.message ?: throw ErrorException("Missing chat message acknowledgement.")
@@ -1044,6 +1050,30 @@ internal class SocketIOManager {
     internal suspend fun setReactionsDisabled(disabled: Boolean): RoomPolicyMutationResponse {
         val data = emit(SocketEvent.setReactionsDisabled, mapOf("disabled" to disabled))
         return decodeRoomPolicyMutationResponse(data)
+    }
+
+    /** S50 PH6: `setImageAttachmentsEnabled` (adminHandlers.ts:1383-1404); the ack carries `enabled`. */
+    internal suspend fun setImageAttachmentsEnabled(enabled: Boolean): RoomPolicyMutationResponse {
+        val data = emit(SocketEvent.setImageAttachmentsEnabled, mapOf("enabled" to enabled))
+        return decodeRoomPolicyMutationResponse(data)
+    }
+
+    /**
+     * S50 PH5: `setParticipantMediaPermissions` (adminHandlers.ts:1444-1478). A null permission is left out of the
+     * payload, so the SFU keeps it; turning one off also closes the matching live producers server side.
+     */
+    internal suspend fun setParticipantMediaPermissions(unmuteAllowed: Boolean?, videoAllowed: Boolean?): ParticipantMediaPermissionsResponse {
+        val payload = mutableMapOf<String, Any>()
+        if (unmuteAllowed != null) payload["unmuteAllowed"] = unmuteAllowed
+        if (videoAllowed != null) payload["videoAllowed"] = videoAllowed
+        val data = emit(SocketEvent.setParticipantMediaPermissions, payload)
+        val obj = dataObject(data) ?: return JSONDecoder().decode(ParticipantMediaPermissionsResponse::class, from = data)
+        return ParticipantMediaPermissionsResponse(
+            success = boolField(obj, "success"),
+            error = stringField(obj, "error"),
+            unmuteAllowed = boolField(obj, "unmuteAllowed"),
+            videoAllowed = boolField(obj, "videoAllowed")
+        )
     }
 
     internal suspend fun setRoomPolicies(
@@ -2690,7 +2720,9 @@ internal class SocketIOManager {
             dmTargetDisplayName = null,
             roomId = stringField(obj, "roomId"),
             replyTo = null,
-            reactions = null
+            reactions = null,
+            ttsVoiceToken = null,
+            suppressEmbeds = null
         )
     }
 
@@ -2708,7 +2740,9 @@ internal class SocketIOManager {
             dmTargetDisplayName = stringField(obj, "dmTargetDisplayName"),
             roomId = stringField(obj, "roomId"),
             replyTo = obj.optJSONObject("replyTo")?.let { decodeChatReplyPreviewObject(it) },
-            reactions = decodeChatReactionsArray(obj.optJSONArray("reactions"))
+            reactions = decodeChatReactionsArray(obj.optJSONArray("reactions")),
+            ttsVoiceToken = stringField(obj, "ttsVoiceToken"),
+            suppressEmbeds = boolField(obj, "suppressEmbeds")
         )
     }
 
@@ -3062,7 +3096,10 @@ internal class SocketIOManager {
             ttsDisabled = boolField(obj, "ttsDisabled"),
             dmEnabled = boolField(obj, "dmEnabled"),
             reactionsDisabled = boolField(obj, "reactionsDisabled"),
-            requiresMeetingInviteCode = boolField(obj, "requiresMeetingInviteCode")
+            requiresMeetingInviteCode = boolField(obj, "requiresMeetingInviteCode"),
+            imageAttachmentsEnabled = boolField(obj, "imageAttachmentsEnabled"),
+            participantUnmuteAllowed = boolField(obj, "participantUnmuteAllowed"),
+            participantVideoAllowed = boolField(obj, "participantVideoAllowed")
         )
     }
 
@@ -3268,7 +3305,9 @@ internal class SocketIOManager {
             replyTo = replyTo,
             clientId = null,
             sendStatus = null,
-            reactions = reactions ?: skip.lib.Array()
+            reactions = reactions ?: skip.lib.Array(),
+            ttsVoiceToken = ttsVoiceToken,
+            suppressEmbeds = suppressEmbeds ?: false
         )
     }
 
@@ -3465,6 +3504,13 @@ internal class SocketIOManager {
             val notification = decode<ImageAttachmentsStateChangedNotification>(args.firstOrNull()) ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
             onImageAttachmentsStateChanged?.invoke(notification)
+        })
+
+        socket.on(SocketEvent.participantMediaPermissionsChanged, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val notification = decode<ParticipantMediaPermissionsChangedNotification>(args.firstOrNull()) ?: return@Listener
+            if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
+            onParticipantMediaPermissionsChanged?.invoke(notification)
         })
 
         socket.on(SocketEvent.ttsDisabledChanged, Emitter.Listener { args ->

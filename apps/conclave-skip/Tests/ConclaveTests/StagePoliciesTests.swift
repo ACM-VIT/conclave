@@ -577,7 +577,8 @@ struct StagePoliciesTests {
     @Test func everyFixtureStateBuildsAndMagicTapCountsOnce() {
         for state in StageFixtureState.allCases {
             let session = StageFixtureSession(state: state)
-            #expect(session.shell.session.phase == (state == StageFixtureState.recovering ? MeetingPhaseKind.recovering : MeetingPhaseKind.inCall), "\(state.rawValue)")
+            let recovers = state == StageFixtureState.recovering || state == StageFixtureState.meetingInfoRecovering
+            #expect(session.shell.session.phase == (recovers ? MeetingPhaseKind.recovering : MeetingPhaseKind.inCall), "\(state.rawValue)")
             #expect(StageFixtureScript.state(named: state.rawValue) == state)
         }
         let session = StageFixtureSession(state: .grid6)
@@ -686,7 +687,8 @@ struct StagePoliciesTests {
         #expect(root.contains("if (covered) hideFromAccessibility()"))
         let canvas = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/StageCanvas.kt"))
         #expect(canvas.contains("key(slot.id) {") && canvas.contains("placeRelative(x, y)"))
-        #expect(canvas.contains("SideEffect { stage.setViewport(viewport) }"))
+        // SYS-4 (S70 3 d, HD request B5-T4 R9): the PiP window never reaches the presenter's viewport.
+        #expect(canvas.contains("SideEffect { if (!inPip) stage.setViewport(viewport) }"))
         let slot = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/SlotView.kt"))
         #expect(slot.contains("rendererKey = \"stage:$slotId\", clearBeforeAttach = false"))
         #expect(slot.contains("graphicsLayer { alpha = if (minimized) 0f else 1f }"))

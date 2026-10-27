@@ -128,6 +128,7 @@ enum SfuClientEvent: String {
     case adminUnblockUsers = "admin:unblockUsers"
     case adminRevokeAllowedUsers = "admin:revokeAllowedUsers"
     case adminSetPolicies = "admin:setPolicies"
+    case setParticipantMediaPermissions = "setParticipantMediaPermissions"
     case adminCloseRoom = "admin:closeRoom"
     case adminEndRoom = "admin:endRoom"
 }
@@ -170,6 +171,7 @@ enum SfuServerEvent: String {
     case imageAttachmentsStateChanged = "imageAttachmentsStateChanged"
     case ttsDisabledChanged = "ttsDisabledChanged"
     case reactionsDisabledChanged = "reactionsDisabledChanged"
+    case participantMediaPermissionsChanged = "participantMediaPermissionsChanged"
     case kicked = "kicked"
     case roomClosed = "roomClosed"
     case roomEnded = "roomEnded"

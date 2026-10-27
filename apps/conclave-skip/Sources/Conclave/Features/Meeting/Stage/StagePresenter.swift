@@ -7,11 +7,13 @@ import Observation
 /// `withObservationTracking`). Every hot or narrowly read value is its own stored property and per-tile state lives in
 /// the SL4 stores, so a speaker change, a mute, a consumer swap or a reaction re-evaluates only the leaf that shows it.
 ///
-/// Extension points for later slices (keep per-feature state here, not in the views): STG-6 adds `meetingInfo`; STG-8
-/// adds `attendee`; STG-2 adds the tile menu and pin announcements. Requests against this file name the property they
-/// add. STG-5 (S20 10) added the notice lanes: `banner`, `toast`, `queuedToasts` and `noticeGeometry` from the
-/// `MeetingNoticeCenter` (state through `applyNotices`, events through `post`, presenter toasts through `postLocal`),
-/// the host notice sounds (`sounds`) and, with TRN-1, the captions leaf (`captions`, `captionsActive`).
+/// Extension points for later slices (keep per-feature state here, not in the views): STG-2 adds the tile menu and pin
+/// announcements. Requests against this file name the property they add. STG-5 (S20 10) added the notice lanes:
+/// `banner`, `toast`, `queuedToasts` and `noticeGeometry` from the `MeetingNoticeCenter` (state through `applyNotices`,
+/// events through `post`, presenter toasts through `postLocal`), the host notice sounds (`sounds`) and, with TRN-1, the
+/// captions leaf (`captions`, `captionsActive`). STG-6 (S20 15) added `meetingInfo` and STG-8 (S20 12) added
+/// `attendee`, both fed by `applyDetails(_:)` beside `apply(_:)` (the models and their pure policies sit at the end of
+/// this file; the one connection label is `ConnectionQualityLabelPolicy`).
 @MainActor
 @Observable
 final class StagePresenter {
@@ -36,6 +38,12 @@ final class StagePresenter {
     private(set) var noticeGeometry: NoticeLaneGeometry = NoticeLaneGeometry.zero
     /// TRN-1 (SC13): captions are on and live notes are live for a non-attendee in the call, so the strip mounts.
     private(set) var captionsActive: Bool = false
+    /// STG-6 (S20 15 j, k): non-nil only while Meeting Details is the current (or the queued) panel; built before the
+    /// panel presents and refreshed, equality guarded, by every input change while it shows. Only the panel reads it.
+    private(set) var meetingInfo: MeetingInfoSnapshot? = nil
+    /// STG-8 (S20 12 j): the attendee viewer's snapshot, non-nil only for a webinar attendee in the call. Only the
+    /// attendee viewer layers read it.
+    private(set) var attendee: AttendeeViewerSnapshot? = nil
     /// Stage outcome tokens (S1 shape); this presenter is the only publisher of the S20 kinds (RECONCILE R12).
     private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
 
@@ -62,6 +70,9 @@ final class StagePresenter {
     @ObservationIgnored var onActivityResolved: ((String) -> Void)? = nil
     /// Core only (STG-5): notice actions the view model performs (admit, audio-only, Retry Now, settings, resume, ...).
     @ObservationIgnored var onNoticeCommand: ((NoticeCommand) -> Void)? = nil
+    /// PPL-2 (RECONCILE R19): the session's People presenter, set by `PeoplePresenter.init`. The tile menu reads its
+    /// row action table (minus Admit and Deny) and performs people items with source `tileMenu`. Never observed.
+    @ObservationIgnored weak var people: PeoplePresenter? = nil
     /// Injectable clock and sleep (SL2) so the promotion timing is testable.
     @ObservationIgnored var now: () -> Double = { Date().timeIntervalSince1970 * 1000.0 }
     @ObservationIgnored var sleep: (Double) async -> Void = { millis in
@@ -110,6 +121,15 @@ final class StagePresenter {
     @ObservationIgnored private var noticeExpiryDeadline = 0.0
     /// Diagnostics: how many notice input sets were accepted (equal sets are skipped).
     @ObservationIgnored private(set) var noticeApplyCount = 0
+    /// STG-6, STG-8: the Meeting Details and attendee inputs (`applyDetails`), the stable connection label, the
+    /// attendee feed of the last rebuild and the one-shot announcement trackers.
+    @ObservationIgnored private(set) var details = StageDetailsInputs.make()
+    @ObservationIgnored private(set) var detailsApplyCount = 0
+    @ObservationIgnored private(set) var connectionLabel = ConnectionQualityLabel.measuring
+    @ObservationIgnored private(set) var attendeeFeed = AttendeeFeed.none
+    @ObservationIgnored private var lastAttendeeState = ""
+    @ObservationIgnored private var announcedWebinarLiveSession = -1
+    @ObservationIgnored private var meetingInfoOpening = false
 
     static let recentEventLimit = 20
 
@@ -130,12 +150,26 @@ final class StagePresenter {
         // STG-2: "Pinned %@" and "%@ left. Spotlight follows the speaker." (TileFeaturePolicy; never on the first
         // snapshot of a call, so the entry announcement keeps the one-shot channel).
         let pinAnnouncement = TileFeaturePolicy.pinAnnouncement(previous: inputs, next: next)
+        // STG-3 (S20 5 e, g, i): your share's outcome token and "%@ started presenting" for a remote presenter.
+        let shareToken = ShareAnnouncementPolicy.localShareFeedback(previous: inputs, next: next)
+        let startedPresenter = ShareAnnouncementPolicy.startedPresenterName(previous: inputs, next: next)
+        // STG-8 (S20 12 f): moved to the audience inside this call ("You're now watching as an attendee.").
+        let demoted = AttendeeViewerPolicy.isDemotion(previous: inputs, next: next)
         inputs = next
         rebuild()
         publishFeedbackTransitions()
         publishEntryAnnouncement()
         if !pinAnnouncement.kind.isEmpty {
             announce(kind: pinAnnouncement.kind, name: pinAnnouncement.name)
+        }
+        if let token = shareToken {
+            advanceFeedback(token)
+        }
+        if !startedPresenter.isEmpty {
+            announce(kind: ShareAnnouncementPolicy.presentingKind, name: startedPresenter)
+        }
+        if demoted {
+            announce(kind: AttendeeViewerPolicy.demotedAnnouncement, name: "")
         }
     }
 
@@ -209,6 +243,8 @@ final class StagePresenter {
         recomputeBlocker()
         notices.setCurrentPanel(shell.panels.snapshot.current?.panel.rawValue ?? "", nowMillis: now())
         publishNotices()
+        // STG-6 (S20 15 k): Meeting Details opened from More builds its snapshot here; closing it clears the snapshot.
+        refreshMeetingInfo()
     }
 
     // MARK: Canvas
@@ -273,8 +309,12 @@ final class StagePresenter {
         if let onCommand = onCommand { onCommand(StageCommand(kind: StageCommandKind.flipCamera, userId: "", value: "")) }
     }
 
-    /// The capsule opens Meeting Details (S20 7 a), invoker `.call`.
+    /// The capsule opens Meeting Details (S20 7 a), invoker `.call`; for an attendee it opens the Webinar Details variant
+    /// (S20 12 a, RECONCILE R44). The snapshot is built before the panel presents (S20 15 k), so its first frame is full.
     func openMeetingInfo() {
+        meetingInfoOpening = true
+        refreshMeetingInfo()
+        meetingInfoOpening = false
         shell.panels.present(MeetingPanel.meetingInfo, from: PanelInvoker.call)
     }
 
@@ -406,6 +446,15 @@ final class StagePresenter {
         announcedEntrySession = -1
         lastGameActive = false
         lastLiveNotes = LiveNotesState.off
+        details = StageDetailsInputs.make()
+        detailsApplyCount = 0
+        connectionLabel = ConnectionQualityLabel.measuring
+        attendeeFeed = AttendeeFeed.none
+        lastAttendeeState = ""
+        announcedWebinarLiveSession = -1
+        meetingInfoOpening = false
+        if meetingInfo != nil { meetingInfo = nil }
+        if attendee != nil { attendee = nil }
         cancelNoticeExpiry()
         notices.reset()
         sounds.reset()
@@ -447,6 +496,9 @@ final class StagePresenter {
         let activityResolution = resolveActivities()
         var nextKind = StageLayoutPolicy.kind(inputs, showsVideoOverActivity: activityResolution.showsVideoOverActivity)
         if nextKind.isActivity, let card = activityResolution.stageKind { nextKind = card }
+        // STG-8 (S20 12): an attendee's stage is the program feed (a live share first, else the speaker), never a grid.
+        attendeeFeed = inputs.isWebinarAttendee ? AttendeeViewerPolicy.feed(inputs) : AttendeeFeed.none
+        if inputs.isWebinarAttendee { nextKind = AttendeeViewerPolicy.kind(attendeeFeed) }
         let capacity = StageLayoutPolicy.capacity(viewport: viewport, kind: nextKind, count: present.count,
                                                   viewMaxTiles: inputs.viewMaxTiles)
         let keepSpeaker = currentSpeakerId.isEmpty ? featuredUserId : currentSpeakerId
@@ -468,12 +520,15 @@ final class StagePresenter {
             fitOverrides: fitOverrides
         ))
         let corner = inputs.isEffectsOpen ? "top-right" : inputs.selfViewCorner
+        // STG-8: one feed slot plus at most one speaker inset; slot ids stay "p:" and "share:" so a share starting
+        // moves the speaker's renderer into the inset instead of recreating it (S20 12 k, l).
+        let attendeeSlots = AttendeeViewerPolicy.slots(attendeeFeed, fitOverrides: fitOverrides)
         let candidate = StageLayoutSnapshot(
             revision: layout.revision,
             kind: nextKind,
-            slots: plan.slots,
-            overflowCount: plan.overflowCount,
-            overflowSeeds: plan.overflowSeeds,
+            slots: inputs.isWebinarAttendee ? attendeeSlots : plan.slots,
+            overflowCount: inputs.isWebinarAttendee ? 0 : plan.overflowCount,
+            overflowSeeds: inputs.isWebinarAttendee ? [] : plan.overflowSeeds,
             capacity: capacity,
             pinnedUserId: inputs.pinnedUserId,
             featuredUserId: featuredUserId,
@@ -499,7 +554,7 @@ final class StagePresenter {
         }
         tileChrome.prune(keeping: presentIds)
         speaking.prune(keeping: presentIds)
-        writeBindings(plan.slots, present: present)
+        writeBindings(layout.slots, present: present)
 
         let nextCapsule = capsuleModel(present)
         if nextCapsule != capsule { capsule = nextCapsule }
@@ -516,6 +571,8 @@ final class StagePresenter {
         if geometry != noticeGeometry { noticeGeometry = geometry }
         updateCaptionsActive()
         publishActivityChanges(activityResolution)
+        refreshAttendee()
+        refreshMeetingInfo()
     }
 
     /// The status chips row under the top chrome (hand, Now Playing, Share Invite; S20 7): the banner sits below it.
@@ -573,6 +630,13 @@ final class StagePresenter {
 
     private func capsuleModel(_ present: [StageParticipantInput]) -> StageCapsuleModel {
         let count = max(1, present.count)
+        if inputs.isWebinarAttendee {
+            // S20 12 c: the webinar title (SC22; empty selects the "Webinar" fallback in the view), "Live", no lock,
+            // count or captions.
+            return StageCapsuleModel(title: details.webinarTitle, subtitleKind: AttendeeViewerPolicy.capsuleLiveKind,
+                                     subtitleName: "", count: count, isLocked: false, captionsOn: false,
+                                     liveNotes: LiveNotesState.off)
+        }
         var kind = StageCapsuleModel.countKind
         var name = ""
         if inputs.isLocalScreenSharing {
@@ -591,6 +655,7 @@ final class StagePresenter {
         let local = StageOrderPolicy.participant(inputs.localUserId, in: present)
         let cameraOn = !(local?.isCameraOff ?? true)
         return StageChromeSnapshot(revision: 0, canFlipCamera: inputs.canFlipCamera && cameraOn, isFrontCamera: inputs.isFrontCamera,
+                                   isFlipInFlight: inputs.isFlipInFlight && cameraOn, isCameraPaused: inputs.isCameraPaused && cameraOn,
                                    nowPlaying: chip, routeKind: inputs.routeKind, routeName: inputs.routeName,
                                    isAttendee: inputs.isWebinarAttendee)
     }
@@ -655,8 +720,9 @@ final class StagePresenter {
     }
 
     private func hasRemoteVideoOrShare() -> Bool {
+        // STG-8 (S20 12 c): an attendee's chrome auto-hides once the program feed is live.
+        if inputs.isWebinarAttendee { return !attendeeFeed.userId.isEmpty }
         if !inputs.screenShareUserId.isEmpty { return true }
-        if inputs.isWebinarAttendee && !inputs.webinarSpeakerUserId.isEmpty { return true }
         for participant in inputs.participants {
             if !participant.isLocal && !participant.isLeaving && !participant.isCameraOff { return true }
         }
@@ -854,6 +920,9 @@ final class StagePresenter {
             case "screenShare":
                 shell.toggleScreenShare()
                 return
+            case "flipCamera":
+                _ = StageCameraFlip.perform(self)
+                return
             default:
                 break
             }
@@ -911,6 +980,68 @@ final class StagePresenter {
     }
 
     var hasLiveNoticeExpiryTask: Bool { noticeExpiryTask != nil }
+
+    // MARK: Meeting Details and the attendee viewer (STG-6: S20 15, SC15; STG-8: S20 12, SC22)
+
+    /// Core only: the Meeting Details and attendee inputs, on the stage refresh path after `apply` and `applyNotices`.
+    /// Equal inputs are skipped. The connection label goes through the one shared policy (RECONCILE R21) and keeps its
+    /// last measured value while the call recovers (SC15).
+    func applyDetails(_ next: StageDetailsInputs) {
+        if next == details && detailsApplyCount > 0 { return }
+        if details.callSession != 0 && next.callSession != details.callSession {
+            connectionLabel = ConnectionQualityLabel.measuring
+        }
+        detailsApplyCount += 1
+        details = next
+        let label = ConnectionQualityLabelPolicy.label(next.connectionQuality, hasSample: next.connectionHasSample,
+                                                       statsFailed: next.connectionStatsFailed)
+        connectionLabel = ConnectionQualityLabelPolicy.stable(previous: connectionLabel, next: label,
+                                                              isRecovering: inputs.isRecovering)
+        if inputs.isWebinarAttendee {
+            // The capsule title, the waiting count, Q&A and the hand capability live in the rebuild.
+            rebuild()
+        } else {
+            refreshMeetingInfo()
+        }
+    }
+
+    /// Meeting Details is current, queued behind a dismissal, or about to present from the capsule.
+    private var isMeetingInfoShowing: Bool {
+        meetingInfoOpening || shell.panels.isShowingOrQueued(MeetingPanel.meetingInfo)
+    }
+
+    /// S20 15 k: built from inputs only (never the async webinar link request, R34) while the panel shows, equality
+    /// guarded, so a lock, live notes, host or connection change shows at once and roster churn publishes nothing.
+    private func refreshMeetingInfo() {
+        if !isMeetingInfoShowing {
+            if meetingInfo != nil { meetingInfo = nil }
+            return
+        }
+        let next = MeetingInfoPolicy.snapshot(inputs: inputs, details: details, connection: connectionLabel)
+        if next != meetingInfo { meetingInfo = next }
+    }
+
+    /// S20 12 j: the attendee snapshot (waiting or live, the feed, the inset, Q&A and the hand capability) and the one
+    /// "The webinar is live." announcement per call session when the feed first goes live from waiting.
+    private func refreshAttendee() {
+        if !inputs.isWebinarAttendee || !inputs.isInCall {
+            if attendee != nil { attendee = nil }
+            lastAttendeeState = ""
+            return
+        }
+        let next = AttendeeViewerPolicy.snapshot(inputs: inputs, details: details, feed: attendeeFeed, hand: localHand)
+        if let current = attendee {
+            if next != current.withRevision(0) { attendee = next.withRevision(current.revision + 1) }
+        } else {
+            attendee = next.withRevision(1)
+        }
+        if lastAttendeeState == AttendeeViewerPolicy.waitingState && next.state == AttendeeViewerPolicy.liveState
+            && announcedWebinarLiveSession != inputs.callSession {
+            announcedWebinarLiveSession = inputs.callSession
+            announce(kind: AttendeeViewerPolicy.webinarLiveAnnouncement, name: "")
+        }
+        lastAttendeeState = next.state
+    }
 
     // MARK: Promotion (SL2: one cancellable task, injectable clock and sleep)
 
@@ -984,5 +1115,420 @@ final class StagePresenter {
         promotionTask?.cancel()
         promotionTask = nil
         pendingPromotionCandidate = ""
+    }
+}
+
+// MARK: - STG-6 and STG-8 models and pure policies (S20 0.5, 12 j, 15 j; S1C 3.6 Kotlin DTO rules)
+
+/// STG-6, STG-8: what the core sends beyond `StageInputs` (StageModels.swift had no owner in batch 5), pushed through
+/// `StagePresenter.applyDetails(_:)` on the stage refresh path like the STG-5 notice inputs. The view model builds it
+/// in `makeStageDetailsInputs()` (HD request B5-T2 R1); every field has a default, so a missing source reads empty.
+struct StageDetailsInputs: Equatable {
+    let callSession: Int
+    /// `MeetingState.roomId` (MS:150): the code people type. The capsule title stays `StageInputs.roomLabel`.
+    let roomCode: String
+    /// `meetingRequiresInviteCode` (MS:160): the host's "Invite Code Required" status row.
+    let requiresInviteCode: Bool
+    /// `isWebinarEnabled` (MS:168) and `isWebinarPublicAccess` (MS:169).
+    let isWebinarEnabled: Bool
+    let isWebinarPublicAccess: Bool
+    /// `webinarLinkURL` (MS:175), read only: empty means not generated yet. Only the link actions generate it, through
+    /// the S50 `HostControlsPresenter.ensureWebinarLink()` (RECONCILE R34).
+    let webinarLinkURL: String
+    /// SC22 (WP7): the webinar landing title; empty selects the "Webinar" fallback copy.
+    let webinarTitle: String
+    /// `webinarAttendeeCount` (MS:172): "%lld people are waiting with you".
+    let webinarAttendeeCount: Int
+    /// S50 PH7 (batch 6): Q&A is on, and the viewer's role-appropriate unseen counter (RECONCILE R18).
+    let isWebinarQaEnabled: Bool
+    let webinarQaUnseen: Int
+    /// S20 Q10: the attendee hand capability (PPL-5, batch 6); hidden until it is true.
+    let attendeeCanRaiseHand: Bool
+    /// SC15: the one `ConnectionQualityLabelPolicy` inputs: the stabilized `connectionQuality` (MS:378), whether a usable
+    /// sample arrived in this call session, and whether stats stopped reporting since.
+    let connectionQuality: ConnectionQuality
+    let connectionHasSample: Bool
+    let connectionStatsFailed: Bool
+
+    static func make(
+        callSession: Int = 0,
+        roomCode: String = "",
+        requiresInviteCode: Bool = false,
+        isWebinarEnabled: Bool = false,
+        isWebinarPublicAccess: Bool = false,
+        webinarLinkURL: String = "",
+        webinarTitle: String = "",
+        webinarAttendeeCount: Int = 0,
+        isWebinarQaEnabled: Bool = false,
+        webinarQaUnseen: Int = 0,
+        attendeeCanRaiseHand: Bool = false,
+        connectionQuality: ConnectionQuality = ConnectionQuality.unknown,
+        connectionHasSample: Bool = false,
+        connectionStatsFailed: Bool = false
+    ) -> StageDetailsInputs {
+        StageDetailsInputs(callSession: callSession, roomCode: roomCode, requiresInviteCode: requiresInviteCode,
+                           isWebinarEnabled: isWebinarEnabled, isWebinarPublicAccess: isWebinarPublicAccess,
+                           webinarLinkURL: webinarLinkURL, webinarTitle: webinarTitle,
+                           webinarAttendeeCount: webinarAttendeeCount, isWebinarQaEnabled: isWebinarQaEnabled,
+                           webinarQaUnseen: webinarQaUnseen, attendeeCanRaiseHand: attendeeCanRaiseHand,
+                           connectionQuality: connectionQuality, connectionHasSample: connectionHasSample,
+                           connectionStatsFailed: connectionStatsFailed)
+    }
+}
+
+/// S20 15 j: everything Meeting Details shows, built from inputs only. Additions to the spec's field list:
+/// `roomLabel` (share preview and EXTRA_TITLE), `isWebinarEnabled` (the host's webinar rows), `webinarTitle` (the
+/// attendee variant) and `isRecovering` (the Host Controls row reason, 15 f).
+struct MeetingInfoSnapshot: Equatable {
+    let roomCode: String
+    let link: String
+    let roomLabel: String
+    let isLocked: Bool
+    let liveNotes: LiveNotesState
+    let captionsOn: Bool
+    let hostNames: [String]
+    let joinedAtMillis: Double
+    let connection: ConnectionQualityLabel
+    let isHost: Bool
+    let requiresInviteCode: Bool
+    let isWebinarEnabled: Bool
+    let webinarLink: String
+    let isWebinarPublic: Bool
+    let isAttendee: Bool
+    let webinarTitle: String
+    let isRecovering: Bool
+}
+
+/// The sections of Meeting Details in S20 15 b order (the attendee variant uses `attendee` and `settings`).
+enum MeetingInfoSection: String, CaseIterable, Equatable {
+    case room, status, webinar, details, host, attendee, settings
+}
+
+/// One row of Meeting Details; the raw value is the stable list key and the accessibility identifier suffix.
+enum MeetingInfoRowID: String, CaseIterable, Equatable {
+    case roomCode, copyCode, meetingLink, shareInvite, copyLink
+    case meetingLocked, liveNotes, captions, inviteCodeRequired
+    case shareWebinarLink, copyWebinarLink
+    case hosts, started, connection
+    case hostControls
+    case webinarTitle, settings
+}
+
+struct MeetingInfoRow: Equatable, Identifiable {
+    let row: MeetingInfoRowID
+    let section: MeetingInfoSection
+
+    var id: String { row.rawValue }
+}
+
+/// S20 15: the pure rules both platforms and both test hosts read (rows, values, enablement, copy keys).
+enum MeetingInfoPolicy {
+    /// Copy confirms inline for 2 s on iOS (F00 C13: no toast on a system-appearance sheet), 15 c, f.
+    static let copiedMillis = 2000.0
+    /// Android 13 (API 33) and later show the system clipboard confirmation, so the app's own "Link copied" snackbar
+    /// appears only on API 28 to 32 (S20 15 d, D-24).
+    static let systemCopyConfirmationApi = 33
+
+    static func snapshot(inputs: StageInputs, details: StageDetailsInputs, connection: ConnectionQualityLabel) -> MeetingInfoSnapshot {
+        let local = inputs.participant(inputs.localUserId)
+        return MeetingInfoSnapshot(
+            roomCode: details.roomCode,
+            link: inputs.meetingLink,
+            roomLabel: inputs.roomLabel,
+            isLocked: inputs.isRoomLocked,
+            liveNotes: inputs.liveNotes,
+            captionsOn: inputs.captionsOn,
+            hostNames: hostNames(inputs.participants),
+            joinedAtMillis: inputs.joinedAtMillis,
+            connection: connection,
+            isHost: local?.isHost ?? false,
+            requiresInviteCode: details.requiresInviteCode,
+            isWebinarEnabled: details.isWebinarEnabled,
+            webinarLink: details.webinarLinkURL,
+            isWebinarPublic: details.isWebinarPublicAccess,
+            isAttendee: inputs.isWebinarAttendee,
+            webinarTitle: details.webinarTitle,
+            isRecovering: inputs.isRecovering
+        )
+    }
+
+    /// Present hosts in join order (the one join order shared with People, RECONCILE R20); you, unnumbered, last.
+    static func hostNames(_ participants: [StageParticipantInput]) -> [String] {
+        var remotes: [StageParticipantInput] = []
+        var localName = ""
+        for participant in participants {
+            if participant.isLeaving || !participant.isHost { continue }
+            let name = participant.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty { continue }
+            if participant.isLocal {
+                localName = name
+            } else {
+                remotes.append(participant)
+            }
+        }
+        let ordered = remotes.sorted { a, b in
+            if a.joinSerial != b.joinSerial {
+                if a.joinSerial == 0 { return false }
+                if b.joinSerial == 0 { return true }
+                return a.joinSerial < b.joinSerial
+            }
+            return a.userId < b.userId
+        }
+        var result: [String] = []
+        for participant in ordered {
+            result.append(participant.displayName.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        if !localName.isEmpty { result.append(localName) }
+        return result
+    }
+
+    /// The rows in S20 15 b order. Hosts see the invite-code status, the webinar link rows (with the webinar on) and
+    /// Host Controls; the attendee variant (RECONCILE R44) shows the webinar title, hosts, Share Webinar Link only for
+    /// a public webinar whose link exists, and one Settings row; no room code, status or connection rows.
+    static func rows(_ snapshot: MeetingInfoSnapshot) -> [MeetingInfoRow] {
+        var result: [MeetingInfoRow] = []
+        if snapshot.isAttendee {
+            result.append(MeetingInfoRow(row: MeetingInfoRowID.webinarTitle, section: MeetingInfoSection.attendee))
+            if !snapshot.hostNames.isEmpty {
+                result.append(MeetingInfoRow(row: MeetingInfoRowID.hosts, section: MeetingInfoSection.attendee))
+            }
+            if snapshot.isWebinarPublic && !snapshot.webinarLink.isEmpty {
+                result.append(MeetingInfoRow(row: MeetingInfoRowID.shareWebinarLink, section: MeetingInfoSection.attendee))
+            }
+            result.append(MeetingInfoRow(row: MeetingInfoRowID.settings, section: MeetingInfoSection.settings))
+            return result
+        }
+        if !snapshot.roomCode.isEmpty {
+            result.append(MeetingInfoRow(row: MeetingInfoRowID.roomCode, section: MeetingInfoSection.room))
+            result.append(MeetingInfoRow(row: MeetingInfoRowID.copyCode, section: MeetingInfoSection.room))
+        }
+        if !snapshot.link.isEmpty {
+            result.append(MeetingInfoRow(row: MeetingInfoRowID.meetingLink, section: MeetingInfoSection.room))
+            result.append(MeetingInfoRow(row: MeetingInfoRowID.shareInvite, section: MeetingInfoSection.room))
+            result.append(MeetingInfoRow(row: MeetingInfoRowID.copyLink, section: MeetingInfoSection.room))
+        }
+        result.append(MeetingInfoRow(row: MeetingInfoRowID.meetingLocked, section: MeetingInfoSection.status))
+        result.append(MeetingInfoRow(row: MeetingInfoRowID.liveNotes, section: MeetingInfoSection.status))
+        if snapshot.captionsOn {
+            result.append(MeetingInfoRow(row: MeetingInfoRowID.captions, section: MeetingInfoSection.status))
+        }
+        if snapshot.isHost && snapshot.requiresInviteCode {
+            result.append(MeetingInfoRow(row: MeetingInfoRowID.inviteCodeRequired, section: MeetingInfoSection.status))
+        }
+        if snapshot.isHost && snapshot.isWebinarEnabled {
+            result.append(MeetingInfoRow(row: MeetingInfoRowID.shareWebinarLink, section: MeetingInfoSection.webinar))
+            result.append(MeetingInfoRow(row: MeetingInfoRowID.copyWebinarLink, section: MeetingInfoSection.webinar))
+        }
+        if !snapshot.hostNames.isEmpty {
+            result.append(MeetingInfoRow(row: MeetingInfoRowID.hosts, section: MeetingInfoSection.details))
+        }
+        if snapshot.joinedAtMillis > 0 {
+            result.append(MeetingInfoRow(row: MeetingInfoRowID.started, section: MeetingInfoSection.details))
+        }
+        result.append(MeetingInfoRow(row: MeetingInfoRowID.connection, section: MeetingInfoSection.details))
+        if snapshot.isHost {
+            result.append(MeetingInfoRow(row: MeetingInfoRowID.hostControls, section: MeetingInfoSection.host))
+        }
+        return result
+    }
+
+    /// The row ids in order (tests and readouts).
+    static func rowIds(_ snapshot: MeetingInfoSnapshot) -> [String] {
+        var ids: [String] = []
+        for row in rows(snapshot) {
+            ids.append(row.id)
+        }
+        return ids
+    }
+
+    /// The sections that have rows, in order (the views draw one section each).
+    static func sections(_ snapshot: MeetingInfoSnapshot) -> [MeetingInfoSection] {
+        var result: [MeetingInfoSection] = []
+        for row in rows(snapshot) {
+            if !result.contains(row.section) { result.append(row.section) }
+        }
+        return result
+    }
+
+    static func sectionRows(_ snapshot: MeetingInfoSnapshot, section: MeetingInfoSection) -> [MeetingInfoRow] {
+        var result: [MeetingInfoRow] = []
+        for row in rows(snapshot) {
+            if row.section == section { result.append(row) }
+        }
+        return result
+    }
+
+    /// 15 f recovering: Host Controls stays visible but disabled with "Unavailable while reconnecting".
+    static func isHostControlsEnabled(_ snapshot: MeetingInfoSnapshot) -> Bool {
+        !snapshot.isRecovering
+    }
+
+    /// The webinar link actions work for an existing link at any time; generating a missing one needs the connection
+    /// (it is a host socket request, VM:9668-9684), so it waits out a recovery.
+    static func isWebinarLinkActionEnabled(_ snapshot: MeetingInfoSnapshot) -> Bool {
+        !snapshot.webinarLink.isEmpty || !snapshot.isRecovering
+    }
+
+    /// The app's own copy confirmation on Android (API 28 to 32 only).
+    static func showsCopySnackbar(sdkInt: Int) -> Bool {
+        sdkInt < systemCopyConfirmationApi
+    }
+
+    /// The Live Notes status value: Off, Starting, On, Paused, Needs Attention (15 g; iOS catalog keys).
+    static func liveNotesCatalogKey(_ state: LiveNotesState) -> String {
+        switch state {
+        case .off: return "Off"
+        case .starting: return "Starting"
+        case .live: return "On"
+        case .paused: return "Paused"
+        case .needsAttention: return "Needs Attention"
+        }
+    }
+
+    /// The same values as Android resource names (15 g).
+    static func liveNotesAndroidName(_ state: LiveNotesState) -> String {
+        switch state {
+        case .off: return "stg_off"
+        case .starting: return "stg_state_starting"
+        case .live: return "stg_on"
+        case .paused: return "stg_state_paused"
+        case .needsAttention: return "stg_state_needs_attention"
+        }
+    }
+}
+
+/// STG-8: what the attendee's program feed shows (S20 12 c, WEB PPL-32): a live share first, with the presenter's
+/// camera as the inset while it is on; else the webinar speaker; else the first panelist with a camera on.
+struct AttendeeFeed: Equatable {
+    let userId: String
+    let isShare: Bool
+    let insetUserId: String
+
+    static let none = AttendeeFeed(userId: "", isShare: false, insetUserId: "")
+}
+
+/// S20 0.5 `AttendeeViewerSnapshot`, plus `feedName` for the feed's accessibility label ("Live Video from %@").
+struct AttendeeViewerSnapshot: Equatable {
+    let revision: Int
+    /// "waiting" or "live" (`AttendeeViewerPolicy.waitingState`, `liveState`).
+    let state: String
+    /// WP7 `webinarTitle` (SC22); empty selects the fallback copy.
+    let title: String
+    let waitingCount: Int
+    let feedUserId: String
+    let feedName: String
+    let isShareFeed: Bool
+    let insetUserId: String
+    let hand: LocalHandState
+    let canRaiseHand: Bool
+    let qaEnabled: Bool
+    /// Derived: the viewer's role-appropriate counter over the canonical S50 PH7 fields (RECONCILE R18); 0 with Q&A off.
+    let webinarQaUnseen: Int
+
+    func withRevision(_ next: Int) -> AttendeeViewerSnapshot {
+        AttendeeViewerSnapshot(revision: next, state: state, title: title, waitingCount: waitingCount, feedUserId: feedUserId,
+                               feedName: feedName, isShareFeed: isShareFeed, insetUserId: insetUserId, hand: hand,
+                               canRaiseHand: canRaiseHand, qaEnabled: qaEnabled, webinarQaUnseen: webinarQaUnseen)
+    }
+
+    var isLive: Bool { state == AttendeeViewerPolicy.liveState }
+}
+
+/// S20 12: the pure attendee rules (feed choice, slots, snapshot, announcements, the waiting count rule).
+enum AttendeeViewerPolicy {
+    static let waitingState = "waiting"
+    static let liveState = "live"
+    /// `StageCapsuleModel.subtitleKind` for attendees: the capsule reads the webinar title and "Live".
+    static let capsuleLiveKind = "live"
+    /// `StageAnnouncement.kind` values (12 f, 12 i).
+    static let demotedAnnouncement = "demoted"
+    static let webinarLiveAnnouncement = "webinarLive"
+
+    static func feed(_ inputs: StageInputs) -> AttendeeFeed {
+        let local = inputs.localUserId
+        let share = inputs.screenShareUserId
+        if !share.isEmpty && share != local, let presenter = inputs.participant(share) {
+            return AttendeeFeed(userId: share, isShare: true, insetUserId: presenter.isCameraOff ? "" : share)
+        }
+        let speaker = inputs.webinarSpeakerUserId
+        if !speaker.isEmpty && speaker != local && inputs.participant(speaker) != nil {
+            return AttendeeFeed(userId: speaker, isShare: false, insetUserId: "")
+        }
+        var best: StageParticipantInput? = nil
+        for participant in inputs.presentParticipants {
+            if participant.isLocal || participant.isCameraOff { continue }
+            if let current = best {
+                if participant.joinSerial > 0 && (current.joinSerial == 0 || participant.joinSerial < current.joinSerial) {
+                    best = participant
+                }
+            } else {
+                best = participant
+            }
+        }
+        if let chosen = best {
+            return AttendeeFeed(userId: chosen.userId, isShare: false, insetUserId: "")
+        }
+        return AttendeeFeed.none
+    }
+
+    static func kind(_ feed: AttendeeFeed) -> StageKind {
+        feed.userId.isEmpty ? StageKind.attendeeWaiting : StageKind.attendeeLive
+    }
+
+    /// One program feed slot (share fit on black, camera fill; a per-session fit override wins, SC4) and at most one
+    /// speaker inset. The camera keeps its "p:" slot id when a share starts, so its renderer moves into the inset.
+    static func slots(_ feed: AttendeeFeed, fitOverrides: [String: String]) -> [StageSlot] {
+        if feed.userId.isEmpty { return [] }
+        var result: [StageSlot] = []
+        if feed.isShare {
+            let shareId = StageSlot.shareId(feed.userId)
+            result.append(StageSlot(id: shareId, role: StageSlotRole.programFeed, userId: feed.userId,
+                                    fit: resolvedFit(fitOverrides[shareId], fallback: StageVideoFit.fit)))
+            if !feed.insetUserId.isEmpty {
+                result.append(StageSlot(id: StageSlot.participantId(feed.insetUserId), role: StageSlotRole.speakerInset,
+                                        userId: feed.insetUserId, fit: StageVideoFit.fill))
+            }
+            return result
+        }
+        let id = StageSlot.participantId(feed.userId)
+        result.append(StageSlot(id: id, role: StageSlotRole.programFeed, userId: feed.userId,
+                                fit: resolvedFit(fitOverrides[id], fallback: StageVideoFit.fill)))
+        return result
+    }
+
+    static func resolvedFit(_ raw: String?, fallback: StageVideoFit) -> StageVideoFit {
+        if let value = raw, let parsed = StageVideoFit(rawValue: value) { return parsed }
+        return fallback
+    }
+
+    static func snapshot(inputs: StageInputs, details: StageDetailsInputs, feed: AttendeeFeed,
+                         hand: LocalHandState) -> AttendeeViewerSnapshot {
+        let name = feed.userId.isEmpty ? "" : (inputs.participant(feed.userId)?.displayName ?? "")
+        return AttendeeViewerSnapshot(
+            revision: 0,
+            state: feed.userId.isEmpty ? waitingState : liveState,
+            title: details.webinarTitle,
+            waitingCount: max(0, details.webinarAttendeeCount),
+            feedUserId: feed.userId,
+            feedName: name,
+            isShareFeed: feed.isShare,
+            insetUserId: feed.insetUserId,
+            hand: hand,
+            canRaiseHand: details.attendeeCanRaiseHand,
+            qaEnabled: details.isWebinarQaEnabled,
+            webinarQaUnseen: details.isWebinarQaEnabled ? max(0, details.webinarQaUnseen) : 0
+        )
+    }
+
+    /// The waiting card shows the count only when someone else waits too (web WebinarViewer: attendeeCount > 1).
+    static func showsWaitingCount(_ count: Int) -> Bool {
+        count > 1
+    }
+
+    /// Moved to the audience inside the same call session after the stage showed (S20 12 f); a fresh join as an
+    /// attendee is not a demotion.
+    static func isDemotion(previous: StageInputs, next: StageInputs) -> Bool {
+        previous.callSession != 0 && previous.callSession == next.callSession && previous.isInCall && next.isInCall
+            && !previous.isWebinarAttendee && next.isWebinarAttendee
     }
 }

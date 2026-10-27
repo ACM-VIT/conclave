@@ -31,6 +31,10 @@
         <package android:name="androidx.test.orchestrator" tools:node="remove" />
         <package android:name="androidx.test.services" tools:node="remove" />
         <package android:name="com.google.android.apps.common.testing.services" tools:node="remove" />
+        <!-- S40 Q16, S70 8 d: find a browser that supports Custom Tabs (CustomTabsClient.getPackageName) on API 30+. -->
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
     </queries>
 
     <!-- android:localeConfig is generated: app/build.gradle.kts turns on
@@ -113,5 +117,33 @@
         <receiver
             android:name="conclave.module.CallActionReceiver"
             android:exported="false" />
+
+        <!-- Shares files from the cache directory (S40 CH18: Share Photo in the chat image viewer; TRN-2 and SYS-15
+             reuse it through the paths in res/xml/conclave_file_paths.xml). Never exported; read access is granted per
+             intent. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/conclave_file_paths" />
+        </provider>
+
+        <!-- Photo Picker backport for API 28 to 29 through Google Play services (S40 CH18, AND 15.5): the system picker
+             needs no storage permission on every supported API level. -->
+        <service
+            android:name="com.google.android.gms.metadata.ModuleDependencies"
+            android:enabled="false"
+            android:exported="false"
+            tools:ignore="MissingClass">
+            <intent-filter>
+                <action android:name="com.google.android.gms.metadata.MODULE_DEPENDENCIES" />
+            </intent-filter>
+            <meta-data
+                android:name="photopicker_activity:0:required"
+                android:value="" />
+        </service>
     </application>
 </manifest>

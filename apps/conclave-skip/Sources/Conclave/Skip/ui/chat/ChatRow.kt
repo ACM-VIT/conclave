@@ -28,8 +28,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -62,8 +65,11 @@ import kotlinx.coroutines.launch
  * row, so TalkBack offers no empty "Double tap to activate"); the summary node carries the label, the value parts,
  * the long-click label "Message actions" and the custom actions (3 i, 5 i). Every control (quote, chips, failed row)
  * is its own node. Bubbles are the C23 component; own public rows primaryContainer with onPrimaryContainer, every
- * private and peer row neutral (Q9). Photos, GIFs, voice and assistant markdown are CHT-4 to CHT-7; those rows show
- * fixed-geometry placeholders and their text until then.
+ * private and peer row neutral (Q9). CHT-4 and CHT-5: photo rows show the Coil image in a fixed 240 by 180 dp box (the
+ * viewer opens on tap, a failed load retries on tap), GIF rows animate through coil-gif (the first frame under Remove
+ * animations; stickers without a bubble; clips as a poster with the play glyph, no inline player until Media3 is
+ * approved, Q6), and ready link cards follow the reactions. Media-only rows carry the summary semantics on the media
+ * element. Voice and assistant markdown are CHT-6 and CHT-7.
  */
 @Composable
 internal fun ChatRow(entry: ChatRowEntry, actions: ChatRowActions, sidePane: Boolean, maxBubble: Dp, highlighted: Boolean) {
@@ -174,6 +180,10 @@ private fun ChatMessageRow(row: ChatRowModel, actions: ChatRowActions, sidePane:
                     haptics = haptics,
                 )
             }
+            // CL6: only ready cards are in the row (CH16), so each appears once and never resizes.
+            row.embedURLs.toList().forEachIndexed { index, url ->
+                LinkEmbedCard(actions.embed(url), row.id, index) { target -> actions.openLink(target) }
+            }
             ChatDeliveryLine(row, actions)
         }
     }
@@ -206,15 +216,113 @@ private fun ChatPrivateLabel(row: ChatRowModel) {
     }
 }
 
+/** Which media element a row draws (3 d, f). */
+internal enum class ChatRowMediaKind { None, Photo, Gif, Sticker, Clip }
+
+internal fun chatRowMedia(row: ChatRowModel): ChatRowMediaKind {
+    if (row.kind == ChatRowKind.photo && row.photoURL.isNotEmpty()) return ChatRowMediaKind.Photo
+    if (row.kind == ChatRowKind.gif) {
+        // A GIF whose URL does not parse shows its title in a bubble (3 f).
+        if (row.gifURL.isEmpty() || runCatching { java.net.URI(row.gifURL) }.isFailure) return ChatRowMediaKind.None
+        return when (row.gifKind) {
+            ChatGifKind.sticker -> ChatRowMediaKind.Sticker
+            ChatGifKind.clip -> ChatRowMediaKind.Clip
+            else -> ChatRowMediaKind.Gif
+        }
+    }
+    return ChatRowMediaKind.None
+}
+
+/** The text summary shows for text rows, a photo with a caption and a GIF that fell back to its title. */
+internal fun chatRowShowsText(row: ChatRowModel, media: ChatRowMediaKind): Boolean = when (media) {
+    ChatRowMediaKind.None -> true
+    ChatRowMediaKind.Photo -> !row.photoCaptionIsEmpty && row.plainText.isNotEmpty()
+    else -> false
+}
+
 @Composable
 private fun ChatBubble(row: ChatRowModel, actions: ChatRowActions) {
     val tone = row.bubbleTone
+    val media = chatRowMedia(row)
+    if (media == ChatRowMediaKind.Sticker) {
+        // Stickers have no bubble fill (3 c).
+        ChatGifElement(row, actions, media)
+        return
+    }
     ConclaveChatBubble(tone = tone, isOwn = row.isOwn, identifier = "chat.row.${row.id}.bubble",
-        isFollowUp = !row.isGroupStart, hasFollower = !row.isGroupEnd) {
+        isFollowUp = !row.isGroupStart, hasFollower = !row.isGroupEnd, isMedia = media != ChatRowMediaKind.None) {
+        val insets = if (media == ChatRowMediaKind.None) Modifier else Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
         val reply = row.reply
-        if (reply != null) ChatQuote(row, reply, tone, actions)
-        if (row.kind == ChatRowKind.photo) ChatPhotoPlaceholder()
-        ChatBubbleText(row, tone, actions)
+        if (reply != null) Box(insets) { ChatQuote(row, reply, tone, actions) }
+        when (media) {
+            ChatRowMediaKind.Photo -> ChatPhotoElement(row, actions)
+            ChatRowMediaKind.Gif, ChatRowMediaKind.Clip -> ChatGifElement(row, actions, media)
+            else -> {}
+        }
+        if (row.kind == ChatRowKind.voice) ChatVoiceControl(row, actions.presenter)
+        if (chatRowShowsText(row, media)) Box(insets) { ChatBubbleText(row, tone, actions) }
+    }
+}
+
+/**
+ * S40 3 d photo: a fixed 240 by 180 dp Coil box bounded to its size, the viewer on tap, "Couldn't load photo. Tap to
+ * retry." in the same box on failure. Labelled "Photo from Avery Lee" plus the caption (never the upload file name);
+ * for a photo without caption it carries the row's summary semantics.
+ */
+@Composable
+private fun ChatPhotoElement(row: ChatRowModel, actions: ChatRowActions) {
+    val isSummary = !chatRowShowsText(row, ChatRowMediaKind.Photo)
+    val label = ChatMediaCopyAndroid.photoLabel(row)
+    val summary = if (isSummary) chatSummarySemantics(row, actions, label) else Modifier
+    ChatImageBox(
+        url = row.photoURL,
+        width = ChatMediaGeometry.photoWidth.dp,
+        height = ChatMediaGeometry.photoHeight.dp,
+        modifier = summary.testTag("chat.row.${row.id}.photo"),
+        shape = RoundedCornerShape(0.dp),
+        failureText = conclaveString("chat_photo_failed"),
+        retriesOnTap = true,
+        description = if (isSummary) null else label,
+        onOpen = { actions.openPhoto(row.id) },
+    )
+}
+
+/**
+ * S40 3 d GIF, sticker and clip: a GIF box 220 dp wide (height from the aspect, 120 to 300) animated through coil-gif
+ * (static under Remove animations); a sticker up to 160 dp square without a bubble; a clip as its poster with the play
+ * glyph and the "Clip" tag, opening the clip through the link policy (Custom Tabs). Carries the summary semantics.
+ */
+@Composable
+private fun ChatGifElement(row: ChatRowModel, actions: ChatRowActions, media: ChatRowMediaKind) {
+    val summary = chatSummarySemantics(row, actions, ChatCopyAndroid.rowLabel(row))
+    val scheme = MaterialTheme.colorScheme
+    when (media) {
+        ChatRowMediaKind.Clip -> {
+            val height = ChatMediaGeometry.gifHeight(row.gifAspect).dp
+            val poster = row.gifPreviewURL.ifEmpty { row.gifURL }
+            val target = row.gifVideoURL.ifEmpty { row.gifURL }
+            Box(summary.testTag("chat.row.${row.id}.gif"), contentAlignment = Alignment.Center) {
+                ChatImageBox(poster, ChatMediaGeometry.gifWidth.dp, height, shape = RoundedCornerShape(0.dp),
+                    onOpen = { actions.openLink(target) })
+                Surface(shape = CircleShape, color = scheme.surface) {
+                    Icon(ConclaveIcons.VideocamFill1, contentDescription = null, tint = scheme.onSurface,
+                        modifier = Modifier.padding(12.dp).size(24.dp))
+                }
+                Surface(shape = MaterialTheme.shapes.small, color = scheme.surface, modifier = Modifier.align(Alignment.BottomStart).padding(8.dp)) {
+                    ConclaveText(conclaveString("chat_clip"), line = "chat.row.${row.id}.clipTag", style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
+                }
+            }
+        }
+        ChatRowMediaKind.Sticker -> ChatImageBox(
+            row.gifURL, ChatMediaGeometry.stickerWidth(row.gifAspect).dp, ChatMediaGeometry.stickerHeight(row.gifAspect).dp,
+            modifier = summary.testTag("chat.row.${row.id}.gif"), shape = RoundedCornerShape(0.dp), placeholder = Color.Transparent,
+            animate = true,
+        )
+        else -> ChatImageBox(
+            row.gifURL, ChatMediaGeometry.gifWidth.dp, ChatMediaGeometry.gifHeight(row.gifAspect).dp,
+            modifier = summary.testTag("chat.row.${row.id}.gif"), shape = RoundedCornerShape(0.dp), animate = true,
+        )
     }
 }
 
@@ -238,37 +346,15 @@ private fun ChatQuote(row: ChatRowModel, reply: ChatReplyRef, tone: ConclaveBubb
     }
 }
 
-/** The fixed photo box until CHT-4 brings the bounded loader (identical geometry in every phase). */
-@Composable
-private fun ChatPhotoPlaceholder() {
-    Box(Modifier.size(240.dp, 180.dp).background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(8.dp))
-        .clearAndSetSemantics { }, contentAlignment = Alignment.Center) {
-        Icon(ConclaveIcons.ImageFill0, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
 /**
  * The summary node (3 i): linkified spans (CH17) through LinkAnnotation, mentions SemiBold, a mention of you in primary
  * on neutral fills; label, value parts, the long-click label and the custom actions (5 i).
  */
 @Composable
 private fun ChatBubbleText(row: ChatRowModel, tone: ConclaveBubbleTone, actions: ChatRowActions) {
-    val context = LocalContext.current
-    val label = ChatCopyAndroid.rowLabel(row)
-    val value = ChatCopyAndroid.rowValue(context, row)
-    val menuLabel = conclaveString("chat_message_actions")
-    val customActions = chatCustomActions(row, actions)
+    val semantics = chatSummarySemantics(row, actions, ChatCopyAndroid.rowLabel(row))
     val linkColor = ConclaveBubbleColors.link(tone)
     val youColor = MaterialTheme.colorScheme.primary
-    val semantics = Modifier.semantics {
-        contentDescription = label
-        stateDescription = value
-        onLongClick(label = menuLabel) {
-            actions.openMenu(row.id)
-            true
-        }
-        this.customActions = customActions
-    }
     if (row.kind == ChatRowKind.assistant && row.plainText.isEmpty()) {
         // D10: a static state with the system spinner until CHT-7's thinking rows.
         CircularProgressIndicator(Modifier.size(20.dp).then(semantics))
@@ -295,6 +381,27 @@ private fun ChatBubbleText(row: ChatRowModel, tone: ConclaveBubbleTone, actions:
     )
 }
 
+/**
+ * The one summary node per message (3 i): the label, the value parts as the state description, the long-click label
+ * "Message actions" and the custom actions (5 i). The bubble text carries it, or the media element for a media-only row.
+ */
+@Composable
+private fun chatSummarySemantics(row: ChatRowModel, actions: ChatRowActions, label: String): Modifier {
+    val context = LocalContext.current
+    val value = ChatCopyAndroid.rowValue(context, row)
+    val menuLabel = conclaveString("chat_message_actions")
+    val customActions = chatCustomActions(row, actions)
+    return Modifier.semantics {
+        contentDescription = label
+        stateDescription = value
+        onLongClick(label = menuLabel) {
+            actions.openMenu(row.id)
+            true
+        }
+        this.customActions = customActions
+    }
+}
+
 /** 5 i: the menu's actions in menu order, then the row actions; Android's long press reaches the menu itself. */
 @Composable
 private fun chatCustomActions(row: ChatRowModel, actions: ChatRowActions): List<CustomAccessibilityAction> {
@@ -309,6 +416,7 @@ private fun chatCustomActions(row: ChatRowModel, actions: ChatRowActions): List<
     val retryLabel = conclaveString("ds_retry")
     val deleteLabel = conclaveString("chat_delete")
     val originalLabel = conclaveString("chat_ax_go_to_original")
+    val openPhotoLabel = conclaveString("chat_ax_open_photo")
     if (row.canReply) result.add(CustomAccessibilityAction(replyLabel) { actions.reply(row.id); true })
     if (row.canReact) result.add(CustomAccessibilityAction(reactLabel) { actions.openMenu(row.id); true })
     if (row.canMessagePrivately) result.add(CustomAccessibilityAction(privateLabel) { actions.messagePrivately(row.senderId); true })
@@ -318,9 +426,13 @@ private fun chatCustomActions(row: ChatRowModel, actions: ChatRowActions): List<
     if (row.canHideSender) result.add(CustomAccessibilityAction(hideLabel) { actions.hideSender(row.senderId); true })
     if (row.canRetry) result.add(CustomAccessibilityAction(retryLabel) { actions.retry(row.id); true })
     if (row.canDelete) result.add(CustomAccessibilityAction(deleteLabel) { actions.delete(row.id); true })
+    chatVoiceCustomAction(row, actions.presenter)?.let { result.add(it) }
     val reply = row.reply
     if (row.canJumpToReply && reply != null) {
         result.add(CustomAccessibilityAction(originalLabel) { actions.jumpToReply(reply.messageId); true })
+    }
+    if (row.kind == ChatRowKind.photo && row.photoURL.isNotEmpty()) {
+        result.add(CustomAccessibilityAction(openPhotoLabel) { actions.openPhoto(row.id); true })
     }
     return result
 }
@@ -348,7 +460,7 @@ private fun ChatDeliveryLine(row: ChatRowModel, actions: ChatRowActions) {
                 color = scheme.error)
         }
         if (ChatFailurePolicy.showsReason(row.failure)) {
-            ConclaveText(ChatCopyAndroid.failureReason(row.failure), line = "chat.row.${row.id}.reason",
+            ConclaveText(ChatMediaCopyAndroid.failureReason(row.failure), line = "chat.row.${row.id}.reason",
                 style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant, textAlign = TextAlign.End)
         }
     }

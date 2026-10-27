@@ -187,6 +187,12 @@ enum TileMenuPolicy {
 enum TileMenuDispatcher {
     @MainActor
     static func perform(_ itemId: String, context: TileMenuContext, stage: StagePresenter) -> Bool {
+        // STG-3 (S20 6 c, d, i): the self view's Move items commit a corner through the presenter.
+        let corner = SelfViewSnapPolicy.corner(forItemId: itemId)
+        if !corner.isEmpty {
+            stage.moveSelfView(toCorner: corner)
+            return true
+        }
         guard let id = TileMenuItemId(rawValue: itemId) else { return false }
         switch id {
         case .pin:
@@ -194,8 +200,8 @@ enum TileMenuDispatcher {
         case .unpin:
             stage.clearPin()
         case .flipCamera:
-            // The view plays `selectionChanged` after this dispatch (RECONCILE R13).
-            stage.flipCamera()
+            // The view plays `selectionChanged` only after a dispatched flip (RECONCILE R13; nothing while in flight).
+            return StageCameraFlip.perform(stage)
         case .minimizeSelfView:
             stage.setSelfViewMode(TileFeaturePolicy.minimizedSelfViewMode)
         case .showSelfView:

@@ -129,8 +129,11 @@ object ScreenCaptureManager {
             return@suspendCancellableCoroutine
         }
         try {
+            // S30 CC15 (SYS-8): the consent dialog is not Home; no PiP auto-enter behind it.
+            PipManager.suppressForExternalHandoff(ExternalHandoffKind.mediaProjectionConsent)
             launcher.launch(pm.createScreenCaptureIntent())
         } catch (t: Throwable) {
+            PipManager.restoreAutoEnterAfterExternalActivity()
             debugLog("[ScreenShare] Failed to launch screen capture consent: ${t}")
             synchronized(stateLock) {
                 resultIntent = null

@@ -3,6 +3,7 @@ package conclave.module
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.text.format.DateFormat
 import android.text.format.DateUtils
@@ -10,7 +11,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.browser.customtabs.CustomTabsClient
+import androidx.browser.customtabs.CustomTabsIntent
 import java.util.Date
+import skip.ui.UIApplication
 
 /*
  * S40 2 d, 3 g, 5 g (CHT-1 to CHT-3): the Android chat's cached snapshots, row actions and copy. Handwritten Compose
@@ -55,15 +59,24 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
     /** D23: a link that leaves Conclave waits here for its confirmation. */
     var pendingExternalUrl by mutableStateOf("")
     var pendingExternalIsWeb = false
-    /** S70 R70-5: true once the camera keeps capturing while Conclave is in the background (WP3). */
-    var cameraContinuesInBackground = false
     /** API 28 to 32 show the app's "Copied" snackbar (5 d); API 33 and later rely on the system confirmation. */
     var copiedRequest by mutableStateOf(0)
+    /** CHT-4: the row whose photo the full-screen viewer shows; "" when none (S40 9 d). */
+    var photoRowId by mutableStateOf("")
+    /** CHT-5: the GIF picker (overlay sheet, or the side pane's in-pane page, S40 7 d). */
+    var showsGifs by mutableStateOf(false)
 
     fun openMenu(rowId: String) { menuRowId = rowId }
     fun closeMenu() { menuRowId = "" }
     fun openViewer(rowId: String) { viewerRowId = rowId }
     fun closeViewer() { viewerRowId = "" }
+    fun openPhoto(rowId: String) { photoRowId = rowId }
+    fun closePhoto() { photoRowId = "" }
+    fun openGifs() { showsGifs = true }
+    fun closeGifs() { showsGifs = false }
+
+    /** A card's entry (CH16): read only, never a fetch (the presenter fetched it when it built the row). */
+    fun embed(url: String): ChatEmbedEntry = presenter.embeds.entry(url)
 
     fun focusComposer(insert: String = "") {
         pendingInsert = insert
@@ -89,7 +102,11 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
     fun showSender(userId: String) { presenter.showSender(userId) }
     fun jumpToReply(messageId: String) { presenter.jumpTo(messageId) }
 
-    /** D23, RECONCILE R25: meeting links route in the app through the S10 4 intake; everything else confirms first. */
+    /**
+     * D23, RECONCILE R25: meeting links route in the app through the S10 4 intake; http and https open in Custom Tabs
+     * in the call task with PiP auto-enter suppressed (S40 Q16, S70 8 d); a link that would leave Conclave (another
+     * app's scheme, or no browser with Custom Tabs, the ACTION_VIEW fallback) confirms first.
+     */
     fun openLink(url: String) {
         val kind = NativeJoinLinkParser.classify(url)
         if (kind == NativeJoinLinkKind.meeting || kind == NativeJoinLinkKind.webinar) {
@@ -97,7 +114,9 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
             return
         }
         val lower = url.lowercase()
-        pendingExternalIsWeb = lower.startsWith("http://") || lower.startsWith("https://")
+        val isWeb = lower.startsWith("http://") || lower.startsWith("https://")
+        if (isWeb && ChatLinkLauncher.openInCustomTab(context, url)) return
+        pendingExternalIsWeb = isWeb
         pendingExternalUrl = url
     }
 
@@ -107,6 +126,27 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
         clipboard.setPrimaryClip(ClipData.newPlainText(conclaveStringOf(context, "chat_clip_label"), text))
         presenter.noteCopied()
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) copiedRequest += 1
+    }
+}
+
+/**
+ * S40 3 h, Q16 and S70 8 d: http and https links open in a Custom Tab launched from the call activity (androidx.browser
+ * in K/skip.yml), so the tab sits on top of the call task; PiP auto-enter is suppressed before the launch and restored
+ * when it fails (the suppression window clears itself on return). False when no browser supports Custom Tabs or no
+ * activity is up: the caller falls back to the confirmation and ACTION_VIEW.
+ */
+internal object ChatLinkLauncher {
+    fun openInCustomTab(context: Context, url: String): Boolean {
+        val activity = UIApplication.shared.androidActivity ?: return false
+        if (CustomTabsClient.getPackageName(context, null) == null) return false
+        return try {
+            PipManager.suppressNextAutoEnter("chat_link")
+            CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(activity, Uri.parse(url))
+            true
+        } catch (failure: Throwable) {
+            PipManager.restoreAutoEnterAfterExternalActivity()
+            false
+        }
     }
 }
 
@@ -226,6 +266,7 @@ internal object ChatCopyAndroid {
     @Composable
     fun placeholder(composer: ChatComposerSnapshot): String {
         if (composer.gate == ChatSendGate.locked) return conclaveString("chat_placeholder_locked")
+        VoiceCopyAndroid.placeholder(composer)?.let { return it }
         val recipient = composer.privateTo
         if (recipient != null) return conclaveString("chat_placeholder_private", recipient.name)
         return conclaveString("chat_placeholder")
@@ -275,6 +316,7 @@ internal object ChatCopyAndroid {
         }
         if (row.kind == ChatRowKind.photo) parts.add(conclaveString("chat_reply_photo"))
         if (row.kind == ChatRowKind.gif) parts.add(conclaveString("chat_reply_gif"))
+        if (row.kind == ChatRowKind.voice) parts.add(VoiceCopyAndroid.accessibilityValue())
         var total = 0
         for (chip in row.reactions) total += chip.count
         if (total > 0) parts.add(conclavePlural("chat_ax_reactions", total, total))

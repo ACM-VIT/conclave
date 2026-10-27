@@ -276,6 +276,8 @@ enum NoticeCopy {
             return ConclaveStrings.format("Audio switched to %@", notice.name)
         case NoticeKind.actionFailed:
             if notice.detail == "hand" { return ConclaveStrings.text("Couldn’t raise your hand. Try again.") }
+            // S20 6 g (STG-3, HD request B5-T8 R14): the flip failure toast with Retry.
+            if notice.detail == "flipCamera" { return ConclaveStrings.text("Couldn’t switch cameras. Try again.") }
             return ConclaveStrings.text("That didn’t go through. Try again.")
         case NoticeKind.rateLimited:
             if notice.detail == "hand" { return ConclaveStrings.text("You’re raising your hand too quickly.") }
@@ -302,6 +304,9 @@ enum NoticeCopy {
             return ConclaveStrings.text("Couldn’t change the meeting lock. Try again.")
         case NoticeKind.linkCopied:
             return ConclaveStrings.text("Link copied")
+        case PeopleFailurePlacementPolicy.stageNoticeKind:
+            // S50 PL14: a tile-menu People failure ("Couldn't mute Avery Lee." and the typed reasons, S50 3 g).
+            return PeopleActionText.stageToast(notice)
         case NoticeKind.blockedExplanation:
             // S30 CC7 (CTL-1, HD request B4-T6 R4): the controls' explanation table names the blocked control's reason.
             if let explanation = ControlBarPolicy.explanation(fromNotice: notice), let text = CallControlsCopy.toast(explanation) {

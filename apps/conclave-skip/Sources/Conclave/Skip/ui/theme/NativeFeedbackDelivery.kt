@@ -158,5 +158,8 @@ fun ConclaveRootFeedback() {
             records = FeedbackDeliveryRecords.shared,
         )
     }
+    // SYS-4 (PS 9.4): PiP (and the API 35 transition into it) suspends delivery; resuming rebaselines, nothing replays.
+    val pipSuspended = PipController.feedbackSuspended
+    LaunchedEffect(delivery, pipSuspended) { delivery.updateSuspended(pipSuspended) }
     NativeFeedbackConsumer(delivery, mount = 0)
 }

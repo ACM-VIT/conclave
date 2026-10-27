@@ -16,6 +16,13 @@ import AVFoundation
 // On Android `Skip/LocalPreviewController.kt` replaces this file's transpiled output (same base name): it implements
 // the same members with CameraX. Keep the member names and labels identical on both sides, and keep every other
 // type out of this file (the Kotlin file would hide it).
+//
+// STG-3 (S20 SC8, S60 C6-2, S20 6 f): the controller is also the one owner of the camera facing and of the call
+// camera's system pause. The call's camera reports its facing after a flip or a start (`adoptCallFacing(_:)`) and its
+// interruptions (`noteCallCameraInterruption(_:)`, iOS from the capture session notifications here, Android from the
+// WebRTC client's camera events); `onCallCameraChange` tells the core, which mirrors both into `MeetingState` once so
+// the stage's mirror, its flip value, the "Camera paused" caption and the Settings facing control change in one publish.
+// None of this starts, stops or restarts a capture while the latch is closed.
 
 @MainActor
 final class LocalPreviewController {
@@ -24,6 +31,9 @@ final class LocalPreviewController {
     /// Called on the main actor after every state, session or facing change (the production wiring pushes it to the
     /// premeeting presenter).
     var onChange: (() -> Void)? = nil
+    /// STG-3: called on the main actor after the facing or the call camera's pause changes (the core mirrors both into
+    /// `MeetingState`, S20 SC8, S60 C6-2).
+    var onCallCameraChange: (() -> Void)? = nil
 
     private(set) var machine = LocalPreviewMachine.initial
     private(set) var facing: LocalCameraFacing = .front
@@ -37,6 +47,10 @@ final class LocalPreviewController {
     var isPublishLatched: Bool { machine.isLatched }
     var interruption: PreviewInterruption { machine.interruption }
 
+    /// STG-3 (S20 6 f): why the system holds the call's camera right now; none while it runs.
+    private(set) var callCameraInterruption: PreviewInterruption = .none
+    var isCallCameraPaused: Bool { LocalCameraPublication.isPaused(callCameraInterruption) }
+
     #if os(iOS) && !SKIP
     /// The capture session the iOS preview surface attaches its layer to. Configured and run on `sessionQueue`.
     let captureSession = AVCaptureSession()
@@ -48,6 +62,7 @@ final class LocalPreviewController {
     init() {
         #if os(iOS) && !SKIP
         observeInterruptions()
+        observeCallCaptureInterruptions()
         #endif
     }
 
@@ -57,6 +72,9 @@ final class LocalPreviewController {
     func start(facing requested: LocalCameraFacing) {
         let facingChanged = requested != facing
         facing = requested
+        if facingChanged {
+            onCallCameraChange?()
+        }
         if machine.state == .live || machine.state == .starting || machine.state == .interrupted {
             if facingChanged {
                 restartCapture()
@@ -91,6 +109,40 @@ final class LocalPreviewController {
             restartCapture()
         }
         publish()
+        onCallCameraChange?()
+    }
+
+    // MARK: - The call's camera (STG-3: S20 SC8, S60 C6-2, S20 6 f)
+
+    /// The call's camera reports the facing it resolved after a flip or a start, so the lobby after the call, the
+    /// Settings preview and the stage all read one facing. Equal reports publish nothing. While the latch is closed the
+    /// capture is untouched; an open, running preview follows the new facing.
+    @discardableResult
+    func adoptCallFacing(_ reported: LocalCameraFacing) -> Bool {
+        guard LocalCameraPublication.publishes(current: facing, reported: reported) else { return false }
+        facing = reported
+        if LocalPreviewPolicy.mayCapture(machine) {
+            restartCapture()
+        }
+        publish()
+        onCallCameraChange?()
+        return true
+    }
+
+    /// The system took (or, with `.none`, returned) the call's camera. Main actor; equal reports publish nothing.
+    func noteCallCameraInterruption(_ reason: PreviewInterruption) {
+        guard reason != callCameraInterruption else { return }
+        callCameraInterruption = reason
+        onCallCameraChange?()
+    }
+
+    func noteCallCameraResumed() {
+        noteCallCameraInterruption(.none)
+    }
+
+    /// The call ended or your camera turned off: no pause carries into the next call or the next camera start.
+    func resetCallCamera() {
+        noteCallCameraInterruption(.none)
     }
 
     /// The publish latch closes: the call owns the camera. The capture stops; the layer keeps its last frame.
@@ -171,8 +223,13 @@ final class LocalPreviewController {
                     return
                 }
                 if bound {
-                    self.facing = resolvedFront ? .front : .back
+                    let resolved = LocalCameraFacing.from(isFront: resolvedFront)
+                    let facingChanged = LocalCameraPublication.publishes(current: self.facing, reported: resolved)
+                    self.facing = resolved
                     self.apply(.bound)
+                    if facingChanged {
+                        self.onCallCameraChange?()
+                    }
                 } else {
                     self.apply(.failed)
                 }
@@ -210,6 +267,31 @@ final class LocalPreviewController {
                                                      object: captureSession, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.apply(.failed)
+            }
+        })
+    }
+
+    /// STG-3 (S20 6 f): the call's camera is the other capture session (the WebRTC capturer's). Its interruptions
+    /// (another app, Split View or Slide Over, the background) and their end reach `noteCallCameraInterruption(_:)`;
+    /// this controller's own session is excluded. The core reads the pause only while your camera is on in a call and
+    /// resets it when the call ends.
+    private func observeCallCaptureInterruptions() {
+        let center = NotificationCenter.default
+        let own = ObjectIdentifier(captureSession)
+        notificationTokens.append(center.addObserver(forName: AVCaptureSession.wasInterruptedNotification,
+                                                     object: nil, queue: .main) { [weak self] note in
+            guard let session = note.object as? AVCaptureSession, ObjectIdentifier(session) != own else { return }
+            let raw = (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? NSNumber)?.intValue ?? -1
+            let reason = LocalPreviewController.previewInterruption(rawReason: raw)
+            MainActor.assumeIsolated {
+                self?.noteCallCameraInterruption(reason)
+            }
+        })
+        notificationTokens.append(center.addObserver(forName: AVCaptureSession.interruptionEndedNotification,
+                                                     object: nil, queue: .main) { [weak self] note in
+            guard let session = note.object as? AVCaptureSession, ObjectIdentifier(session) != own else { return }
+            MainActor.assumeIsolated {
+                self?.noteCallCameraResumed()
             }
         })
     }

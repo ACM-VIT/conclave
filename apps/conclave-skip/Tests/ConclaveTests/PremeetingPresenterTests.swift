@@ -424,6 +424,27 @@ struct PremeetingPresenterTests {
                 // ENT-7: Home stays the root; T/ENT7AccountTests.swift checks the account side.
                 #expect(premeeting.root == PremeetingRootDecision.home, "\(state)")
                 #expect(AccountFixtureScript.state(named: state.rawValue) != nil, "\(state)")
+            // Batch 5 integrator (HD request B5-T5 R5): the ENT-5 and ENT-6 fixtures (T/ENT5EntryTransitionTests.swift
+            // and T/ENT6OutcomeTests.swift check each one in detail).
+            case .failedNetwork:
+                #expect(premeeting.lobbyStatus?.mode == .failed && premeeting.lobbyStatus?.issue == .failedNetwork)
+            case .failedServerBusy, .retryAfter:
+                #expect(premeeting.lobbyStatus?.mode == .connecting, "\(state)")
+            case .recoveringBeforeAdmission:
+                #expect(premeeting.root.root == .premeeting && premeeting.lobbyStatus?.waitingKind == .reconnecting)
+            case .waitingLocked, .waitingNoHost, .waitingHostAvailable, .waitingReconnecting, .waitingOffline,
+                 .waitingServerRestarting, .waitingToAdmitted, .waitingDenied:
+                #expect(premeeting.lobbyStatus?.mode == .waiting, "\(state)")
+            case .outcomeDenied:
+                #expect(premeeting.outcome?.variant == .denied)
+            case .outcomeServerDisconnected:
+                #expect(premeeting.outcome?.variant == .serverDisconnected && premeeting.outcome?.primary == .rejoin)
+            case .outcomeRejoinFailed:
+                #expect(premeeting.outcome?.variant == .rejoinFailed && premeeting.outcome?.primary == .tryAgain)
+            case .noticeRoomClosed:
+                #expect(premeeting.home.noticeKind == .roomClosed && premeeting.outcome == nil)
+            case .homeRejoin:
+                #expect(premeeting.home.rejoin != nil && premeeting.currentInputs.rejoinRoomId == PremeetingFixtureScript.roomLabel)
             }
         }
     }

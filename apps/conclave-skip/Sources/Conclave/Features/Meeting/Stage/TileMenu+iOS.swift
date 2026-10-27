@@ -4,8 +4,10 @@ import SwiftUI
 // STG-2 (S20 3 c, f, g, i; F00 C16; RECONCILE R19): the iOS tile menu. The system context menu over the tile with a
 // chrome-only preview, so opening it never creates a second renderer (S20 3 l3); unavailable items are hidden (HIG,
 // H-21; F00 C16 c); every available item is also a named accessibility action on the tile (AX4). Items come from the
-// shared `TileMenuPolicy` and dispatch through the shared `TileMenuDispatcher`; the people items (S50 3 g `ppl_` copy)
-// arrive with PPL-2 through the `people` sections. iOS is silent on open (the system menu, F00 8).
+// shared `TileMenuPolicy` and dispatch through the shared `TileMenuDispatcher`; the people items (PPL-2, RECONCILE R19)
+// are the S50 `PeopleActionPolicy` items for that person minus Admit and Deny, with the S50 3 g copy, read from the
+// session's `PeoplePresenter` (`stage.people`) and performed with source `tileMenu` (confirmations present over the
+// stage, failures use the stage toast lane, PL14). iOS is silent on open (the system menu, F00 8).
 
 /// The tile menu titles from the String Catalog (S20 3 g; S50 3 g is the single source for Pin and Unpin, R19).
 enum TileMenuText {
@@ -32,7 +34,8 @@ enum TileAnnouncementText {
         case TileFeaturePolicy.pinClearedKind:
             return ConclaveStrings.format("%@ left. Spotlight follows the speaker.", announcement.name)
         default:
-            return nil
+            // S50 3 i, 6 f: the People result announcements share the stage's one channel (kind `peopleResult`).
+            return PeopleActionText.announcement(announcement)
         }
     }
 }
@@ -43,12 +46,16 @@ struct TileMenuModel {
     let context: TileMenuContext
     let sections: [MenuSectionModel]
 
+    /// The people items always come from the session's People presenter (R19); `people` adds extra sections after
+    /// them (STG-3's self view Move items, Move last, HD request B5-T8 R4).
     @MainActor
     static func make(slot: StageSlot, model: TileChromeModel, stage: StagePresenter,
                      people: [MenuSectionModel] = []) -> TileMenuModel {
         let canFlip = model.isLocal ? stage.chrome.canFlipCamera : false
         let context = TileMenuContext.make(slot: slot, model: model, kind: stage.kind, canFlipCamera: canFlip, offersFlipItem: true)
-        return TileMenuModel(context: context, sections: TileMenuPolicy.sections(context, titles: TileMenuText.titles(), people: people))
+        let peopleSections = TilePeopleMenu.sections(context, stage: stage) + people
+        return TileMenuModel(context: context,
+                             sections: TileMenuPolicy.sections(context, titles: TileMenuText.titles(), people: peopleSections))
     }
 
     /// The context menu shows only available items (H-21).
@@ -64,6 +71,8 @@ struct TileMenuModel {
             result.append(ConclaveTileAction(id: id, title: item.title, action: {
                 if TileMenuDispatcher.perform(id, context: menuContext, stage: stage) {
                     onDispatched(id)
+                } else {
+                    TilePeopleMenu.perform(id, context: menuContext, stage: stage)
                 }
             }))
         }
@@ -93,11 +102,36 @@ private struct StageTileMenuModifier: ViewModifier {
             ConclaveMenuContent(sections: menu.contextSections, onSelect: { item in
                 if TileMenuDispatcher.perform(item.id, context: menu.context, stage: stage) {
                     onDispatched(item.id)
+                } else {
+                    TilePeopleMenu.perform(item.id, context: menu.context, stage: stage)
                 }
             })
         } preview: {
             TileMenuPreview(model: model, speaking: speaking)
         }
+    }
+}
+
+/// RECONCILE R19: the people items of a tile menu come from the S50 action table for that person (minus Admit and
+/// Deny); S20 keeps Pin, so `TileMenuPolicy.sections` drops the people Pin and Unpin. Reading the row entry here ties
+/// the tile to that person's People row (both change on the same events).
+enum TilePeopleMenu {
+    @MainActor
+    static func sections(_ context: TileMenuContext, stage: StagePresenter) -> [MenuSectionModel] {
+        guard TileMenuPolicy.hasMenu(slotId: context.slotId, role: context.role, kind: context.kind),
+              let people = stage.people, people.rows.contains(context.userId) else { return [] }
+        let row = people.rows.entry(for: context.userId).model
+        let actions = PeopleActionPolicy.tileActions(row.actions)
+        if actions.isEmpty { return [] }
+        return PeopleActionPolicy.menuSections(actions, titles: PeopleActionText.titles(name: PeopleActionText.displayName(row)))
+    }
+
+    /// Performs a people item with source `tileMenu` (S50 3 a, 3 j); false when the id is not a people item.
+    @MainActor
+    @discardableResult
+    static func perform(_ itemId: String, context: TileMenuContext, stage: StagePresenter) -> Bool {
+        guard let action = PersonActionID(rawValue: itemId), let people = stage.people else { return false }
+        return people.perform(action, rowId: context.userId, source: PeopleActionSource.tileMenu) == ControlTapResult.dispatched
     }
 }
 

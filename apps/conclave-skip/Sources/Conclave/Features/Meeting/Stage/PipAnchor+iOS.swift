@@ -35,10 +35,15 @@ final class StagePipAnchorRegistry {
         if view === anchor { return }
         view = anchor
         createdCount += 1
+        // SYS-4: one controller per call; a new anchor only updates its source.
+        VideoCallPictureInPicture.shared.anchorDidChange()
     }
 
     func unregister(_ anchor: UIView) {
-        if view === anchor { view = nil }
+        if view === anchor {
+            view = nil
+            VideoCallPictureInPicture.shared.anchorDidChange()
+        }
     }
 }
 

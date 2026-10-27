@@ -152,6 +152,7 @@ enum ChatCopy {
 
     static func placeholder(_ composer: ChatComposerSnapshot) -> String {
         if composer.gate == ChatSendGate.locked { return ConclaveStrings.text("Chat locked by host") }
+        if composer.isVoiceMode { return VoiceCopy.placeholder }
         if let recipient = composer.privateTo { return ConclaveStrings.format("Message %@ privately", recipient.name) }
         return ConclaveStrings.text("Message")
     }
@@ -205,6 +206,7 @@ enum ChatCopy {
         }
         if row.kind == ChatRowKind.photo { parts.append(ConclaveStrings.text("Photo")) }
         if row.kind == ChatRowKind.gif { parts.append(ConclaveStrings.text("GIF")) }
+        if row.kind == ChatRowKind.voice { parts.append(VoiceCopy.accessibilityValue) }
         if !row.reactions.isEmpty {
             var total = 0
             for chip in row.reactions {

@@ -5,11 +5,17 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,34 +34,47 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.webrtc.VideoTrack
 import skip.ui.UIApplication
 
@@ -67,6 +86,14 @@ import skip.ui.UIApplication
  * key. Hot state stays in leaves: the tile reads its TileChromeEntry, the stroke its TileSpeakingState, the renderer
  * its RendererBinding.
  */
+
+/**
+ * STG-3: the stage's chrome visibility for the share slot's own single tap (S20 5 d, 8 d) and the landscape strip fade
+ * (S20 5 d, 8 a), and the canvas viewport for the strip rule. StageCanvas provides both around its slots; without them
+ * the share's single tap still clears the bar hold and the strip reads the presenter's viewport.
+ */
+internal val LocalStageChromeVisibility = staticCompositionLocalOf<StageChromeVisibilityState?> { null }
+internal val LocalStageViewport = compositionLocalOf<StageViewport?> { null }
 
 /** Where slot renderers come from: the fixture's counting probes or the live WebRTC renderers (WP3 bridge). */
 internal class StageRenderers(val ledger: RendererIdentityLedger?, val pattern: RendererProbePattern, val usesProbes: Boolean) {
@@ -114,6 +141,13 @@ internal fun stageSlotModel(model: TileChromeModel, isShare: Boolean): TileChrom
  * (S20 3 d), its items as TalkBack custom actions, the Unpin target over the pinned badge (S20 4 d), the 1:1 camera-off
  * caption (S20 3 d) and the reconnect reason with "Back online" (S20 3 c; F00 C08 f). Every overlay is a leaf that reads
  * only what it shows and every modifier is present for every role, so the renderer's structure never changes (D15).
+ *
+ * STG-3 (S20 5, 6; SL6, SL7): every renderer sits in a ShareZoomBox (zoom and pan on the main share slot, identity
+ * elsewhere) with the share placeholder under the chrome; a share slot is one node ("Shared screen from %1$s", the zoom
+ * value, Zoom in, Zoom out and Reset zoom) with the Reset zoom chip; the floating self view and the minimized chip drag
+ * and snap to a corner (draw-phase translation only, no recomposition per frame), carry the four Move items in the tile
+ * menu and custom actions, and keep the system back gesture off their bounds; "Camera paused" covers your tile while the
+ * system holds the camera; the landscape share strip fades with chrome.
  */
 @Composable
 private fun ParticipantTile(
@@ -129,13 +163,55 @@ private fun ParticipantTile(
     val haptics = rememberConclaveHaptics()
     val menuState = rememberTileMenuState()
     val titles = rememberTileMenuTitles()
+    val moveTitles = rememberSelfViewMoveTitles()
+    val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val kind = stage.kind
-    val menu = remember(slot, model, kind, titles) { stageTileMenu(slot, model, kind, titles) }
+    // S20 6 d, i: your floating view and minimized chip add the four Move items after the stage items (the extra
+    // sections seam the PPL-2 people items also use).
+    val menu = remember(slot, model, kind, titles, moveTitles, isRtl) {
+        stageTileMenu(slot, model, kind, titles, selfViewMoveSections(slot, model, moveTitles, isRtl))
+    }
     val actions = remember(menu) { stageTileActions(menu, stage) }
     val actionsLabel = conclaveString("stg_tile_actions")
-    Box(modifier) {
+    // STG-3 (S20 5): the share slot's view-local zoom, its node words and actions.
+    val zoom = remember { ShareZoomState() }
+    val zoomable = ShareZoomPolicy.isZoomable(slotId = slot.id, role = role, isLocal = model.isLocal)
+    val shareSemantics = if (isShare) {
+        shareNodeModifier(shareNodeLabel(model), shareZoomValue(zoom, zoomable), rememberShareZoomActions(zoom, zoomable, slot.id, stage))
+    } else {
+        Modifier
+    }
+    // S20 6 f: while the system holds your camera the chrome draws your avatar face and the caption sits on top.
+    val paused = model.isLocal && !isShare && !model.isCameraOff && stage.chrome.isCameraPaused
+    // S20 5 d, 8 a: the landscape share strip fades with chrome; only rail tiles read the chrome state.
+    val chromeVisibility = LocalStageChromeVisibility.current
+    val viewport = LocalStageViewport.current ?: stage.viewport
+    val stripHides = role == StageSlotRole.rail
+        && ShareZoomPolicy.railHidesWithChrome(kind = kind, role = role, isCompactHeight = StageLayoutPolicy.isCompactHeight(viewport))
+    val stripHidden = stripHides && (chromeVisibility?.state?.isHidden ?: false)
+    val reduceMotion = rememberReduceMotion()
+    val stripAlpha = animateFloatAsState(if (stripHidden) 0f else 1f,
+        if (reduceMotion) snap<Float>() else ConclaveMotion.chromeFade<Float>(), label = "stage.strip")
+    // S20 6 d, k: the self view drag (draw-phase translation, committed once on release).
+    val drag = remember { SelfViewDragState() }
+    val scope = rememberCoroutineScope()
+    val reduceState = rememberUpdatedState(reduceMotion)
+    val rtlState = rememberUpdatedState(isRtl)
+    val renderTargetResize = LocalStageRenderTargetResize.current
+    Box(
+        modifier
+            .then(shareSemantics)
+            .then(if (role.isSelfMovable) Modifier.systemGestureExclusion() else Modifier)
+            .selfViewDrag(role.isSelfMovable, slot.id, stage, drag, scope, { reduceState.value }, { rtlState.value }, haptics)
+            .graphicsLayer {
+                val offset = drag.offset.value
+                translationX = offset.x
+                translationY = offset.y
+                alpha = stripAlpha.value
+            },
+    ) {
         ConclaveTileChrome(
-            model = model,
+            model = if (paused) cameraPausedModel(model) else model,
             speaking = speaking,
             identifier = "stage.tile.${slot.id}",
             modifier = Modifier.fillMaxSize().tileLongPress(menu.hasItems) { at ->
@@ -146,22 +222,161 @@ private fun ParticipantTile(
             spotlight = role == StageSlotRole.spotlightMain,
             cornerRadius = stageCornerRadius(role),
             actions = actions,
+            // The minimized chip's node is the tile's: a TalkBack double tap restores the floating view (S20 6 d, i).
+            onClick = if (minimized) { { stage.setSelfViewMode(TileFeaturePolicy.floatingSelfViewMode) } } else null,
             haptics = haptics,
             accessibilityLongPressLabel = if (menu.hasItems) actionsLabel else null,
             onAccessibilityLongPress = if (menu.hasItems) { { menuState.open(Offset.Zero) } } else null,
+            // STG-8 (S20 12 i, HD request B5-T2 R7): the attendee program feed names what it shows.
+            accessibilityName = if (role == StageSlotRole.programFeed) attendeeFeedLabel(isShare = isShare, name = model.displayName) else null,
         ) {
-            StageRendererSlot(slot.id, slot.userId, model.isLocal, isShare, slot.fit, binding, stage, renderers,
-                Modifier.fillMaxSize().graphicsLayer { alpha = if (minimized) 0f else 1f })
+            ShareZoomBox(zoom, zoomable, slot.id, stage, Modifier.fillMaxSize().graphicsLayer { alpha = if (minimized) 0f else 1f }) {
+                StageRendererSlot(slot.id, slot.userId, model.isLocal, isShare, slot.fit, binding, stage, renderers, Modifier.fillMaxSize())
+            }
+            SharePlaceholder(model, binding, isShare, Modifier.fillMaxSize())
         }
         if (minimized) {
+            // The chip is the visible tap target; its node is cleared so TalkBack reads the tile's one node.
             ConclaveStageChip(title = conclaveString("ds_you"), identifier = "stage.selfView.minimized",
-                modifier = Modifier.align(Alignment.Center), onClick = { stage.setSelfViewMode("floating") })
+                modifier = Modifier.align(Alignment.Center).clearAndSetSemantics { },
+                onClick = { stage.setSelfViewMode(TileFeaturePolicy.floatingSelfViewMode) })
+        }
+        if (paused && !minimized) {
+            CameraPausedCaption(Modifier.align(Alignment.BottomCenter))
         }
         TileReconnectDetail(entry, isShare, Modifier.fillMaxSize())
         OneOnOneCameraOffCaption(slot, entry, stage, isShare, Modifier.fillMaxSize())
         TileUnpinTarget(slot, entry, stage, isShare, Modifier.align(Alignment.TopEnd))
+        if (isShare) {
+            ShareResetZoomChip(zoom, zoomable, onReset = {
+                zoom.settle(ShareZoomValue.identity, scope, reduceMotion, renderTargetResize)
+            }, modifier = Modifier.align(Alignment.TopEnd))
+        }
         TileMenuAnchor(menuState, menu, stage, "stage.tile.menu.${slot.id}", Modifier.align(AbsoluteAlignment.TopLeft))
     }
+}
+
+/** The share slot's one node (S20 5 i): the label, the zoom value and the zoom actions, over a cleared subtree. */
+private fun shareNodeModifier(label: String, value: String, actions: List<ConclaveTileAction>): Modifier =
+    Modifier.testTag("stage.share").clearAndSetSemantics {
+        contentDescription = label
+        if (value.isNotEmpty()) stateDescription = value
+        if (actions.isNotEmpty()) customActions = actions.map { action -> CustomAccessibilityAction(action.label) { action.onAction(); true } }
+    }
+
+/** The Move titles from the app-module resources (S20 6 g). */
+@Composable
+private fun rememberSelfViewMoveTitles(): SelfViewMoveTitles {
+    val topLeft = conclaveString("stg_move_top_left")
+    val topRight = conclaveString("stg_move_top_right")
+    val bottomLeft = conclaveString("stg_move_bottom_left")
+    val bottomRight = conclaveString("stg_move_bottom_right")
+    return remember(topLeft, topRight, bottomLeft, bottomRight) {
+        SelfViewMoveTitles(topLeft = topLeft, topRight = topRight, bottomLeft = bottomLeft, bottomRight = bottomRight)
+    }
+}
+
+/** The Move section for your floating view or minimized chip; empty for every other slot. */
+private fun selfViewMoveSections(slot: StageSlot, model: TileChromeModel, titles: SelfViewMoveTitles, isRtl: Boolean): List<MenuSectionModel> =
+    SelfViewSnapPolicy.moveSections(role = slot.role, isLocal = model.isLocal, titles = titles, isRightToLeft = isRtl).toList()
+
+/** S20 6 f: your tile draws the avatar face while the system holds the camera. */
+private fun cameraPausedModel(model: TileChromeModel): TileChromeModel = TileChromeModel(userId = model.userId,
+    displayName = model.displayName, avatarSeed = model.avatarSeed, isLocal = true, isMuted = model.isMuted, isCameraOff = true,
+    isHandRaised = model.isHandRaised, isPinned = model.isPinned, isPresenting = model.isPresenting,
+    isWeakConnection = model.isWeakConnection, isReconnecting = model.isReconnecting, reconnectReason = model.reconnectReason,
+    isHost = model.isHost, isVoiceAgent = model.isVoiceAgent)
+
+/** "Camera paused" under your avatar face (S20 6 f); decorative for TalkBack. */
+@Composable
+private fun CameraPausedCaption(modifier: Modifier) {
+    val ext = LocalConclaveExtendedColors.current
+    ConclaveText(conclaveString("stg_camera_paused"), line = "stage.selfView.paused", style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        modifier = modifier.padding(bottom = 8.dp).clip(CircleShape).background(ext.labelScrim)
+            .padding(horizontal = 8.dp, vertical = 2.dp).semantics { hideFromAccessibility() })
+}
+
+/** View-local drag of the floating self view and the minimized chip (S20 6 d, k): the offset is read only inside
+ *  graphicsLayer, so drag frames change the draw phase alone (no recomposition, no relayout of the AndroidView). */
+internal class SelfViewDragState {
+    val offset = Animatable(Offset.Zero, Offset.VectorConverter)
+    val velocity = VelocityTracker()
+}
+
+/**
+ * S20 6 d: drag with a velocity tracker; on release the corner whose quadrant holds the flung position commits once
+ * through moveSelfView(toCorner:), the slot is laid out at that corner and the Animatable springs the remaining offset
+ * away (spring(0.9, 700); no travel under "Remove animations"). selfViewSnapped plays once on a commit to a different
+ * corner. Pointer positions and the translation are physical; the corners are leading based. Present for every role
+ * (inactive unless the slot is the floating or minimized self view).
+ */
+private fun Modifier.selfViewDrag(
+    movable: Boolean, slotId: String, stage: StagePresenter, drag: SelfViewDragState, scope: CoroutineScope,
+    reduceMotion: () -> Boolean, isRtl: () -> Boolean, haptics: ConclaveGestureHaptics,
+): Modifier = pointerInput(movable) {
+    if (!movable) return@pointerInput
+    detectDragGestures(
+        onDragStart = { drag.velocity.resetTracking() },
+        onDragEnd = {
+            val velocity = drag.velocity.calculateVelocity()
+            drag.velocity.resetTracking()
+            val pxPerDp = density
+            scope.launch {
+                dropSelfView(slotId, stage, drag, velocity.x, velocity.y, pxPerDp, isRtl(), reduceMotion(), haptics)
+            }
+        },
+        onDragCancel = {
+            scope.launch { settleSelfViewHome(drag, reduceMotion()) }
+        },
+        onDrag = { change, amount ->
+            drag.velocity.addPosition(change.uptimeMillis, change.position)
+            change.consume()
+            scope.launch { drag.offset.snapTo(drag.offset.value + amount) }
+        },
+    )
+}
+
+private suspend fun dropSelfView(
+    slotId: String, stage: StagePresenter, drag: SelfViewDragState, velocityX: Float, velocityY: Float, pxPerDp: Float,
+    isRtl: Boolean, reduceMotion: Boolean, haptics: ConclaveGestureHaptics,
+) {
+    val viewport = stage.viewport
+    val frame = StageLayoutPolicy.find(slotId, stage.currentFrames())
+    if (viewport.isEmpty || frame == null || pxPerDp <= 0f) {
+        settleSelfViewHome(drag, reduceMotion)
+        return
+    }
+    val current = drag.offset.value
+    val flungX = (current.x + SelfViewSnapPolicy.projectedDistance(velocity = velocityX.toDouble()).toFloat()) / pxPerDp
+    val flungY = (current.y + SelfViewSnapPolicy.projectedDistance(velocity = velocityY.toDouble()).toFloat()) / pxPerDp
+    val target = SelfViewSnapPolicy.dropCorner(frame = frame,
+        leadingTranslationX = SelfViewSnapPolicy.leadingX(flungX.toDouble(), isRightToLeft = isRtl),
+        translationY = flungY.toDouble(), viewport = viewport)
+    val previous = stage.layout.selfCorner
+    stage.moveSelfView(toCorner = target)
+    val next = if (stage.layout.selfCorner == target && target != previous) StageLayoutPolicy.find(slotId, stage.currentFrames()) else null
+    if (next == null) {
+        // Same corner, or the core kept the corner: back to the corner the slot is at.
+        settleSelfViewHome(drag, reduceMotion)
+        return
+    }
+    if (SelfViewSnapPolicy.playsSnapFeedback(previousCorner = previous, nextCorner = target)) {
+        haptics.gesture(FeedbackKind.selfViewSnapped)
+    }
+    if (reduceMotion) {
+        drag.offset.snapTo(Offset.Zero)
+        return
+    }
+    // FLIP: the slot is laid out at its new corner in the next frame with the offset that keeps it under the finger.
+    val shiftX = (SelfViewSnapPolicy.physicalShiftX(fromFrame = frame, toFrame = next, isRightToLeft = isRtl) * pxPerDp).toFloat()
+    val shiftY = (SelfViewSnapPolicy.shiftY(fromFrame = frame, toFrame = next) * pxPerDp).toFloat()
+    drag.offset.snapTo(Offset(current.x - shiftX, current.y - shiftY))
+    drag.offset.animateTo(Offset.Zero, ConclaveMotion.spatialDefault())
+}
+
+private suspend fun settleSelfViewHome(drag: SelfViewDragState, reduceMotion: Boolean) {
+    if (reduceMotion) drag.offset.snapTo(Offset.Zero) else drag.offset.animateTo(Offset.Zero, ConclaveMotion.spatialDefault())
 }
 
 /** Places the content horizontally centered with its top `gap` below the parent's vertical center. */

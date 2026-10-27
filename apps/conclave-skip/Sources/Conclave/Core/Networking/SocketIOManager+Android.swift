@@ -69,6 +69,8 @@ final class SocketIOManager {
     var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Void)?
     var onDmStateChanged: ((DmStateChangedNotification) -> Void)?
     var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Void)?
+    /// S50 PH5.
+    var onParticipantMediaPermissionsChanged: ((ParticipantMediaPermissionsChangedNotification) -> Void)?
     var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Void)?
     var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Void)?
     var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Void)?
@@ -144,7 +146,7 @@ final class SocketIOManager {
     func toggleCamera(producerId: String, paused: Bool) async throws { fatalError() }
     func closeProducer(producerId: String) async throws { fatalError() }
 
-    func sendChat(content: String, gif: ChatGifAttachment? = nil, image: ChatImageAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil) async throws -> ChatMessage { fatalError() }
+    func sendChat(content: String, gif: ChatGifAttachment? = nil, image: ChatImageAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil, suppressEmbeds: Bool = false) async throws -> ChatMessage { fatalError() }
     func toggleChatReaction(messageId: String, emoji: String) async throws -> [ChatMessageReaction] { fatalError() }
     func authorizeChatImageUpload() async throws -> ChatImageUploadAuthorization { fatalError() }
     func requestConclaveAuthorization(answerId: String, questionMessageId: String) async throws -> ConclaveAuthorizeResponse { fatalError() }
@@ -159,6 +161,10 @@ final class SocketIOManager {
     func setDmEnabled(_ enabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
     func setTtsDisabled(_ disabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
     func setReactionsDisabled(_ disabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
+    /// S50 PH6.
+    func setImageAttachmentsEnabled(_ enabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
+    /// S50 PH5.
+    func setParticipantMediaPermissions(unmuteAllowed: Bool?, videoAllowed: Bool?) async throws -> ParticipantMediaPermissionsResponse { fatalError() }
     func setRoomPolicies(
         locked: Bool? = nil,
         noGuests: Bool? = nil,

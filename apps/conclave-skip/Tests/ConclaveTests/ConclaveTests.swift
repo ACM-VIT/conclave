@@ -8234,10 +8234,12 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testSettingsDisplayNameAutoSaveClearsDebounceBeforeSubmitting() throws {
-        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/SettingsSheetView.swift")
-        let guardNeedle = "generation: generation,\n                    currentGeneration: displayNameAutoSaveGeneration\n                  ) else { return }"
-        let clearNeedle = "displayNameAutoSaveTask = nil"
-        let submitNeedle = "await submitDisplayNameUpdate(pendingName, generation: generation)"
+        // PPL-2 (S60 C6-10): the Settings field's autosave moved into the shared DisplayNameEditor; the ordering pin
+        // follows it (the debounce clears before the submit).
+        let source = try sourceFileContents("Sources/Conclave/Core/Session/DisplayNameEditor.swift")
+        let guardNeedle = "SettingsTimingPolicy.shouldApply(generation: generation, currentGeneration: self.autoSaveGeneration) else { return }"
+        let clearNeedle = "self.autoSaveTask = nil"
+        let submitNeedle = "await self.submit(pendingName, generation: generation, rescheduleIfNeeded: true)"
 
         let guardRange = try XCTUnwrap(source.range(of: guardNeedle))
         let clearRange = try XCTUnwrap(source.range(of: clearNeedle, range: guardRange.upperBound..<source.endIndex))

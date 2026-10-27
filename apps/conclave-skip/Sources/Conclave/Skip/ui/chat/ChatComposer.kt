@@ -1,5 +1,8 @@
 package conclave.module
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,6 +19,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -23,6 +27,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -30,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
@@ -38,14 +44,19 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /*
  * S40 6 d (CHT-2): the composer on Android, in the InCallPage composer slot (the page applies imePadding and the
  * horizontal margin). The FND-3 composer column and field (always opaque on Android: surfaceContainerHighest, no
  * indicator, radius 20, IME action Send, hardware Enter sends and Shift+Enter inserts a newline, Q13). Keystrokes stay
  * in Compose state; the draft is written to ChatDraftStore after 500 ms idle and on dispose (R40-7). Every send goes
- * through `presenter.send` (ChatComposerPolicy.route, D24); no send, command or recipient haptic (Q11). Photos, GIFs,
- * voice and the link preview are CHT-4 to CHT-6: the attach control appears once `composer.attachKinds` names an item.
+ * through `presenter.send` (ChatComposerPolicy.route, D24); no send, command or recipient haptic (Q11). CHT-4 and
+ * CHT-5: the attach control (an IconButton opening a DropdownMenu of Photo and GIFs and stickers; an item unavailable
+ * in the mode stays, disabled, with its reason), the system Photo Picker (no storage permission; the backport module
+ * entry in AndroidManifest.xml covers API 28 and 29) whose URI is copied into a cache file on Dispatchers.IO before the
+ * presenter gets it (CH6), the attachment chip and the link preview above the field. Voice is CHT-6. Keyboard and
+ * clipboard images (`contentReceiver`) need the FND-3 field on TextFieldState: not wired here (see the B5-T6 record).
  */
 @Composable
 internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
@@ -54,7 +65,20 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
     var text by remember { mutableStateOf("") }
     var loadedKey by remember { mutableStateOf("") }
     var hasLoaded by remember { mutableStateOf(false) }
+    // CHT-5: the composer preview the person removed; the next send carries suppressEmbeds (6 d).
+    var dismissedPreviewUrl by remember { mutableStateOf("") }
     val focus = remember { FocusRequester() }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // CH6: the Photo Picker's URI becomes a cache file off the main thread; cancelling changes nothing.
+    val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val file = ChatPhotoFiles.copyToCache(context, uri) { presenter.rejectPhoto(ChatFailure.photoTooLarge) }
+                if (file != null) presenter.attachPhoto(file.fileUrl, file.mimeType, file.fileName)
+            }
+        }
+    }
     // R40-7: a recipient switch saves the text under the old key and loads the new key's draft; when the new key has
     // none, the text you were writing moves with you.
     LaunchedEffect(composer.draftKey) {
@@ -89,10 +113,13 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
     }
     val limit = ChatComposerPolicy.limit(text, composer.isVoiceMode)
     val count = ChatComposerPolicy.limitLength(text, composer.isVoiceMode)
-    val canSend = ChatComposerPolicy.canSend(text, composer.gate, composer.isVoiceMode)
+    val canSend = ChatComposerPolicy.canSend(text, composer.gate, composer.isVoiceMode, composer.attachment)
     val send: () -> Unit = {
-        if (presenter.send(text, "") == ChatSendResult.dispatched) {
+        val dismissed = dismissedPreviewUrl
+        val result = if (dismissed.isEmpty()) presenter.send(text, "") else presenter.send(text, dismissed)
+        if (result == ChatSendResult.dispatched) {
             text = ""
+            dismissedPreviewUrl = ""
             presenter.drafts.setText("", loadedKey)
         }
     }
@@ -104,9 +131,12 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
             ConclaveComposerReplyBar(ChatCopyAndroid.replyTitle(reply), ChatCopyAndroid.replyPreview(reply),
                 conclaveString("chat_cancel_reply"), "chat.composer.reply", { presenter.cancelReply() })
         }
+        ChatAttachmentChipRow(presenter, composer.attachment)
+        ChatComposerLinkPreview(presenter, text, dismissedPreviewUrl) { url -> dismissedPreviewUrl = url }
         ChatComposerModeRow(presenter, composer, text)
+        ChatVoiceModeRow(presenter, composer, text)
         if (composer.inlineNotice != ChatFailure.none) {
-            ConclaveComposerStatusLine(ChatCopyAndroid.failureReason(composer.inlineNotice), "chat.composer.notice")
+            ConclaveComposerStatusLine(ChatMediaCopyAndroid.failureReason(composer.inlineNotice), "chat.composer.notice")
         }
         val gateLine = ChatCopyAndroid.gateLine(composer.gate)
         if (gateLine.isNotEmpty()) ConclaveComposerStatusLine(gateLine, "chat.composer.gate")
@@ -121,7 +151,25 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
             onSend = send,
             identifier = "chat.composer.field",
             modifier = Modifier.focusRequester(focus),
+            sendLabel = VoiceCopyAndroid.sendLabel(composer),
             enabled = composer.gate != ChatSendGate.locked,
+            attach = {
+                ChatAttachMenuButton(
+                    presenter,
+                    composer,
+                    onPhoto = {
+                        // S70 8 d (SYS-8, HD/requests/B5-T4.md R17 e): the picker activity must not tear the call into
+                        // PiP; auto-enter comes back if the launch fails.
+                        PipManager.suppressForExternalHandoff(ExternalHandoffKind.photoPicker)
+                        try {
+                            pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        } catch (failure: Throwable) {
+                            PipManager.restoreAutoEnterAfterExternalActivity()
+                        }
+                    },
+                    onGifs = { actions.openGifs() },
+                )
+            },
         )
         ConclaveCharacterCounter(count, limit,
             if (composer.isVoiceMode) 0 else ConclaveComposerCounterPolicy.visibleFrom(limit),
@@ -262,4 +310,86 @@ private fun ChatSuggestionList(draft: String, composer: ChatComposerSnapshot, on
             }
         }
     }
+}
+
+/**
+ * 6 d attach control: an IconButton opening a DropdownMenu. Items unavailable in the current mode stay in the menu,
+ * disabled, with the reason as a second line (private mode is text only; photos follow the host switch).
+ */
+@Composable
+private fun ChatAttachMenuButton(presenter: ChatPresenter, composer: ChatComposerSnapshot, onPhoto: () -> Unit, onGifs: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val scheme = MaterialTheme.colorScheme
+    Box {
+        IconButton(onClick = { expanded = true }, enabled = composer.gate == ChatSendGate.allowed,
+            modifier = Modifier.testTag("chat.composer.attach")) {
+            Icon(ConclaveIcons.ImageFill0, contentDescription = conclaveString("chat_attach"))
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            NativeSemanticsPopupRoot("chat.composer.attach.menu")
+            for (kind in composer.attachKinds) {
+                if (kind == VoiceMessagePolicy.attachKind) {
+                    ChatVoiceAttachMenuItem(presenter, composer, onDismiss = { expanded = false })
+                    continue
+                }
+                val reason = ChatComposerPolicy.attachItemReason(kind, composer.privateTo != null, composer.photosEnabled,
+                    composer.voiceEnabled)
+                val reasonText = ChatMediaCopyAndroid.attachReason(reason)
+                val title = when (kind) {
+                    "photo" -> conclaveString("chat_attach_photo")
+                    "gif" -> conclaveString("chat_attach_gif")
+                    else -> ""
+                }
+                if (title.isEmpty()) continue
+                val busy = kind == "photo" && composer.attachment.phase != ChatAttachmentPhase.none
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            ConclaveText(title, line = "chat.composer.attach.$kind.title")
+                            if (reasonText.isNotEmpty()) {
+                                ConclaveText(reasonText, line = "chat.composer.attach.$kind.reason", style = MaterialTheme.typography.bodySmall,
+                                    color = scheme.onSurfaceVariant)
+                            }
+                        }
+                    },
+                    leadingIcon = {
+                        Icon(if (kind == "gif") ConclaveIcons.GifBoxFill0 else ConclaveIcons.ImageFill0, contentDescription = null,
+                            tint = scheme.onSurfaceVariant)
+                    },
+                    enabled = reason.isEmpty() && !busy,
+                    onClick = {
+                        expanded = false
+                        if (kind == "photo") onPhoto() else onGifs()
+                    },
+                    modifier = Modifier.testTag("chat.composer.attach.$kind"),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 6 d attachment chip (FND-3 component): the thumbnail from the cache file, "Photo", the status line, the linear
+ * indicator while preparing or uploading, Try again after a failure, and Remove. Absent while there is no photo.
+ */
+@Composable
+private fun ChatAttachmentChipRow(presenter: ChatPresenter, attachment: ChatAttachmentState) {
+    val phase = when (attachment.phase) {
+        ChatAttachmentPhase.preparing -> ConclaveAttachmentPhase.preparing
+        ChatAttachmentPhase.uploading -> ConclaveAttachmentPhase.uploading
+        ChatAttachmentPhase.ready -> ConclaveAttachmentPhase.ready
+        ChatAttachmentPhase.failed -> ConclaveAttachmentPhase.failed
+        else -> return
+    }
+    ConclaveComposerAttachmentChip(
+        title = conclaveString("chat_attachment_photo"),
+        status = ChatMediaCopyAndroid.attachmentStatus(attachment),
+        phase = phase,
+        removeLabel = conclaveString("chat_attachment_remove"),
+        identifier = "chat.composer.attachment",
+        onRemove = { presenter.removeAttachment() },
+        progress = if (attachment.phase == ChatAttachmentPhase.uploading && attachment.progress >= 0) attachment.progress.toFloat() else null,
+        onRetry = { presenter.retryAttachment() },
+        thumbnail = { ChatImageBox(attachment.thumbnailKey, 40.dp, 40.dp) },
+    )
 }

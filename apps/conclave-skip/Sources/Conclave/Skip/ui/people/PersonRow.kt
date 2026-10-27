@@ -20,8 +20,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
@@ -81,8 +83,9 @@ internal fun personRowTexts(context: Context, model: PersonRowModel, showsQueue:
 }
 
 /**
- * One person (S50 2 d). [onOpenMenu] is PPL-2's: null while the row has no actions, so PPL-1 rows are a plain merged
- * node with no click and no MoreVertFill0; [menu] is the row's DropdownMenu, anchored at the trailing edge.
+ * One person (S50 2 d). [onOpenMenu] is PPL-2's: null while the row has no actions, so the row is a plain merged node
+ * with no click and no MoreVertFill0; [menu] is the row's DropdownMenu, anchored at the trailing edge; [actions] are the
+ * same items as TalkBack custom actions on the merged node (S50 3 i, AX4).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -94,6 +97,7 @@ internal fun PersonRow(
     probe: PeopleRecomposeLedger?,
     modifier: Modifier = Modifier,
     onOpenMenu: (() -> Unit)? = null,
+    actions: List<CustomAccessibilityAction> = emptyList(),
     menu: @Composable () -> Unit = {},
 ) {
     val model = entry.model
@@ -132,7 +136,8 @@ internal fun PersonRow(
             },
             colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
             modifier = Modifier.heightIn(min = 56.dp).then(click).testTag(identifier)
-                .semantics(mergeDescendants = true) { if (texts.states.isNotEmpty()) stateDescription = texts.states },
+                .semantics(mergeDescendants = true) { if (texts.states.isNotEmpty()) stateDescription = texts.states }
+                .semantics { if (actions.isNotEmpty()) customActions = actions },
         )
         menu()
     }

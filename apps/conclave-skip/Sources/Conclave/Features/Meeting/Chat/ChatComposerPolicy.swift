@@ -257,4 +257,53 @@ enum ChatComposerPolicy {
     static func draftKey(roomId: String, privateToUserId: String) -> String {
         roomId + "|" + privateToUserId
     }
+
+    // MARK: Attachments and link preview (CHT-4, CHT-5)
+
+    /// The attach menu items this build has, in menu order (S40 6 c): Photo Library (CHT-4), GIFs and Stickers
+    /// (CHT-5). Voice Message joins with CHT-6.
+    static let attachKinds: [String] = ["photo", "gif", "voice"]
+
+    /// Why an attach item is disabled in the current mode ("" when available): every item is text-only in private
+    /// mode (D24); photos and voice follow their host switches (6 f; GIFs stay allowed when photos are off, INM C5).
+    /// A closed gate disables every item without a reason line (the gate line above the field says why).
+    static func attachItemReason(kind: String, isPrivateMode: Bool, photosEnabled: Bool, voiceEnabled: Bool) -> String {
+        if isPrivateMode { return "privateTextOnly" }
+        if kind == "photo" && !photosEnabled { return "photosDisabled" }
+        if kind == "voice" && !voiceEnabled { return "voiceDisabled" }
+        return ""
+    }
+
+    /// Send with a photo (6 f): a ready photo sends alone or with a caption; a photo still preparing, uploading or
+    /// failed blocks Send; without a photo the text rules apply.
+    static func canSend(text: String, gate: ChatSendGate, isVoiceMode: Bool, attachment: ChatAttachmentState) -> Bool {
+        if gate != ChatSendGate.allowed { return false }
+        if attachment.blocksSend { return false }
+        if attachment.isReady {
+            return !isOverLimit(text: text, isVoiceMode: isVoiceMode)
+        }
+        return canSend(text: text, gate: gate, isVoiceMode: isVoiceMode)
+    }
+
+    /// A ready photo travels with public text only: private mode is text-only (`privateTextOnly`); a voice message
+    /// or an assistant question cannot carry a photo (`oneAttachment`); a local command runs and keeps the photo.
+    static func photoRouteFailure(_ route: ChatRouteKind) -> ChatFailure {
+        switch route {
+        case .privateText: return ChatFailure.privateTextOnly
+        case .voice, .assistant: return ChatFailure.oneAttachment
+        default: return ChatFailure.none
+        }
+    }
+
+    /// The composer preview's URL (S40 6 c): the first embeddable URL of the draft, the same rule as the message cards.
+    static func linkPreviewURL(draft: String) -> String {
+        LinkEmbedPolicy.firstEmbedURL(draft)
+    }
+
+    /// Whether a send suppresses its embeds (web ChatPanel.tsx): the draft's first embeddable URL is the one whose
+    /// preview the person removed.
+    static func suppressesEmbeds(draft: String, dismissedURL: String) -> Bool {
+        if dismissedURL.isEmpty { return false }
+        return LinkEmbedPolicy.firstEmbedURL(draft) == dismissedURL
+    }
 }

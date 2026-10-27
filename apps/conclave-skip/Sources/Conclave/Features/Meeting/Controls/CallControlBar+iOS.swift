@@ -18,11 +18,17 @@ struct CallControlBar: View {
     let available: CGSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    /// Read here, above the bar's `.xxxLarge` cap, so the Leave control can drop its host menu at accessibility sizes
+    /// (S30 4 f "Host at AX5").
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         ConclaveScaledControlDiameter { scaled in
-            CallControlBarContent(controls: controls, available: available, scaledDiameter: scaled)
+            CallControlBarContent(controls: controls, available: available, scaledDiameter: scaled,
+                                  isAccessibilityText: dynamicTypeSize.isAccessibilitySize)
         }
+        // S30 CC16 (CTL-2): a touch that begins in the bar holds chrome while a system menu from it is open.
+        .callControlsBarTouchHold(controls.stage)
         .background { CallControlsAlertHost(controls: controls) }
         .onChange(of: CallControlsWindowKey(regularWidth: horizontalSizeClass == .regular,
                                             regularHeight: verticalSizeClass == .regular), initial: true) { _, key in
@@ -45,6 +51,7 @@ private struct CallControlBarContent: View {
     let controls: CallControlsPresenter
     let available: CGSize
     let scaledDiameter: CGFloat
+    let isAccessibilityText: Bool
 
     var body: some View {
         let bar = controls.bar
@@ -60,7 +67,7 @@ private struct CallControlBarContent: View {
                 // still carries its own surface.
                 VStack(spacing: spacing) {
                     ForEach(shown) { model in
-                        CallControlCell(model: model, controls: controls, diameter: diameter)
+                        CallControlCell(model: model, controls: controls, diameter: diameter, isAccessibilityText: isAccessibilityText)
                     }
                 }
                 .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
@@ -69,7 +76,7 @@ private struct CallControlBarContent: View {
             } else {
                 ConclaveControlBar(spacing: spacing, identifier: "control.bar") {
                     ForEach(shown) { model in
-                        CallControlCell(model: model, controls: controls, diameter: diameter)
+                        CallControlCell(model: model, controls: controls, diameter: diameter, isAccessibilityText: isAccessibilityText)
                     }
                 }
             }

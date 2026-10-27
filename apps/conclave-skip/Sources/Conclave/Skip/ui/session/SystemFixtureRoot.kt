@@ -1,7 +1,9 @@
 package conclave.module
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -10,6 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -31,30 +34,45 @@ fun SystemFixtureRoot(stateName: String) {
         }
     }
     LaunchedEffect(session) { session.start() }
+    // SYS-4 (S70 SX1, 3 l2, 3 l3): pip-speaker draws a full-bleed static pattern behind the readouts and Back minimizes
+    // (PiP when eligible). PipController.isInCall stays false, so Main.kt keeps this root composed in PiP.
+    val ledger = remember { RendererIdentityLedger() }
+    BackHandler(enabled = state == SystemFixtureState.pipSpeaker) { PipManager.minimizeCurrent() }
     HostingTheme {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
-                .safeDrawingPadding()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = session.presenceReadout,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.testTag(SystemFixtureReadout.presenceKey),
-            )
-            Text(
-                text = session.commandsReadout,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.testTag(SystemFixtureReadout.commandsKey),
-            )
-            FixtureCommand(conclaveString("sys_call_mute")) { session.send(SystemCallCommandKind.mute, source = SystemCallSource.notification) }
-            FixtureCommand(conclaveString("sys_call_unmute")) { session.send(SystemCallCommandKind.unmute, source = SystemCallSource.notification) }
-            FixtureCommand(conclaveString("ds_leave_call")) { session.send(SystemCallCommandKind.leave, source = SystemCallSource.notification) }
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+            if (state == SystemFixtureState.pipSpeaker) {
+                CompositionLocalProvider(LocalRendererLedger provides ledger) {
+                    RendererProbe(key = "pip:fixture", slot = RendererSlot.pip, modifier = Modifier.fillMaxSize(),
+                        pattern = RendererProbePattern.staticPattern)
+                }
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = session.presenceReadout,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.testTag(SystemFixtureReadout.presenceKey),
+                )
+                Text(
+                    text = session.commandsReadout,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.testTag(SystemFixtureReadout.commandsKey),
+                )
+                FixtureCommand(conclaveString("sys_call_mute")) { session.send(SystemCallCommandKind.mute, source = SystemCallSource.notification) }
+                FixtureCommand(conclaveString("sys_call_unmute")) { session.send(SystemCallCommandKind.unmute, source = SystemCallSource.notification) }
+                FixtureCommand(conclaveString("ds_leave_call")) { session.send(SystemCallCommandKind.leave, source = SystemCallSource.notification) }
+                // SYS-4 and SYS-8 (S70 3 l2, 8 l2): the sys.pip and sys.pipSuppressions readouts and the hand-off commands.
+                PipFixtureReadouts()
+                FixtureCommand(conclaveString("chat_link_open")) { NativeExternalHandoff.openWebLink("https://conclave.acmvit.in") }
+                FixtureCommand(conclaveString("ds_open_settings")) { PermissionHelper.openAppSettings() }
+            }
         }
     }
 }

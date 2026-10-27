@@ -116,7 +116,9 @@ struct ChatRowModel: Equatable, Identifiable {
     let gifKind: ChatGifKind
     let gifAspect: Double
     let gifTitle: String
-    /// At most 2; filled by CHT-5 (CH16), always empty here.
+    /// CH16 (CHT-5): at most 2, in message order, and only URLs whose `ChatEmbedEntry` is ready, so a card is added
+    /// once and never shrinks. Empty for photo, GIF, action and assistant rows and for messages sent with
+    /// `suppressEmbeds`.
     let embedURLs: [String]
     let reactions: [ChatReactionChip]
     let delivery: ChatDelivery
@@ -320,15 +322,24 @@ enum ChatAttachmentPhase: String, CaseIterable {
     case none, preparing, uploading, ready, failed
 }
 
-/// CH6 (CHT-4) fills this; `none` until then.
+/// CH6 (CHT-4): the composer photo. The core reports it through `ChatInputs.attachment` (prepare, upload, ready,
+/// failed); the presenter shows `preparing` the moment a photo is handed over, until the core reports.
 struct ChatAttachmentState: Equatable {
     let phase: ChatAttachmentPhase
     /// 0...1, -1 indeterminate.
     let progress: Double
+    /// The local `file://` URL of the picked or prepared photo: the chip thumbnail and the send marker. "" for none.
     let thumbnailKey: String
     let failure: ChatFailure
 
     static let none = ChatAttachmentState(phase: ChatAttachmentPhase.none, progress: 0, thumbnailKey: "", failure: ChatFailure.none)
+
+    /// Only a ready photo can be sent; every other phase but `none` blocks Send (6 f).
+    var blocksSend: Bool {
+        phase == ChatAttachmentPhase.preparing || phase == ChatAttachmentPhase.uploading || phase == ChatAttachmentPhase.failed
+    }
+
+    var isReady: Bool { phase == ChatAttachmentPhase.ready && !thumbnailKey.isEmpty }
 }
 
 enum AssistantAvailability: String, CaseIterable {
@@ -373,8 +384,9 @@ struct ChatComposerSnapshot: Equatable {
     let inlineNotice: ChatFailure
     /// Room id plus recipient; drafts live in `ChatDraftStore` (R40-7).
     let draftKey: String
-    /// Attach menu items that exist in this build ("photo", "gif", "voice"). Empty until CHT-4, CHT-5 and CHT-6
-    /// land, so the attach control is hidden rather than an empty menu.
+    /// Attach menu items that exist in this build, in menu order ("photo" CHT-4, "gif" CHT-5, "voice" CHT-6). The
+    /// attach control shows while this is not empty; an item unavailable in the current mode stays in the menu,
+    /// disabled with its reason (`ChatComposerPolicy.attachItemReason`).
     let attachKinds: [String]
 
     static let initial = ChatComposerSnapshot(
@@ -437,8 +449,12 @@ enum ChatCommandKind: String, CaseIterable {
     case hideSender, showSender, attachPhoto, removeAttachment, retryAttachment
 }
 
-/// Scalars only (S1C 3.6). For `send`, `flag` is false and `text` is the routed wire text with `emoji` carrying the
-/// `ChatRouteKind` raw value; `rowId` and `messageId` name the reply target ("" when none).
+/// Scalars only (S1C 3.6). For `send`, `text` is the routed wire text with `emoji` carrying the `ChatRouteKind` raw
+/// value; `rowId` and `messageId` name the reply target ("" when none); `fileURL` names the ready photo the send
+/// carries ("" for none, CHT-4) and `flag` is `suppressEmbeds` (CHT-5). For `sendGif`, `text` is the GIF id (the core
+/// reads the attachment with `ChatPresenter.takeSentGif(id:)`), `emoji` its kind and `fileURL` its URL. For
+/// `attachPhoto`, `fileURL` is the file in the caches directory, `text` the picker's file name and `emoji` its MIME
+/// type; `removeAttachment` and `retryAttachment` carry the photo's `fileURL`.
 struct ChatCommandRequest: Equatable {
     let kind: ChatCommandKind
     let rowId: String
@@ -519,6 +535,10 @@ struct ChatMessageInput: Equatable {
     let reactions: [ChatReactionInput]
     /// From the join history replay (no unread, no announcement).
     let isHistory: Bool
+    /// CH5 (CHT-5): the sender removed the link preview, so the message shows no embed cards for anyone.
+    let suppressEmbeds: Bool
+    /// S40 CH4: a voice message (the core's isTts).
+    let isTts: Bool
 
     static func make(id: String, clientId: String = "", senderId: String, senderName: String, isOwn: Bool = false,
                      isAssistant: Bool = false, content: String, timestampMillis: Double, isDirect: Bool = false,
@@ -527,14 +547,15 @@ struct ChatMessageInput: Equatable {
                      gifVideoURL: String = "", gifKind: String = "", gifWidth: Double = 0, gifHeight: Double = 0,
                      gifTitle: String = "", delivery: ChatDelivery = ChatDelivery.delivered,
                      failure: ChatFailure = ChatFailure.none, failureServerText: String = "", isRetryable: Bool = false,
-                     reactions: [ChatReactionInput] = [], isHistory: Bool = false) -> ChatMessageInput {
+                     reactions: [ChatReactionInput] = [], isHistory: Bool = false,
+                     suppressEmbeds: Bool = false, isTts: Bool = false) -> ChatMessageInput {
         ChatMessageInput(id: id, clientId: clientId, senderId: senderId, senderName: senderName, isOwn: isOwn,
                          isAssistant: isAssistant, content: content, timestampMillis: timestampMillis, isDirect: isDirect,
                          dmTargetUserId: dmTargetUserId, dmTargetName: dmTargetName, reply: reply, imageURL: imageURL,
                          imageFileName: imageFileName, gifURL: gifURL, gifPreviewURL: gifPreviewURL, gifVideoURL: gifVideoURL,
                          gifKind: gifKind, gifWidth: gifWidth, gifHeight: gifHeight, gifTitle: gifTitle, delivery: delivery,
                          failure: failure, failureServerText: failureServerText, isRetryable: isRetryable,
-                         reactions: reactions, isHistory: isHistory)
+                         reactions: reactions, isHistory: isHistory, suppressEmbeds: suppressEmbeds, isTts: isTts)
     }
 
     /// The row id for life (CH1, D25): the client id of an own send, the server id otherwise.
@@ -577,15 +598,144 @@ struct ChatInputs: Equatable {
     let isHost: Bool
     let roster: [ChatRosterEntry]
     let assistant: AssistantAvailability
+    /// CH6 (CHT-4): the core's composer photo (the meeting state's `chatAttachment`, hint `attachment`).
+    let attachment: ChatAttachmentState
+    /// S40 CH4: the message the speaker is playing ("" when idle).
+    let activeTtsMessageId: String
+    /// "system" or "personal" (`VoicePreferences.composerVoiceKind`, S40 Q12).
+    let voiceKind: String
 
     static func make(callSession: Int = 0, roomId: String = "", localUserId: String = "", localName: String = "",
                      messages: [ChatMessageInput] = [], localRows: [ChatLocalRow] = [], isLocked: Bool = false,
                      privateEnabled: Bool = true, photosEnabled: Bool = true, voiceEnabled: Bool = true,
                      reactionsEnabled: Bool = true, gate: ChatSendGate = ChatSendGate.notJoined, isHost: Bool = false,
-                     roster: [ChatRosterEntry] = [], assistant: AssistantAvailability = AssistantAvailability.unknown) -> ChatInputs {
+                     roster: [ChatRosterEntry] = [], assistant: AssistantAvailability = AssistantAvailability.unknown,
+                     attachment: ChatAttachmentState = ChatAttachmentState.none, activeTtsMessageId: String = "",
+                     voiceKind: String = VoiceKind.system.rawValue) -> ChatInputs {
         ChatInputs(callSession: callSession, roomId: roomId, localUserId: localUserId, localName: localName,
                    messages: messages, localRows: localRows, isLocked: isLocked, privateEnabled: privateEnabled,
                    photosEnabled: photosEnabled, voiceEnabled: voiceEnabled, reactionsEnabled: reactionsEnabled, gate: gate,
-                   isHost: isHost, roster: roster, assistant: assistant)
+                   isHost: isHost, roster: roster, assistant: assistant, attachment: attachment,
+                   activeTtsMessageId: activeTtsMessageId, voiceKind: voiceKind)
     }
+}
+
+/// S40 3 c, d: fixed media geometry in points (iOS) and dp (Android), the same in every load phase, so a row never
+/// changes height when its image arrives (AGENTS appearance rule).
+enum ChatMediaGeometry {
+    static let photoWidth = 240.0
+    static let photoHeight = 180.0
+    static let gifWidth = 220.0
+    static let gifMinHeight = 120.0
+    static let gifMaxHeight = 300.0
+    static let stickerMax = 160.0
+
+    /// GIF and clip boxes: 220 wide, the height from the aspect (already clamped 0.6 to 1.8) clamped 120 to 300.
+    static func gifHeight(aspect: Double) -> Double {
+        let safe = aspect <= 0 ? 1.0 : aspect
+        return min(gifMaxHeight, max(gifMinHeight, (gifWidth / safe).rounded()))
+    }
+
+    /// Stickers fit a 160 square without a bubble.
+    static func stickerWidth(aspect: Double) -> Double {
+        let safe = aspect <= 0 ? 1.0 : aspect
+        return safe >= 1 ? stickerMax : (stickerMax * safe).rounded()
+    }
+
+    static func stickerHeight(aspect: Double) -> Double {
+        let safe = aspect <= 0 ? 1.0 : aspect
+        return safe >= 1 ? (stickerMax / safe).rounded() : stickerMax
+    }
+}
+
+// MARK: - CHT-5: link embeds (CH16) and the GIF picker (CH19)
+
+enum ChatEmbedKind: String, CaseIterable {
+    case page, image, tweet, youtube
+}
+
+/// A session cache entry's phase: `loading` while the fetch runs, `ready` with a card, `none` when the URL has no
+/// card (cached too, so a remount never refetches).
+enum ChatEmbedPhase: String, CaseIterable {
+    case loading, ready, none
+}
+
+/// One photo, video or GIF of an X post (`ChatLinkTweetMedia`); `url` is the photo or the poster frame.
+struct ChatEmbedMedia: Equatable {
+    /// "photo", "video" or "gif".
+    let kind: String
+    let url: String
+    let videoURL: String
+    /// Width over height, clamped by the card's fixed cells; 0 when unknown.
+    let aspect: Double
+}
+
+/// The `/api/unfurl` payload (`apps/web/src/app/lib/link-embeds.ts` ChatLinkPreview) with asset paths resolved
+/// against the app base URL; YouTube links are detected locally (`kind == youtube`, thumbnail in `imageURL`).
+struct ChatEmbedModel: Equatable {
+    /// The final URL the card opens.
+    let url: String
+    let kind: ChatEmbedKind
+    let siteName: String
+    let title: String
+    let summary: String
+    let imageURL: String
+    let faviconURL: String
+    /// The 16:9 large layout; false is the 64 pt / dp thumbnail layout.
+    let isLargeImage: Bool
+    let authorName: String
+    /// Without the leading "@".
+    let authorHandle: String
+    let postText: String
+    let media: [ChatEmbedMedia]
+    /// The 11-character YouTube id ("" otherwise).
+    let youTubeId: String
+
+    static func make(url: String, kind: ChatEmbedKind, siteName: String = "", title: String = "", summary: String = "",
+                     imageURL: String = "", faviconURL: String = "", isLargeImage: Bool = false, authorName: String = "",
+                     authorHandle: String = "", postText: String = "", media: [ChatEmbedMedia] = [],
+                     youTubeId: String = "") -> ChatEmbedModel {
+        ChatEmbedModel(url: url, kind: kind, siteName: siteName, title: title, summary: summary, imageURL: imageURL,
+                       faviconURL: faviconURL, isLargeImage: isLargeImage, authorName: authorName,
+                       authorHandle: authorHandle, postText: postText, media: media, youTubeId: youTubeId)
+    }
+}
+
+/// One observable entry per embeddable URL for the whole session (CH16): rows read only ready entries, so a card
+/// appears once with fixed geometry and never resizes. Equality-guarded writes.
+@MainActor
+@Observable
+final class ChatEmbedEntry {
+    let url: String
+    private(set) var phase: ChatEmbedPhase
+    private(set) var model: ChatEmbedModel?
+
+    init(url: String, phase: ChatEmbedPhase = ChatEmbedPhase.loading, model: ChatEmbedModel? = nil) {
+        self.url = url
+        self.phase = phase
+        self.model = model
+    }
+
+    /// Returns true when the entry changed. A ready entry never goes back to loading or none.
+    @discardableResult
+    func resolve(_ next: ChatEmbedModel?) -> Bool {
+        if phase == ChatEmbedPhase.ready { return false }
+        if let model = next {
+            self.model = model
+            phase = ChatEmbedPhase.ready
+            return true
+        }
+        if phase == ChatEmbedPhase.none { return false }
+        phase = ChatEmbedPhase.none
+        return true
+    }
+}
+
+/// One page of Klipy results for the picker (CH19). `failed` pages carry no items.
+struct ChatGifPage: Equatable {
+    let items: [ChatGifAttachment]
+    let hasNext: Bool
+    let failed: Bool
+
+    static let failure = ChatGifPage(items: [], hasNext: false, failed: true)
 }

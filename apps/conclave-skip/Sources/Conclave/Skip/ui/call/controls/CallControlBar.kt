@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.PlainTooltip
@@ -91,7 +90,7 @@ internal fun CallControlBar(controls: CallControlsPresenter, windowWidth: Dp, wi
         ConclaveCallControlBar(
             identifier = "control.bar",
             modifier = Modifier.widthIn(max = ControlBarPolicy.androidMaxToolbarWidth.dp),
-            leave = { if (leave != null) CallLeaveCell(controls, leave) },
+            leave = { if (leave != null) LeaveControl(controls) },
         ) {
             for (control in shown) {
                 key(control.id) { CallControlCell(controls, control, toggleWidth) }
@@ -172,33 +171,11 @@ private fun CallInvokerCell(controls: CallControlsPresenter, control: CallContro
     }
 }
 
-/** Leave (F00 C04 d): the WP1-2b 72 x 48 dp callEnd pill, "Leave call" (OQ3), no haptic (Q11). While leaving it shows a
- *  spinner and takes no clicks. The host long-press End menu arrives with CTL-2 (LeaveControl.kt). */
-@Composable
-private fun CallLeaveCell(controls: CallControlsPresenter, control: CallControlUi) {
-    val leaving = control.isLeaving || control.isPending
-    if (!leaving) {
-        CallControlTooltip(conclaveString("ds_leave_call")) {
-            ConclaveLeaveButton(identifier = "control.leave", onClick = { controls.leave() })
-        }
-        return
-    }
-    val description = conclaveString("ds_leave_call")
-    Box(
-        Modifier.testTag("control.leave").size(CompactBarFit.androidLeaveWidth.dp, 48.dp)
-            .clip(CircleShape)
-            .background(Color(conclaveLeaveColors.container))
-            .semantics { contentDescription = description },
-        contentAlignment = Alignment.Center,
-    ) {
-        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color(conclaveLeaveColors.content), strokeWidth = 2.dp)
-    }
-}
-
-/** The M3 plain tooltip above the control (S30 1 d; material3 1.4.0 rememberTooltipPositionProvider). */
+/** The M3 plain tooltip above the control (S30 1 d; material3 1.4.0 rememberTooltipPositionProvider); also the guest
+ *  Leave control's (LeaveControl.kt). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CallControlTooltip(label: String, content: @Composable () -> Unit) {
+internal fun CallControlTooltip(label: String, content: @Composable () -> Unit) {
     TooltipBox(
         positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
         tooltip = { PlainTooltip { Text(label) } },

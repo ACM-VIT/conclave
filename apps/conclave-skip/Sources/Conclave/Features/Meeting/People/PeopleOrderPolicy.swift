@@ -158,7 +158,9 @@ enum PeopleRowPolicy {
         return FacehashPresentation.seed(name: shown, id: userId)
     }
 
-    static func rowModel(_ person: PeopleParticipantInput, role: PersonRole, handOrder: Int) -> PersonRowModel {
+    /// `actions` come from PPL-2's `PeopleActionPolicy`; `pendingAction` from the presenter's ledger.
+    static func rowModel(_ person: PeopleParticipantInput, role: PersonRole, handOrder: Int, actions: [PersonActionModel] = [],
+                         pendingAction: String = "") -> PersonRowModel {
         let name = person.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         return PersonRowModel(
             id: PeopleOrderPolicy.rosterKey(person.userId),
@@ -174,8 +176,8 @@ enum PeopleRowPolicy {
             isPresenting: person.isScreenSharing,
             isReconnecting: person.isReconnecting,
             handOrder: handOrder,
-            actions: [],
-            pendingAction: "",
+            actions: actions,
+            pendingAction: pendingAction,
             messagesHidden: person.messagesHidden
         )
     }

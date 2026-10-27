@@ -20,7 +20,8 @@ object CallNotificationBridge {
         this.presence = presence
         fixtureOnly = false
         CallActionDispatcher.attach(presence)
-        return CallPresenceAdapters.single(adapter())
+        // SYS-4 (S70 3 d): the PiP params follow the same snapshot.
+        return CallPresenceAdapters(skip.lib.Array(listOf(adapter(), PipManager.presenceAdapter(presence))))
     }
 
     /** SX1 fixture adapters for a standalone CallPresence (Debug only; never WebRTC, audio or capture). */
@@ -28,7 +29,8 @@ object CallNotificationBridge {
         this.presence = presence
         fixtureOnly = true
         CallActionDispatcher.attach(presence)
-        return CallPresenceAdapters.single(adapter())
+        // SYS-4 (S70 3 d): the PiP params follow the same snapshot.
+        return CallPresenceAdapters(skip.lib.Array(listOf(adapter(), PipManager.presenceAdapter(presence))))
     }
 
     private fun adapter(): CallPresenceAdapter =
