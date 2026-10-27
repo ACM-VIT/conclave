@@ -14,6 +14,7 @@
 		7A6D6B2C2E4E4702A581F7A1 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 7A6D6B2B2E4E4702A581F7A1 /* PrivacyInfo.xcprivacy */; };
 		499CD43B2AC5B799001AE8D8 /* Main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49F90C2B2A52156200F06D93 /* Main.swift */; };
 		499CD4402AC5B799001AE8D8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 49F90C2F2A52156300F06D93 /* Assets.xcassets */; };
+		5C11A1C02E9F4B7A00D1A002 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 5C11A1C02E9F4B7A00D1A001 /* AppIcon.icon */; };
 		502A04D681B019AAC7B8DC4A /* ScreenShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B4453F91272390D27F4F652A /* ScreenShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
 		A8264D6A672273FA806A3FB6 /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9C74C4304A8EA72CC8134FE /* SampleHandler.swift */; };
 		DFE47E95E36C8EE1B5CCE9EC /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 66D43BF7D33BFBAD3F7B4B90 /* Foundation.framework */; };
@@ -70,6 +71,7 @@
 		499AB9082B0581F4005E8330 /* plugins */ = {isa = PBXFileReference; lastKnownFileType = folder; name = plugins; path = ../../Intermediates.noindex/BuildToolPluginIntermediates; sourceTree = BUILT_PRODUCTS_DIR; };
 		49F90C2B2A52156200F06D93 /* Main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Main.swift; path = Sources/Main.swift; sourceTree = SOURCE_ROOT; };
 		49F90C2F2A52156300F06D93 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		5C11A1C02E9F4B7A00D1A001 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		49F90C312A52156300F06D93 /* Entitlements.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Entitlements.plist; sourceTree = "<group>"; };
 		66D43BF7D33BFBAD3F7B4B90 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		B1ABD79B5D294DEA239C6EE1 /* ScreenShareExtension.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ScreenShareExtension.entitlements; sourceTree = "<group>"; };
@@ -159,6 +161,7 @@
 			children = (
 				49F90C2B2A52156200F06D93 /* Main.swift */,
 				49F90C2F2A52156300F06D93 /* Assets.xcassets */,
+				5C11A1C02E9F4B7A00D1A001 /* AppIcon.icon */,
 				49F90C312A52156300F06D93 /* Entitlements.plist */,
 				4900101C2BACEA710000DE33 /* Info.plist */,
 				6D4A1F0F2E1B4D0A9C72A111 /* PrivacyInfo.xcprivacy */,
@@ -258,6 +261,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				499CD4402AC5B799001AE8D8 /* Assets.xcassets in Resources */,
+				5C11A1C02E9F4B7A00D1A002 /* AppIcon.icon in Resources */,
 				496BDBEE2B8A7E9C00C09264 /* Localizable.xcstrings in Resources */,
 				6D4A1F102E1B4D0A9C72A111 /* PrivacyInfo.xcprivacy in Resources */,
 			);

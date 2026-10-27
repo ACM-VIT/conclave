@@ -164,9 +164,16 @@ export function renderNativeTokens(tokens = native) {
     ])],
   ]);
   for (const [folder, mode] of [["values", "light"], ["values-night", "dark"]]) {
+    const resources = [
+      ["conclave_window_background", tokens.android[mode].background],
+      // S70 SX8: notification accent (Notification.setColor) from the scheme's primary; follows night mode on re-post.
+      ["sys_notification_accent", tokens.android[mode].primary],
+    ];
+    // S70 11 d: the adaptive icon tile is the stage color in every appearance, so it has no night variant.
+    if (mode === "light") resources.push(["ic_launcher_background", tokens.android.extended.stage]);
     outputs.set(`${nativeRoot}/Android/app/src/main/res/${folder}/colors.xml`,
       `<?xml version="1.0" encoding="utf-8"?>\n<!-- ${generatedNotice} -->\n<resources>\n` +
-      `    <color name="conclave_window_background">#${argb(tokens.android[mode].background)}</color>\n` +
+      resources.map(([name, value]) => `    <color name="${name}">#${argb(value, `colors.xml ${name}`)}</color>\n`).join("") +
       "</resources>\n");
   }
   return outputs;

@@ -490,22 +490,350 @@ class ValidationAndDrift(unittest.TestCase):
             self.assertNotIn(forbidden, generated)
 
 
+def drawable(outputs, name):
+    return outputs[g.DRAWABLES / (name + '.xml')].decode()
+
+
+def xml_attr(source, name):
+    values = re.findall(r'\b' + re.escape(name) + r'="([^"]*)"', source)
+    assert len(values) == 1, (name, values)
+    return values[0]
+
+
+def kotlin_vector_numbers(prop):
+    """Coordinates of one lazy ImageVector in the checked-in ConclaveIcons.kt, in emission order."""
+    source = (g.ROOT / g.ANDROID / 'ConclaveIcons.kt').read_text()
+    body = re.search(r'private val ' + prop + r'Cache = lazy.*?\.build\(\)', source, re.S).group(0)
+    return [F(n.rstrip('f')) for n in re.findall(r'-?[0-9][0-9.e+-]*f', body.split('path(fill', 1)[1])]
+
+
+BRAND_FIXTURE = (b'<svg width="400" height="400" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">\n'
+                 b'<path fill-rule="evenodd" clip-rule="evenodd" d="M200 0L400 200L200 400L0 200Z'
+                 b'M150 180H250V220H150Z" fill="#F95F4A"/>\n</svg>\n')
+
+
+class AppModuleDrawables(unittest.TestCase):
+    """S70 SX8, S20 SC20 and S70 11 d: app-module vector drawables with legal names, from pinned inputs only."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.outputs = g.generate(g.ROOT)
+
+    def test_inventory_and_legal_resource_names(self):
+        names = sorted(p.name for p in self.outputs if p.parent == g.DRAWABLES)
+        self.assertEqual(names, sorted(n + '.xml' for n in [
+            'conclave_mic_fill1', 'conclave_mic_off_fill1', 'conclave_call_end_fill1',
+            'conclave_cancel_presentation_fill1', 'conclave_ic_stat',
+            'ic_launcher_foreground', 'ic_launcher_monochrome']))
+        for name in names:
+            self.assertRegex(name, r'^[a-z][a-z0-9_]*\.xml$')
+        for bad in ['MicFill1', 'mic-fill', '1mic', 'mic.fill1', '', 'conclave_Mic']:
+            with self.subTest(bad=bad), self.assertRaises(g.IconError):
+                g.drawable_name(bad)
+
+    def test_system_drawables_are_the_selected_material_artwork(self):
+        # Consistency, not an oracle: the drawable a notification or PiP action shows is the same converted
+        # geometry as the Compose ImageVector for that artwork, as plain 24 dp white single paths.
+        for name, prop in [('conclave_mic_fill1', 'MicFill1'), ('conclave_mic_off_fill1', 'MicOffFill1'),
+                           ('conclave_call_end_fill1', 'CallEndFill1'),
+                           ('conclave_cancel_presentation_fill1', 'CancelPresentationFill1')]:
+            with self.subTest(name=name):
+                xml = drawable(self.outputs, name)
+                self.assertEqual(xml.count('<path'), 1)
+                self.assertEqual((xml_attr(xml, 'android:width'), xml_attr(xml, 'android:height')), ('24dp', '24dp'))
+                self.assertEqual((xml_attr(xml, 'android:viewportWidth'), xml_attr(xml, 'android:viewportHeight')),
+                                 ('960', '960'))
+                self.assertEqual(xml_attr(xml, 'android:fillColor'), '#FFFFFFFF')
+                self.assertNotIn('autoMirrored', xml)
+                self.assertNotIn('<group', xml)
+                data = xml_attr(xml, 'android:pathData')
+                self.assertRegex(data, r'^M[-0-9. ,MLQZ]*Z$')
+                numbers = [F(n) for n in re.findall(r'-?[0-9][0-9.]*', data)]
+                self.assertEqual(numbers, kotlin_vector_numbers(prop))
+                self.assertIn('Material Symbols by Google', xml)
+
+    def test_status_icon_is_the_letterless_diamond_in_the_live_area(self):
+        xml = drawable(self.outputs, 'conclave_ic_stat')
+        brand = g.parse_brand_mark((g.ROOT / g.BRAND_MARK).read_bytes())
+        self.assertEqual(xml.count('<path'), 1)
+        data = xml_attr(xml, 'android:pathData')
+        self.assertEqual(data, brand['subpaths'][0])
+        self.assertEqual(data.count('M'), 1)
+        for letter in brand['subpaths'][1:]:
+            self.assertNotIn(letter, xml)
+        self.assertEqual(xml_attr(xml, 'android:fillColor'), '#FFFFFFFF')
+        self.assertNotIn('fillType', xml)
+        # The drawn diamond (curve extent of the parsed path, placed by the parsed group translation) spans the
+        # 20 dp live area of the 24 dp canvas with a 2 dp margin on every side.
+        width, height = xml_attr(xml, 'android:width'), xml_attr(xml, 'android:height')
+        self.assertEqual((width, height), ('24dp', '24dp'))
+        size = F(width[:-2])
+        viewport = F(xml_attr(xml, 'android:viewportWidth'))
+        self.assertEqual(viewport, F(xml_attr(xml, 'android:viewportHeight')))
+        dp = size / viewport
+        (left, right), (top, bottom) = curve_extent(data)
+        for low, high, offset in [(left, right, F(xml_attr(xml, 'android:translateX'))),
+                                  (top, bottom, F(xml_attr(xml, 'android:translateY')))]:
+            self.assertLess(abs((high - low) * dp - 20), F(1, 100))
+            self.assertLess(abs((offset + low) * dp - 2), F(1, 100))
+            self.assertLess(abs((viewport - offset - high) * dp - 2), F(1, 100))
+
+    def test_launcher_layers_share_one_knockout_path_inside_the_safe_zone(self):
+        brand = g.parse_brand_mark((g.ROOT / g.BRAND_MARK).read_bytes())
+        full = ''.join(brand['subpaths'])
+        layers = {name: drawable(self.outputs, name) for name in ['ic_launcher_foreground', 'ic_launcher_monochrome']}
+        for name, xml in layers.items():
+            with self.subTest(name=name):
+                self.assertEqual(xml.count('<path'), 1)
+                self.assertEqual(xml_attr(xml, 'android:pathData'), full)
+                self.assertEqual(xml_attr(xml, 'android:fillType'), 'evenOdd')
+                self.assertEqual((xml_attr(xml, 'android:width'), xml_attr(xml, 'android:viewportWidth')), ('108dp', '108'))
+                scale = F(xml_attr(xml, 'android:scaleX'))
+                self.assertEqual(scale, F(xml_attr(xml, 'android:scaleY')))
+                offset = F(xml_attr(xml, 'android:translateX'))
+                self.assertEqual(offset, F(xml_attr(xml, 'android:translateY')))
+                # The 400 unit diamond becomes 66 dp, centred: its tips touch the 66 dp safe-zone circle.
+                self.assertEqual(scale * 400, 66)
+                self.assertEqual(offset * 2 + 66, 108)
+        self.assertEqual(xml_attr(layers['ic_launcher_monochrome'], 'android:fillColor'), '#FFFFFFFF')
+        self.assertEqual(xml_attr(layers['ic_launcher_foreground'], 'android:fillColor'), '#FF' + brand['fill'][1:])
+        self.assertEqual(brand['fill'], '#F95F4A')
+        self.assertEqual(len(brand['subpaths']), 5)
+
+    def test_wordmark_stand_in_is_withheld(self):
+        # Review F3 and ISSUE 1: the icon mark is not a "Conclave" wordmark, so no output ships under that name
+        # and the S10 R2 plain-title fallback stays until owner-approved outlined lettering exists.
+        self.assertNotIn(g.DRAWABLES / 'conclave_wordmark.xml', self.outputs)
+        self.assertEqual([p for p in self.outputs if 'wordmark' in str(p).lower()], [])
+        full = ''.join(g.parse_brand_mark((g.ROOT / g.BRAND_MARK).read_bytes())['subpaths'])
+        holders = sorted(p.name for p, data in self.outputs.items() if full.encode() in data)
+        self.assertEqual(holders, ['conclave-mark.svg', 'ic_launcher_foreground.xml', 'ic_launcher_monochrome.xml'])
+
+    def test_every_drawable_is_flat_generated_and_dash_free(self):
+        for path, data in self.outputs.items():
+            if path.parent != g.DRAWABLES:
+                continue
+            text = data.decode()
+            with self.subTest(path=path.name):
+                self.assertTrue(text.startswith('<?xml version="1.0" encoding="utf-8"?>\n<!-- ' + g.GENERATED_MARK))
+                self.assertNotRegex(text.lower(), r'gradient|<aapt:attr|<clip-path|stroke')
+                self.assertEqual(len(re.findall(r'android:fillColor="(#[0-9A-F]{8})"', text)), 1)
+                for forbidden in [chr(0x2013), chr(0x2014), '\r', '/Users/']:
+                    self.assertNotIn(forbidden, text)
+
+    def test_brand_source_is_pinned_and_parsed_strictly(self):
+        self.assertEqual(g.digest((g.ROOT / g.BRAND_MARK).read_bytes()), g.BRAND_MARK_SHA)
+        parsed = g.parse_brand_mark(BRAND_FIXTURE)
+        self.assertEqual(parsed, {'fill': '#F95F4A', 'subpaths': ['M200 0L400 200L200 400L0 200Z', 'M150 180H250V220H150Z']})
+        bad = {
+            'relative command': BRAND_FIXTURE.replace(b'L400 200', b'l200 200'),
+            'curve family outside profile': BRAND_FIXTURE.replace(b'L400 200', b'A1 1 0 0 1 400 200'),
+            'second path': BRAND_FIXTURE.replace(b'</svg>', b'<path d="M0 0Z" fill="#000000"/></svg>'),
+            'gradient paint': BRAND_FIXTURE.replace(b'fill="#F95F4A"', b'fill="url(#g)"'),
+            'gradient element': BRAND_FIXTURE.replace(b'</svg>', b'<linearGradient id="g"/></svg>'),
+            'nonzero rule': BRAND_FIXTURE.replace(b'fill-rule="evenodd"', b'fill-rule="nonzero"'),
+            'other canvas': BRAND_FIXTURE.replace(b'viewBox="0 0 400 400"', b'viewBox="0 0 24 24"'),
+            'letters missing': BRAND_FIXTURE.replace(b'M150 180H250V220H150Z', b''),
+            'open subpath': BRAND_FIXTURE.replace(b'L0 200Z', b'L0 200'),
+            'entity': BRAND_FIXTURE.replace(b'M200 0', b'M200&#48;'),
+        }
+        for name, data in bad.items():
+            with self.subTest(case=name), self.assertRaises(g.IconError):
+                g.parse_brand_mark(data)
+        read = Path.read_bytes
+
+        def tampered(path):
+            data = read(path)
+            return data + b' ' if path == g.ROOT / g.BRAND_MARK else data
+        with patch.object(Path, 'read_bytes', tampered), self.assertRaises(g.IconError):
+            g.generate(g.ROOT)
+
+    def test_drawable_drift_and_extras_only_count_generated_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / g.ICON).mkdir(parents=True)
+            outputs = {g.DRAWABLES / 'conclave_mic_fill1.xml': b'<!-- ' + g.GENERATED_MARK.encode() + b' -->\n'}
+            g.publish(root, outputs)
+            self.assertEqual(g.publish(root, outputs, check=True), [])
+            folder = root / g.DRAWABLES
+            (folder / 'hand_written.xml').write_bytes(b'<vector/>\n')
+            self.assertEqual(g.publish(root, outputs, check=True), [])
+            (folder / 'conclave_retired.xml').write_bytes(b'<!-- ' + g.GENERATED_MARK.encode() + b'; do not edit. -->\n')
+            with self.assertRaises(g.IconError):
+                g.publish(root, outputs, check=True)
+
+
+def sandbox(td):
+    """A copy of every generator input and output folder under a temporary root."""
+    root = Path(td)
+    for rel in [g.ICON, g.ANDROID, g.IOS, g.APP_ICON, g.CALLKIT_ICON]:
+        shutil.copytree(g.ROOT / rel, root / rel)
+    (root / g.DRAWABLES).mkdir(parents=True)
+    for path in (g.ROOT / g.DRAWABLES).glob('*.xml'):
+        shutil.copyfile(path, root / g.DRAWABLES / path.name)
+    for rel in [g.IOS_LICENSE, g.ANDROID_LICENSE, g.TOKEN_COLORS]:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(g.ROOT / rel, root / rel)
+    return root
+
+
+def curve_extent(subpath, steps=64):
+    """x and y extent of an absolute M/C/L/H/V/Z path; cubic segments are sampled at k/steps (exact rationals)."""
+    xs, ys, x, y = [], [], F(0), F(0)
+    for command, numbers in re.findall(r'([MCLHVZ])([^MCLHVZ]*)', subpath):
+        values = [F(n) for n in g.NUMBER.findall(numbers)]
+        if command in 'ML':
+            for i in range(0, len(values), 2):
+                x, y = values[i], values[i + 1]
+                xs.append(x)
+                ys.append(y)
+        elif command in 'HV':
+            for value in values:
+                x, y = (value, y) if command == 'H' else (x, value)
+                xs.append(x)
+                ys.append(y)
+        elif command == 'C':
+            for i in range(0, len(values), 6):
+                x1, y1, x2, y2, x3, y3 = values[i:i + 6]
+                for k in range(steps + 1):
+                    t = F(k, steps)
+                    u = 1 - t
+                    xs.append(u ** 3 * x + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t ** 3 * x3)
+                    ys.append(u ** 3 * y + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t ** 3 * y3)
+                x, y = x3, y3
+    return (min(xs), max(xs)), (min(ys), max(ys))
+
+
+def token_tile():
+    """The launcher tile color as gen-native-tokens wrote it, read without the generator under test."""
+    text = (g.ROOT / g.TOKEN_COLORS).read_text()
+    found = re.findall(r'<color name="ic_launcher_background">#FF([0-9A-F]{6})</color>', text)
+    assert len(found) == 1, found
+    return '#' + found[0]
+
+
+def srgb_text(hex6):
+    return 'srgb:' + ','.join('%.5f' % (int(hex6[i:i + 2], 16) / 255) for i in (1, 3, 5)) + ',1.00000'
+
+
+class DarwinBrandAssets(unittest.TestCase):
+    """S70 SX9 and 11 c (review F4): the Icon Composer document and the CallKit template are generated from the
+    pinned mark and the generated launcher tile color, so a changed input regenerates them and --check fails on a
+    stale or extra file in either folder."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.outputs = g.generate(g.ROOT)
+        cls.brand = g.parse_brand_mark((g.ROOT / g.BRAND_MARK).read_bytes())
+
+    def test_inventory(self):
+        self.assertEqual(sorted(p for p in self.outputs if g.APP_ICON in p.parents),
+                         [g.APP_ICON / 'Assets/acm-letters.svg', g.APP_ICON / 'Assets/conclave-mark.svg',
+                          g.APP_ICON / 'icon.json'])
+        self.assertEqual(sorted(p for p in self.outputs if g.CALLKIT_ICON in p.parents),
+                         [g.CALLKIT_ICON / 'CallKitIcon.svg', g.CALLKIT_ICON / 'Contents.json'])
+
+    def test_icon_document_uses_solid_fills_and_hides_the_letters_in_mono(self):
+        text = self.outputs[g.APP_ICON / 'icon.json'].decode()
+        self.assertNotIn('gradient', text.lower())
+        document = json.loads(text)
+        ink = {'solid': srgb_text(token_tile())}
+        self.assertEqual(document['fill-specializations'], [{'value': ink}, {'appearance': 'dark', 'value': ink}])
+        self.assertNotIn('fill', document)
+        self.assertEqual(document['supported-platforms'], {'squares': 'shared'})
+        group, = document['groups']
+        self.assertEqual(group['shadow']['kind'], 'none')
+        self.assertIs(group['translucency']['enabled'], False)
+        letters, mark = group['layers']
+        self.assertEqual((letters['name'], letters['image-name']), ('Letters', 'acm-letters.svg'))
+        self.assertEqual((mark['name'], mark['image-name']), ('Mark', 'conclave-mark.svg'))
+        self.assertEqual(letters['fill'], ink)
+        self.assertEqual(mark['fill'], {'solid': srgb_text(self.brand['fill'])})
+        self.assertIs(letters['glass'], False)
+        self.assertIs(mark['glass'], False)
+        self.assertEqual(letters['hidden-specializations'], [{'appearance': 'tinted', 'value': True}])
+        self.assertNotIn('hidden-specializations', mark)
+
+    def test_layers_carry_the_pinned_path_at_todays_placement(self):
+        subpaths = self.brand['subpaths']
+        for name, path, fill in [('conclave-mark.svg', ''.join(subpaths), self.brand['fill']),
+                                 ('acm-letters.svg', ''.join(subpaths[1:]), token_tile())]:
+            with self.subTest(name=name):
+                svg = self.outputs[g.APP_ICON / 'Assets' / name].decode()
+                self.assertEqual(svg.count('<path'), 1)
+                self.assertEqual(xml_attr(svg, 'd'), path)
+                self.assertEqual(xml_attr(svg, 'fill'), fill)
+                self.assertEqual(xml_attr(svg, 'fill-rule'), 'evenodd')
+                self.assertEqual((xml_attr(svg, 'width'), xml_attr(svg, 'viewBox')), ('1024', '0 0 1024 1024'))
+                offset_x, offset_y, scale = (F(n) for n in re.fullmatch(
+                    r'translate\(([0-9.]+) ([0-9.]+)\) scale\(([0-9.]+)\)', xml_attr(svg, 'transform')).groups())
+                # The 400 unit mark becomes today's 860 px diamond, centred on the 1024 px canvas.
+                self.assertEqual((offset_x, scale * 400, offset_x * 2 + scale * 400), (offset_y, 860, 1024))
+
+    def test_callkit_template_is_the_letterless_diamond_vector(self):
+        svg = self.outputs[g.CALLKIT_ICON / 'CallKitIcon.svg'].decode()
+        diamond = self.brand['subpaths'][0]
+        self.assertEqual(svg.count('<path'), 1)
+        self.assertEqual(xml_attr(svg, 'd'), diamond)
+        for letter in self.brand['subpaths'][1:]:
+            self.assertNotIn(letter, svg)
+        # Template art: the system draws alpha only, so the path keeps SVG's default paint (no color, one color).
+        self.assertNotIn('fill', svg)
+        self.assertNotRegex(svg.lower(), r'gradient|stroke|opacity')
+        self.assertEqual((xml_attr(svg, 'width'), xml_attr(svg, 'height')), ('40', '40'))
+        self.assertEqual(xml_attr(svg, 'viewBox'), '0 0 400 400')
+        # S70 11 c: the diamond fills the 40 pt square.
+        (left, right), (top, bottom) = curve_extent(diamond)
+        for low, high in [(left, right), (top, bottom)]:
+            self.assertLess(abs(low), F(1, 100))
+            self.assertLess(abs(high - 400), F(1, 100))
+        contents = json.loads(self.outputs[g.CALLKIT_ICON / 'Contents.json'])
+        self.assertEqual(contents['images'], [{'filename': 'CallKitIcon.svg', 'idiom': 'universal'}])
+        self.assertEqual(contents['properties'], {'template-rendering-intent': 'template'})
+
+    def test_tile_is_the_generated_launcher_color(self):
+        self.assertEqual(g.launcher_tile(g.ROOT), token_tile())
+        line = re.compile(r'(<color name="ic_launcher_background">)#FF[0-9A-F]{6}(</color>)')
+        with tempfile.TemporaryDirectory() as td:
+            root = sandbox(td)
+            colors = root / g.TOKEN_COLORS
+            original = colors.read_text()
+            colors.write_text(line.sub(r'\g<1>#FF101012\g<2>', original))
+            document = g.generate(root)[g.APP_ICON / 'icon.json'].decode()
+            self.assertIn(srgb_text('#101012'), document)
+            self.assertNotIn(srgb_text(token_tile()), document)
+            broken = {
+                'hand edited': original.replace('GENERATED by packages/ui-tokens/scripts/gen-native-tokens.mjs', 'Edited'),
+                'missing': line.sub('', original),
+                'duplicate': original.replace('</resources>', line.search(original).group(0) + '\n</resources>'),
+                'translucent': line.sub(r'\g<1>#800A0A0B\g<2>', original),
+            }
+            for case, text in broken.items():
+                colors.write_text(text)
+                with self.subTest(case=case), self.assertRaises(g.IconError):
+                    g.generate(root)
+
+    def test_stale_and_extra_darwin_files_fail_the_check(self):
+        for rel in [g.CALLKIT_ICON / 'CallKitIcon.png', g.CALLKIT_ICON / 'CallKitIcon@2x.png',
+                    g.APP_ICON / 'Assets/stray.svg', g.APP_ICON / 'icon.json']:
+            with self.subTest(rel=str(rel)), tempfile.TemporaryDirectory() as td:
+                root = sandbox(td)
+                (root / rel).write_bytes(b'x')
+                with self.assertRaises(g.IconError):
+                    g.publish(root, g.generate(root), check=True)
+
+
 class FinderMetadata(unittest.TestCase):
     """Review D3: a Finder .DS_Store is never an input or an output, so it cannot fail validation or drift."""
 
     def sandbox(self, td):
-        root = Path(td)
-        for rel in [g.ICON, g.ANDROID, g.IOS]:
-            shutil.copytree(g.ROOT / rel, root / rel)
-        for rel in [g.IOS_LICENSE, g.ANDROID_LICENSE]:
-            (root / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(g.ROOT / rel, root / rel)
-        return root
+        return sandbox(td)
 
     def test_ds_store_in_inputs_evidence_and_outputs_is_ignored(self):
         with tempfile.TemporaryDirectory() as td:
             root = self.sandbox(td)
-            folders = [g.VENDOR, g.VENDOR / 'assets/symbols/web/send', g.EVIDENCE, g.ANDROID, g.IOS]
+            folders = [g.VENDOR, g.VENDOR / 'assets/symbols/web/send', g.EVIDENCE, g.ANDROID, g.IOS, g.BRAND, g.DRAWABLES,
+                       g.APP_ICON, g.APP_ICON / 'Assets', g.CALLKIT_ICON]
             for folder in folders:
                 (root / folder / '.DS_Store').write_bytes(b'\x00\x00\x00\x01Bud1')
             outputs = g.generate(root)
@@ -517,7 +845,7 @@ class FinderMetadata(unittest.TestCase):
 
     def test_other_stray_files_still_fail(self):
         for folder, name in [(g.VENDOR, 'stray.svg'), (g.EVIDENCE, 'stray.json'), (g.ANDROID, 'Stray.kt'),
-                             (g.IOS, '.DS_Store.swift')]:
+                             (g.IOS, '.DS_Store.swift'), (g.BRAND, 'stray.svg'), (g.CALLKIT_ICON, 'stray.png')]:
             with self.subTest(folder=str(folder), name=name), tempfile.TemporaryDirectory() as td:
                 root = self.sandbox(td)
                 (root / folder / name).write_bytes(b'x')

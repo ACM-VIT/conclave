@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Conclave" parent="Theme.Material3.Dark.NoActionBar">
+    <style name="Base.Theme.Conclave" parent="Theme.Material3.Dark.NoActionBar">
         <!-- Keep launch and legacy entry dark until the production root migrates. -->
         <item name="colorPrimary">@color/md_theme_primary</item>
         <item name="colorOnPrimary">@color/md_theme_onPrimary</item>
@@ -23,4 +23,7 @@
         <item name="android:navigationBarColor">@color/navigation_bar_color</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+
+    <!-- API 31 and later add the system splash items in values-v31 and values-night-v31. -->
+    <style name="Theme.Conclave" parent="Base.Theme.Conclave" />
 </resources>

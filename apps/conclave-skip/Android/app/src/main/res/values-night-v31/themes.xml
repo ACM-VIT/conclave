@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- S70 11 d, S10 1 d: the API 31 and later system splash shows the full adaptive icon on the launch color,
+         with no android:windowSplashScreenAnimatedIcon override. Night: the generated androidDarkSurface. -->
+    <style name="Theme.Conclave" parent="Base.Theme.Conclave">
+        <item name="android:windowSplashScreenBackground">@color/conclave_window_background</item>
+    </style>
+</resources>

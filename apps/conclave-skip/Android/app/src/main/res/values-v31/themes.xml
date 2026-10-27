@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- S70 11 d, S10 1 d: the API 31 and later system splash shows the full adaptive icon on the launch
+         color, so no android:windowSplashScreenAnimatedIcon override (a foreground-only override would show
+         the splash color through the knocked-out letters). Light: the legacy entry still launches dark until
+         the S10 R4 flip, which lands with the native default root (S10 1 d, 1 l7), so the splash keeps the
+         window's own background; the flip points this item at @color/conclave_window_background. -->
+    <style name="Theme.Conclave" parent="Base.Theme.Conclave">
+        <item name="android:windowSplashScreenBackground">?android:attr/colorBackground</item>
+    </style>
+</resources>

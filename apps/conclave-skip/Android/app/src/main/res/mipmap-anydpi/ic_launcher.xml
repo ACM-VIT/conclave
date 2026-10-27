@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- S70 11 d: vector layers. Background: the generated stage color. Foreground: the coral mark with the letters
+     knocked out, 66 dp inside the 108 dp canvas (the safe zone). Monochrome: the same single path, tinted by the
+     system for themed icons. The PNG mipmap layers retire with WP11. -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-<background android:drawable="@mipmap/ic_launcher_background" />
-<foreground android:drawable="@mipmap/ic_launcher_foreground" />
-<monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
 </adaptive-icon>
