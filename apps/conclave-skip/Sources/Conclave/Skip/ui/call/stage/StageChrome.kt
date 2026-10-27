@@ -101,7 +101,7 @@ internal fun StageChrome(
         ) {
             // The row keeps its height while hidden, so the chips below never move.
             Box(Modifier.heightIn(min = ConclaveChromeMetrics.HEIGHT_DP.dp)) {
-                AnimatedVisibility(visible = visible, enter = enter, exit = exit) {
+                androidx.compose.animation.AnimatedVisibility(visible = visible, enter = enter, exit = exit) {
                     StageTopRow(stage, capsuleMax, onMinimize, onRoute)
                 }
             }

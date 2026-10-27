@@ -187,11 +187,11 @@ final class StagePresenter {
     // MARK: Actions (views)
 
     func togglePin(userId: String) {
-        onCommand?(StageCommand(kind: StageCommandKind.togglePin, userId: userId, value: ""))
+        if let onCommand = onCommand { onCommand(StageCommand(kind: StageCommandKind.togglePin, userId: userId, value: "")) }
     }
 
     func clearPin() {
-        onCommand?(StageCommand(kind: StageCommandKind.clearPin, userId: "", value: ""))
+        if let onCommand = onCommand { onCommand(StageCommand(kind: StageCommandKind.clearPin, userId: "", value: "")) }
     }
 
     /// SC4: a per-session fit override, kept across kind changes and cleared on reset.
@@ -207,7 +207,7 @@ final class StagePresenter {
     }
 
     func setSelfViewMode(_ raw: String) {
-        onCommand?(StageCommand(kind: StageCommandKind.setSelfViewMode, userId: "", value: raw))
+        if let onCommand = onCommand { onCommand(StageCommand(kind: StageCommandKind.setSelfViewMode, userId: "", value: raw)) }
     }
 
     func moveSelfView(toCorner raw: String) {
@@ -215,7 +215,7 @@ final class StagePresenter {
     }
 
     func flipCamera() {
-        onCommand?(StageCommand(kind: StageCommandKind.flipCamera, userId: "", value: ""))
+        if let onCommand = onCommand { onCommand(StageCommand(kind: StageCommandKind.flipCamera, userId: "", value: "")) }
     }
 
     /// The capsule opens Meeting Details (S20 7 a), invoker `.call`.

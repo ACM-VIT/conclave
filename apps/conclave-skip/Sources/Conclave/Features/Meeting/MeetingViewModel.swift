@@ -2663,7 +2663,7 @@ final class MeetingViewModel {
                 await cleanupAbandonedJoinAttempt(cleanupMedia: true, joinAttemptId: joinAttemptId)
                 return
             }
-            if presenceJoinedAtMillis == 0 {
+            if presenceJoinedAtMillis == 0.0 {
                 presenceJoinedAtMillis = Date().timeIntervalSince1970 * 1000
             }
             redirectContinuationPending = false

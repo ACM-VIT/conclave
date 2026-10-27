@@ -155,7 +155,7 @@ final class PremeetingPresenter {
         if decision.showsOutcome && next.outcomeId != 0 && next.outcomeId == dismissedOutcomeId {
             decision = PremeetingRootDecision.home
         }
-        setRoot(decision)
+        publishRoot(decision)
         refreshOutcome(next, decision: decision)
 
         if decision.showsOutcome {
@@ -332,7 +332,7 @@ final class PremeetingPresenter {
 
     /// Cancel while connecting or waiting: `shell.leave()` (no haptic, Q11).
     func cancelJoin() {
-        onCommand?(.leave)
+        if let onCommand = onCommand { onCommand(.leave) }
     }
 
     // MARK: - Outcome
@@ -351,9 +351,9 @@ final class PremeetingPresenter {
         if inputs.outcomeId != 0 {
             dismissedOutcomeId = inputs.outcomeId
         }
-        setOutcome(nil)
+        publishOutcome(nil)
         if root.showsOutcome {
-            setRoot(PremeetingRootDecision.home)
+            publishRoot(PremeetingRootDecision.home)
         }
         setPathValue([])
         refreshLobbyStatus()
@@ -417,7 +417,7 @@ final class PremeetingPresenter {
                 ? EntryPolicies.roomLabel(inputs.roomLabel.isEmpty ? inputs.currentRoomId : inputs.roomLabel)
                 : EntryPolicies.roomLabel(lobbyTarget?.roomId ?? "")
             pendingSwitchTarget = parsed
-            setSwitchPrompt(RoomSwitchPrompt(id: nextPromptId, currentLabel: current,
+            publishSwitchPrompt(RoomSwitchPrompt(id: nextPromptId, currentLabel: current,
                                              targetLabel: EntryPolicies.roomLabel(parsed.roomId)))
             nextPromptId += 1
         case .ignore:
@@ -439,7 +439,7 @@ final class PremeetingPresenter {
     /// reached. A stale id (a newer link replaced the prompt) does nothing.
     func confirmSwitch(id: Int) {
         guard let prompt = switchPrompt, prompt.id == id, let target = pendingSwitchTarget else { return }
-        setSwitchPrompt(nil)
+        publishSwitchPrompt(nil)
         pendingSwitchTarget = nil
         awaitingHomeTarget = target
         if MeetingRoomSwitchPolicy.isBusy(phase: inputs.phase, lobby: .none) {
@@ -454,7 +454,7 @@ final class PremeetingPresenter {
     /// Stay (Cancel role, Back, scrim): consumes the link.
     func stay(id: Int) {
         guard let prompt = switchPrompt, prompt.id == id else { return }
-        setSwitchPrompt(nil)
+        publishSwitchPrompt(nil)
         pendingSwitchTarget = nil
     }
 
@@ -705,16 +705,16 @@ final class PremeetingPresenter {
     private func refreshOutcome(_ next: PremeetingInputs, decision: PremeetingRootDecision) {
         guard decision.showsOutcome, let kind = next.outcomeKind,
               let variant = PremeetingRootPolicy.outcomeVariant(kind, entryOrigin: next.entryOrigin) else {
-            setOutcome(nil)
+            publishOutcome(nil)
             return
         }
-        setOutcome(OutcomeModel(id: next.outcomeId, variant: variant, primary: .backHome, secondary: .none,
+        publishOutcome(OutcomeModel(id: next.outcomeId, variant: variant, primary: .backHome, secondary: .none,
                                 serverDetail: next.outcomeServerText))
     }
 
     private func refreshLobbyStatus() {
         guard let target = topLobbyTarget() else {
-            setLobbyStatus(nil)
+            publishLobbyStatus(nil)
             return
         }
         let mode = root.lobbyMode ?? LobbyMode.editing
@@ -732,7 +732,7 @@ final class PremeetingPresenter {
         } else if inputs.isNetworkOffline && mode == .waiting {
             waiting = .offline
         }
-        setLobbyStatus(LobbyStatusSnapshot(
+        publishLobbyStatus(LobbyStatusSnapshot(
             routeId: target.routeId,
             intent: target.intent,
             mode: mode,
@@ -772,19 +772,19 @@ final class PremeetingPresenter {
         targets = kept
     }
 
-    private func setRoot(_ value: PremeetingRootDecision) {
+    private func publishRoot(_ value: PremeetingRootDecision) {
         guard value != root else { return }
         root = value
         publishCount += 1
     }
 
-    private func setOutcome(_ value: OutcomeModel?) {
+    private func publishOutcome(_ value: OutcomeModel?) {
         guard value != outcome else { return }
         outcome = value
         publishCount += 1
     }
 
-    private func setLobbyStatus(_ value: LobbyStatusSnapshot?) {
+    private func publishLobbyStatus(_ value: LobbyStatusSnapshot?) {
         guard value != lobbyStatus else { return }
         lobbyStatus = value
         publishCount += 1
@@ -808,7 +808,7 @@ final class PremeetingPresenter {
         publishCount += 1
     }
 
-    private func setSwitchPrompt(_ value: RoomSwitchPrompt?) {
+    private func publishSwitchPrompt(_ value: RoomSwitchPrompt?) {
         guard value != switchPrompt else { return }
         switchPrompt = value
         publishCount += 1

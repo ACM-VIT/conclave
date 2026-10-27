@@ -220,7 +220,7 @@ struct STG4ChromeAutoHideTests {
         #expect(chrome.contains("LaunchedEffect(state.armSerial, armed) { if (!armed) return@LaunchedEffect"))
         #expect(chrome.contains("val timeout = accessState.recommendedTimeoutMillis"))
         #expect(chrome.contains("fadeIn(animationSpec = ConclaveMotion.chromeFade())"))
-        #expect(chrome.contains("Box(Modifier.heightIn(min = ConclaveChromeMetrics.HEIGHT_DP.dp)) { AnimatedVisibility(visible = visible, enter = enter, exit = exit) { StageTopRow("))
+        #expect(chrome.contains("Box(Modifier.heightIn(min = ConclaveChromeMetrics.HEIGHT_DP.dp)) { androidx.compose.animation.AnimatedVisibility(visible = visible, enter = enter, exit = exit) { StageTopRow("))
         #expect(chrome.contains("haptics.gesture(FeedbackKind.selectionChanged)"))
         #expect(chrome.contains("actionDescription = conclaveString(\"stg_lower_hand\")"))
         for pattern in ["WindowInsetsControllerCompat", "systemBars())", "SYSTEM_UI_FLAG", "while (true)", "repeatOnLifecycle"] {

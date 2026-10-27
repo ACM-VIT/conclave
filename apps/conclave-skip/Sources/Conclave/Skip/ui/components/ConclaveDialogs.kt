@@ -77,7 +77,7 @@ internal fun ConclaveTextEntryDialog(
     val canConfirm = ConclaveTextEntryPolicy.canConfirm(value, isPending = pending)
     val multiline = model.kind == ConclaveTextEntryKind.multiline
     val options = when (model.kind) {
-        ConclaveTextEntryKind.name -> KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done)
+        ConclaveTextEntryKind.name_ -> KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done)
         ConclaveTextEntryKind.number -> KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done)
         ConclaveTextEntryKind.multiline -> KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)
         else -> KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done)

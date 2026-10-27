@@ -16,7 +16,7 @@ object CallNotificationBridge {
     @Volatile private var fixtureOnly = false
 
     /** The adapter set MeetingViewModel.shared installs once; also attaches the action dispatcher. */
-    fun presenceAdapters(presence: CallPresence): CallPresenceAdapters {
+    internal fun presenceAdapters(presence: CallPresence): CallPresenceAdapters {
         this.presence = presence
         fixtureOnly = false
         CallActionDispatcher.attach(presence)
@@ -24,7 +24,7 @@ object CallNotificationBridge {
     }
 
     /** SX1 fixture adapters for a standalone CallPresence (Debug only; never WebRTC, audio or capture). */
-    fun fixtureAdapters(presence: CallPresence): CallPresenceAdapters {
+    internal fun fixtureAdapters(presence: CallPresence): CallPresenceAdapters {
         this.presence = presence
         fixtureOnly = true
         CallActionDispatcher.attach(presence)

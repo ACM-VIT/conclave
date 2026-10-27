@@ -30,7 +30,7 @@ object CallActionDispatcher {
         private set
 
     /** The presence system commands reach. Installed with the platform adapters (CallNotificationBridge). */
-    fun attach(presence: CallPresence) {
+    internal fun attach(presence: CallPresence) {
         this.presence = presence
     }
 
@@ -54,24 +54,24 @@ object CallActionDispatcher {
     }
 
     /** An absolute command from a posted control, with the presence session it carried. */
-    fun handle(kind: SystemCallCommandKind, source: SystemCallSource, presenceSession: Int) {
+    internal fun handle(kind: SystemCallCommandKind, source: SystemCallSource, presenceSession: Int) {
         onMain {
             lastResult = presence?.handle(kind, source = source, presenceSession = presenceSession)
         }
     }
 
     /** A command for whatever call is current (a control that carries no session: the PiP RemoteActions). */
-    fun handleCurrent(kind: SystemCallCommandKind, source: SystemCallSource) {
+    internal fun handleCurrent(kind: SystemCallCommandKind, source: SystemCallSource) {
         onMain { handleCurrentOnMain(kind, source) }
     }
 
     /** Like handleCurrent, but synchronous when already on the main thread (onTaskRemoved: the process may go next). */
-    fun handleCurrentNow(kind: SystemCallCommandKind, source: SystemCallSource) {
+    internal fun handleCurrentNow(kind: SystemCallCommandKind, source: SystemCallSource) {
         onMain { handleCurrentOnMain(kind, source) }
     }
 
     /** The legacy PiP toggle, resolved to the absolute command for the state shown now. */
-    fun toggleMute(source: SystemCallSource) {
+    internal fun toggleMute(source: SystemCallSource) {
         onMain {
             val current = presence ?: return@onMain
             val snapshot = current.snapshot
@@ -89,7 +89,7 @@ object CallActionDispatcher {
         onMain { presence?.reportForegroundServiceTypes(microphone = microphone, camera = camera) }
     }
 
-    fun reportSurface(status: CallSurfaceStatus) {
+    internal fun reportSurface(status: CallSurfaceStatus) {
         onMain { presence?.reportSurface(CallSystemSurfaceKind.androidNotification, status = status) }
     }
 

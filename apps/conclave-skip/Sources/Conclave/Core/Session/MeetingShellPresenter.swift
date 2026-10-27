@@ -301,7 +301,7 @@ final class MeetingShellPresenter {
     }
 
     func retry() {
-        onCommand?(.retry, nil)
+        if let onCommand = onCommand { onCommand(.retry, nil) }
     }
 
     /// Core only (WP2-S2a, PLAN-next 7 item 4): a typed microphone, camera or screen share failure the view model
@@ -329,7 +329,7 @@ final class MeetingShellPresenter {
     }
 
     func dismissOutcome() {
-        onCommand?(.dismissOutcome, nil)
+        if let onCommand = onCommand { onCommand(.dismissOutcome, nil) }
     }
 
     // MARK: - Publication

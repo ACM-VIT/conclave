@@ -35,7 +35,7 @@ final class NativeRouteFlags {
     func configure(routes: String?, premeetingFixture: String?, debugEligible: Bool) {
         guard debugEligible else { return }
         enabledKeys = NativeRouteFlags.parse(routes)
-        premeetingFixture = (premeetingFixture ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        self.premeetingFixture = (premeetingFixture ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Clears the registry (tests).

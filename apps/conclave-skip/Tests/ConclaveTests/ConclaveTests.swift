@@ -3085,7 +3085,7 @@ final class ConclaveTests: XCTestCase {
         func message(_ text: String) -> String? {
             MeetingErrorLegacyCopy.message(MeetingErrorClassifier.classify(
                 NSError(domain: "test", code: 0, userInfo: [NSLocalizedDescriptionKey: text]),
-                context: .chat
+                context: MeetingErrorContext.chat
             ))
         }
         XCTAssertEqual(message("Socket is not connected"), "Reconnect before sending chat.")
@@ -9007,12 +9007,12 @@ final class ConclaveTests: XCTestCase {
         }
         XCTAssertEqual(classified("Camera permission not granted").category, .cameraPermission)
         XCTAssertEqual(
-            MeetingErrorLegacyCopy.message(classified("Camera permission not granted"), device: .camera),
+            MeetingErrorLegacyCopy.message(classified("Camera permission not granted"), device: MeetingMediaDevice.camera),
             "Camera access is off. Turn it on in Settings."
         )
         XCTAssertEqual(classified("DevicesNotFoundError").category, .deviceUnavailable)
         XCTAssertEqual(
-            MeetingErrorLegacyCopy.message(classified("DevicesNotFoundError"), device: .microphone),
+            MeetingErrorLegacyCopy.message(classified("DevicesNotFoundError"), device: MeetingMediaDevice.microphone),
             "Your microphone isn't available right now."
         )
         XCTAssertEqual(classified("Send transport not ready").category, .serverUnreachable)
@@ -9020,12 +9020,12 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(classified("No rear camera available").category, .deviceUnavailable)
         XCTAssertEqual(classified("No screen capture permission", .screenShare).category, .screenCapturePermission)
         XCTAssertEqual(
-            MeetingErrorLegacyCopy.message(classified("No screen capture permission", .screenShare), device: .screen),
+            MeetingErrorLegacyCopy.message(classified("No screen capture permission", .screenShare), device: MeetingMediaDevice.screen),
             "Screen sharing isn't allowed on this device."
         )
         XCTAssertNil(MeetingErrorLegacyCopy.message(classified("The operation was cancelled.", .screenShare)))
         for text in ["Camera permission not granted", "DevicesNotFoundError", "Send transport not ready", "No screen capture permission"] {
-            let message = MeetingErrorLegacyCopy.message(classified(text, .screenShare), device: .screen) ?? ""
+            let message = MeetingErrorLegacyCopy.message(classified(text, .screenShare), device: MeetingMediaDevice.screen) ?? ""
             XCTAssertFalse(message.hasPrefix("Failed to toggle screen sharing:"), message)
             XCTAssertFalse(message.contains("Camera/microphone permission denied"), message)
         }

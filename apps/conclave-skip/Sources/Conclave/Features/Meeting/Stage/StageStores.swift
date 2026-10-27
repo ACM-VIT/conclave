@@ -34,7 +34,7 @@ final class RendererBinding {
     }
 
     func update(videoKey next: String) {
-        if videoKey != next { videoKey = next }
+        if self.videoKey != next { self.videoKey = next }
     }
 }
 
