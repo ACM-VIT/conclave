@@ -265,8 +265,12 @@ private struct RecentMeetingRowView: View {
     let onRemove: () -> Void
     @State private var copyCount = 0
 
+    /// ENT-8 (RECONCILE R50): meeting rows use the shared MeetingLinkBuilder (recents keep no client id, Q4, so the
+    /// default-tenant form); webinar rows keep the landing link.
     private var link: String {
-        EntryPolicies.recentLink(roomId: row.roomId, isWebinar: row.routeKind == .webinarLanding)
+        row.routeKind == .webinarLanding
+            ? EntryPolicies.recentLink(roomId: row.roomId, isWebinar: true)
+            : MeetingLinkBuilder.url(roomCode: row.roomId, clientId: nil)
     }
 
     private var subtitle: String {
@@ -298,7 +302,11 @@ private struct RecentMeetingRowView: View {
                 Label(ConclaveStrings.text("Copy Link"), systemImage: PremeetingSymbols.copyLink)
             }
             if let url = URL(string: link) {
-                ShareLink(item: url) {
+                // S10 11 c: the F00 payload (RECONCILE R14) with the room label as the preview title.
+                ShareLink(item: url,
+                          subject: Text(ConclaveStrings.text("Join My Conclave Meeting")),
+                          message: Text(ConclaveStrings.text("Join me in this Conclave meeting.")),
+                          preview: SharePreview(row.title)) {
                     Label(ConclaveStrings.text("Share Invite"), systemImage: PremeetingSymbols.invite)
                 }
             }

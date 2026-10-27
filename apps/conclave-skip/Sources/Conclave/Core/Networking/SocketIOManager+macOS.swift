@@ -57,6 +57,8 @@ final class SocketIOManager {
 
     var onChatMessage: ((ChatMessage) -> Void)?
     var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Void)?
+    /// S40 CH3: `chat:reactionChanged` (the complete set for one message).
+    var onChatReactionChanged: ((ChatReactionChangedNotification) -> Void)?
     var onReaction: ((Reaction) -> Void)?
 
     var onHandRaised: ((HandRaisedNotification) -> Void)?
@@ -82,6 +84,11 @@ final class SocketIOManager {
     /// so a test can hold one, as a slow SFU acknowledgement would, and later
     /// release or fail it.
     var testCallGate: (@MainActor (String) async throws -> Void)?
+    /// Host-test seams for chat (S40 CH2, CH3): a send or reaction acknowledgement that fails, and the reaction set
+    /// a successful `chat:react` returns.
+    var testSendChatError: Error?
+    var testChatReactionError: Error?
+    var testChatReactionResult: [ChatMessageReaction]?
 
     func connect(sfuURL: String, token: String) async throws {
         throw NSError(domain: "Conclave", code: -1, userInfo: [NSLocalizedDescriptionKey: "SocketIO not available on macOS"])
@@ -161,7 +168,13 @@ final class SocketIOManager {
     func closeProducer(producerId: String) async throws { }
 
     func sendChat(content: String, gif: ChatGifAttachment? = nil, image: ChatImageAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil) async throws -> ChatMessage {
-        ChatMessage(userId: "local", displayName: "You", content: content, gif: gif, image: image)
+        if let error = testSendChatError { throw error }
+        return ChatMessage(userId: "local", displayName: "You", content: content, gif: gif, image: image, replyTo: replyTo)
+    }
+    func toggleChatReaction(messageId: String, emoji: String) async throws -> [ChatMessageReaction] {
+        try await testCallGate?("toggleChatReaction(\(emoji))")
+        if let error = testChatReactionError { throw error }
+        return testChatReactionResult ?? []
     }
     func authorizeChatImageUpload() async throws -> ChatImageUploadAuthorization {
         throw NSError(domain: "Conclave", code: -1, userInfo: [NSLocalizedDescriptionKey: "SocketIO not available on macOS"])

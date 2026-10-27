@@ -188,9 +188,11 @@ enum StageOrderPolicy {
                 slots.append(StageSlot(id: StageSlot.overflowId, role: StageSlotRole.overflow, userId: "", fit: StageVideoFit.fill))
             }
         case .spotlight, .sidebar:
-            let main = !inputs.pinnedUserId.isEmpty && participant(inputs.pinnedUserId, in: inputs.participants) != nil
-                ? inputs.pinnedUserId
-                : (inputs.featuredUserId.isEmpty ? (inputs.remoteOrder.first ?? inputs.localUserId) : inputs.featuredUserId)
+            let main = TileFeaturePolicy.spotlightMainUserId(pinnedUserId: inputs.pinnedUserId,
+                                                             featuredUserId: inputs.featuredUserId,
+                                                             remoteOrder: inputs.remoteOrder,
+                                                             participants: inputs.participants,
+                                                             localUserId: inputs.localUserId)
             slots.append(person(main, role: StageSlotRole.spotlightMain, inputs: inputs))
             var rail: [StageSlot] = []
             if !inputs.presenterUserId.isEmpty {
@@ -261,7 +263,8 @@ enum StageOrderPolicy {
         case .attendeeWaiting:
             break
         }
-        if let role = localRole, hasLocal, inputs.kind != StageKind.oneOnOne {
+        if let role = localRole, hasLocal, inputs.kind != StageKind.oneOnOne,
+           !TileFeaturePolicy.containsSlot(slots, id: StageSlot.participantId(inputs.localUserId)) {
             slots.append(person(inputs.localUserId, role: role, inputs: inputs))
         }
         var seeds: [String] = []

@@ -320,11 +320,26 @@ enum TranscriptPresentationPolicy {
 
 /// Observable transcript view state. Holds finalized segments plus the in-flight
 /// partials map so the panel can render live captions as they stream in.
+///
+/// TRN-1 (S60 C6-11, C6-27): beside the legacy strings (kept for the legacy panel) it carries the typed live notes
+/// state: `phase`, `link` and `issue` (with `issueServerText`), the relay availability, the session start for the
+/// catch-up offer, and the newest caption line for the stage strip. The stage refresh path listens through
+/// `onStageInputChanged`; the caption hot path through `onCaptionChanged` (both installed by the view model).
 @MainActor
 @Observable
 final class TranscriptState {
-    var connectionStatus: TranscriptConnectionStatus = .idle
-    var sessionStatus: String = "idle"           // idle/starting/live/paused/stopping/error/takeover_needed
+    var connectionStatus: TranscriptConnectionStatus = .idle {
+        didSet {
+            if oldValue != connectionStatus { onStageInputChanged?() }
+        }
+    }
+    var sessionStatus: String = "idle" {         // idle/starting/live/paused/stopping/error/takeover_needed
+        didSet {
+            guard oldValue != sessionStatus else { return }
+            if TranscriptPhasePolicy.isRunning(sessionStatus) { sawSessionThisCall = true }
+            onStageInputChanged?()
+        }
+    }
     var errorMessage: String?
     var controllerName: String?
     var sessionTranscriptModel = TranscriptConfiguration.defaultTranscriptModel
@@ -348,6 +363,74 @@ final class TranscriptState {
     private(set) var minutes = TranscriptMinutesSnapshotModel.empty()
     private(set) var minutesStatus: TranscriptMinutesStatus = .idle
     private(set) var qaMessages: [TranscriptQAMessageModel] = []
+
+    // MARK: TRN-1 typed state (C6-11, C6-27, S20 SC13)
+
+    /// The typed issue behind `errorMessage` (S60 D20); `issueServerText` is shown verbatim only for `.server`.
+    private(set) var issue: TranscriptIssue = .none
+    private(set) var issueServerText: String = ""
+    /// R52: `getTranscriptSfuRelayStatus()` on join for non-attendees and after a recovery rejoin.
+    private(set) var relay: RelayAvailability = .unknown
+    /// Failed connection attempts in a row; 8 or more read as `unavailable` (C6-11).
+    private(set) var failedAttempts: Int = 0
+    /// The worker's first snapshot arrived (until then the phase is `loading`).
+    private(set) var hasSessionSnapshot = false
+    /// The live session's start (server clock, epoch milliseconds); 0 when unknown (web TRN-14 catch-up).
+    private(set) var sessionStartedAtMillis: Double = 0.0
+    /// A session ran in this call, so a later idle reads as `ended` (the last session stays readable).
+    private(set) var sawSessionThisCall = false
+    /// The stage refresh path (S20 SC13): phase, link, issue, relay and session start changes.
+    @ObservationIgnored var onStageInputChanged: (() -> Void)? = nil
+    /// The caption hot path (S60 5 j): the newest segment's line after each live delta that changes it.
+    @ObservationIgnored var onCaptionChanged: ((CaptionLine) -> Void)? = nil
+    @ObservationIgnored private var lastCaption = CaptionLine.empty
+    @ObservationIgnored private var newestFinal: TranscriptSegmentModel? = nil
+
+    var phase: LiveNotesPhase {
+        TranscriptPhasePolicy.phase(sessionStatus: sessionStatus, hasSnapshot: hasSessionSnapshot, failedAttempts: failedAttempts,
+                                    sawSession: sawSessionThisCall)
+    }
+
+    var link: TranscriptLink {
+        TranscriptPhasePolicy.link(connectionStatus: connectionStatus, failedAttempts: failedAttempts)
+    }
+
+    /// The S20 capsule state, produced only by `LiveNotesPolicy` (RECONCILE R12).
+    var liveNotes: LiveNotesState {
+        LiveNotesPolicy.stageState(phase: phase, link: link, issue: issue)
+    }
+
+    func setIssue(_ next: TranscriptIssue, serverText: String = "") {
+        let text = next == .server ? serverText : ""
+        guard issue != next || issueServerText != text else { return }
+        issue = next
+        issueServerText = text
+        onStageInputChanged?()
+    }
+
+    func setRelay(_ next: RelayAvailability) {
+        guard relay != next else { return }
+        relay = next
+        onStageInputChanged?()
+    }
+
+    func recordFailedAttempts(_ count: Int) {
+        guard failedAttempts != count else { return }
+        failedAttempts = count
+        onStageInputChanged?()
+    }
+
+    func markSessionSnapshot() {
+        guard !hasSessionSnapshot else { return }
+        hasSessionSnapshot = true
+        onStageInputChanged?()
+    }
+
+    func applySessionStartedAt(_ millis: Double) {
+        guard sessionStartedAtMillis != millis else { return }
+        sessionStartedAtMillis = millis
+        onStageInputChanged?()
+    }
 
     var isLive: Bool { sessionStatus == "live" }
     var isBusy: Bool { sessionStatus == "starting" || sessionStatus == "stopping" }
@@ -445,6 +528,7 @@ final class TranscriptState {
         if partials[segment.itemId] == segment { return }
         partials[segment.itemId] = segment
         rebuildPresentation()
+        publishCaption()
     }
 
     func applyFinal(_ segment: TranscriptSegmentModel) {
@@ -460,7 +544,13 @@ final class TranscriptState {
             changedFinal = true
         }
         guard removedPartial || changedFinal else { return }
+        if let current = newestFinal {
+            if segment.sequence >= current.sequence { newestFinal = segment }
+        } else {
+            newestFinal = segment
+        }
         rebuildPresentation()
+        publishCaption()
     }
 
     func resetPartials() {
@@ -476,10 +566,22 @@ final class TranscriptState {
             map[segment.itemId] = segment
         }
         self.partials = map
+        // History is not a caption: the snapshot only seeds the newest final, the strip waits for the next live delta.
+        var newest: TranscriptSegmentModel? = nil
+        for segment in finals {
+            if let current = newest {
+                if segment.sequence >= current.sequence { newest = segment }
+            } else {
+                newest = segment
+            }
+        }
+        newestFinal = newest
         rebuildPresentation()
     }
 
     func clearSegments() {
+        newestFinal = nil
+        lastCaption = CaptionLine.empty
         guard !finals.isEmpty || !partials.isEmpty || !orderedSegments.isEmpty || !groupedSegments.isEmpty else { return }
         finals = []
         partials = [:]
@@ -506,6 +608,29 @@ final class TranscriptState {
         minutes = TranscriptMinutesSnapshotModel.empty()
         minutesStatus = .idle
         qaMessages = []
+        issue = .none
+        issueServerText = ""
+        relay = .unknown
+        failedAttempts = 0
+        hasSessionSnapshot = false
+        sessionStartedAtMillis = 0.0
+        sawSessionThisCall = false
+        onStageInputChanged?()
+    }
+
+    /// The newest segment of the newest speaker (the newest partial if one exists, else the last final), cut to about
+    /// 160 characters keeping the tail; sent only when the drawn text changes (S60 5 j, C6-11).
+    private func publishCaption() {
+        guard let listener = onCaptionChanged else { return }
+        var open: [TranscriptSegmentModel] = []
+        for segment in partials.values {
+            open.append(segment)
+        }
+        guard let newest = CaptionLinePolicy.newest(partials: open, lastFinal: newestFinal) else { return }
+        let line = CaptionLinePolicy.line(from: newest, atMillis: Date().timeIntervalSince1970 * 1000.0)
+        if !CaptionLinePolicy.changesVisibleText(lastCaption, line) { return }
+        lastCaption = line
+        listener(line)
     }
 
     private func rebuildPresentation() {

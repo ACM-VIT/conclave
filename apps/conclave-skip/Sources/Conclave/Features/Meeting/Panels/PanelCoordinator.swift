@@ -52,6 +52,23 @@ final class PanelCoordinator {
         }
     }
 
+    /// S30 1 a, CC18: a bar invoker (Chat, Participants, Q&A) closes its panel while it is current and shown, and
+    /// opens it otherwise (a fresh request, a replacement of another panel, or a re-request while it is closing).
+    /// Close cancels a queued replacement, like the explicit Close and Back.
+    func toggle(_ panel: MeetingPanel, from invoker: PanelInvoker) {
+        if let current = snapshot.current, current.panel == panel, !snapshot.isDismissing {
+            dismiss(cancelPending: true)
+        } else {
+            present(panel, from: invoker)
+        }
+    }
+
+    /// `snapshot.current?.panel.rawValue`, or "" with no panel: the controls' `currentPanel` input (S30 CC18).
+    /// Reads `snapshot`, so an observing caller invalidates with it.
+    var currentPanelName: String {
+        snapshot.current?.panel.rawValue ?? ""
+    }
+
     /// The latest destination request when it names `presentationID` in the current session, else nil, so a
     /// panel never acts on a request meant for an earlier presentation of the same panel.
     func latestDestination(for presentationID: Int) -> PanelDestinationRequest? {

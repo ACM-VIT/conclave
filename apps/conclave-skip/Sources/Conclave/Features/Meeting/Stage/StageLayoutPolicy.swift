@@ -21,11 +21,7 @@ enum StageLayoutPolicy {
     static let packerMinimumHeight = 99.0
     static let compactHeightMaxColumns = 4
     static let tileAspect = 16.0 / 9.0
-    /// Rails: a bottom strip of 4:3 thumbnails on compact portrait, a trailing column of 16:9 tiles elsewhere.
-    static let compactRailTileWidth = 112.0
-    static let compactRailTileHeight = 84.0
-    static let railTileWidth = 176.0
-    static let railTileHeight = 99.0
+    /// Rails (S20 4 c, d): `SpotlightRailPolicy` (STG-2) owns the strip and column geometry and the capacity.
     /// Floating self view (S20 6 owns the full rules; STG-3 refines the sizes).
     static let selfViewMargin = 12.0
     static let selfViewMinimumWidth = 96.0
@@ -144,16 +140,7 @@ enum StageLayoutPolicy {
     /// Rail slots for spotlight, sidebar, presentation and activity strips (capped at the legacy 8,
     /// `MeetingViewConstants.stageRailMaxTiles`).
     static func railCapacity(viewport: StageViewport) -> Int {
-        if viewport.isEmpty { return 0 }
-        let area = contentFrame(viewport)
-        let gap = StageLayoutPolicy.gap(viewport)
-        let fit: Int
-        if isCompactPortrait(viewport) {
-            fit = Int((area.width + gap) / (compactRailTileWidth + gap))
-        } else {
-            fit = Int((area.height + gap) / (railTileHeight + gap))
-        }
-        return max(1, min(fit, MeetingViewConstants.stageRailMaxTiles))
+        SpotlightRailPolicy.capacity(viewport: viewport)
     }
 
     // MARK: Frames
@@ -214,9 +201,9 @@ enum StageLayoutPolicy {
             let gap = StageLayoutPolicy.gap(viewport)
             if isCompactPortrait(viewport) {
                 return StageFrame(slotId: "", x: area.x, y: area.y, width: area.width,
-                                  height: max(0.0, area.height - compactRailTileHeight - gap))
+                                  height: max(0.0, area.height - SpotlightRailPolicy.tileHeight(viewport) - gap))
             }
-            return StageFrame(slotId: "", x: area.x, y: area.y, width: max(0.0, area.width - railTileWidth - gap),
+            return StageFrame(slotId: "", x: area.x, y: area.y, width: max(0.0, area.width - SpotlightRailPolicy.tileWidth(viewport) - gap),
                               height: area.height)
         default:
             return StageFrame(slotId: "", x: 0, y: 0, width: viewport.width, height: viewport.height)
@@ -342,19 +329,21 @@ enum StageLayoutPolicy {
         let gap = StageLayoutPolicy.gap(viewport)
         var result: [StageFrame] = []
         var index = 0
+        let tileWidth = SpotlightRailPolicy.tileWidth(viewport)
+        let tileHeight = SpotlightRailPolicy.tileHeight(viewport)
         if isCompactPortrait(viewport) {
-            let y = area.y + area.height - compactRailTileHeight
+            let y = area.y + area.height - tileHeight
             for slot in slots {
-                result.append(StageFrame(slotId: slot.id, x: area.x + Double(index) * (compactRailTileWidth + gap), y: y,
-                                         width: compactRailTileWidth, height: compactRailTileHeight))
+                result.append(StageFrame(slotId: slot.id, x: area.x + Double(index) * (tileWidth + gap), y: y,
+                                         width: tileWidth, height: tileHeight))
                 index += 1
             }
             return result
         }
-        let x = area.x + area.width - railTileWidth
+        let x = area.x + area.width - tileWidth
         for slot in slots {
-            result.append(StageFrame(slotId: slot.id, x: x, y: area.y + Double(index) * (railTileHeight + gap),
-                                     width: railTileWidth, height: railTileHeight))
+            result.append(StageFrame(slotId: slot.id, x: x, y: area.y + Double(index) * (tileHeight + gap),
+                                     width: tileWidth, height: tileHeight))
             index += 1
         }
         return result

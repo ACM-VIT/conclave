@@ -970,6 +970,15 @@ final class SocketIOManager {
         return message.chatMessage(taggedRoomId: activeRoomId)
     }
 
+    /// S40 CH3: toggles your reaction on a retained message. The SFU handler is `(data, callback)` and answers the
+    /// authoritative set (`{ success, reactions }`) or `{ error }`, which `emit` throws as a server error.
+    func toggleChatReaction(messageId: String, emoji: String) async throws -> [ChatMessageReaction] {
+        let request = ChatReactRequest(messageId: messageId, emoji: emoji)
+        let data = try await emit(event: SocketEvent.chatReact, payload: request)
+        let response = try JSONDecoder().decode(ChatReactResponse.self, from: data)
+        return response.reactions ?? []
+    }
+
     /// Asks the SFU for a short-lived upload slot for a chat image; the bytes
     /// are then POSTed to `uploadUrl` with the bearer token (see
     /// MeetingViewModel.sendChatImageAttachment).

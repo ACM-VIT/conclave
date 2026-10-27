@@ -2,19 +2,15 @@ package conclave.module
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
@@ -24,6 +20,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -32,9 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.style.TextOverflow
@@ -58,6 +53,11 @@ internal fun PremeetingHost(
     // STG-1 (HD request B3-T2 R5): the session's stage presenter for the native call root; null (the L9 fixture)
     // always shows the interim call content.
     stage: StagePresenter? = null,
+    // PPL-1 (HD request B4-T7 R6): the session's People presenter for the native Participants page; null keeps the
+    // empty native shell (the L9 fixture).
+    people: PeoplePresenter? = null,
+    // ACT-1, ACT-2, STG-9 (HD request B4-T8 R5c): the session's activity presenters; null in the L9 fixture.
+    activitySession: ActivitySession? = null,
     callContent: @Composable () -> Unit,
 ) {
     val systemDark = isSystemInDarkTheme()
@@ -68,10 +68,11 @@ internal fun PremeetingHost(
             if (inCall) {
                 // CALL-ROOT SLOT: B3-T2 (STG-1) mounts its CallRoot here when `usesNativeCallRoot` (the Debug `call`
                 // key) is on (HD request B3-T2 R5); always when the key is off, the interim call content. The native
-                // call root is then the system-bar writer. The control bar slot stays empty until CTL-1.
+                // call root is then the system-bar writer. The control bar reads LocalCallControls (CTL-1, HD request
+                // B4-T6 R9), which NativePremeetingHost provides.
                 if (usesNativeCallRoot && stage != null) {
-                    CallRoot(shell = shell, stage = stage, renderers = StageRenderers.live,
-                        onMinimize = { stageMinimizeToBackground() })
+                    CallRoot(shell = shell, stage = stage, people = people, renderers = StageRenderers.live,
+                        activitySession = activitySession, onMinimize = { stageMinimizeToBackground() })
                 } else {
                     callContent()
                 }
@@ -113,6 +114,10 @@ private fun premeetingBack(premeeting: PremeetingPresenter) {
         return
     }
     val top = premeeting.path.last
+    if (top != null && top.kind == PremeetingRouteKind.account && !premeeting.account.snapshot.canDismiss) {
+        // ENT-7 (S10 5 f): Back is disabled while the account is being deleted.
+        return
+    }
     val status = premeeting.lobbyStatus
     if (top != null && top.kind == PremeetingRouteKind.lobby && status != null && status.routeId == top.id &&
         (status.mode == LobbyMode.connecting || status.mode == LobbyMode.waiting)) {
@@ -126,15 +131,20 @@ private fun premeetingBack(premeeting: PremeetingPresenter) {
 private fun PremeetingPage(premeeting: PremeetingPresenter, key: PremeetingKey) {
     when (key) {
         is PremeetingKey.HomeKey -> HomeScreen(premeeting)
-        is PremeetingKey.LobbyKey -> LobbyStandInPage(premeeting, key)
+        is PremeetingKey.LobbyKey -> LobbyScreen(premeeting, key, onBack = { premeetingBack(premeeting) })
         is PremeetingKey.WebinarLandingKey -> WebinarStandInPage(premeeting, key)
-        is PremeetingKey.AccountKey -> AccountStandInPage(premeeting)
-        is PremeetingKey.PrivacyKey -> AccountStandInPage(premeeting)
+        is PremeetingKey.AccountKey -> AccountScreen(
+            account = premeeting.account,
+            onBack = { premeetingBack(premeeting) },
+            onOpenPrivacy = { premeeting.openPrivacyPolicy() },
+        )
+        is PremeetingKey.PrivacyKey -> PrivacyPolicyScreen(onBack = { premeetingBack(premeeting) })
         is PremeetingKey.OutcomeKey -> OutcomeStandInPage(premeeting)
     }
 }
 
-// MARK: Stand-ins until their slices land (ENT-3 lobby, ENT-6 outcome, ENT-7 account, ENT-9 webinar landing)
+// MARK: Stand-ins until their slices land (ENT-6 outcome, ENT-9 webinar landing; the lobby is ENT-3's LobbyScreen in
+// K/ui/lobby, Account and Privacy are ENT-7's AccountScreen and PrivacyPolicyScreen in K/ui/account)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -164,66 +174,6 @@ private fun StandInScaffold(
     }
 }
 
-/** The lobby stand-in: the room, the 0.4 mode and Cancel while busy. No Start or Join (ENT-3), so no joinRoom. */
-@Composable
-private fun LobbyStandInPage(premeeting: PremeetingPresenter, key: PremeetingKey.LobbyKey) {
-    val status = premeeting.lobbyStatus?.takeIf { it.routeId == key.routeId }
-    val busy = status != null && (status.mode == LobbyMode.connecting || status.mode == LobbyMode.waiting)
-    StandInScaffold(
-        title = key.roomId,
-        showsBack = !busy,
-        onBack = { premeetingBack(premeeting) },
-        actions = {
-            if (busy) {
-                TextButton(onClick = { premeeting.cancelJoin() }, modifier = Modifier.testTag("lobby.cancel")) {
-                    Text(conclaveString("pm_cancel"))
-                }
-            }
-        },
-    ) {
-        ListItem(
-            headlineContent = {
-                Text(key.roomId, style = MaterialTheme.typography.bodyLarge)
-            },
-            colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier.testTag("lobby.room"),
-        )
-        if (status != null && status.mode != LobbyMode.editing) {
-            LobbyStatusItem(status)
-        }
-    }
-}
-
-@Composable
-private fun LobbyStatusItem(status: LobbyStatusSnapshot) {
-    val scheme = MaterialTheme.colorScheme
-    val reconnecting = status.waitingKind == WaitingKind.reconnecting
-    val text = when (status.mode) {
-        LobbyMode.connecting -> if (reconnecting) conclaveString("pm_subtitle_reconnecting") else conclaveString("pm_subtitle_joining")
-        LobbyMode.waiting -> if (reconnecting) conclaveString("pm_subtitle_reconnecting") else conclaveString("pm_asking_to_join")
-        LobbyMode.failed -> if (status.intent == LobbyIntent.newMeeting) conclaveString("pm_couldnt_start") else conclaveString("pm_couldnt_join")
-        LobbyMode.editing -> ""
-    }
-    Row(
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp).testTag("lobby.status")
-            .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (status.mode == LobbyMode.failed) {
-            Icon(PremeetingIcons.Error, contentDescription = null, tint = scheme.error)
-        } else {
-            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-        }
-        Column {
-            Text(text, style = MaterialTheme.typography.bodyLarge)
-            if (status.issueServerText.isNotEmpty()) {
-                Text(status.issueServerText, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
-            }
-        }
-    }
-}
-
 @Composable
 private fun WebinarStandInPage(premeeting: PremeetingPresenter, key: PremeetingKey.WebinarLandingKey) {
     StandInScaffold(title = key.roomId, showsBack = true, onBack = { premeetingBack(premeeting) }) {
@@ -233,21 +183,6 @@ private fun WebinarStandInPage(premeeting: PremeetingPresenter, key: PremeetingK
             colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
             modifier = Modifier.testTag("webinar.room"),
         )
-    }
-}
-
-@Composable
-private fun AccountStandInPage(premeeting: PremeetingPresenter) {
-    val home = premeeting.home
-    StandInScaffold(title = conclaveString("pm_account"), showsBack = true, onBack = { premeetingBack(premeeting) }) {
-        if (home.isSignedIn) {
-            ListItem(
-                leadingContent = { ConclaveAvatar(home.accountName, home.accountSeed, ConclaveAvatarSize.row) },
-                headlineContent = { Text(home.accountName) },
-                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
-                modifier = Modifier.semantics(mergeDescendants = true) { },
-            )
-        }
     }
 }
 
@@ -372,13 +307,18 @@ object NativeRouteLaunch {
 @Composable
 fun NativePremeetingHost(callContent: @Composable () -> Unit) {
     val viewModel = MeetingViewModel.shared
-    PremeetingHost(
-        shell = viewModel.shell,
-        premeeting = viewModel.premeeting,
-        usesNativeCallRoot = NativeRouteFlags.shared.isEnabled(NativeRouteKey.call),
-        stage = viewModel.stage,
-        callContent = callContent,
-    )
+    // CTL-1 (HD request B4-T6 R9): the native call root's control bar reads the controls presenter from here.
+    CompositionLocalProvider(LocalCallControls provides viewModel.controls) {
+        PremeetingHost(
+            shell = viewModel.shell,
+            premeeting = viewModel.premeeting,
+            usesNativeCallRoot = NativeRouteFlags.shared.isEnabled(NativeRouteKey.call),
+            stage = viewModel.stage,
+            people = viewModel.people,
+            activitySession = viewModel.activitySession,
+            callContent = callContent,
+        )
+    }
 }
 
 /** The premeeting feedback delivery over the view model's presenter (MainActivity, behind the flag). */

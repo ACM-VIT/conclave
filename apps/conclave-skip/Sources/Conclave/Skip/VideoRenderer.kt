@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -22,6 +23,14 @@ import java.util.concurrent.Executors
 internal object VideoRendererShared {
     val eglBase: EglBase = EglBase.create()
 }
+
+/**
+ * S20 SC11 and S70 R70-10 (STG-7): the stage's renderer frame-size store (StagePresenter.frameSizes), provided by the
+ * native call root. Only renderers keyed "stage:<slotId>" report into it, on the main thread, after the frame callback
+ * already hopped there for the aspect ratio; the sink never moves for it (RR6). Null everywhere else (legacy views, PiP,
+ * mini tiles), where nothing reports.
+ */
+internal val LocalRendererFrameSizes = staticCompositionLocalOf<RendererFrameSizeStore?> { null }
 
 private object VideoRendererReleaseDispatcher {
     private val executor = Executors.newSingleThreadExecutor { runnable ->
@@ -89,6 +98,14 @@ private fun TextureVideoTrackView(
         }
     }
 
+    // STG-7: decoded frame sizes for the PiP target frame (stage slots only).
+    val frameSizes = LocalRendererFrameSizes.current
+    val frameSlotId = RendererFrameSizeStore.slotId(rendererKey = rendererLifecycleKey.toString())
+    DisposableEffect(renderer, frameSizes, frameSlotId) {
+        renderer.attachFrameSizes(frameSizes, frameSlotId)
+        onDispose { renderer.detachFrameSizes() }
+    }
+
     key(renderer) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -127,6 +144,8 @@ private class TextureEglVideoRenderer(
     private var identitySerial = 0
     private var identitySlot = RendererSlot.stage
     private var identitySurfaceLost = false
+    private var frameSizeStore: RendererFrameSizeStore? = null
+    private var frameSizeSlotId = ""
 
     init {
         isOpaque = true
@@ -154,6 +173,31 @@ private class TextureEglVideoRenderer(
     fun releaseIdentity() {
         identityLedger?.released(key = identityKey, serial = identitySerial, slot = identitySlot)
         identityLedger = null
+    }
+
+    /** Main thread only. Points the renderer at a stage slot's frame-size entry and reports a size it already knows. */
+    fun attachFrameSizes(store: RendererFrameSizeStore?, slotId: String) {
+        if (store === frameSizeStore && slotId == frameSizeSlotId) return
+        detachFrameSizes()
+        if (store == null || slotId.isEmpty()) return
+        frameSizeStore = store
+        frameSizeSlotId = slotId
+        reportFrameSize()
+    }
+
+    /** Main thread only. The renderer left its slot: forget the slot's size. */
+    fun detachFrameSizes() {
+        val store = frameSizeStore
+        if (store != null && frameSizeSlotId.isNotEmpty()) store.remove(slotId = frameSizeSlotId)
+        frameSizeStore = null
+        frameSizeSlotId = ""
+    }
+
+    /** Main thread only; the store is equality guarded, so an unchanged size republishes nothing. */
+    private fun reportFrameSize() {
+        val store = frameSizeStore ?: return
+        if (frameSizeSlotId.isEmpty() || frameWidth <= 0 || frameHeight <= 0) return
+        store.report(slotId = frameSizeSlotId, width = frameWidth, height = frameHeight)
     }
 
     fun release() {
@@ -192,7 +236,10 @@ private class TextureEglVideoRenderer(
             frameWidth = rotatedWidth
             frameHeight = rotatedHeight
             frameRotation = frame.rotation
-            post { updateLayoutAspectRatio() }
+            post {
+                updateLayoutAspectRatio()
+                reportFrameSize()
+            }
         }
         eglRenderer.onFrame(frame)
     }

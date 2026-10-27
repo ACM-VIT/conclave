@@ -141,14 +141,18 @@ enum EntryPolicies {
     }
 
     /// The link a recent row copies or shares. Recents never keep a client id (Q4), so this is the default-tenant
-    /// form; ENT-8's shared MeetingLinkBuilder replaces it (RECONCILE R50).
+    /// form; meeting links come from ENT-8's shared MeetingLinkBuilder (RECONCILE R50).
     static func recentLink(roomId: String, isWebinar: Bool) -> String {
-        // The same path encoding as the state's main-actor meeting link helper (urlPathAllowed minus `/?#`).
+        // ENT-8 (HD request B4-T2 R6): meeting links come from the one shared builder (the web `buildMeetingPath`).
+        if !isWebinar {
+            return MeetingLinkBuilder.url(roomCode: roomId, clientId: nil)
+        }
+        // Webinar links keep the `/w/` path with the legacy path encoding (urlPathAllowed minus `/?#`).
         let trimmed = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
         var allowed = CharacterSet.urlPathAllowed
         allowed.remove(charactersIn: "/?#")
         let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: allowed) ?? trimmed
-        return (isWebinar ? "https://conclave.acmvit.in/w/" : "https://conclave.acmvit.in/") + encoded
+        return "https://conclave.acmvit.in/w/" + encoded
     }
 
     /// A room label for copy: the trimmed value, or "" so the view shows its localized fallback (S10 4 g).

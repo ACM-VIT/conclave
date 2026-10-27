@@ -478,6 +478,12 @@ struct GameOptionChoice: Codable, Identifiable {
     var id: String { value }
 }
 
+/// `showWhen` (C6-16): show the option only while the select option `id` holds one of `equals`.
+struct GameOptionCondition: Codable, Equatable {
+    let id: String
+    let equals: [String]
+}
+
 struct GameOptionSpec: Codable, Identifiable {
     let id: String
     let type: String
@@ -491,6 +497,7 @@ struct GameOptionSpec: Codable, Identifiable {
     let choices: [GameOptionChoice]?
     let placeholder: String?
     let maxLength: Int?
+    let showWhen: GameOptionCondition?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -504,6 +511,7 @@ struct GameOptionSpec: Codable, Identifiable {
         case choices
         case placeholder
         case maxLength
+        case showWhen
     }
 
     init(
@@ -518,7 +526,8 @@ struct GameOptionSpec: Codable, Identifiable {
         suffix: String? = nil,
         choices: [GameOptionChoice]? = nil,
         placeholder: String? = nil,
-        maxLength: Int? = nil
+        maxLength: Int? = nil,
+        showWhen: GameOptionCondition? = nil
     ) {
         self.id = id
         self.type = type
@@ -532,6 +541,7 @@ struct GameOptionSpec: Codable, Identifiable {
         self.choices = choices
         self.placeholder = placeholder
         self.maxLength = maxLength
+        self.showWhen = showWhen
     }
 
     init(from decoder: Decoder) throws {
@@ -553,6 +563,7 @@ struct GameOptionSpec: Codable, Identifiable {
         choices = try container.decodeIfPresent([GameOptionChoice].self, forKey: .choices)
         placeholder = try container.decodeIfPresent(String.self, forKey: .placeholder)
         maxLength = try container.decodeIfPresent(Int.self, forKey: .maxLength)
+        showWhen = try container.decodeIfPresent(GameOptionCondition.self, forKey: .showWhen)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -572,6 +583,7 @@ struct GameOptionSpec: Codable, Identifiable {
         try container.encodeIfPresent(choices, forKey: .choices)
         try container.encodeIfPresent(placeholder, forKey: .placeholder)
         try container.encodeIfPresent(maxLength, forKey: .maxLength)
+        try container.encodeIfPresent(showWhen, forKey: .showWhen)
     }
 
     var defaultConfigValue: GameConfigValue {
@@ -636,12 +648,15 @@ struct GameStateResponse: Codable {
     let publicState: GamePublicState?
     let view: GameJSONValue?
     let vote: GameVoteState?
+    /// The server's canonical id for you (C6-15); a `var` with a default so the memberwise callers keep compiling.
+    var selfId: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case active
         case publicState = "public"
         case view
         case vote
+        case selfId
     }
 }
 
@@ -1229,6 +1244,9 @@ struct ChatMessageNotification: Codable {
     let dmTargetDisplayName: String?
     let roomId: String?
     let replyTo: ChatReplyPreview?
+    /// S40 CH3: the complete reaction set on history and live messages; absent means none. A `var` with a
+    /// default so every existing memberwise call still compiles.
+    var reactions: [ChatMessageReaction]? = nil
 }
 
 struct ConclaveAssistantMessageNotification: Codable {
@@ -1255,6 +1273,19 @@ struct ChatReactionChangedNotification: Codable {
     let roomId: String
 }
 
+/// `chat:react` payload (S40 CH3). The SFU handler is `(data, callback)`, so it rides the payloaded emit.
+struct ChatReactRequest: Codable {
+    let messageId: String
+    let emoji: String
+}
+
+/// `chat:react` acknowledgement: `{ success, reactions }` (the authoritative set) or `{ error }`, which the emit
+/// helpers already turn into a thrown server error.
+struct ChatReactResponse: Codable {
+    let success: Bool?
+    let reactions: [ChatMessageReaction]?
+}
+
 extension ChatMessageNotification {
     var chatMessage: ChatMessage {
         chatMessage(taggedRoomId: nil)
@@ -1273,7 +1304,10 @@ extension ChatMessageNotification {
             dmTargetUserId: dmTargetUserId,
             dmTargetDisplayName: dmTargetDisplayName,
             roomId: roomId ?? taggedRoomId,
-            replyTo: replyTo
+            replyTo: replyTo,
+            clientId: nil,
+            sendStatus: nil,
+            reactions: reactions ?? []
         )
     }
 }

@@ -955,6 +955,18 @@ internal class SocketIOManager {
         return notification.toChatMessage(activeRoomId)
     }
 
+    /**
+     * S40 CH3: toggles your reaction on a retained message. The SFU handler is `(data, callback)`; it answers
+     * `{ success, reactions }` (the authoritative set) or `{ error }`, which [emit] throws.
+     */
+    internal suspend fun toggleChatReaction(messageId: String, emoji: String): skip.lib.Array<ChatMessageReaction> {
+        val payload = JSONObject()
+            .put("messageId", messageId)
+            .put("emoji", emoji)
+        val data = emit(SocketEvent.chatReact, payload)
+        return decodeChatReactionsArray(dataObject(data)?.optJSONArray("reactions"))
+    }
+
     internal suspend fun authorizeChatImageUpload(): ChatImageUploadAuthorization {
         // The server handler is `(_data, callback)`: send an empty payload so
         // the ack callback binds to the second slot (ack-only emits never get
@@ -2090,6 +2102,11 @@ internal class SocketIOManager {
                 ?.let { decodeGameOptionChoiceObject(it) } ?: continue
             choices.add(choice)
         }
+        val showWhenObject = obj.optJSONObject("showWhen")
+        val showWhen = if (showWhenObject != null) {
+            val conditionId = stringField(showWhenObject, "id")
+            if (conditionId != null) GameOptionCondition(id = conditionId, equals = stringArrayField(showWhenObject, "equals") ?: skip.lib.Array()) else null
+        } else null
         return GameOptionSpec(
             id = stringField(obj, "id") ?: return null,
             type = type,
@@ -2102,7 +2119,8 @@ internal class SocketIOManager {
             suffix = stringField(obj, "suffix"),
             choices = skip.lib.Array(choices),
             placeholder = stringField(obj, "placeholder"),
-            maxLength = intField(obj, "maxLength")
+            maxLength = intField(obj, "maxLength"),
+            showWhen = showWhen
         )
     }
 
@@ -2213,7 +2231,8 @@ internal class SocketIOManager {
             active = boolField(obj, "active") ?: false,
             publicState = obj.optJSONObject("public")?.let { decodeGamePublicStateObject(it) },
             view = rawJsonField(obj, "view"),
-            vote = obj.optJSONObject("vote")?.let { decodeGameVoteStateObject(it) }
+            vote = obj.optJSONObject("vote")?.let { decodeGameVoteStateObject(it) },
+            selfId = stringField(obj, "selfId")
         )
     }
 
@@ -2670,7 +2689,8 @@ internal class SocketIOManager {
             dmTargetUserId = null,
             dmTargetDisplayName = null,
             roomId = stringField(obj, "roomId"),
-            replyTo = null
+            replyTo = null,
+            reactions = null
         )
     }
 
@@ -2687,7 +2707,39 @@ internal class SocketIOManager {
             dmTargetUserId = stringField(obj, "dmTargetUserId"),
             dmTargetDisplayName = stringField(obj, "dmTargetDisplayName"),
             roomId = stringField(obj, "roomId"),
-            replyTo = obj.optJSONObject("replyTo")?.let { decodeChatReplyPreviewObject(it) }
+            replyTo = obj.optJSONObject("replyTo")?.let { decodeChatReplyPreviewObject(it) },
+            reactions = decodeChatReactionsArray(obj.optJSONArray("reactions"))
+        )
+    }
+
+    /** S40 CH3: the wire `reactions` array (emoji plus every reactor id); entries without an emoji are skipped. */
+    private fun decodeChatReactionsArray(array: JSONArray?): skip.lib.Array<ChatMessageReaction> {
+        val reactions = mutableListOf<ChatMessageReaction>()
+        if (array == null) return skip.lib.Array(reactions)
+        for (index in 0 until array.length()) {
+            val entry = array.optJSONObject(index) ?: continue
+            val emoji = stringField(entry, "emoji") ?: continue
+            val ids = mutableListOf<String>()
+            val rawIds = entry.optJSONArray("userIds")
+            if (rawIds != null) {
+                for (idIndex in 0 until rawIds.length()) {
+                    val id = rawIds.optString(idIndex, "")
+                    if (id.isNotEmpty()) ids.add(id)
+                }
+            }
+            reactions.add(ChatMessageReaction(emoji = emoji, userIds = skip.lib.Array(ids)))
+        }
+        return skip.lib.Array(reactions)
+    }
+
+    /** S40 CH3: `chat:reactionChanged`, hand-rolled like the other chat decoders. */
+    private fun decodeChatReactionChanged(value: Any?): ChatReactionChangedNotification? {
+        val obj = jsonObject(value) ?: return decode<ChatReactionChangedNotification>(value)
+        val messageId = stringField(obj, "messageId") ?: return null
+        return ChatReactionChangedNotification(
+            messageId = messageId,
+            reactions = decodeChatReactionsArray(obj.optJSONArray("reactions")),
+            roomId = stringField(obj, "roomId") ?: ""
         )
     }
 
@@ -3213,7 +3265,10 @@ internal class SocketIOManager {
             dmTargetUserId = dmTargetUserId,
             dmTargetDisplayName = dmTargetDisplayName,
             roomId = roomId ?: taggedRoomId,
-            replyTo = replyTo
+            replyTo = replyTo,
+            clientId = null,
+            sendStatus = null,
+            reactions = reactions ?: skip.lib.Array()
         )
     }
 
@@ -3328,7 +3383,7 @@ internal class SocketIOManager {
 
         socket.on(SocketEvent.chatReactionChanged, Emitter.Listener { args ->
             if (this.socket !== socket) return@Listener
-            val notification = decode<ChatReactionChangedNotification>(args.firstOrNull()) ?: return@Listener
+            val notification = decodeChatReactionChanged(args.firstOrNull()) ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
             onChatReactionChanged?.invoke(notification)
         })

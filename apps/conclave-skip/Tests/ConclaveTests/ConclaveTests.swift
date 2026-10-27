@@ -7086,7 +7086,8 @@ final class ConclaveTests: XCTestCase {
         viewModel.togglePin("remote@example.com#remote-session")
 
         XCTAssertNil(viewModel.state.pinnedUserId)
-        XCTAssertEqual(viewModel.state.viewMode, .auto)
+        // S20 SC2: unpinning never rewrites the user's chosen layout (it was explicitly Spotlight here).
+        XCTAssertEqual(viewModel.state.viewMode, .spotlight)
     }
 
     @MainActor
@@ -10364,9 +10365,19 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(appPlist["UIApplicationSupportsIndirectInputEvents"] as? Bool, true)
         XCTAssertNotNil(appPlist["UILaunchScreen"])
         XCTAssertEqual(appPlist["UIStatusBarStyle"] as? String, "UIStatusBarStyleDefault")
+        // S20 SC14 (Q9): no upside-down portrait on iPhone; iPad keeps all four for multitasking.
         let orientations = try XCTUnwrap(appPlist["UISupportedInterfaceOrientations"] as? [String])
         XCTAssertEqual(
             orientations,
+            [
+                "UIInterfaceOrientationLandscapeLeft",
+                "UIInterfaceOrientationLandscapeRight",
+                "UIInterfaceOrientationPortrait",
+            ]
+        )
+        let iPadOrientations = try XCTUnwrap(appPlist["UISupportedInterfaceOrientations~ipad"] as? [String])
+        XCTAssertEqual(
+            Set(iPadOrientations),
             [
                 "UIInterfaceOrientationLandscapeLeft",
                 "UIInterfaceOrientationLandscapeRight",

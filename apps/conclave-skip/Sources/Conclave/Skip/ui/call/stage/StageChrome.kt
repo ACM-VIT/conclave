@@ -16,10 +16,12 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
@@ -38,7 +40,7 @@ import kotlinx.coroutines.delay
 
 /*
  * S20 7 and 8 (STG-4): the top row (Minimize, meeting capsule, audio route, flip camera), the flat status chips (they
- * stay while chrome hides), the toolbar slot (spec 30 fills it) and chrome visibility. Android has no glass: the
+ * stay while chrome hides), the toolbar slot (the S30 control bar, CTL-1) and chrome visibility. Android has no glass: the
  * chrome components draw the flat label scrim. The one timer is a LaunchedEffect keyed on the arm serial and the
  * eligibility, armed only while chrome is visible and nothing blocks; nothing ticks while hidden or blocked (RR8). No
  * immersive mode: the status and navigation bars stay (AND 9.2 item 2).
@@ -107,11 +109,18 @@ internal fun StageChrome(
             }
             StageStatusChips(stage)
         }
+        val stageWidth = maxWidth
+        val stageHeight = maxHeight
         AnimatedVisibility(
             visible = visible, enter = enter, exit = exit,
-            modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars).padding(12.dp),
+            // S30 1 d: the system bars and the cutout at the bottom and sides (edge to edge at targetSdk 36), then
+            // 12 dp. Never the IME (S20 1 d), which safeDrawing would include.
+            modifier = Modifier.align(Alignment.BottomCenter)
+                .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout)
+                    .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
+                .padding(bottom = 12.dp),
         ) {
-            StageBarSlot(shell, stage)
+            StageBarSlot(shell, stage, stageWidth, stageHeight)
         }
     }
 }
@@ -211,7 +220,7 @@ private fun StageHandChip(stage: StagePresenter) {
 @Composable
 private fun StageNowPlayingChip(stage: StagePresenter) {
     val chip = stage.chrome.nowPlaying ?: return
-    val name = if (chip.name.isEmpty()) conclaveString("stg_activity") else chip.name
+    val name = activityStageDisplayName(chip.kind, chip.name)
     val icon = when (chip.kind) {
         "app" -> ConclaveIcons.AppsFill0
         "browser" -> ConclaveIcons.PublicFill0
@@ -236,8 +245,18 @@ private fun StageShareInviteChip(stage: StagePresenter) {
         onClick = { stageShareMeetingLink(context, link, roomLabel) })
 }
 
-/** The toolbar slot. Spec 30 (CTL-1) fills it through a request against this file; until then it draws nothing. */
+/**
+ * The toolbar slot (S30 1, CTL-1). The controls presenter arrives through LocalCallControls from whoever mounts the call
+ * root (the native call route and the controls fixture), so CallRoot's signature stays the stage owner's; without one
+ * the slot draws nothing. The window classes come from the whole stage, not the slot. The toolbar is an overlay
+ * sibling of the canvas: showing, hiding or recomposing it never relayouts tiles (S30 1 k).
+ */
 @Composable
-private fun StageBarSlot(shell: MeetingShellPresenter, stage: StagePresenter) {
-    Box(Modifier) {}
+private fun StageBarSlot(shell: MeetingShellPresenter, stage: StagePresenter, stageWidth: Dp, stageHeight: Dp) {
+    val controls = LocalCallControls.current
+    if (controls == null) {
+        Box(Modifier) {}
+        return
+    }
+    CallControlBar(controls, windowWidth = stageWidth, windowHeight = stageHeight)
 }

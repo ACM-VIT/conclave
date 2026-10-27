@@ -2,14 +2,14 @@ import Foundation
 
 // ENT-1 (S10 0.4, 0.5): the premeeting contract shared by both native roots. Transpiled Swift: String raw-value enums,
 // scalar structs and arrays of structs, no associated values, no tuples, no protocols (S1C 3.6). The six lobby
-// snapshots of S10 6 (card, status, audio, identity, presence, link) arrive with ENT-3; this slice publishes the
-// status snapshot that the 0.4 table and the S10 4 switch rules need, and the stand-in lobby reads.
+// snapshots of S10 6 (card, status, audio, identity, presence, link): the status snapshot is here (ENT-1, the 0.4
+// table and the S10 4 switch rules read it); ENT-3 adds the other five in Features/Lobby/LobbyContracts.swift.
 
 // MARK: - Navigation
 
 /// A pushed premeeting page (S10 0.5). The Outcome screen is root content on iOS and `OutcomeKey` on Android
 /// (S10 0.4), never a route. New pages add a case here, a destination in `PremeetingRoot+iOS.swift` and a key in
-/// `K/ui/home/PremeetingBackStack.kt` (Lobby ENT-3, Account and Privacy ENT-7, Webinar landing ENT-9).
+/// `K/ui/home/PremeetingBackStack.kt` (Lobby ENT-3 landed; Account and Privacy ENT-7, Webinar landing ENT-9).
 enum PremeetingRouteKind: String, CaseIterable, Equatable {
     case lobby, webinarLanding, account, privacyPolicy
 }
@@ -42,8 +42,9 @@ enum WaitingKind: String, CaseIterable, Equatable {
     case standard, locked, noHost, hostAvailable, reconnecting, offline, serverRestarting   // R46
 }
 
-/// The lobby's bottom block and navigation state (S10 0.5). ENT-1 publishes it for the stand-in lobby; ENT-3 adds
-/// the other five lobby snapshots beside it.
+/// The lobby's bottom block and navigation state (S10 0.5). `primaryReason` carries a `LobbyPrimaryReason` raw value
+/// ("" for none); `isPrimaryPending` shows the primary's spinner while a start is in flight (the C17 code check,
+/// additive to S10 0.5).
 struct LobbyStatusSnapshot: Equatable {
     let routeId: Int
     let intent: LobbyIntent
@@ -54,6 +55,7 @@ struct LobbyStatusSnapshot: Equatable {
     let primaryReason: String
     let showsSlowNotice: Bool
     let waitingKind: WaitingKind
+    let isPrimaryPending: Bool
 }
 
 // MARK: - Home
@@ -299,6 +301,9 @@ struct PremeetingInputs: Equatable {
     // App and network
     let isNetworkOffline: Bool
     let isAppActive: Bool
+    // Entry media intent (S10 0.8 C1, ENT-3): the view model's flags, or its pending entry intent while entering
+    let micIntentOn: Bool
+    let cameraIntentOn: Bool
     // Process-death resume (0.8 C7, a later core slice; the L9 fixture injects them)
     let resumeInFlight: Bool
     let resumeRoomId: String
@@ -328,6 +333,8 @@ struct PremeetingInputs: Equatable {
         isSigningIn: Bool = false,
         isNetworkOffline: Bool = false,
         isAppActive: Bool = true,
+        micIntentOn: Bool = false,
+        cameraIntentOn: Bool = false,
         resumeInFlight: Bool = false,
         resumeRoomId: String = "",
         updateRequired: Bool = false,
@@ -355,6 +362,8 @@ struct PremeetingInputs: Equatable {
             isSigningIn: isSigningIn,
             isNetworkOffline: isNetworkOffline,
             isAppActive: isAppActive,
+            micIntentOn: micIntentOn,
+            cameraIntentOn: cameraIntentOn,
             resumeInFlight: resumeInFlight,
             resumeRoomId: resumeRoomId,
             updateRequired: updateRequired,
@@ -386,6 +395,41 @@ struct PremeetingInputs: Equatable {
             isSigningIn: isSigningIn,
             isNetworkOffline: isNetworkOffline,
             isAppActive: isAppActive,
+            micIntentOn: micIntentOn,
+            cameraIntentOn: cameraIntentOn,
+            resumeInFlight: resumeInFlight,
+            resumeRoomId: resumeRoomId,
+            updateRequired: updateRequired,
+            storeURL: storeURL
+        )
+    }
+
+    /// The same inputs with another entry media intent (the L9 fixture's scripted C1 answer).
+    func withMediaIntent(micIntentOn mic: Bool, cameraIntentOn camera: Bool) -> PremeetingInputs {
+        PremeetingInputs(
+            callSession: callSession,
+            phase: phase,
+            notice: notice,
+            noticeText: noticeText,
+            outcomeId: outcomeId,
+            outcomeKind: outcomeKind,
+            outcomeServerText: outcomeServerText,
+            roomLabel: roomLabel,
+            isLocalHost: isLocalHost,
+            isWebinarAttendee: isWebinarAttendee,
+            hasBeenAdmittedThisSession: hasBeenAdmittedThisSession,
+            entryOrigin: entryOrigin,
+            currentRoomId: currentRoomId,
+            roomAliases: roomAliases,
+            currentJoinMode: currentJoinMode,
+            isSignedIn: isSignedIn,
+            accountName: accountName,
+            accountSeed: accountSeed,
+            isSigningIn: isSigningIn,
+            isNetworkOffline: isNetworkOffline,
+            isAppActive: isAppActive,
+            micIntentOn: mic,
+            cameraIntentOn: camera,
             resumeInFlight: resumeInFlight,
             resumeRoomId: resumeRoomId,
             updateRequired: updateRequired,
@@ -418,6 +462,8 @@ struct PremeetingInputs: Equatable {
             isSigningIn: base.isSigningIn,
             isNetworkOffline: base.isNetworkOffline,
             isAppActive: base.isAppActive,
+            micIntentOn: base.micIntentOn,
+            cameraIntentOn: base.cameraIntentOn,
             resumeInFlight: base.resumeInFlight,
             resumeRoomId: base.resumeRoomId,
             updateRequired: base.updateRequired,

@@ -32,6 +32,13 @@ object CameraPreviewController {
     private var activePreview: Preview? = null
     private var releaseGeneration = 0L
 
+    /**
+     * ENT-3 (S10 0.5 "Preview capture" row, RECONCILE R22): told after every release with the preview it unbound, so
+     * the native lobby's LocalPreviewController sees the WebRTC client take the camera (its publish latch) and the
+     * legacy preview keeps its own behavior. Set once by LocalPreviewController.
+     */
+    internal var onReleased: ((Preview?) -> Unit)? = null
+
     fun releasePreview() {
         val action = Runnable {
             releaseGeneration += 1
@@ -46,6 +53,7 @@ object CameraPreviewController {
                     debugLog("[CameraPreview] Failed to unbind preview: ${error}")
                 }
             }
+            onReleased?.invoke(preview)
         }
 
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -80,13 +88,14 @@ object CameraPreviewController {
     }
 }
 
-private data class PreviewCameraSelection(
+/** Shared with the native lobby's LocalPreviewController (ENT-3): one camera choice rule for both previews. */
+internal data class PreviewCameraSelection(
     val selector: CameraSelector,
     val mirrored: Boolean,
     val facing: String
 )
 
-private fun selectPreviewCamera(cameraProvider: ProcessCameraProvider, facing: String): PreviewCameraSelection? {
+internal fun selectPreviewCamera(cameraProvider: ProcessCameraProvider, facing: String): PreviewCameraSelection? {
     val wantsBackCamera = facing.trim().lowercase() == "back"
     val preferred = if (wantsBackCamera) {
         PreviewCameraSelection(CameraSelector.DEFAULT_BACK_CAMERA, mirrored = false, facing = "back")

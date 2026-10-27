@@ -22,6 +22,11 @@ final class MeetingShellPresenter {
     let panels = PanelCoordinator(session: 0)
     /// The action ledger (S1C LED). Not observable; rows publish its pending state.
     let ledger = MeetingActionLedger()
+    /// S40 0.5: the session-owned chat presenter, created with the shell so it lives for the whole call and opening
+    /// the panel reads finished rows. The core feeds it (`requestChatRefresh`); it resets itself when the call session
+    /// changes and the core resets it on leave. The native call root reaches it as `shell.chat`; the chat fixture
+    /// installs into the stage fixture shell's instance.
+    let chat = ChatPresenter()
     /// Core only: the view model forwards each intent to its existing implementation (S1C E8). Never called from
     /// `apply(_:)`.
     @ObservationIgnored var onCommand: ((MeetingShellCommand, MeetingActionTicket?) -> Void)? = nil
