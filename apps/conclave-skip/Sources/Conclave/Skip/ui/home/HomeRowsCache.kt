@@ -2,7 +2,7 @@ package conclave.module
 
 /*
  * ENT-1 (S10 2 k, S1C 3.5): Home rows as plain Kotlin values built once per HomeSnapshot revision. Unchanged rows keep
- * their instance, so LazyColumn items with a stable key skip recomposition. No @Stable or @Immutable claims (R14).
+ * their instance, so LazyColumn items with a stable key skip recomposition. No Compose stability annotations (R14).
  */
 
 internal data class HomeRecentUi(
