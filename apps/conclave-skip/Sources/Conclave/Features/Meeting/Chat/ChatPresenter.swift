@@ -23,7 +23,8 @@ final class ChatPresenter {
     private(set) var composer: ChatComposerSnapshot = ChatComposerSnapshot.initial
     /// Read only inside voice rows (CHT-6); follows `ChatInputs.activeTtsMessageId` through the row index.
     private(set) var playback = ChatPlaybackSnapshot(activeVoiceRowId: "")
-    /// The iOS 17 streaming follow counter (2 c, CHT-7); constant here.
+    /// The iOS 17 streaming follow counter (2 c, CHT-7): bumped at most every 250 ms while the newest row is a thinking
+    /// or streaming assistant row whose entry changed, and once when it completes; read only by the iOS 17 follow path.
     private(set) var tailGrowth = 0
     /// One-shot; the view resolves the string.
     private(set) var announcement: ChatAnnouncement? = nil
@@ -91,6 +92,10 @@ final class ChatPresenter {
     @ObservationIgnored private var localAttachment: ChatAttachmentState? = nil
     /// GIFs handed to the core by id (`ChatCommandRequest` carries scalars only); the core takes each once.
     @ObservationIgnored private var sentGifs: [String: ChatGifAttachment] = [:]
+    /// CHT-7 (S40 4 k): one markdown render state per assistant row, so committed blocks are never reparsed and only
+    /// the tail block changes while an answer streams.
+    @ObservationIgnored private var markdownStates: [String: StreamingMarkdownRenderState] = [:]
+    @ObservationIgnored private var lastTailGrowthMillis = -1_000_000.0
 
     /// `sendingSlow` after this long (S40 0.5).
     static let slowSendMillis = 1000.0
@@ -98,6 +103,8 @@ final class ChatPresenter {
     static let announcementCoalesceMillis = 2000.0
     /// Quote previews are cut like the SFU's reply preview (MAX_REPLY_CONTENT_LENGTH).
     static let replyPreviewLimit = 280
+    /// The iOS 17 follow counter moves at most this often while an answer streams (S40 2 c, 0.5).
+    static let tailGrowthIntervalMillis = 250.0
 
     init() {
         embeds.onResolved = { [weak self] _ in
@@ -193,6 +200,7 @@ final class ChatPresenter {
         if panel != ChatPanelSnapshot.initial { panel = ChatPanelSnapshot.initial }
         if announcement != nil { announcement = nil }
         if playback.activeVoiceRowId != "" { playback = ChatPlaybackSnapshot(activeVoiceRowId: "") }
+        if tailGrowth != 0 { tailGrowth = 0 }
     }
 
     private func resetSessionState() {
@@ -222,6 +230,8 @@ final class ChatPresenter {
         serverToClientRowId = [:]
         spansCache = [:]
         spansSignature = [:]
+        markdownStates = [:]
+        lastTailGrowthMillis = -1_000_000.0
         hasTimeline = false
     }
 
@@ -467,6 +477,14 @@ final class ChatPresenter {
         onCommand?(ChatCommandRequest.make(ChatCommandKind.stopVoice))
     }
 
+    /// S40 4 f (CHT-7): Try Again on the asker's failed answer; the core asks the same question again under the same
+    /// answer id (the row keeps its place). No Stop control (Q3). The approval and key actions stay gated (W10-2).
+    func retryAssistant(rowId: String) {
+        let entry = rows.entry(for: rowId)
+        guard let model = entry.assistant, model.canRetry else { return }
+        onCommand?(ChatCommandRequest.make(ChatCommandKind.retryAssistant, rowId: rowId, messageId: entry.row.serverId))
+    }
+
     /// SYS-8 (HD request B5-T4 R17a): the view model's camera line input (see `showsCameraLine`).
     func setCameraLine(_ shows: Bool) {
         if showsCameraLine != shows { showsCameraLine = shows }
@@ -600,6 +618,8 @@ final class ChatPresenter {
 
         var built: [ChatRowModel] = []
         var builtMessageIds: [[String]] = []
+        // CHT-7: the assistant model for each built row (nil for every other row), parallel to `built`.
+        var builtAssistants: [AssistantRowModel?] = []
         var lastDayKey = -1
         var previousForGrouping: ChatRowModel? = nil
         for item in items {
@@ -609,6 +629,7 @@ final class ChatPresenter {
                     built.append(ChatRowModel(id: "day:" + String(dayKey), kind: ChatRowKind.daySeparator,
                                               timestampMillis: item.timestampMillis))
                     builtMessageIds.append([])
+                    builtAssistants.append(nil)
                     previousForGrouping = nil
                 }
                 lastDayKey = dayKey
@@ -619,10 +640,13 @@ final class ChatPresenter {
                 if !firstUnreadId.isEmpty && rowId == firstUnreadId {
                     built.append(ChatRowModel(id: "unread", kind: ChatRowKind.unreadDivider, timestampMillis: item.timestampMillis))
                     builtMessageIds.append([])
+                    builtAssistants.append(nil)
                     previousForGrouping = nil
                 }
-                let draft = messageRow(message, rowId: rowId, isGroupStart: true, isGroupEnd: true, messageToRow: messageToRow,
-                                       tokens: tokens, youToken: youToken, tokenSignature: tokenSignature)
+                let assistantModel: AssistantRowModel? = message.isAssistant ? assistantRowModel(message, rowId: rowId) : nil
+                let draft = messageRow(message, rowId: rowId, assistant: assistantModel, isGroupStart: true, isGroupEnd: true,
+                                       messageToRow: messageToRow, tokens: tokens, youToken: youToken,
+                                       tokenSignature: tokenSignature)
                 let groups = ChatRowGroupingPolicy.groupsWithPrevious(previous: previousForGrouping, current: draft)
                 if groups {
                     // The previous row is not a group end after all; it is the last built message row.
@@ -634,6 +658,7 @@ final class ChatPresenter {
                 var ids = [message.id]
                 if !message.clientId.isEmpty { ids.append(message.clientId) }
                 builtMessageIds.append(ids)
+                builtAssistants.append(assistantModel)
                 previousForGrouping = row
             } else if item.source == 1 {
                 let local = inputs.localRows[item.index]
@@ -643,6 +668,7 @@ final class ChatPresenter {
                                           systemTone: local.isError ? ChatSystemTone.error : ChatSystemTone.info,
                                           notice: local.notice))
                 builtMessageIds.append([])
+                builtAssistants.append(nil)
                 previousForGrouping = nil
             } else {
                 let userId = hiddenSenderIds[item.index]
@@ -651,16 +677,28 @@ final class ChatPresenter {
                                           timestampMillis: item.timestampMillis, plainText: name, notice: ChatNotice.senderHidden,
                                           noticeArgument: name))
                 builtMessageIds.append([])
+                builtAssistants.append(nil)
                 previousForGrouping = nil
             }
         }
 
         var rowIds: [String] = []
         var kinds: [ChatRowKind] = []
+        var completedAnswer: ChatRowModel? = nil
         var builtIndex = 0
         while builtIndex < built.count {
             let row = built[builtIndex]
-            rows.upsert(row, messageIds: builtMessageIds[builtIndex])
+            let assistantModel = builtAssistants[builtIndex]
+            // CHT-7 (S40 4 i): an answer that just finished is announced once, never per delta.
+            if let model = assistantModel, model.state == AssistantRowState.done, rows.hasEntry(row.id),
+               let previous = rows.entry(for: row.id).assistant,
+               previous.state == AssistantRowState.thinking || previous.state == AssistantRowState.streaming {
+                completedAnswer = row
+            }
+            let changed = rows.upsert(row, messageIds: builtMessageIds[builtIndex], assistant: assistantModel)
+            if changed && builtIndex == built.count - 1, let model = assistantModel {
+                noteTailGrowth(model.state)
+            }
             rowIds.append(row.id)
             kinds.append(row.kind)
             builtIndex += 1
@@ -668,6 +706,13 @@ final class ChatPresenter {
         rows.retain(rowIds: rowIds)
         trimCaches(messages: messages)
         trackNewRows(built: built, previousRowIds: previousRowIds, messages: messages)
+        if let answer = completedAnswer, isOpen, hasTimeline, !suppressesNewRowTracking {
+            let sentence = AssistantRowPolicy.firstSentence(answer.plainText)
+            if !sentence.isEmpty {
+                postAnnouncement(kind: "assistantAnswered", name: answer.senderName, text: sentence, count: 1)
+                lastAnnouncementMillis = now()
+            }
+        }
         scheduleSlowTasks(messages: messages)
         let last = built.last
         let next = ChatTimelineSnapshot(
@@ -687,11 +732,17 @@ final class ChatPresenter {
         publishPlayback()
     }
 
-    private func messageRow(_ message: ChatMessageInput, rowId: String, isGroupStart: Bool, isGroupEnd: Bool,
-                            messageToRow: [String: String], tokens: [String], youToken: String,
+    private func messageRow(_ message: ChatMessageInput, rowId: String, assistant: AssistantRowModel?, isGroupStart: Bool,
+                            isGroupEnd: Bool, messageToRow: [String: String], tokens: [String], youToken: String,
                             tokenSignature: String) -> ChatRowModel {
         let kind = rowKind(message)
         var body = message.content
+        // CHT-7 (CH8): a failed answer has no body (the row shows the kind's copy); an answer still streaming is
+        // copied as it stands but not linkified until it is done (the markdown blocks render it).
+        let assistantDone = assistant?.state == AssistantRowState.done
+        if kind == ChatRowKind.assistant && (assistant?.showsError ?? false) {
+            body = ""
+        }
         if kind == ChatRowKind.action {
             body = ChatMessageContentPolicy.fullActionText(from: message.content) ?? message.content
         } else if kind == ChatRowKind.photo {
@@ -701,7 +752,8 @@ final class ChatPresenter {
         } else if kind == ChatRowKind.voice {
             body = VoiceMessageText.spokenText(normalizedContent: message.content)
         }
-        let spans = cachedSpans(rowId: rowId, body: body, kind: kind, tokens: tokens, youToken: youToken, signature: tokenSignature)
+        let spans = kind == ChatRowKind.assistant && !assistantDone ? []
+            : cachedSpans(rowId: rowId, body: body, kind: kind, tokens: tokens, youToken: youToken, signature: tokenSignature)
         let privacy: ChatPrivacy = message.isDirect ? (message.isOwn ? ChatPrivacy.privateSent : ChatPrivacy.privateReceived)
             : ChatPrivacy.everyone
         var privateName = ""
@@ -722,8 +774,10 @@ final class ChatPresenter {
             self.isLocal(userId) ? "" : self.displayName(userId)
         }
         let firstLink = ChatMentionPolicy.firstLink(spans)
-        let canReply = writable && delivered && !serverId.isEmpty && kind != ChatRowKind.action
-        let canReact = kind != ChatRowKind.action && delivered
+        // An answer is in the room's history (so it can be replied to or reacted to) only once it is done.
+        let assistantSettled = kind != ChatRowKind.assistant || assistantDone
+        let canReply = writable && delivered && !serverId.isEmpty && kind != ChatRowKind.action && assistantSettled
+        let canReact = kind != ChatRowKind.action && delivered && assistantSettled
             && ChatReactionRules.canReact(serverId: serverId, isDirect: message.isDirect, gate: gate,
                                           reactionsEnabled: inputs.reactionsEnabled, isHost: inputs.isHost)
         let canMessagePrivately = writable && !message.isOwn && !message.isAssistant && inputs.privateEnabled
@@ -840,7 +894,7 @@ final class ChatPresenter {
         if body.isEmpty {
             spans = []
         } else if kind == ChatRowKind.assistant {
-            // Assistant markdown is CHT-7's (NSM); until then the plain answer text, linkified.
+            // CHT-7: the row renders the markdown blocks; these spans serve Copy Link and the summary only.
             spans = ChatLinkifyPolicy.spans(body)
         } else {
             spans = ChatMentionPolicy.applyMentions(ChatLinkifyPolicy.spans(body), knownTokens: tokens, youToken: youToken)
@@ -889,6 +943,69 @@ final class ChatPresenter {
             embedURLCache.removeValue(forKey: key)
             embedSourceCache.removeValue(forKey: key)
         }
+        var staleMarkdown: [String] = []
+        for key in markdownStates.keys {
+            if live[key] == nil { staleMarkdown.append(key) }
+        }
+        for key in staleMarkdown {
+            markdownStates.removeValue(forKey: key)
+        }
+    }
+
+    // MARK: - Assistant rows (CHT-7, S40 4)
+
+    /// The row model from the core's process state and the answer text: state and error kind by the shared policy,
+    /// listed steps only, markdown blocks for streaming and done answers (reparsing only the tail), nothing else for
+    /// thinking or failed rows (CH8). No approval while W10-2 is out.
+    private func assistantRowModel(_ message: ChatMessageInput, rowId: String) -> AssistantRowModel {
+        let input = message.assistant
+        let state = AssistantRowPolicy.state(input: input, content: message.content)
+        let showsError = state == AssistantRowState.error || state == AssistantRowState.needsKey
+        let errorKind = showsError ? AssistantRowPolicy.errorKind(input: input, content: message.content) : AssistantErrorKind.none
+        var blocks: [StreamingMarkdownBlock] = []
+        if state == AssistantRowState.streaming || state == AssistantRowState.done {
+            blocks = markdownBlocks(rowId: rowId, markdown: message.content, isStreaming: state == AssistantRowState.streaming)
+        } else {
+            markdownStates.removeValue(forKey: rowId)
+        }
+        let isAsker = input?.isAsker ?? false
+        var tasks: [AssistantTask] = []
+        if let input = input {
+            tasks = AssistantTaskPolicy.listed(input.tasks)
+        }
+        return AssistantRowModel(
+            state: state,
+            isAsker: isAsker,
+            reasoning: input?.reasoning ?? "",
+            reasoningDone: input?.reasoningDone ?? true,
+            thoughtSeconds: input?.thoughtSeconds ?? 0,
+            tasks: tasks,
+            blocks: blocks,
+            approval: nil,
+            errorKind: errorKind,
+            canRetry: AssistantRowPolicy.canRetry(isAsker: isAsker, state: state, errorKind: errorKind)
+        )
+    }
+
+    /// S40 4 k: the row's render state keeps committed blocks and reparses only the tail; the final text is parsed once
+    /// more without the streaming rules when the answer completes.
+    private func markdownBlocks(rowId: String, markdown: String, isStreaming: Bool) -> [StreamingMarkdownBlock] {
+        if let existing = markdownStates[rowId] {
+            existing.update(markdown: markdown, isStreaming: isStreaming)
+            return existing.blocks
+        }
+        let created = StreamingMarkdownRenderState(markdown: markdown, isStreaming: isStreaming)
+        markdownStates[rowId] = created
+        return created.blocks
+    }
+
+    /// 2 c: the iOS 17 follow path re-scrolls on this counter only while the reader is at the bottom.
+    private func noteTailGrowth(_ state: AssistantRowState) {
+        let time = now()
+        let isLive = state == AssistantRowState.thinking || state == AssistantRowState.streaming
+        if isLive && time - lastTailGrowthMillis < ChatPresenter.tailGrowthIntervalMillis { return }
+        lastTailGrowthMillis = time
+        tailGrowth += 1
     }
 
     /// Unread capture while closed and announcements while open (2 i): new remote message rows only, never history,
@@ -908,6 +1025,8 @@ final class ChatPresenter {
             if !row.isMessage || row.isOwn { continue }
             if historyRows[row.id] == true { continue }
             if row.kind == ChatRowKind.assistant && row.plainText.isEmpty { continue }
+            // CHT-7 (S40 4 i): with the panel open an answer is announced when it completes, never when it appears.
+            if row.kind == ChatRowKind.assistant && isOpen { continue }
             fresh.append(row)
         }
         guard hasTimeline else {

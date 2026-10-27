@@ -86,6 +86,8 @@ private fun StageFixtureControls(session: StageFixtureSession, modifier: Modifie
             FixtureButton("Reactions", "stage.fixture.reactions") { session.replayReactions(); refresh++ }
             FixtureButton("Join burst", "stage.fixture.joinBurst") { session.postJoinBurst(); refresh++ }
             FixtureButton("Dismiss toast", "stage.fixture.dismissToast") { session.dismissCurrentToast(); refresh++ }
+            FixtureButton("Previews 1 sender", "stage.fixture.previews.sameSender3") { session.postChatPreviewScript(named = "sameSender3"); refresh++ }
+            FixtureButton("Previews 3 senders", "stage.fixture.previews.mixed3") { session.postChatPreviewScript(named = "mixed3"); refresh++ }
             FixtureButton("Suspend toasts", "stage.fixture.suspendToasts") { session.toggleToastSuspension(); refresh++ }
             FixtureButton("Next caption", "stage.fixture.nextCaption") { session.nextCaption(); refresh++ }
             FixtureButton("Reconnect", "stage.fixture.reconnect") { session.toggleReconnecting(); refresh++ }
@@ -97,6 +99,10 @@ private fun StageFixtureControls(session: StageFixtureSession, modifier: Modifie
             FixtureReadout(session.countersReadout(), "stage.counters", tick)
             FixtureReadout(session.announcementsReadout(), "stage.announcements", tick)
             FixtureReadout(session.noticesReadout(), "stage.notices", tick)
+            FixtureReadout(session.chatPreviewReadout(), "chat.preview", tick)
+            FixtureReadout(session.settingsCallsReadout(), "wp3.calls", tick)
+            FixtureReadout(session.speakerTestReadout(), "speakerTest.count", tick)
+            FixtureReadout(session.voicePreviewReadout(), "voicePreview.count", tick)
             FixtureReadout(session.captionsReadout(), "stage.captions.readout", tick)
             FixtureReadout(session.activityReadout(), "game.emits", tick)
             FixtureReadout(session.panelReadout(), "panel.current", tick)

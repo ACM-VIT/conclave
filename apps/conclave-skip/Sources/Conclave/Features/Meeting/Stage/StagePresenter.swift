@@ -13,7 +13,9 @@ import Observation
 /// events through `post`, presenter toasts through `postLocal`), the host notice sounds (`sounds`) and, with TRN-1, the
 /// captions leaf (`captions`, `captionsActive`). STG-6 (S20 15) added `meetingInfo` and STG-8 (S20 12) added
 /// `attendee`, both fed by `applyDetails(_:)` beside `apply(_:)` (the models and their pure policies sit at the end of
-/// this file; the one connection label is `ConnectionQualityLabelPolicy`).
+/// this file; the one connection label is `ConnectionQualityLabelPolicy`). CHT-8 (S40 8) added the chat preview rules:
+/// `chatPreviewsEnabled` (S60 C6-22), `clearChatPreviews()`, `dropChatPreviews(fromUserId:)` and the in-place
+/// coalescing in `MeetingNoticeCenter` (`ChatPreviewPolicy` holds the unread and body rules the core calls).
 @MainActor
 @Observable
 final class StagePresenter {
@@ -73,6 +75,9 @@ final class StagePresenter {
     /// PPL-2 (RECONCILE R19): the session's People presenter, set by `PeoplePresenter.init`. The tile menu reads its
     /// row action table (minus Admit and Deny) and performs people items with source `tileMenu`. Never observed.
     @ObservationIgnored weak var people: PeoplePresenter? = nil
+    /// CHT-8 (S40 8 f, S60 C6-22): "Show Chat Previews", read when a chat preview arrives (never for the badge, S40 Q8).
+    /// Fixtures and tests inject their own answer so the device preference never changes them.
+    @ObservationIgnored var chatPreviewsEnabled: () -> Bool = { VoicePreferences.showsChatPreviews() }
     /// Injectable clock and sleep (SL2) so the promotion timing is testable.
     @ObservationIgnored var now: () -> Double = { Date().timeIntervalSince1970 * 1000.0 }
     @ObservationIgnored var sleep: (Double) async -> Void = { millis in
@@ -222,6 +227,7 @@ final class StagePresenter {
     /// Core only (SC18): one-shot events. The recent ones stay for the readout; the notice center turns them into toasts
     /// (suppression, coalescing and the Q4 thresholds live in `MeetingNoticePolicy`), moderation and role events
     /// publish their outcome tokens, a new remote hand may request a chime, and `hostNotice` latches the host banner.
+    /// CHT-8: a `chatPreview` event (built by `ChatPreviewPolicy.event`) reads "Show Chat Previews" once.
     func post(_ event: StageEvent) {
         recentEvents.append(event)
         if recentEvents.count > StagePresenter.recentEventLimit {
@@ -230,8 +236,27 @@ final class StagePresenter {
         if let token = MeetingNoticePolicy.feedbackKind(forEvent: event.kind) {
             advanceFeedback(token)
         }
-        requestChimes(notices.post(event, nowMillis: now()))
+        let showsPreviews = event.kind == StageEventKind.chatPreview ? chatPreviewsEnabled() : true
+        requestChimes(notices.post(event, nowMillis: now(), showsChatPreviews: showsPreviews))
         publishNotices()
+    }
+
+    /// Core only (CHT-8, S40 8 f): `/clear` drops every chat preview, shown or waiting.
+    func clearChatPreviews() {
+        notices.clearChatPreviews()
+        publishNotices()
+    }
+
+    /// Core only (CHT-8, S40 CH21): hiding a sender drops the previews that carry their messages. `userId` is the
+    /// canonical stage id (the one the previews were posted with).
+    func dropChatPreviews(fromUserId userId: String) {
+        notices.dropChatPreviews(fromUserId: userId)
+        publishNotices()
+    }
+
+    /// The `chat.preview` readout (fixtures and tests).
+    func chatPreviewReadout() -> String {
+        ChatPreviewPolicy.readout(toast)
     }
 
     /// Core only: the S1 panel snapshot changed (open, close, replace). Folds a panel into the blocker and clears the
@@ -563,7 +588,15 @@ final class StagePresenter {
             chrome = nextChrome.withRevision(chrome.revision + 1)
         }
         let hand = StagePresenter.handState(isRaised: inputs.isHandRaised, inFlight: inputs.handToggleInFlight)
-        if hand != localHand { localHand = hand }
+        if hand != localHand {
+            // S30 CC7 and 6 i (CTL-6): "Hand raised" and "Hand lowered" once, when the server confirms your own change.
+            if localHand == LocalHandState.raising && hand == LocalHandState.raised {
+                announce(kind: StageAnnouncement.handRaisedKind, name: "")
+            } else if localHand == LocalHandState.lowering && hand == LocalHandState.lowered {
+                announce(kind: StageAnnouncement.handLoweredKind, name: "")
+            }
+            localHand = hand
+        }
         recomputeBlocker()
         let chips = statusChipsVisible(present)
         let geometry = NoticeLaneGeometryPolicy.geometry(viewport: viewport, frames: currentFrames(), slots: layout.slots,

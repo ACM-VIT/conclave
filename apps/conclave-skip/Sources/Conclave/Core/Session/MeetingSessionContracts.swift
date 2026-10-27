@@ -244,6 +244,9 @@ struct MeetingShellInputs: Equatable {
     let cameraPermission: MeetingMediaPermissionStatus
     /// From `CallPresence` (S70 5): `held` is the CallKit hold, `otherAudio` another call or app holds the audio.
     let audioInterruption: AudioInterruptionKind
+    /// S20 Q10, S30 CC9 (PPL-5): the attendee hand capability (`webinar:setHandRaised`, PH8). While true an attendee's
+    /// hand row is visible and follows the call state; while false it stays hidden with reason `attendee`.
+    let attendeeCanRaiseHand: Bool
 
     /// Every field defaulted, so tests (Swift and the transpiled Kotlin) name only what a scenario needs.
     static func make(
@@ -282,7 +285,8 @@ struct MeetingShellInputs: Equatable {
         isRedirectContinuation: Bool = false,
         microphonePermission: MeetingMediaPermissionStatus = MeetingMediaPermissionStatus.granted,
         cameraPermission: MeetingMediaPermissionStatus = MeetingMediaPermissionStatus.granted,
-        audioInterruption: AudioInterruptionKind = AudioInterruptionKind.none
+        audioInterruption: AudioInterruptionKind = AudioInterruptionKind.none,
+        attendeeCanRaiseHand: Bool = false
     ) -> MeetingShellInputs {
         MeetingShellInputs(
             identity: identity,
@@ -320,7 +324,8 @@ struct MeetingShellInputs: Equatable {
             isRedirectContinuation: isRedirectContinuation,
             microphonePermission: microphonePermission,
             cameraPermission: cameraPermission,
-            audioInterruption: audioInterruption
+            audioInterruption: audioInterruption,
+            attendeeCanRaiseHand: attendeeCanRaiseHand
         )
     }
 

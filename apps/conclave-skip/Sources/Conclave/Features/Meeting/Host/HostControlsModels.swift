@@ -133,21 +133,34 @@ struct HostControlsSnapshot: Equatable {
     let canEndForEveryone: Bool
     /// A `HostEndPhase` value.
     let endPhase: String
+    /// PPL-5 (S50 9 f): bumps on every acknowledged rotation, so the view copies the new link and announces "New link
+    /// copied." once.
+    let rotatedLinkSerial: Int
+    /// PPL-5 (S50 9 f): `HostFieldID` values with a save in flight (Max Attendees, Attendee Code, Custom Link), for the
+    /// field spinners; and the last acknowledged field with a serial, so a page shows "Saved" and clears once.
+    let pendingFields: [String]
+    let savedField: String
+    let savedSerial: Int
 
     static let empty = HostControlsSnapshot(revision: 0, isAvailable: false, blockedReason: MeetingBlockedReason.notJoined.rawValue,
                                             isConfigLoading: false, bulk: [], policies: [], access: HostAccessSummary.empty,
                                             noticePhase: HostFieldPhase.idle, noticeSentSerial: 0,
                                             inviteCodePhase: HostFieldPhase.idle, inviteCodeSavedSerial: 0,
                                             pendingAccessKeys: [], webinar: WebinarSettingsModel.empty,
-                                            canEndForEveryone: false, endPhase: HostEndPhase.idle)
+                                            canEndForEveryone: false, endPhase: HostEndPhase.idle, rotatedLinkSerial: 0,
+                                            pendingFields: [], savedField: "", savedSerial: 0)
 
     func withRevision(_ next: Int) -> HostControlsSnapshot {
         HostControlsSnapshot(revision: next, isAvailable: isAvailable, blockedReason: blockedReason,
                              isConfigLoading: isConfigLoading, bulk: bulk, policies: policies, access: access,
                              noticePhase: noticePhase, noticeSentSerial: noticeSentSerial, inviteCodePhase: inviteCodePhase,
                              inviteCodeSavedSerial: inviteCodeSavedSerial, pendingAccessKeys: pendingAccessKeys,
-                             webinar: webinar, canEndForEveryone: canEndForEveryone, endPhase: endPhase)
+                             webinar: webinar, canEndForEveryone: canEndForEveryone, endPhase: endPhase,
+                             rotatedLinkSerial: rotatedLinkSerial, pendingFields: pendingFields, savedField: savedField,
+                             savedSerial: savedSerial)
     }
+
+    func isFieldPending(_ field: String) -> Bool { pendingFields.contains(field) }
 
     func policy(_ id: HostPolicyID) -> HostPolicyRow? {
         for row in policies {

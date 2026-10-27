@@ -53,7 +53,7 @@ internal fun ChatFixtureControlsBar(driver: ChatFixtureDriver) {
             ConclaveText(actionsText, line = "chat.fixture.actions", style = MaterialTheme.typography.labelSmall, maxLines = 4,
                 modifier = Modifier.padding(horizontal = 16.dp).testTag("chat.fixture.actions"))
             val latency = driver.openLatencyReadout + " list=" + driver.counters.count("chat.recompose.list") +
-                " composer=" + driver.counters.count("chat.recompose.composer")
+                " composer=" + driver.counters.count("chat.recompose.composer") + " " + driver.assistantAnnouncementReadout
             ConclaveText(latency, line = "chat.openLatency", style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 16.dp).testTag("chat.openLatency"))
         }

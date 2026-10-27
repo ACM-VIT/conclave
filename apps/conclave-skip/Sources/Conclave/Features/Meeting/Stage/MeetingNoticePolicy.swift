@@ -210,6 +210,18 @@ struct MeetingNotice: Equatable, Identifiable {
                       expiresAtMillis: expiresAtMillis, announcement: announcement)
     }
 
+    /// CHT-8 (S40 8 f): a chat preview updated in place (while it shows) or coalesced in the queue. The message and
+    /// sender counts grow, and the newest message supplies the sender, the body kind, the text and the private tag, so
+    /// the title, the avatar and the accessibility label always describe the body that shows. Id, actions and
+    /// priority stay, so the host keeps the same toast.
+    func mergedPreview(with newest: MeetingNotice, count nextCount: Int, senderCount nextSenders: Int) -> MeetingNotice {
+        MeetingNotice(id: id, kind: kind, lane: lane, priority: priority, severity: severity, userId: newest.userId,
+                      name: newest.name, count: nextCount, total: total, serverText: newest.serverText, actions: actions,
+                      isDismissible: isDismissible, messageId: newest.messageId.isEmpty ? messageId : newest.messageId,
+                      detail: newest.detail, isPrivate: newest.isPrivate, senderCount: nextSenders,
+                      expiresAtMillis: expiresAtMillis, announcement: announcement)
+    }
+
     func hasAction(_ actionId: String) -> Bool {
         for action in actions {
             if action.id == actionId { return true }
@@ -545,9 +557,11 @@ enum MeetingNoticePolicy {
                                       serverText: event.serverText, actions: [NoticeAction.make(NoticeAction.retry)],
                                       detail: event.detail)
         case StageEventKind.chatPreview:
+            // CHT-8: `serverText` carries the `ChatPreviewBodyKind` raw value ("" reads as text), `detail` the payload.
             return MeetingNotice.make(kind: NoticeKind.chatPreview, priority: 3, userId: event.userId, name: event.name,
-                                      count: 1, actions: [NoticeAction.make(NoticeAction.view)], messageId: event.messageId,
-                                      detail: event.detail, isPrivate: event.isPrivate, senderCount: 1)
+                                      count: 1, serverText: event.serverText, actions: [NoticeAction.make(NoticeAction.view)],
+                                      messageId: event.messageId, detail: event.detail, isPrivate: event.isPrivate,
+                                      senderCount: 1)
         case StageEventKind.voteOpened:
             return MeetingNotice.make(kind: NoticeKind.voteOpened, userId: event.userId, name: event.name,
                                       actions: [NoticeAction.make(NoticeAction.vote)])
@@ -698,11 +712,13 @@ final class MeetingNoticeCenter {
         recomputeBanner(nowMillis: nowMillis)
     }
 
-    /// RECONCILE R3: while suspended no toast shows; the interrupted toast returns first when the lane comes back.
+    /// RECONCILE R3: while suspended no toast shows; the interrupted toast returns first when the lane comes back. Chat
+    /// previews are dropped instead (S40 8 f: the badge is the lasting signal), shown or waiting.
     func setToastLaneSuspended(_ suspended: Bool) {
         if suspended == isToastLaneSuspended { return }
         isToastLaneSuspended = suspended
         if suspended {
+            dropToasts { notice in notice.kind == NoticeKind.chatPreview }
             if let current = toast {
                 toast = nil
                 queue.insert(current, at: 0)
@@ -715,8 +731,9 @@ final class MeetingNoticeCenter {
 
     // MARK: Events
 
-    /// One core event (SC18). Returns the notice sound kinds to request (a new remote hand for hosts).
-    func post(_ event: StageEvent, nowMillis: Double) -> [String] {
+    /// One core event (SC18). Returns the notice sound kinds to request (a new remote hand for hosts). `showsChatPreviews`
+    /// is the S60 C6-22 preference read when a chat preview arrives (off: no preview, the badge still counts, S40 Q8).
+    func post(_ event: StageEvent, nowMillis: Double, showsChatPreviews: Bool = true) -> [String] {
         if event.kind == StageEventKind.hostNotice {
             latchHostNotice(event, nowMillis: nowMillis)
             return []
@@ -749,7 +766,20 @@ final class MeetingNoticeCenter {
             droppedToasts += 1
             return []
         }
-        enqueue(candidate, senderId: event.userId, nowMillis: nowMillis)
+        // CHT-8 (S40 8 f, RECONCILE R3): previews are off, or a compact sheet or an Android overlay suspends the lane.
+        if candidate.kind == NoticeKind.chatPreview && (!showsChatPreviews || isToastLaneSuspended) {
+            droppedToasts += 1
+            return []
+        }
+        // Your own messages never preview (CH12); the core already filters them, this keeps the stage honest.
+        if candidate.kind == NoticeKind.chatPreview && !event.userId.isEmpty && event.userId == inputs.localUserId {
+            return []
+        }
+        var senderId = event.userId
+        if candidate.kind == NoticeKind.chatPreview {
+            senderId = ChatPreviewPolicy.senderKey(userId: event.userId, name: event.name)
+        }
+        enqueue(candidate, senderId: senderId, nowMillis: nowMillis)
         if candidate.kind == NoticeKind.handRaised { return [NoticeSoundKind.hand] }
         return []
     }
@@ -806,6 +836,39 @@ final class MeetingNoticeCenter {
             return
         }
         removeQueued { notice in notice.id == id }
+    }
+
+    /// CHT-8 (S40 8 f): `/clear` drops every chat preview, shown or waiting; other toasts stay.
+    func clearChatPreviews() {
+        dropToasts { notice in notice.kind == NoticeKind.chatPreview }
+    }
+
+    /// CHT-8 (S40 CH21): hiding a sender drops the previews that carry one of their messages (a coalesced preview
+    /// included). `userId` is the canonical stage id the previews were posted with.
+    func dropChatPreviews(fromUserId userId: String) {
+        if userId.isEmpty { return }
+        var ids: [String] = []
+        if let current = toast, current.kind == NoticeKind.chatPreview, previewIncludes(current, userId: userId) {
+            ids.append(current.id)
+        }
+        for notice in queue {
+            if notice.kind == NoticeKind.chatPreview && previewIncludes(notice, userId: userId) {
+                ids.append(notice.id)
+            }
+        }
+        if ids.isEmpty { return }
+        let dropped = ids
+        dropToasts { notice in dropped.contains(notice.id) }
+    }
+
+    /// The people a shown or waiting chat preview counts (diagnostics and tests); empty for other notices.
+    func previewSenders(noticeId: String) -> [String] {
+        senders[noticeId] ?? []
+    }
+
+    private func previewIncludes(_ notice: MeetingNotice, userId: String) -> Bool {
+        if notice.userId == userId { return true }
+        return (senders[notice.id] ?? []).contains(userId)
     }
 
     /// Ends the host notice once its visible time ran out. True when the banner changed.
@@ -904,19 +967,28 @@ final class MeetingNoticeCenter {
     // MARK: Toast queue
 
     private func enqueue(_ notice: MeetingNotice, senderId: String, nowMillis: Double) {
+        // CHT-8 (S40 8 f): a chat preview arriving while another one shows updates the shown toast in place (same id,
+        // so the host keeps it and restarts its display time): "3 new messages" from one sender, or "and 2 others".
+        if notice.kind == NoticeKind.chatPreview, let current = toast, current.kind == NoticeKind.chatPreview {
+            let people = addSender(senderId, to: current.id)
+            toast = current.mergedPreview(with: notice, count: current.count + 1, senderCount: max(1, people.count))
+            postedAt[current.id] = nowMillis
+            return
+        }
         if MeetingNoticePolicy.coalesces(notice.kind) {
             var index = 0
             while index < queue.count {
                 let queued = queue[index]
                 let at = postedAt[queued.id] ?? 0.0
                 if queued.kind == notice.kind && nowMillis - at <= MeetingNoticePolicy.coalesceWindowMillis {
-                    var people = senders[queued.id] ?? []
-                    if !senderId.isEmpty && !people.contains(senderId) { people.append(senderId) }
-                    senders[queued.id] = people
-                    let merged = queued.coalesced(count: queued.count + 1, senderCount: max(1, people.count),
+                    let people = addSender(senderId, to: queued.id)
+                    var merged = queued.coalesced(count: queued.count + 1, senderCount: max(1, people.count),
                                                   messageId: notice.messageId.isEmpty ? queued.messageId : notice.messageId,
                                                   detail: notice.detail.isEmpty ? queued.detail : notice.detail,
                                                   isPrivate: queued.isPrivate || notice.isPrivate)
+                    if notice.kind == NoticeKind.chatPreview {
+                        merged = queued.mergedPreview(with: notice, count: queued.count + 1, senderCount: max(1, people.count))
+                    }
                     queue[index] = merged
                     postedAt[queued.id] = nowMillis
                     promote()
@@ -930,6 +1002,15 @@ final class MeetingNoticeCenter {
         senders[next.id] = senderId.isEmpty ? [] : [senderId]
         insertQueued(next, nowMillis: nowMillis)
         promote()
+    }
+
+    /// Records one more person behind a coalesced notice (joins and hands by user id; chat previews by
+    /// `ChatPreviewPolicy.senderKey`) and returns everyone counted so far.
+    private func addSender(_ senderId: String, to noticeId: String) -> [String] {
+        var people = senders[noticeId] ?? []
+        if !senderId.isEmpty && !people.contains(senderId) { people.append(senderId) }
+        senders[noticeId] = people
+        return people
     }
 
     /// Lower priority numbers wait in front (failures first); equal priorities keep arrival order.
@@ -992,8 +1073,171 @@ final class MeetingNoticeCenter {
         droppedToasts += before - queue.count
         if let current = toast, matches(current) {
             toast = nil
+            postedAt[current.id] = nil
+            senders[current.id] = nil
             droppedToasts += 1
             promote()
         }
+    }
+}
+
+// MARK: - Chat previews and unread (CHT-8: S40 8, 0.8 CH12, R40-4; S60 C6-22; RECONCILE R1, R3)
+
+/// What a chat preview's body says (S40 8 f, 8 g). Shared Swift has no String Catalog access (owner Q14), so the core
+/// sends the kind in `StageEvent.serverText` (carried into `MeetingNotice.serverText`) and the payload (a caption, a
+/// title or the text) in `detail`; the toast views resolve "Photo: %@", "GIF: %@" and the rest per platform (F00 11).
+/// `text` covers plain messages, `/me` actions (the payload already reads "Avery Lee waves") and assistant answers (the
+/// first sentence). An empty `serverText` reads as `text`.
+enum ChatPreviewBodyKind: String, CaseIterable {
+    case text, photo, gif, sticker, clip, voice
+}
+
+/// One preview body: the kind the views format and its payload ("" for a photo without a caption).
+struct ChatPreviewBody: Equatable {
+    let kind: ChatPreviewBodyKind
+    let text: String
+}
+
+/// The pure CHT-8 rules: which arrivals count toward the Chat badge and post a stage preview (CH12), the preview body
+/// for one message (8 f), the `StageEvent` the core posts (R40-4) and the small view decisions both toast variants
+/// share (title grouping, count line, display time). The notice center applies the stage rules (Chat current, lane
+/// suspended, previews off, attendee) when the event arrives.
+enum ChatPreviewPolicy {
+    /// The longest payload a preview carries; the toast shows at most two lines of it.
+    static let maxDetailCharacters = 160
+
+    /// CH12: +1 for a remote message, a private message to you, a voice message and an assistant answer once its
+    /// content arrives, while Chat is not the current panel. Never for your own messages, a hidden sender (CH21), the
+    /// empty first packet of an assistant answer or a webinar attendee (who has no Chat control). History, system rows
+    /// and reaction changes never reach this rule (they are not new messages).
+    static func countsUnread(isOwn: Bool, isHiddenSender: Bool, isEmptyAssistantStart: Bool, isChatCurrent: Bool,
+                             isAttendee: Bool) -> Bool {
+        if isOwn || isHiddenSender || isEmptyAssistantStart || isAttendee { return false }
+        return !isChatCurrent
+    }
+
+    /// CH12: which arrivals post a `chatPreview` event. The notice center still drops it while Chat is current, while
+    /// the toast lane is suspended and while "Show Chat Previews" is off.
+    static func postsPreview(isOwn: Bool, isHiddenSender: Bool, isEmptyAssistantStart: Bool, isAttendee: Bool) -> Bool {
+        !isOwn && !isHiddenSender && !isEmptyAssistantStart && !isAttendee
+    }
+
+    /// S40 8 f: the body for one received message. A photo never shows its file name; a GIF, sticker or clip shows its
+    /// title; a voice message its spoken text; an action reads "Avery Lee waves"; the assistant its first sentence;
+    /// everything else the first line of the text.
+    static func body(message: ChatMessage) -> ChatPreviewBody {
+        if message.userId == ConclaveAssistantChatIdentity.userId {
+            return ChatPreviewBody(kind: ChatPreviewBodyKind.text, text: firstSentence(message.content))
+        }
+        if let image = message.image {
+            let caption = message.content.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            let isFileName = caption.isEmpty || caption == image.fileName || caption == image.url
+            return ChatPreviewBody(kind: ChatPreviewBodyKind.photo, text: isFileName ? "" : leadingLine(caption))
+        }
+        if let gif = message.gif {
+            var title = gif.title.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            if title.isEmpty {
+                let content = message.content.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+                if content != gif.url { title = content }
+            }
+            return ChatPreviewBody(kind: gifKind(gif.kind), text: leadingLine(title))
+        }
+        if message.isTts {
+            return ChatPreviewBody(kind: ChatPreviewBodyKind.voice,
+                                   text: leadingLine(VoiceMessageText.spokenText(normalizedContent: message.content)))
+        }
+        if let action = ChatMessageContentPolicy.fullActionText(from: message.content) {
+            return ChatPreviewBody(kind: ChatPreviewBodyKind.text, text: leadingLine(message.displayName + " " + action))
+        }
+        return ChatPreviewBody(kind: ChatPreviewBodyKind.text, text: leadingLine(message.content))
+    }
+
+    /// R40-4: the event the core posts through `stage.post(_:)` from its chat message handler. The assistant keeps its
+    /// own identity (it is not a participant, so it has no canonical stage id); everyone else uses the canonical id.
+    static func event(message: ChatMessage, canonicalSenderId: String) -> StageEvent {
+        let preview = body(message: message)
+        let isAssistant = message.userId == ConclaveAssistantChatIdentity.userId
+        return StageEvent.make(kind: StageEventKind.chatPreview,
+                               userId: isAssistant ? ConclaveAssistantChatIdentity.userId : canonicalSenderId,
+                               name: message.displayName, serverText: preview.kind.rawValue, messageId: message.id,
+                               detail: preview.text, isPrivate: message.isDirect)
+    }
+
+    /// The GIF picker's kinds (`ChatGifKind`); anything else is a GIF.
+    static func gifKind(_ raw: String?) -> ChatPreviewBodyKind {
+        if raw == ChatGifKind.sticker.rawValue { return ChatPreviewBodyKind.sticker }
+        if raw == ChatGifKind.clip.rawValue { return ChatPreviewBodyKind.clip }
+        return ChatPreviewBodyKind.gif
+    }
+
+    /// The first line of `text`, trimmed and bounded to `maxDetailCharacters`.
+    static func leadingLine(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        var line = ""
+        var count = 0
+        for character in trimmed {
+            if character.isNewline { break }
+            line += String(character)
+            count += 1
+            if count >= maxDetailCharacters { break }
+        }
+        return line.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+    }
+
+    /// S40 8 f "Conclave and the first sentence": the first line up to the first sentence end followed by a space.
+    static func firstSentence(_ text: String) -> String {
+        let line = leadingLine(text)
+        var result = ""
+        var endsSentence = false
+        for character in line {
+            if endsSentence && character.isWhitespace { break }
+            result += String(character)
+            endsSentence = character == "." || character == "!" || character == "?"
+        }
+        return result.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+    }
+
+    /// Who a coalesced preview counts: the canonical user id, or the name when the core had no id (people, not
+    /// messages, F00 `ds_name_and_others`).
+    static func senderKey(userId: String, name: String) -> String {
+        if !userId.isEmpty { return userId }
+        if name.isEmpty { return "" }
+        return "name:" + name
+    }
+
+    static func isChatPreview(_ notice: MeetingNotice?) -> Bool {
+        notice?.kind == NoticeKind.chatPreview
+    }
+
+    static func bodyKind(_ notice: MeetingNotice) -> ChatPreviewBodyKind {
+        ChatPreviewBodyKind(rawValue: notice.serverText) ?? ChatPreviewBodyKind.text
+    }
+
+    /// The assistant's previews show its mark (the avatar of its identity until the `assistant` glyph lands, R40-5).
+    static func isAssistant(_ notice: MeetingNotice) -> Bool {
+        notice.userId == ConclaveAssistantChatIdentity.userId
+    }
+
+    /// Several senders: the title is "Avery Lee and 2 others" (people other than the newest sender).
+    static func othersCount(_ notice: MeetingNotice) -> Int {
+        max(0, notice.senderCount - 1)
+    }
+
+    /// One sender with more than one message: the count line ("3 new messages") under the newest text.
+    static func showsCountLine(_ notice: MeetingNotice) -> Bool {
+        notice.senderCount <= 1 && notice.count > 1
+    }
+
+    /// The host's display time (S40 8 c, S20 10 f): 4 s, held under VoiceOver (0 means held until dismissed or
+    /// replaced). Android stretches the 4 s through the system's recommended timeout; an in-place update restarts it.
+    static func displayMillis(isScreenReaderRunning: Bool) -> Double {
+        isScreenReaderRunning ? 0.0 : SystemAccessibilityDefaults.toastMillis
+    }
+
+    /// The `chat.preview` readout: the shown preview's counts and fields, or "none".
+    static func readout(_ notice: MeetingNotice?) -> String {
+        guard let shown = notice, shown.kind == NoticeKind.chatPreview else { return "none" }
+        return "count=" + String(shown.count) + " senders=" + String(shown.senderCount) + " name=" + shown.name
+            + " private=" + (shown.isPrivate ? "1" : "0") + " body=" + bodyKind(shown).rawValue + " message=" + shown.messageId
     }
 }

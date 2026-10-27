@@ -205,7 +205,9 @@ public final class ConclaveAppDelegate: Sendable {
 
     public func onPause() {
         Task { @MainActor in
-            _ = self.transitionLifecycle(to: .inactive)
+            guard self.transitionLifecycle(to: .inactive) else { return }
+            // SYS-6 (S70 6 c, 6 d): the core decides light refresh versus full recovery on the next activation.
+            MeetingViewModel.shared.handleAppResignedActive()
         }
     }
 

@@ -668,9 +668,14 @@ struct TypographyHapticsGalleryContractsTests {
                      "Sources/Conclave/Skip/ui/call/stage/MeetingDetailsPage.kt", "Sources/Conclave/Skip/ui/call/stage/AttendeeViewer.kt",
                      // STG-3 (batch 5, HD request B5-T8 R20): share viewing (it names ds_is_presenting and no literal Text).
                      "Sources/Conclave/Skip/ui/call/stage/ShareZoom.kt",
+                     // CHT-8 (batch 6, HD request B6-T5 R5): the stage chat preview snackbar (ds_view, ds_name_and_others).
+                     "Sources/Conclave/Skip/ui/call/stage/ChatPreviewSnackbar.kt",
                      // PPL-2 and PPL-4 (batch 5 integrator): the people actions and the Host controls rows name the new
                      // ds_unavailable_offline and no literal Text.
-                     "Sources/Conclave/Skip/ui/people/PeopleActions.kt", "Sources/Conclave/Skip/ui/host/HostRows.kt"]
+                     "Sources/Conclave/Skip/ui/people/PeopleActions.kt", "Sources/Conclave/Skip/ui/host/HostRows.kt",
+                     // PPL-5 and PPL-6 (batch 6 integrator): the person row and the question row name the new ds_attendee
+                     // and no literal Text.
+                     "Sources/Conclave/Skip/ui/people/PersonRow.kt", "Sources/Conclave/Skip/ui/qa/QuestionRow.kt"]
             + Self.androidComponentFiles {
             let text = try source(file)
             // Names appear at call sites or in tables such as the live role list.
@@ -709,11 +714,14 @@ struct TypographyHapticsGalleryContractsTests {
         // T/Skip/ChatBridgeTests.kt use them (batch 4 integrator). ACT-1 and ACT-2 own the S60 act_, gm_, br_ and app_
         // names and the shared set_ recovery line; T/ActivityProjectionTests.swift checks every one the activity
         // sources name (batch 4, HD request B4-T8 R10). PPL-4 owns the hst_ Host Controls names (S50 6 copy tables);
-        // T/PPL4HostControlsTests.swift and T/Skip/PPL2PPL4BridgeTests.kt use them (batch 5 integrator).
+        // T/PPL4HostControlsTests.swift and T/Skip/PPL2PPL4BridgeTests.kt use them (batch 5 integrator). PPL-6 owns the qa_
+        // Webinar Q&A names (S50 11 copy tables); T/PPL6QaPolicyTests.swift and T/Skip/PPL6QaBridgeTests.kt use them
+        // (batch 6 integrator).
         let galleryNames = Set(resources.keys.filter {
             !$0.hasPrefix("sys_") && !$0.hasPrefix("ctl_") && !$0.hasPrefix("pm_") && !$0.hasPrefix("stg_")
                 && !$0.hasPrefix("ppl_") && !$0.hasPrefix("chat_") && !$0.hasPrefix("act_") && !$0.hasPrefix("gm_")
                 && !$0.hasPrefix("br_") && !$0.hasPrefix("app_") && !$0.hasPrefix("set_") && !$0.hasPrefix("hst_")
+                && !$0.hasPrefix("qa_")
         })
         #expect(used == galleryNames, "unused or missing resources: \(used.symmetricDifference(galleryNames).sorted())")
         for (name, value) in resources {
@@ -721,7 +729,7 @@ struct TypographyHapticsGalleryContractsTests {
                     || name.hasPrefix("ds_") || name.hasPrefix("sys_") || name.hasPrefix("ctl_") || name.hasPrefix("pm_")
                     || name.hasPrefix("stg_") || name.hasPrefix("ppl_") || name.hasPrefix("chat_") || name.hasPrefix("act_")
                     || name.hasPrefix("gm_") || name.hasPrefix("br_") || name.hasPrefix("app_") || name.hasPrefix("set_")
-                    || name.hasPrefix("hst_"), "\(name)")
+                    || name.hasPrefix("hst_") || name.hasPrefix("qa_"), "\(name)")
             #expect(!containsDash(value), "\(name)")
             #expect(!value.contains("'"), "\(name) needs an escaped apostrophe")
             // Positional format arguments only, so translations can reorder them.
@@ -1248,7 +1256,9 @@ private func isTitleCase(_ label: String) -> Bool {
 private let properNouns: Set<String> = ["Android", "iOS", "PiP", "TalkBack", "JSON", "Material", "Roboto", "Conclave",
                                         "SF", "Dynamic", "Type", "Appendix",
                                         // Batch 5 (CHT-4, CHT-5 copy): product and format names.
-                                        "Klipy", "YouTube", "GIFs", "WebP"]
+                                        "Klipy", "YouTube", "GIFs", "WebP",
+                                        // Batch 6 (CHT-7 steps, SET-1 account row): company and product names.
+                                        "GitHub", "Apple", "Google"]
 
 /// Material sentence case: each sentence starts with a capital, a digit or a format argument, and later words
 /// are lowercase unless they are proper nouns or acronyms. A fragment that is substituted into a sentence may

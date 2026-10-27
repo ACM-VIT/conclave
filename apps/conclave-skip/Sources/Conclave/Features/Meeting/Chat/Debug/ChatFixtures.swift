@@ -8,6 +8,9 @@ import Foundation
 // the same states. CHT-4 to CHT-8 add their states (attachment, voice, previews) here. CHT-4 and CHT-5: photos, GIFs,
 // stickers and the clip poster are tiny images the fixture writes into the caches directory (`ChatFixtureAssets`), the
 // GIF picker reads canned Klipy pages and the link cards come from a canned fetcher, so no check needs the network.
+// CHT-7: the busy state carries assistant rows in every state but approval (W10-2 is out), and the driver plays a
+// streamed answer through a real `ConclaveAssistantStore` (`stream:3tasks`, `assistantFail`, Try Again), exactly the
+// path the core takes, with scripted events instead of the network.
 
 /// Fixture states. Raw values are the launch values.
 enum ChatFixtureState: String, CaseIterable, Equatable {
@@ -45,6 +48,10 @@ enum ChatFixtureScriptName: String, CaseIterable {
     case photoFail
     /// CHT-5: the next GIF page after the first fails (the load-more footer).
     case gifMoreFail
+    /// CHT-7 (S40 0.9): an answer that thinks, runs 3 steps, streams 10 deltas and completes.
+    case stream3tasks = "stream:3tasks"
+    /// CHT-7: an answer that thinks, then fails (the asker's Try Again replays `stream:3tasks` under the same id).
+    case assistantFail
 }
 
 /// CHT-4, CHT-5: tiny generated images (neutral grays: image content, not interface color) written into the caches
@@ -124,6 +131,12 @@ final class ChatFixtureCounters {
     }
 }
 
+/// CHT-7: one scripted stream event and the pause before it.
+struct ChatFixtureStreamStep {
+    let waitMillis: Double
+    let event: NativeConclaveAssistantStreamEvent
+}
+
 /// The diagnostics hook views read. Nil outside the fixture, so release and normal Debug runs count nothing.
 @MainActor
 enum ChatDiagnostics {
@@ -197,14 +210,16 @@ enum ChatFixtureScript {
                         isRetryable: Bool = false, imageURL: String = "", gifURL: String = "", gifTitle: String = "",
                         isAssistant: Bool = false, isHistory: Bool = true, gifKind: String = "", gifPreviewURL: String = "",
                         gifVideoURL: String = "", gifWidth: Double = 0, gifHeight: Double = 0,
-                        suppressEmbeds: Bool = false, isTts: Bool = false) -> ChatMessageInput {
+                        suppressEmbeds: Bool = false, isTts: Bool = false,
+                        assistant: ChatAssistantInput? = nil) -> ChatMessageInput {
         ChatMessageInput.make(id: id, clientId: clientId, senderId: userId, senderName: name, isOwn: isOwn,
                               isAssistant: isAssistant, content: content, timestampMillis: millis, isDirect: isDirect,
                               dmTargetUserId: target, dmTargetName: targetName, reply: reply, imageURL: imageURL,
                               imageFileName: imageURL.isEmpty ? "" : "photo.jpg", gifURL: gifURL, gifPreviewURL: gifPreviewURL,
                               gifVideoURL: gifVideoURL, gifKind: gifKind, gifWidth: gifWidth, gifHeight: gifHeight,
                               gifTitle: gifTitle, delivery: delivery, failure: failure, isRetryable: isRetryable,
-                              reactions: reactions, isHistory: isHistory, suppressEmbeds: suppressEmbeds, isTts: isTts)
+                              reactions: reactions, isHistory: isHistory, suppressEmbeds: suppressEmbeds, isTts: isTts,
+                              assistant: assistant)
     }
 
     /// Every field of `message` with a new id, delivery and reactions (the one place the fixture rebuilds a message, so
@@ -219,7 +234,60 @@ enum ChatFixtureScript {
                               gifPreviewURL: message.gifPreviewURL, gifVideoURL: message.gifVideoURL, gifKind: message.gifKind,
                               gifWidth: message.gifWidth, gifHeight: message.gifHeight, gifTitle: message.gifTitle,
                               delivery: delivery, failure: failure, isRetryable: isRetryable, reactions: reactions,
-                              isHistory: isHistory, suppressEmbeds: message.suppressEmbeds)
+                              isHistory: isHistory, suppressEmbeds: message.suppressEmbeds, isTts: message.isTts,
+                              assistant: message.assistant)
+    }
+
+    /// CHT-7: `message` with the text and process state the assistant store reports (every other field kept).
+    static func withAssistant(_ message: ChatMessageInput, content: String, assistant: ChatAssistantInput?) -> ChatMessageInput {
+        ChatMessageInput.make(id: message.id, clientId: message.clientId, senderId: message.senderId, senderName: message.senderName,
+                              isOwn: message.isOwn, isAssistant: message.isAssistant, content: content,
+                              timestampMillis: message.timestampMillis, isDirect: message.isDirect,
+                              dmTargetUserId: message.dmTargetUserId, dmTargetName: message.dmTargetName, reply: message.reply,
+                              imageURL: message.imageURL, imageFileName: message.imageFileName, gifURL: message.gifURL,
+                              gifPreviewURL: message.gifPreviewURL, gifVideoURL: message.gifVideoURL, gifKind: message.gifKind,
+                              gifWidth: message.gifWidth, gifHeight: message.gifHeight, gifTitle: message.gifTitle,
+                              delivery: message.delivery, failure: message.failure, isRetryable: message.isRetryable,
+                              reactions: message.reactions, isHistory: message.isHistory, suppressEmbeds: message.suppressEmbeds,
+                              isTts: message.isTts, assistant: assistant)
+    }
+
+    /// CHT-7 (S40 0.9 `stream:3tasks`): the scripted events and the pause before each, in milliseconds. Three listed
+    /// steps (web search, transcript, browser), a reasoning summary, ten text deltas, then done.
+    static func streamScript() -> [ChatFixtureStreamStep] {
+        var steps: [ChatFixtureStreamStep] = [
+            ChatFixtureStreamStep(waitMillis: 300, event: streamTask("start", kind: "reasoning", done: false, query: "")),
+            ChatFixtureStreamStep(waitMillis: 400, event: streamReasoning("Checking the roadmap doc, ", done: false)),
+            ChatFixtureStreamStep(waitMillis: 200, event: streamReasoning("the notes and the shared browser.", done: false)),
+            ChatFixtureStreamStep(waitMillis: 300, event: streamTask("web", kind: "web_search", done: false, query: "q4 roadmap")),
+            ChatFixtureStreamStep(waitMillis: 500, event: streamTask("web", kind: "web_search", done: true, query: "")),
+            ChatFixtureStreamStep(waitMillis: 200, event: streamTask("notes", kind: "transcript", done: false, query: "")),
+            ChatFixtureStreamStep(waitMillis: 500, event: streamTask("notes", kind: "transcript", done: true, query: "")),
+            ChatFixtureStreamStep(waitMillis: 200, event: streamTask("browser", kind: "browser", done: false, query: "roadmap.example.com")),
+            ChatFixtureStreamStep(waitMillis: 500, event: streamTask("browser", kind: "browser", done: true, query: "")),
+            ChatFixtureStreamStep(waitMillis: 200, event: streamReasoning("", done: true)),
+            ChatFixtureStreamStep(waitMillis: 100, event: streamTask("start", kind: "reasoning", done: true, query: "")),
+        ]
+        let deltas = ["## Summary\n", "- Launch moved ", "to **Nov 4**\n", "- Hiring ", "is on track\n", "\n", "```text\n",
+                      "roadmap v2\n", "```\n", "Ask me for details."]
+        for delta in deltas {
+            steps.append(ChatFixtureStreamStep(waitMillis: 150, event: NativeConclaveAssistantStreamEvent(
+                kind: NativeConclaveAssistantStreamEventKind.delta, delta: delta, isReasoningDone: false, task: nil, error: "", relay: nil)))
+        }
+        steps.append(ChatFixtureStreamStep(waitMillis: 200, event: NativeConclaveAssistantStreamEvent(
+            kind: NativeConclaveAssistantStreamEventKind.done, delta: "", isReasoningDone: false, task: nil, error: "", relay: nil)))
+        return steps
+    }
+
+    static func streamTask(_ id: String, kind: String, done: Bool, query: String) -> NativeConclaveAssistantStreamEvent {
+        NativeConclaveAssistantStreamEvent(kind: NativeConclaveAssistantStreamEventKind.task, delta: "", isReasoningDone: false,
+                                           task: ConclaveAssistantRelayTask(id: id, kind: kind, status: done ? "done" : "running",
+                                                                            query: query.isEmpty ? nil : query),
+                                           error: "", relay: nil)
+    }
+
+    static func streamReasoning(_ delta: String, done: Bool) -> NativeConclaveAssistantStreamEvent {
+        NativeConclaveAssistantStreamEvent(kind: NativeConclaveAssistantStreamEventKind.reasoning, delta: delta, isReasoningDone: done, task: nil, error: "", relay: nil)
     }
 
     /// CH19: 16 canned items per page and kind, a second page, then no more (S40 0.9). Every tile shows the fixture GIF
@@ -337,6 +405,28 @@ enum ChatFixtureScript {
             message("s-13", from: ConclaveAssistantChatIdentity.userId, name: ConclaveAssistantChatIdentity.displayName,
                     "The agenda covers three items: budget, hiring and the launch date.", at: base + 480_000,
                     isAssistant: true),
+            // CHT-7 (S40 0.9): thinking, streaming with steps, done with code, and the asker's failure. Two minutes
+            // apart, so each starts its own group.
+            message("s-a1", from: ConclaveAssistantChatIdentity.userId, name: ConclaveAssistantChatIdentity.displayName, "",
+                    at: base + 640_000, isAssistant: true, isHistory: false,
+                    assistant: ChatAssistantInput.make(tasks: [AssistantTask(id: "a1-start", kind: AssistantTaskKind.reasoning, isDone: false, query: "")])),
+            message("s-a2", from: ConclaveAssistantChatIdentity.userId, name: ConclaveAssistantChatIdentity.displayName,
+                    "## Summary\n- Launch moved to **Nov 4**\n- Hiring is on track", at: base + 800_000, isAssistant: true,
+                    isHistory: false,
+                    assistant: ChatAssistantInput.make(reasoning: "Checking the roadmap doc and the meeting notes.",
+                                                       reasoningDone: true,
+                                                       tasks: [AssistantTask(id: "a2-web", kind: AssistantTaskKind.webSearch, isDone: true, query: "q4 roadmap"),
+                                                               AssistantTask(id: "a2-notes", kind: AssistantTaskKind.transcript, isDone: false, query: "")],
+                                                       thoughtSeconds: 4)),
+            message("s-a3", from: ConclaveAssistantChatIdentity.userId, name: ConclaveAssistantChatIdentity.displayName,
+                    "Here is the config:\n\n```swift\nlet launch = \"2026-11-04\"\nlet owners = [\"Avery\", \"Sam\"]\n```\n\nSee [the plan](https://docs.example.com/agenda).",
+                    at: base + 960_000, isAssistant: true, isHistory: false,
+                    assistant: ChatAssistantInput.make(reasoning: "Pulling the config from the doc.", reasoningDone: true,
+                                                       tasks: [AssistantTask(id: "a3-web", kind: AssistantTaskKind.webSearch, isDone: true, query: "launch config")],
+                                                       isDone: true, thoughtSeconds: 3)),
+            message("s-a4", from: ConclaveAssistantChatIdentity.userId, name: ConclaveAssistantChatIdentity.displayName, "",
+                    at: base + 1_120_000, isAssistant: true, isHistory: false,
+                    assistant: ChatAssistantInput.make(errorKind: AssistantErrorKind.generic, isAsker: true)),
             message("optimistic-c-14", from: localUserId, name: localName, "Sending this now", at: nowMillis - 2_000,
                     isOwn: true, clientId: "c-14", delivery: ChatDelivery.sending),
             message("optimistic-c-15", from: localUserId, name: localName, "This one timed out", at: nowMillis - 1_500,
@@ -393,6 +483,8 @@ final class ChatFixtureDriver {
     let counters = ChatFixtureCounters()
     /// CHT-6: the real queue on the recording speaker (no audio, socket or network).
     let voice = TtsRecordingSpeaker(queue: TtsPlaybackQueue())
+    /// CHT-7: the core's assistant store, fed scripted stream events instead of the network.
+    let assistant = ConclaveAssistantStore()
     private(set) var inputs: ChatInputs
     private(set) var actionLog: [String] = []
     private var nextId = 100
@@ -401,6 +493,8 @@ final class ChatFixtureDriver {
     private var failNextPhoto = false
     private var failNextGifPage = false
     private var photoGeneration = 0
+    /// CHT-7: bumped per played answer, so a replay (Try Again) stops the earlier script.
+    private var streamGeneration = 0
     private var sleep: (Double) async -> Void = { millis in
         try? await Task.sleep(nanoseconds: UInt64(max(0.0, millis) * 1_000_000.0))
     }
@@ -430,6 +524,11 @@ final class ChatFixtureDriver {
         // CH4: the queue reports what plays; the voice rows follow it.
         voice.queue.onPlaybackChanged = { [weak self] messageId, _ in
             self?.setActiveVoice(messageId)
+        }
+        // CH7: the assistant store's coalesced refreshes rebuild the inputs like the core's.
+        assistant.sleep = sleep
+        assistant.onChange = { [weak self] in
+            self?.applyAssistantState()
         }
         if state == ChatFixtureState.attachmentUploading {
             inputs = withAttachment(ChatAttachmentState(phase: ChatAttachmentPhase.uploading, progress: 0.42,
@@ -513,6 +612,12 @@ final class ChatFixtureDriver {
             failNextPhoto = true
         case .gifMoreFail:
             failNextGifPage = true
+        case .stream3tasks:
+            nextId += 1
+            playStream(answerId: "fixture-answer-" + String(nextId), appends: true, fails: false)
+        case .assistantFail:
+            nextId += 1
+            playStream(answerId: "fixture-answer-" + String(nextId), appends: true, fails: true)
         }
     }
 
@@ -543,9 +648,75 @@ final class ChatFixtureDriver {
                                                  userId: request.userId, displayName: request.userId, text: request.text))
         case .stopVoice:
             voice.queue.stop()
+        case .retryAssistant:
+            // S40 4 f: the asker's Try Again replays the answer under the same id.
+            if let record = assistant.retryRecord(answerId: request.rowId) {
+                playStream(answerId: record.answerId, appends: false, fails: false)
+            }
         default:
             break
         }
+    }
+
+    /// CHT-7: an answer through the real store: begin (thinking), the scripted events, then done; or, with `fails`,
+    /// a short think and a failure (the row's error state, never a body).
+    private func playStream(answerId: String, appends: Bool, fails: Bool) {
+        streamGeneration += 1
+        let generation = streamGeneration
+        assistant.begin(answerId: answerId, question: "What changed in the roadmap?", questionMessageId: "")
+        if appends {
+            var messages = inputs.messages
+            messages.append(ChatFixtureScript.message(answerId, from: ConclaveAssistantChatIdentity.userId,
+                                                      name: ConclaveAssistantChatIdentity.displayName, "",
+                                                      at: Date().timeIntervalSince1970 * 1000.0, isAssistant: true,
+                                                      isHistory: false))
+            replace(messages: messages)
+        }
+        let steps = fails ? [ChatFixtureStreamStep(waitMillis: 300, event: ChatFixtureScript.streamTask(
+            "start", kind: "reasoning", done: false, query: ""))] : ChatFixtureScript.streamScript()
+        let wait = sleep
+        Task { @MainActor [weak self] in
+            for step in steps {
+                await wait(step.waitMillis)
+                guard let self = self, self.streamGeneration == generation else { return }
+                _ = self.assistant.handle(step.event, answerId: answerId)
+            }
+            await wait(600.0)
+            guard let self = self, self.streamGeneration == generation else { return }
+            if fails {
+                self.assistant.fail(answerId: answerId, kind: AssistantErrorKind.generic)
+            } else {
+                self.assistant.finish(answerId: answerId, content: "")
+            }
+        }
+    }
+
+    /// CH7: the messages with the text and process state the store reports; rows the store does not know keep theirs
+    /// (the busy state's static assistant rows).
+    private func applyAssistantState() {
+        var messages: [ChatMessageInput] = []
+        for message in inputs.messages {
+            if message.isAssistant && assistant.hasAnswer(message.id) {
+                messages.append(ChatFixtureScript.withAssistant(
+                    message, content: assistant.content(forMessageId: message.id, messageContent: message.content),
+                    assistant: assistant.input(forMessageId: message.id)))
+            } else {
+                messages.append(message)
+            }
+        }
+        inputs = ChatInputs.make(callSession: inputs.callSession, roomId: inputs.roomId, localUserId: inputs.localUserId,
+                                 localName: inputs.localName, messages: messages, localRows: inputs.localRows,
+                                 isLocked: inputs.isLocked, privateEnabled: inputs.privateEnabled,
+                                 photosEnabled: inputs.photosEnabled, voiceEnabled: inputs.voiceEnabled,
+                                 reactionsEnabled: inputs.reactionsEnabled, gate: inputs.gate, isHost: inputs.isHost,
+                                 roster: inputs.roster, assistant: inputs.assistant, attachment: inputs.attachment,
+                                 activeTtsMessageId: inputs.activeTtsMessageId, voiceKind: inputs.voiceKind)
+        chat.apply(inputs, change: ChatInputChange.assistant)
+    }
+
+    /// The `chat.announcement` readout (S40 4 l 2): how many "Conclave answered" announcements the panel posted.
+    var assistantAnnouncementReadout: String {
+        "announce=" + String(counters.count("chat.announcement.assistantAnswered"))
     }
 
     /// CH19: the canned page, or a scripted failure for the next page after the first.

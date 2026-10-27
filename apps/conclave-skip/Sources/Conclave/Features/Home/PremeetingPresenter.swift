@@ -50,6 +50,9 @@ final class PremeetingPresenter {
     private(set) var switchPrompt: RoomSwitchPrompt? = nil
     /// ENT-5 (S10 9 d, Android only): Back while waiting asks "Stop asking to join?" instead of cancelling at once.
     private(set) var isStopAskingPresented = false
+    /// S50 PH20 (PPL-7, RECONCILE R30): the `LobbyIntent.promotion` lobby the call root presents over the attendee
+    /// viewer (iOS a large-detent sheet, Android a full-window overlay); nil when none. Never part of `path`.
+    private(set) var promotionRoute: PremeetingRoute? = nil
     /// Premeeting async outcomes as tokens (F00 8; S10 0.5): `validationFailed` on a rejected join submit. The root
     /// consumer reads it beside the shell's stream and plays only `DeliveredTokenKinds`.
     private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
@@ -118,6 +121,8 @@ final class PremeetingPresenter {
     @ObservationIgnored private var slowNoticeShown = false
     @ObservationIgnored private var pendingRejoinRouteId = 0
     @ObservationIgnored private var rejoinCommands = 0
+    /// PH20: the lobby state currently belongs to the promotion lobby (its preview may run while in a call).
+    @ObservationIgnored private var lobbyRouteIsPromotion = false
 
     init() {
         // ENT-7 (S10 5 e): the account's async outcomes (signInSucceeded, sessionExpired) join this token stream.
@@ -434,6 +439,16 @@ final class PremeetingPresenter {
         setPathValue(path + [privacy.route])
     }
 
+    /// RECONCILE R26 (S10 5 d): Android pushes the app-scope Settings above Account (`SettingsKey`); iOS pushes it inside
+    /// the Account sheet's own stack (`AccountRoute.settings`) and never calls this.
+    func openAppSettings() {
+        let settings = PremeetingRouteTarget(routeId: allocateRouteId(), kind: .settings, intent: .join, roomId: "",
+                                             title: "", joinMode: .meeting, meetingInviteCode: nil,
+                                             webinarInviteCode: nil, clientId: nil, allowRoomCreation: false)
+        targets.append(settings)
+        setPathValue(path + [settings.route])
+    }
+
     func openStoreListing() {
         setUpdatePrompt(false)
     }
@@ -445,6 +460,51 @@ final class PremeetingPresenter {
     /// Cancel while connecting or waiting: `shell.leave()` (no haptic, Q11).
     func cancelJoin() {
         onCommand?(.leave)
+    }
+
+    // MARK: - Promotion lobby (S50 PH20, S10 6 promotion; RECONCILE R30)
+
+    /// Core only: the accepted stage invitation opens the S10 lobby with `LobbyIntent.promotion` over the viewer. The
+    /// toggles start off (the core's promotion intent), no presence row, no Share, no name (same identity).
+    func openPromotionLobby(roomId: String, title: String) {
+        let room = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !room.isEmpty else { return }
+        if let open = promotionRoute { removeTarget(routeId: open.id) }
+        let target = PremeetingRouteTarget(routeId: allocateRouteId(), kind: .lobby, intent: LobbyIntent.promotion,
+                                           roomId: room, title: title.isEmpty ? room : title, joinMode: JoinMode.meeting,
+                                           meetingInviteCode: nil, webinarInviteCode: nil, clientId: nil,
+                                           allowRoomCreation: false)
+        targets.append(target)
+        lobbyRouteIsPromotion = true
+        promotionRoute = target.route
+        publishCount += 1
+        refreshLobby()
+    }
+
+    /// Core only: the promotion lobby closes (Join as a Speaker started the speaker join, or Cancel declined).
+    func closePromotionLobby() {
+        guard let open = promotionRoute else { return }
+        promotionRoute = nil
+        publishCount += 1
+        removeTarget(routeId: open.id)
+        if visibleLobbyRouteId == open.id { visibleLobbyRouteId = 0 }
+        refreshLobby()
+        lobbyRouteIsPromotion = false
+        updatePreviewDemand()
+    }
+
+    /// Cancel, the iOS sheet's swipe down and Android Back in the promotion lobby (Back equals Cancel, R30).
+    func cancelPromotion() {
+        guard promotionRoute != nil else { return }
+        onCommand?(.cancelPromotion)
+    }
+
+    private func removeTarget(routeId: Int) {
+        var kept: [PremeetingRouteTarget] = []
+        for target in targets where target.routeId != routeId {
+            kept.append(target)
+        }
+        targets = kept
     }
 
     // MARK: - Lobby (ENT-3, S10 6 j)
@@ -514,6 +574,14 @@ final class PremeetingPresenter {
         guard let target = topLobbyTarget(), let status = lobbyStatus, status.routeId == target.routeId else { return }
         guard status.mode == .editing || status.mode == .failed, !isStarting else { return }
         guard !blockedByUpdate() else { return }
+        if target.intent == .promotion {
+            // PH20: "Join as a Speaker" ends the attendee session silently and joins with the lobby's intents.
+            guard !inputs.isNetworkOffline else { return }
+            joinRequests += 1
+            onCommand?(.joinAsSpeaker)
+            refreshLobby()
+            return
+        }
         if target.intent == .rejoin && canRejoin(roomId: target.roomId) {
             // ENT-6 (S10 0.8 C3): a rejoin lobby joins with the view model's context, never the record's bare room.
             guard !inputs.isNetworkOffline else { return }
@@ -903,6 +971,8 @@ final class PremeetingPresenter {
     }
 
     private func topLobbyTarget() -> PremeetingRouteTarget? {
+        // PH20: the promotion lobby over the viewer is the lobby while it is open.
+        if let promotion = promotionRoute { return target(forRoute: promotion.id) }
         guard let top = path.last, top.kind == .lobby else { return nil }
         return target(forRoute: top.id)
     }
@@ -1148,7 +1218,7 @@ final class PremeetingPresenter {
             mode: mode,
             issue: issue,
             issueServerText: issueServerText,
-            isPrimaryEnabled: root.root == .premeeting
+            isPrimaryEnabled: (root.root == .premeeting || target.intent == .promotion)
                 && LobbyPrimaryPolicy.isEnabled(mode: mode, reason: reason, isStarting: isStarting),
             primaryReason: LobbyPrimaryPolicy.snapshotValue(reason),
             showsSlowNotice: mode == .connecting && slowNoticeShown,
@@ -1179,6 +1249,10 @@ final class PremeetingPresenter {
         // ENT-6: a rejoin with the view model's context joins under the call's own name.
         if target.intent == .rejoin && canRejoin(roomId: target.roomId)
             && (reason == .nameMissingJoin || reason == .nameMissingStart) {
+            return LobbyPrimaryReason.none
+        }
+        // PH20: the speaker join keeps the attendee's identity, so no name is asked for.
+        if target.intent == .promotion && (reason == .nameMissingJoin || reason == .nameMissingStart) {
             return LobbyPrimaryReason.none
         }
         return reason
@@ -1372,16 +1446,19 @@ final class PremeetingPresenter {
         guard let hooks = lobbyHooks else { return }
         var wanted = false
         if let target = topLobbyTarget(), visibleLobbyRouteId == target.routeId {
+            // PH20 (RECONCILE R22): an attendee publishes nothing, so the promotion lobby's preview is the one camera
+            // owner while the viewer plays; the publish latch keeps it off the wire.
+            let callOwnsCamera = (root.root == .call && target.intent != .promotion) || previewHandedOff
             wanted = LocalPreviewPolicy.isWanted(cameraIntentOn: inputs.cameraIntentOn, permission: device.cameraPermission,
                                                  isLobbyVisible: true,
-                                                 isCallOwningCamera: root.root == .call || previewHandedOff)
+                                                 isCallOwningCamera: callOwnsCamera)
         }
         if wanted && !previewRequested {
             previewRequested = true
             hooks.startPreview?(device.isFrontCamera ? LocalCameraFacing.front : LocalCameraFacing.back)
         } else if !wanted && previewRequested {
             previewRequested = false
-            if root.root != .call && !previewHandedOff {
+            if (root.root != .call || promotionRoute != nil || lobbyRouteIsPromotion) && !previewHandedOff {
                 hooks.stopPreview?()
             }
         }

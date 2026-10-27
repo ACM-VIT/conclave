@@ -293,5 +293,11 @@ final class WebRTCClient {
     func selectAudioInput(_ deviceId: String) { }
     func selectAudioOutput(_ deviceId: String) { }
     func testSpeaker() { }
+
+    // S60 C6-1, C6-6, C6-7 (SET-2): the silent host has no microphone and plays nothing.
+    var supportsLiveNoiseSuppressionChange: Bool { false }
+    func applyNoiseSuppression(_ enabled: Bool) async -> Bool { false }
+    func sampleLocalMicrophoneLevel() -> Double { 0 }
+    func playTestTone() { }
 }
 #endif

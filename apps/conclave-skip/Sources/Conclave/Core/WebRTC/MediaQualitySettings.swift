@@ -468,6 +468,59 @@ enum NativeMediaQualityPolicy {
         )
     }
 
+    // MARK: Publish ceilings (S70 6 c, 6 d, O10, SY22; S60 C6-4, C6-5, D21)
+
+    /// The preset tier a camera setting publishes at: 1080p or more above 30 fps is Studio, 1080p or more is HD,
+    /// 720p or more is Auto, anything smaller is Data Saver. A Custom setting falls into the tier of its limits.
+    static func publishTier(of camera: NativeCameraQualitySettings) -> NativePublishTier {
+        let normalized = normalizedCamera(camera)
+        let height = normalized.resolution.height
+        if height >= NativeMediaResolution.p1080.height {
+            return normalized.frameRate > 30 ? NativePublishTier.studio : NativePublishTier.highDefinition
+        }
+        if height >= NativeMediaResolution.p720.height {
+            return NativePublishTier.auto
+        }
+        return NativePublishTier.dataSaver
+    }
+
+    /// One ceiling over a camera setting: the smaller resolution, frame rate and bitrate of the two. The preset, the
+    /// content hint and the degradation preference stay the person's.
+    static func capped(_ camera: NativeCameraQualitySettings, to ceiling: NativeCameraQualitySettings) -> NativeCameraQualitySettings {
+        var next = normalizedCamera(camera)
+        if ceiling.resolution.height < next.resolution.height {
+            next.resolution = ceiling.resolution
+        }
+        next.frameRate = min(next.frameRate, ceiling.frameRate)
+        next.maxBitrateKbps = min(next.maxBitrateKbps, ceiling.maxBitrateKbps)
+        return normalizedCamera(next)
+    }
+
+    /// The camera limits the encoder gets. Order: the person's saved setting (never changed here), then the Data
+    /// Saver ceiling (the S60 toggle or system data saver, `dataSaverOn`, or Low Power Mode and battery saver through
+    /// `systemSendCeiling.appliesDataSaver`, D21: 360p at 20 fps), then the thermal steps below the tier that
+    /// result has. The transient ceiling is an input only: nothing writes `state.videoQuality` or persisted settings,
+    /// so the person's choice is intact once the ceiling clears (S70 6 c).
+    static func effectiveCamera(_ camera: NativeCameraQualitySettings, dataSaverOn: Bool,
+                                systemSendCeiling: NativeSystemSendCeiling) -> NativeCameraQualitySettings {
+        var effective = normalizedCamera(camera)
+        if dataSaverOn || systemSendCeiling.appliesDataSaver {
+            effective = capped(effective, to: NativePublishTier.dataSaver.camera)
+        }
+        if systemSendCeiling.thermalSteps > 0 {
+            let tier = publishTier(of: effective).lowered(by: systemSendCeiling.thermalSteps)
+            effective = capped(effective, to: tier.camera)
+        }
+        return effective
+    }
+
+    /// The publish resolver with both ceilings (S70 SY22: the transient `systemSendCeiling` composes with the S60
+    /// C6-5 Data Saver ceiling). The core passes the result to `WebRTCClient.updateMediaPublishConfiguration`.
+    static func resolvedPublishCamera(_ camera: NativeCameraQualitySettings, dataSaverOn: Bool,
+                                      systemSendCeiling: NativeSystemSendCeiling) -> NativeResolvedCameraPublishSettings {
+        resolvedCamera(effectiveCamera(camera, dataSaverOn: dataSaverOn, systemSendCeiling: systemSendCeiling))
+    }
+
     static func baseVideoQuality(_ settings: NativeCameraQualitySettings) -> VideoQuality {
         let resolved = resolvedCamera(settings)
         return resolved.width <= 640 && resolved.maxBitrateBps <= 500_000 ? .low : .standard
@@ -512,5 +565,174 @@ enum NativeMediaQualityPreferences {
         let normalized = NativeMediaQualityPolicy.normalized(settings)
         guard let data = try? JSONEncoder().encode(normalized) else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+}
+
+// MARK: - System pressure (SYS-6: S70 6 c, 6 d, 6 j, O10, SY22)
+//
+// Thermal pressure lowers what the camera sends through a transient ceiling one tier below the current publish tier
+// (two at critical), with one `qualityLowered` toast per call; Low Power Mode and battery saver apply the Data Saver
+// ceiling silently. Nothing ever mutes or stops media, and nothing here is persisted. Platform listeners live in
+// `NetworkReachabilityMonitor` (iOS `ProcessInfo`; Android `PowerManager`, thermal on API 29+ only); the core keeps
+// one `SystemPressureState` and feeds `NativeMediaQualityPolicy.resolvedPublishCamera` (HD/requests/B6-T6.md).
+
+/// The camera publish tiers the ceilings walk down: the `NativeMediaQualityPolicy` presets, highest first.
+enum NativePublishTier: String, CaseIterable, Equatable {
+    case studio
+    case highDefinition
+    case auto
+    case dataSaver
+
+    var preset: NativeCameraQualityPreset {
+        switch self {
+        case .studio: return NativeCameraQualityPreset.studio
+        case .highDefinition: return NativeCameraQualityPreset.highDefinition
+        case .auto: return NativeCameraQualityPreset.auto
+        case .dataSaver: return NativeCameraQualityPreset.dataSaver
+        }
+    }
+
+    /// The tier's limits (the preset's settings).
+    var camera: NativeCameraQualitySettings {
+        NativeMediaQualityPolicy.cameraPreset(preset, current: NativeMediaQualityPolicy.defaultSettings.camera)
+    }
+
+    /// One tier down; Data Saver is the floor (a ceiling never stops video).
+    var lower: NativePublishTier {
+        switch self {
+        case .studio: return NativePublishTier.highDefinition
+        case .highDefinition: return NativePublishTier.auto
+        case .auto: return NativePublishTier.dataSaver
+        case .dataSaver: return NativePublishTier.dataSaver
+        }
+    }
+
+    func lowered(by steps: Int) -> NativePublishTier {
+        var tier = self
+        var remaining = steps
+        while remaining > 0 {
+            tier = tier.lower
+            remaining -= 1
+        }
+        return tier
+    }
+}
+
+/// S70 6 j `thermalLevel` (nominal, fair, serious, critical): iOS `ProcessInfo.ThermalState`; Android
+/// `PowerManager` thermal status on API 29+ (API 28 reports nothing and stays nominal).
+enum SystemThermalLevel: String, CaseIterable, Equatable {
+    case nominal
+    case fair
+    case serious
+    case critical
+
+    /// Tiers below the current publish tier: one at serious, two at critical, none otherwise (S70 6 c).
+    var ceilingSteps: Int {
+        switch self {
+        case .serious: return 1
+        case .critical: return 2
+        case .nominal, .fair: return 0
+        }
+    }
+
+    /// S70 6 d: `THERMAL_STATUS_SEVERE` (3) is serious; `THERMAL_STATUS_CRITICAL` (4), `EMERGENCY` (5) and
+    /// `SHUTDOWN` (6) are critical; `LIGHT` (1) and `MODERATE` (2) are fair; `NONE` (0) is nominal. The values are
+    /// the android.os.PowerManager constants (API 29).
+    static func fromAndroidThermalStatus(_ status: Int) -> SystemThermalLevel {
+        if status >= 4 { return SystemThermalLevel.critical }
+        if status == 3 { return SystemThermalLevel.serious }
+        if status >= 1 { return SystemThermalLevel.fair }
+        return SystemThermalLevel.nominal
+    }
+}
+
+/// S70 6 j `systemSendCeiling`: derived from the thermal level and the power mode, read only by the publish
+/// resolver, never persisted and never written into `state.videoQuality`.
+struct NativeSystemSendCeiling: Equatable {
+    /// Tiers below the current publish tier (0, 1 at serious, 2 at critical).
+    let thermalSteps: Int
+    /// Low Power Mode (iOS) or battery saver (Android, every level): the Data Saver ceiling, silently (S70 O10).
+    let appliesDataSaver: Bool
+
+    init(thermalSteps: Int, appliesDataSaver: Bool) {
+        self.thermalSteps = thermalSteps
+        self.appliesDataSaver = appliesDataSaver
+    }
+
+    static let unconstrained = NativeSystemSendCeiling(thermalSteps: 0, appliesDataSaver: false)
+
+    var isActive: Bool {
+        thermalSteps > 0 || appliesDataSaver
+    }
+
+    static func make(thermalLevel: SystemThermalLevel, isLowPowerMode: Bool) -> NativeSystemSendCeiling {
+        NativeSystemSendCeiling(thermalSteps: thermalLevel.ceilingSteps, appliesDataSaver: isLowPowerMode)
+    }
+}
+
+/// What one system pressure input changed: whether the publish limits must be pushed again, and whether the R70-1
+/// toast `qualityLowered` posts ("Video quality is lower to keep your device cool.").
+struct SystemPressureChange: Equatable {
+    let ceilingChanged: Bool
+    let postsQualityLoweredToast: Bool
+
+    init(ceilingChanged: Bool, postsQualityLoweredToast: Bool) {
+        self.ceilingChanged = ceilingChanged
+        self.postsQualityLoweredToast = postsQualityLoweredToast
+    }
+}
+
+enum SystemPressurePolicy {
+    /// S70 6 c (O10): one toast per call, on the first escalation of the thermal ceiling while in a call (serious,
+    /// or straight to critical); a further step to critical, a return to fair or nominal and Low Power Mode post
+    /// none (no haptic either, S70 6 e).
+    static func postsQualityLoweredToast(previousSteps: Int, nextSteps: Int, isInCall: Bool,
+                                         alreadyPostedThisCall: Bool) -> Bool {
+        isInCall && !alreadyPostedThisCall && nextSteps > previousSteps
+    }
+}
+
+/// The core's system pressure inputs (S70 6 j `thermalLevel`, `isLowPowerMode`) with the per-call toast latch. The
+/// latch is keyed by the core's call session serial, so a recovery rejoin (same call session) never posts again and
+/// a new call can post once more.
+struct SystemPressureState: Equatable {
+    private(set) var thermalLevel: SystemThermalLevel
+    private(set) var isLowPowerMode: Bool
+    /// The call session that already showed `qualityLowered`, or -1.
+    private(set) var toastCallSession: Int
+    /// Readout and host-test seam: how many `qualityLowered` toasts this process posted.
+    private(set) var qualityLoweredToastsPosted: Int
+
+    init() {
+        thermalLevel = SystemThermalLevel.nominal
+        isLowPowerMode = false
+        toastCallSession = -1
+        qualityLoweredToastsPosted = 0
+    }
+
+    var ceiling: NativeSystemSendCeiling {
+        NativeSystemSendCeiling.make(thermalLevel: thermalLevel, isLowPowerMode: isLowPowerMode)
+    }
+
+    @discardableResult
+    mutating func applyThermalLevel(_ level: SystemThermalLevel, callSession: Int, isInCall: Bool) -> SystemPressureChange {
+        let previousSteps = thermalLevel.ceilingSteps
+        let nextSteps = level.ceilingSteps
+        thermalLevel = level
+        let posts = SystemPressurePolicy.postsQualityLoweredToast(previousSteps: previousSteps, nextSteps: nextSteps,
+                                                                  isInCall: isInCall,
+                                                                  alreadyPostedThisCall: toastCallSession == callSession)
+        if posts {
+            toastCallSession = callSession
+            qualityLoweredToastsPosted += 1
+        }
+        return SystemPressureChange(ceilingChanged: previousSteps != nextSteps, postsQualityLoweredToast: posts)
+    }
+
+    @discardableResult
+    mutating func applyLowPowerMode(_ isOn: Bool) -> SystemPressureChange {
+        let changed = isOn != isLowPowerMode
+        isLowPowerMode = isOn
+        return SystemPressureChange(ceilingChanged: changed, postsQualityLoweredToast: false)
     }
 }

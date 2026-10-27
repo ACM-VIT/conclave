@@ -68,6 +68,9 @@ final class CallPresence {
     /// S20 SC11 / S70 R70-10: the stage's PiP target (slot bounds plus the decoded frame size), reported by the view
     /// model from each changed `StageVisibilityReport`.
     @ObservationIgnored private var pipTarget: PipTargetFrame? = nil
+    /// S30 CC4 / S70 0.5 inputs table `routeKind`: the active audio route, reported by the route owner on every
+    /// published change (SYS-5). Device state, not call state, so `reset()` keeps it. The receiver arms proximity.
+    @ObservationIgnored private var routeKind: AudioRouteKind = .unknown
     @ObservationIgnored private var presenceSessionCounter = 0
     @ObservationIgnored private var endReason: CallEndReason = .none
     @ObservationIgnored private var recentCommands: [String] = []
@@ -174,6 +177,14 @@ final class CallPresence {
         recompute()
     }
 
+    /// The route owner only (`AudioRouteOwner.publishSnapshot`, SYS-5): the active route's kind, equality guarded, so
+    /// an unchanged route fans out nothing. Receiver arms proximity (S70 4 a).
+    func reportAudioRoute(_ kind: AudioRouteKind) {
+        guard routeKind != kind else { return }
+        routeKind = kind
+        recompute()
+    }
+
     // MARK: - Snapshot
 
     /// Adapters may report back (a surface status, an echo) while they handle a change. Such a report is applied
@@ -248,8 +259,16 @@ final class CallPresence {
             pip: pip,
             isInPictureInPicture: isInPictureInPicture,
             pipTarget: isInProgress ? pipTarget : nil,
-            keepsScreenAwake: isInProgress,
-            proximityArmed: false,
+            keepsScreenAwake: KeepAwakePolicy.keepsScreenAwake(phase: phase),
+            // S70 4 (SYS-5): receiver route, camera off, not presenting, not in PiP, app active, call in progress.
+            proximityArmed: ProximityPolicy.armedInCall(
+                phase: phase,
+                route: routeKind,
+                isCameraOn: isCameraOn,
+                isPresenting: inputs.isScreenSharing,
+                isInPip: isInPictureInPicture,
+                isAppActive: inputs.isAppActive
+            ),
             cameraContinuesInBackground: cameraContinues,
             endReason: endReason
         )

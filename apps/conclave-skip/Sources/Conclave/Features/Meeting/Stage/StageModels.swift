@@ -240,6 +240,9 @@ struct StageAnnouncement: Equatable {
     let name: String
 
     static let joinedKind = "joined"
+    /// S30 CC7, 6 i (CTL-6): your own hand change, confirmed by the server.
+    static let handRaisedKind = "handRaised"
+    static let handLoweredKind = "handLowered"
 }
 
 /// One reaction bubble (S20 9). `kind` is the `ReactionKind` raw value ("emoji" or "asset").

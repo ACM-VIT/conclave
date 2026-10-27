@@ -66,6 +66,8 @@ enum StageFixtureState: String, CaseIterable, Equatable {
     case toastFailure = "toast-failure"
     case toastChat = "toast-chat"
     case toastRoute = "toast-route"
+    /// SYS-6 (S70 6 g, S20 10 f toast row; HD request B6-T6 R8): the R70-1 "video quality is lower" toast.
+    case toastQualityLowered = "toast-quality-lowered"
     case captionsLive = "captions-live"
     case captionsPartial = "captions-partial"
     case captionsQuiet = "captions-quiet"
@@ -96,6 +98,24 @@ enum StageFixtureState: String, CaseIterable, Equatable {
     case activitiesVoteZero = "activities-vote-zero"
     case activitiesGameLive = "activities-game-live"
     case activitiesRecovering = "activities-recovering"
+    // ACT-3 (S60 9 l): raw values equal `PromptGameFixtureState` raw values (Games/Native/Scenes/PromptGameFixtures.swift).
+    case gameTriviaAnswered = "game-trivia-answered"
+    case gameTriviaReveal = "game-trivia-reveal"
+    case gameBluffWrite = "game-bluff-write"
+    case gameBluffChoose = "game-bluff-choose"
+    case gameBluffReveal = "game-bluff-reveal"
+    case gameWyrChoose = "game-wyr-choose"
+    case gameWyrReveal = "game-wyr-reveal"
+    case gameMltVote = "game-mlt-vote"
+    case gameMltRevealTie = "game-mlt-reveal-tie"
+    case gameReactionArming = "game-reaction-arming"
+    case gameReactionGo = "game-reaction-go"
+    case gameReactionReveal = "game-reaction-reveal"
+    case gameImposterCrew = "game-imposter-crew"
+    case gameImposterImposter = "game-imposter-imposter"
+    case gameImposterSpectator = "game-imposter-spectator"
+    case gameImposterVote = "game-imposter-vote"
+    case gameImposterResult = "game-imposter-result"
     // STG-6 Meeting Details (S20 15 l): each opens the panel from the capsule on start.
     case meetingInfoHost = "meetingInfo-host"
     case meetingInfoGuest = "meetingInfo-guest"
@@ -114,6 +134,13 @@ enum StageFixtureState: String, CaseIterable, Equatable {
     case selfMinimized = "self-minimized"
     case selfCameraPaused = "self-camera-paused"
     case selfFlipInFlight = "self-flip-inflight"
+    // CHT-8 chat previews on the stage (S40 8 l), chat closed; the grid-4 stage with you as a host.
+    case chatPreviewsSameSender3 = "chat-previews-same-sender-3"
+    case chatPreviewsMixed3 = "chat-previews-mixed-3"
+    case chatPreviewsPrivate = "chat-previews-private"
+    case chatPreviewsPhoto = "chat-previews-photo"
+    case chatPreviewsOff = "chat-previews-off"
+    case chatPreviewsAttendee = "chat-previews-attendee"
 }
 
 /// Pure scripts per state, shared by the fixture roots and both test hosts.
@@ -242,7 +269,7 @@ enum StageFixtureScript {
         case .knock1, .knock2, .offline, .captivePortal, .reconnecting2, .reconnectingInFlight, .serverRestart, .onHold,
              .audioPaused, .shareStalled, .hostNotice,
              .hostNoticeLong, .veryPoor, .permissionMicrophone, .notificationsOff, .toastJoins, .toastHand, .toastFailure,
-             .toastChat, .toastRoute:
+             .toastChat, .toastRoute, .toastQualityLowered:
             return base(count: 4)
         case .oneOnOneCameraOff:
             return base(count: 2, remoteCamerasOn: false, localCameraOn: true)
@@ -260,7 +287,10 @@ enum StageFixtureScript {
             return reconnectingStep(true)
         case .gameTrivia6, .appAndGame, .gameLobbyHost, .gameLobbyHostUnseated, .gameLobbyImposter2, .gameSpectator, .gameResults,
              .gameUnsupported, .gamePrivateLoading, .appOpening, .appFailed, .activitiesHostIdle, .activitiesParticipantIdle,
-             .activitiesVote, .activitiesVoteZero, .activitiesGameLive, .activitiesRecovering:
+             .activitiesVote, .activitiesVoteZero, .activitiesGameLive, .activitiesRecovering,
+             .gameTriviaAnswered, .gameTriviaReveal, .gameBluffWrite, .gameBluffChoose, .gameBluffReveal, .gameWyrChoose,
+             .gameWyrReveal, .gameMltVote, .gameMltRevealTie, .gameReactionArming, .gameReactionGo, .gameReactionReveal,
+             .gameImposterCrew, .gameImposterImposter, .gameImposterSpectator, .gameImposterVote, .gameImposterResult:
             return ActivityFixtureScript.stageInputs(named: state.rawValue, base: base(count: 6))
         case .meetingInfoHost:
             return copy(base(count: 4), participants: hostRoster(count: 4), isRoomLocked: true, captionsOn: true,
@@ -292,6 +322,10 @@ enum StageFixtureScript {
             return copy(base(count: 2, localCameraOn: true), isCameraPaused: true)
         case .selfFlipInFlight:
             return copy(base(count: 2, localCameraOn: true), isFlipInFlight: true)
+        case .chatPreviewsSameSender3, .chatPreviewsMixed3, .chatPreviewsPrivate, .chatPreviewsPhoto, .chatPreviewsOff:
+            return base(count: 4)
+        case .chatPreviewsAttendee:
+            return copy(base(count: 4), isWebinarAttendee: true)
         }
     }
 
@@ -421,12 +455,16 @@ enum StageFixtureScript {
             return noticeBase(microphonePermissionRevoked: true)
         case .notificationsOff:
             return noticeBase(showsNotificationsPrime: true)
-        case .hostNotice, .hostNoticeLong, .toastJoins, .toastHand, .toastFailure, .toastChat, .toastRoute, .captionsLive,
-             .captionsPartial, .captionsQuiet, .captionsAttendee:
+        case .hostNotice, .hostNoticeLong, .toastJoins, .toastHand, .toastFailure, .toastChat, .toastRoute, .toastQualityLowered,
+             .captionsLive, .captionsPartial, .captionsQuiet, .captionsAttendee:
             return noticeBase()
         case .presentationLocal:
             // STG-3 (S20 5 l): your share's banner "You're sharing your screen".
             return noticeBase(isScreenSharing: true)
+        case .chatPreviewsSameSender3, .chatPreviewsMixed3, .chatPreviewsPrivate, .chatPreviewsPhoto, .chatPreviewsOff:
+            return noticeBase()
+        case .chatPreviewsAttendee:
+            return noticeBase(isAttendee: true)
         default:
             return nil
         }
@@ -439,9 +477,10 @@ enum StageFixtureScript {
                            liveNotes: LiveNotesState = LiveNotesState.off, catchUpMinutes: Int = 0,
                            connectionQuality: ConnectionQuality = ConnectionQuality.good,
                            microphonePermissionRevoked: Bool = false, showsNotificationsPrime: Bool = false,
-                           isScreenSharing: Bool = false) -> StageNoticeInputs {
-        StageNoticeInputs.make(callSession: 1, isHost: true, localUserId: localUserId, participantCount: 4,
-                               hasInitialPresenceSnapshot: true, isOffline: isOffline, isCaptivePortal: isCaptivePortal,
+                           isScreenSharing: Bool = false, isAttendee: Bool = false) -> StageNoticeInputs {
+        StageNoticeInputs.make(callSession: 1, isAttendee: isAttendee, isHost: !isAttendee, localUserId: localUserId,
+                               participantCount: 4, hasInitialPresenceSnapshot: true, isOffline: isOffline,
+                               isCaptivePortal: isCaptivePortal,
                                isRecovering: isRecovering, reconnectAttempt: reconnectAttempt, reconnectAttemptLimit: 5,
                                isRecoveryAttemptInFlight: isRecoveryAttemptInFlight,
                                hasServerRestartNotice: hasServerRestartNotice, isOnHold: isOnHold, isAudioPaused: isAudioPaused,
@@ -474,9 +513,92 @@ enum StageFixtureScript {
                                     detail: "Can you share the deck?")]
         case .toastRoute:
             return [StageEvent.make(kind: StageEventKind.routeChanged, name: "AirPods Pro", detail: "bluetooth")]
+        case .toastQualityLowered:
+            return [StageEvent.make(kind: StageEventKind.qualityLowered)]
+        case .chatPreviewsSameSender3, .chatPreviewsMixed3, .chatPreviewsPrivate, .chatPreviewsPhoto, .chatPreviewsOff,
+             .chatPreviewsAttendee:
+            return chatPreviewEvents(chatPreviewMessages(state))
         default:
             return []
         }
+    }
+
+    // MARK: Chat previews (CHT-8)
+
+    /// The people behind the scripted chat messages (S40 8 b names the sender "Avery Lee"); ids are the stage's r1 to r3.
+    static let chatPreviewNames = ["Avery Lee", "Ben Ortiz", "Cai Moreno"]
+    static let chatPreviewPhotoURL = "file:///conclave-stage-fixture/whiteboard.jpg"
+
+    /// One scripted remote chat message from r1 to r3 (the core's `ChatMessage`, so the real body policy runs).
+    static func chatPreviewMessage(_ id: String, sender index: Int, _ content: String, isDirect: Bool = false,
+                                   image: ChatImageAttachment? = nil) -> ChatMessage {
+        ChatMessage(id: id, userId: remoteId(index), displayName: chatPreviewNames[index % chatPreviewNames.count],
+                    content: content, timestamp: Date(timeIntervalSince1970: joinedAtMillis / 1000.0 + 600.0), image: image,
+                    isDirect: isDirect, dmTargetUserId: isDirect ? localUserId : nil, dmTargetDisplayName: isDirect ? "You" : nil,
+                    roomId: roomLabel)
+    }
+
+    /// The scripted messages per chat preview state (S40 0.9 `previews:sameSender3`, `previews:mixed3`): three from
+    /// Avery Lee; Ben, Cai, then Avery Lee (so the title reads "Avery Lee and 2 others"); one private message; one photo
+    /// with a caption (the body never shows the file name).
+    static func chatPreviewMessages(_ state: StageFixtureState) -> [ChatMessage] {
+        switch state {
+        case .chatPreviewsSameSender3:
+            return chatPreviewScript(named: "sameSender3")
+        case .chatPreviewsMixed3:
+            return chatPreviewScript(named: "mixed3")
+        case .chatPreviewsPrivate:
+            return [chatPreviewMessage("cp-private", sender: 0, "Are you free right after this?", isDirect: true)]
+        case .chatPreviewsPhoto:
+            let image = ChatImageAttachment(id: "img-1", url: chatPreviewPhotoURL, fileName: "IMG_2041.jpg", mimeType: "image/jpeg",
+                                            size: 48_000)
+            return [chatPreviewMessage("cp-photo", sender: 0, "Whiteboard from today", image: image)]
+        case .chatPreviewsOff, .chatPreviewsAttendee:
+            return [chatPreviewMessage("cp-1", sender: 0, "Can you share the deck?")]
+        default:
+            return []
+        }
+    }
+
+    /// The named driver scripts (the stage fixture's "Chat Previews" controls, HD request B6-T5 R6).
+    static func chatPreviewScript(named name: String) -> [ChatMessage] {
+        if name == "mixed3" {
+            return [chatPreviewMessage("cp-m1", sender: 1, "I can take notes today"),
+                    chatPreviewMessage("cp-m2", sender: 2, "Same here, I have the agenda"),
+                    chatPreviewMessage("cp-m3", sender: 0, "Can you share the deck?")]
+        }
+        return [chatPreviewMessage("cp-s1", sender: 0, "Can you share the deck?"),
+                chatPreviewMessage("cp-s2", sender: 0, "The one from Tuesday"),
+                chatPreviewMessage("cp-s3", sender: 0, "Thanks!")]
+    }
+
+    /// What the core posts for each message (`ChatPreviewPolicy.event`, R40-4); fixture ids are already canonical.
+    static func chatPreviewEvents(_ messages: [ChatMessage]) -> [StageEvent] {
+        var result: [StageEvent] = []
+        for message in messages {
+            result.append(ChatPreviewPolicy.event(message: message, canonicalSenderId: message.userId))
+        }
+        return result
+    }
+
+    /// The same messages as chat rows, so a tap on the preview opens Chat at a row that exists (S40 8 l1).
+    static func chatPreviewInputs(_ messages: [ChatMessage]) -> ChatInputs {
+        var rows: [ChatMessageInput] = []
+        for message in messages {
+            rows.append(ChatMessageInput.make(id: message.id, senderId: message.userId, senderName: message.displayName,
+                                              content: message.content, timestampMillis: message.timestamp.timeIntervalSince1970 * 1000.0,
+                                              isDirect: message.isDirect, dmTargetUserId: message.dmTargetUserId ?? "",
+                                              dmTargetName: message.dmTargetDisplayName ?? "",
+                                              imageURL: message.image?.url ?? "", imageFileName: message.image?.fileName ?? ""))
+        }
+        var roster: [ChatRosterEntry] = [ChatRosterEntry(userId: localUserId, name: "You", isPresent: true)]
+        var index = 0
+        while index < chatPreviewNames.count {
+            roster.append(ChatRosterEntry(userId: remoteId(index), name: chatPreviewNames[index], isPresent: true))
+            index += 1
+        }
+        return ChatInputs.make(callSession: 1, roomId: roomLabel, localUserId: localUserId, localName: "You", messages: rows,
+                               gate: ChatSendGate.open, roster: roster)
     }
 
     /// Three people join in a row: one toast for the first, then "Ben and 1 other joined" coalesced (S20 10 f).
@@ -605,8 +727,9 @@ enum StageFixtureScript {
             isEffectsOpen: source.isEffectsOpen)
     }
 
-    /// The S1 inputs that put the standalone shell in the call (or in recovery after admission).
-    static func shellInputs(_ stage: StageInputs, isMuted: Bool, isCameraOff: Bool) -> MeetingShellInputs {
+    /// The S1 inputs that put the standalone shell in the call (or in recovery after admission). `unreadChatCount` is
+    /// the scripted core's Chat badge count (CHT-8: the controls row a mounted bar reads).
+    static func shellInputs(_ stage: StageInputs, isMuted: Bool, isCameraOff: Bool, unreadChatCount: Int = 0) -> MeetingShellInputs {
         MeetingShellInputs.make(
             identity: MeetingSessionIdentity(callSession: 1, attempt: 1, attemptToken: "stage-fixture"),
             connectionState: stage.isRecovering ? ConnectionState.reconnecting : ConnectionState.joined,
@@ -619,6 +742,7 @@ enum StageFixtureScript {
             isMuted: isMuted,
             isCameraOff: isCameraOff,
             isHandRaised: stage.isHandRaised,
+            unreadChatCount: unreadChatCount,
             handToggleInFlight: stage.handToggleInFlight
         )
     }
@@ -667,12 +791,17 @@ final class StageFixtureSession {
     /// STG-9, ACT-1, ACT-2: the fixture's activity presenters and the recording owner behind the `game.emits` readout.
     let activity: ActivitySession
     let activityOwner = ActivityFixtureOwner()
+    /// SET-1 (L6-12, HD request B6-T2 R7): the Settings panel's fake media owner (`wp3.calls`), installed on the shell's
+    /// Settings presenter with the host state.
+    let settingsCore = SettingsRecordingCore()
     let renderers = RendererIdentityLedger()
     let counters = StageFixtureCounters()
     private(set) var inputs: StageInputs
     /// STG-6, STG-8: the scripted Meeting Details and attendee inputs (empty for the stage-only states).
     private(set) var details = StageDetailsInputs.make()
     private(set) var rolesSweepStep = 0
+    /// CHT-8: the scripted core's Chat badge count (CH12 through `ChatPreviewPolicy.countsUnread`); 0 once Chat opens.
+    private(set) var unreadChatCount = 0
     private var captionStep = 0
     private var isMuted = true
     private var isCameraOff = true
@@ -701,7 +830,10 @@ final class StageFixtureSession {
         }
         shell.panels.onSnapshotChanged = { [weak self] in
             self?.stage.panelSnapshotChanged()
+            self?.chatPanelSnapshotChanged()
         }
+        settingsCore.install(on: shell.settings)
+        shell.settings.apply(SettingsFixtureState.host.inputs())
         if StageFixtureScript.holdsCaption(state) {
             // Screenshot states keep their caption line; `captions-quiet` keeps the real 6 s silence rule.
             stage.captions.sleep = { _ in try? await Task.sleep(nanoseconds: 3_600_000_000_000) }
@@ -726,12 +858,20 @@ final class StageFixtureSession {
         let counters = self.counters
         stage.sounds.output = { kind in counters.recordChime(kind) }
         stage.onNoticeCommand = { command in counters.recordCommand("notice:" + command.actionId) }
+        // CHT-8: the device's "Show Chat Previews" never changes a fixture; `chat-previews-off` scripts it off.
+        let previewsOn = state != StageFixtureState.chatPreviewsOff
+        stage.chatPreviewsEnabled = { previewsOn }
         if let notices = StageFixtureScript.noticeInputs(state) {
             stage.applyNotices(notices)
+        }
+        let chatMessages = StageFixtureScript.chatPreviewMessages(state)
+        if !chatMessages.isEmpty {
+            shell.chat.apply(StageFixtureScript.chatPreviewInputs(chatMessages), change: ChatInputChange.messages)
         }
         for event in StageFixtureScript.noticeEvents(state) {
             stage.post(event)
         }
+        countChatArrivals(chatMessages)
         if let line = StageFixtureScript.captionLine(state) {
             stage.captionChanged(line)
         }
@@ -818,6 +958,74 @@ final class StageFixtureSession {
     }
 
     func noticesReadout() -> String { stage.noticesReadout() }
+
+    // MARK: Chat preview scripts (CHT-8)
+
+    /// `previews:sameSender3` and `previews:mixed3` (S40 0.9): three remote messages arrive together; the chat rows
+    /// are added first, so the preview's tap opens Chat at a row that exists.
+    func postChatPreviewScript(named name: String) {
+        let messages = StageFixtureScript.chatPreviewScript(named: name)
+        var all: [ChatMessage] = StageFixtureScript.chatPreviewMessages(state)
+        for message in messages {
+            var known = false
+            for existing in all {
+                if existing.id == message.id { known = true }
+            }
+            if !known { all.append(message) }
+        }
+        shell.chat.apply(StageFixtureScript.chatPreviewInputs(all), change: ChatInputChange.messages)
+        for event in StageFixtureScript.chatPreviewEvents(messages) {
+            stage.post(event)
+        }
+        countChatArrivals(messages)
+    }
+
+    /// `chat.preview`: the shown preview plus the scripted badge count.
+    func chatPreviewReadout() -> String {
+        stage.chatPreviewReadout() + " unread=" + String(unreadChatCount) + " dropped=" + String(stage.notices.droppedToasts)
+    }
+
+    // MARK: Settings readouts (SET-1, L6-12; HD request B6-T2 R7)
+
+    /// `wp3.calls`: the fake media owner's recorded commands, in order ("none" before the first).
+    func settingsCallsReadout() -> String {
+        settingsCore.calls.isEmpty ? "none" : settingsCore.calls.joined(separator: ",")
+    }
+
+    /// `speakerTest.count`: test tones the Settings presenter asked for.
+    func speakerTestReadout() -> String { String(shell.settings.speakerTestCount) }
+
+    /// `voicePreview.count`: voice previews the Settings presenter started.
+    func voicePreviewReadout() -> String { String(shell.settings.voicePreviewCount) }
+
+    /// CH12 for the scripted arrivals: what the core adds to the badge (Chat current or an attendee adds nothing).
+    private func countChatArrivals(_ messages: [ChatMessage]) {
+        if messages.isEmpty { return }
+        let chatCurrent = shell.panels.snapshot.current?.panel == MeetingPanel.chat
+        var added = 0
+        for message in messages {
+            if ChatPreviewPolicy.countsUnread(isOwn: message.userId == StageFixtureScript.localUserId, isHiddenSender: false,
+                                              isEmptyAssistantStart: false, isChatCurrent: chatCurrent,
+                                              isAttendee: inputs.isWebinarAttendee) {
+                added += 1
+            }
+        }
+        if added == 0 { return }
+        unreadChatCount += added
+        applyShell()
+    }
+
+    /// The scripted core's CC5: opening Chat resets the badge (the notice center already drops the previews).
+    private func chatPanelSnapshotChanged() {
+        if shell.panels.snapshot.current?.panel != MeetingPanel.chat || unreadChatCount == 0 { return }
+        unreadChatCount = 0
+        applyShell()
+    }
+
+    private func applyShell() {
+        shell.apply(StageFixtureScript.shellInputs(inputs, isMuted: isMuted, isCameraOff: isCameraOff,
+                                                   unreadChatCount: unreadChatCount))
+    }
 
     func captionsReadout() -> String {
         let line = stage.captions.line
@@ -958,7 +1166,7 @@ final class StageFixtureSession {
             }
         }
         inputs = StageFixtureScript.copy(inputs, participants: roster)
-        shell.apply(StageFixtureScript.shellInputs(inputs, isMuted: isMuted, isCameraOff: isCameraOff))
+        applyShell()
         stage.apply(inputs)
     }
 }

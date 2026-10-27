@@ -17,6 +17,7 @@ internal sealed interface PremeetingKey {
     data class WebinarLandingKey(val routeId: Int, val roomId: String) : PremeetingKey
     data class AccountKey(val routeId: Int) : PremeetingKey
     data class PrivacyKey(val routeId: Int) : PremeetingKey
+    data class SettingsKey(val routeId: Int) : PremeetingKey
 
     /** The outcome screen above Home (S10 0.4: back stack `[HomeKey, OutcomeKey]`). */
     data class OutcomeKey(val outcomeId: Int) : PremeetingKey
@@ -41,6 +42,7 @@ internal object PremeetingBackStack {
         PremeetingRouteKind.webinarLanding -> PremeetingKey.WebinarLandingKey(route.id, route.roomId)
         PremeetingRouteKind.account -> PremeetingKey.AccountKey(route.id)
         PremeetingRouteKind.privacyPolicy -> PremeetingKey.PrivacyKey(route.id)
+        PremeetingRouteKind.settings -> PremeetingKey.SettingsKey(route.id)
     }
 
     /** The path after Back from the top page. */

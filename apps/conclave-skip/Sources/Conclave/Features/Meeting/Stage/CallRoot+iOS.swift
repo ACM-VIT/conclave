@@ -61,6 +61,9 @@ struct CallRoot: View {
             // STG-8 (S20 12 c): the attendee waiting state; reads only `stage.attendee`.
             AttendeeWaitingLayer(stage: stage)
                 .accessibilitySortPriority(3)
+            // PPL-7 (S50 12 c, PH9): the stage invitation alert over the viewer; a zero-size leaf that reads only
+            // `stage.people?.stageInvitation`, inside the call root so it inherits the dark stage environment.
+            AttendeeRoleLayer(stage: stage)
             ReactionBurstLayer(stage: stage)
             StageChromeLayer(shell: shell, stage: stage, chrome: chromeVisibility, forceScreenReader: forceScreenReader)
             // STG-5: banner, captions and toast lanes over the chrome (they never move tiles or follow chrome); the
@@ -129,6 +132,14 @@ struct CallPanelContent: View {
             // PPL-4 (S50 6 a): Host Controls as a root panel, its own PanelShell and a PeopleRoute path starting at Host
             // Controls (R50-2); the R50-3 destination scrolls to Meeting Access.
             HostControlsPanel(people: people, shell: shell, adapter: adapter, presentation: presentation, resolved: resolved)
+        } else if presentation.request.panel == .webinarQA, let people {
+            // PPL-6 (S50 11): the Webinar Q&A panel, its own PanelShell with the QaRoute path (PL15 written answers).
+            QaPanel(people: people, shell: shell, adapter: adapter, presentation: presentation, resolved: resolved)
+        } else if presentation.request.panel == .settings {
+            // SET-1 (S60 1 c): Settings with its own PanelShell and SettingsRoute path; Host Controls pushes inside it
+            // through the host mirror routes (R6-3).
+            SettingsPanel(settings: shell.settings, shell: shell, people: people, adapter: adapter, presentation: presentation,
+                          resolved: resolved)
         } else if presentation.request.panel == .activities, let activitySession {
             // ACT-1 (S60 7): the Activities launcher with its own PanelShell and page path.
             ActivitiesPanel(session: activitySession, adapter: adapter, presentation: presentation, resolved: resolved)

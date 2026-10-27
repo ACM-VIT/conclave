@@ -4,7 +4,8 @@ import Foundation
 // rules: String raw-value enums, scalar structs and arrays of structs, no associated values, no tuples, no protocols.
 // Views read only these snapshots, never `MeetingState` or `MeetingViewModel` (F00 P1). Later slices extend the set:
 // CTL-2 added the host menu facts to `LeaveSnapshot` (LeaveControlPolicy.swift reads them), CTL-3 the route snapshot,
-// CTL-5 the More snapshot, menu metrics and keyboard commands, CTL-6 the reaction palette.
+// CTL-5 the More snapshot, menu metrics and keyboard commands (MoreMenuPolicy.swift), CTL-6 the reaction palette
+// (ReactionPalettePolicy.swift); both add the More inputs below and the `CallControlsRequest` core requests.
 
 /// Which controls the bar shows (S30 0.6): compact five on phones, wide eight from medium width (RECONCILE R7), the
 /// webinar attendee three.
@@ -175,6 +176,26 @@ enum CallControlsCommand: String, CaseIterable, Equatable {
     case requestMicrophonePermission, requestCameraPermission
 }
 
+/// CTL-5 and CTL-6: local actions the controls hand to the core with one value (the S30 0.5 mapping table). Kept apart
+/// from `CallControlsCommand` so the core's exhaustive command switch is unaffected. `value` is the reaction wire value
+/// (`sendReaction`), "on" or "off" (`setCaptions`, `setRoomLock`), a `MeetingViewMode` raw value (`setLayoutMode`), or ""
+/// (`flipCamera`, `showSystemVideoEffects`).
+enum CallControlsRequestKind: String, CaseIterable, Equatable {
+    case sendReaction, setCaptions, setLayoutMode, flipCamera, setRoomLock, showSystemVideoEffects
+}
+
+struct CallControlsRequest: Equatable {
+    let kind: CallControlsRequestKind
+    let value: String
+
+    static let on = "on"
+    static let off = "off"
+
+    static func make(_ kind: CallControlsRequestKind, value: String = "") -> CallControlsRequest {
+        CallControlsRequest(kind: kind, value: value)
+    }
+}
+
 /// The schema boundary between the core and the controls (S30 0.5, S1C 3.2 format): built by the view model's
 /// `makeCallControlsInputs()` on its own refresh path (CC1) and pushed through `CallControlsPresenter.apply(_:)`. The
 /// S1-derived fields come from the shell snapshots the view model just published (`fromShell`).
@@ -214,6 +235,26 @@ struct CallControlsInputs: Equatable {
     let activeAppId: String
     let hasOpenVote: Bool
     let layoutMode: String
+    /// CTL-5 (S30 5 j, RECONCILE R50): the S20 SC23 `MeetingLinkBuilder` link (`MeetingState.meetingLink(for:clientId:)`,
+    /// with `?clientId=` for a non-default tenant); "" when the trimmed room id is empty, which hides Invite and Copy Link.
+    let meetingLink: String
+    /// CTL-5 (S20 SC13, WP8): the local captions preference and the live notes state (Captions and Transcript rows).
+    let captionsOn: Bool
+    let liveNotes: LiveNotesState
+    /// CTL-5 (S20 SC1 E4 game hook): a game is running and its display name (the Activities status line).
+    let isGameActive: Bool
+    let gameName: String
+    /// CTL-5 (S30 5 f row 6): the device can flip the camera (it can switch, not audio-only, publishing allowed),
+    /// independent of the connection, so the row stays in place while recovering (R10); and a flip is in flight.
+    let canFlipCamera: Bool
+    let isFlipInFlight: Bool
+    /// CTL-5 (CC11, WP8; RECONCILE OQ6 default A): the native Effects panel exists, and (iOS) the system video effects
+    /// module can open while the camera runs. Both false in this push, so neither row shows.
+    let effectsPanelAvailable: Bool
+    let canShowSystemVideoEffects: Bool
+    /// CTL-5 (S30 5 f row 18): the S50 host-actions owner's pending Lock Meeting switch and the value it asked for.
+    let isRoomLockPending: Bool
+    let roomLockRequestedOn: Bool
 
     static func make(
         callSession: Int = 0,
@@ -240,7 +281,18 @@ struct CallControlsInputs: Equatable {
         isBrowserActive: Bool = false,
         activeAppId: String = "",
         hasOpenVote: Bool = false,
-        layoutMode: String = "auto"
+        layoutMode: String = "auto",
+        meetingLink: String = "",
+        captionsOn: Bool = false,
+        liveNotes: LiveNotesState = LiveNotesState.off,
+        isGameActive: Bool = false,
+        gameName: String = "",
+        canFlipCamera: Bool = false,
+        isFlipInFlight: Bool = false,
+        effectsPanelAvailable: Bool = false,
+        canShowSystemVideoEffects: Bool = false,
+        isRoomLockPending: Bool = false,
+        roomLockRequestedOn: Bool = false
     ) -> CallControlsInputs {
         CallControlsInputs(callSession: callSession, rows: rows, phase: phase, notice: notice, isLocalHost: isLocalHost,
                            isWebinarAttendee: isWebinarAttendee, canEndForEveryone: canEndForEveryone,
@@ -250,7 +302,11 @@ struct CallControlsInputs: Equatable {
                            isWebinarQaEnabled: isWebinarQaEnabled, webinarQaUnseen: webinarQaUnseen,
                            attendeeCanRaiseHand: attendeeCanRaiseHand, moreAttention: moreAttention,
                            isRoomLocked: isRoomLocked, isWebinarEnabled: isWebinarEnabled, isBrowserActive: isBrowserActive,
-                           activeAppId: activeAppId, hasOpenVote: hasOpenVote, layoutMode: layoutMode)
+                           activeAppId: activeAppId, hasOpenVote: hasOpenVote, layoutMode: layoutMode,
+                           meetingLink: meetingLink, captionsOn: captionsOn, liveNotes: liveNotes, isGameActive: isGameActive,
+                           gameName: gameName, canFlipCamera: canFlipCamera, isFlipInFlight: isFlipInFlight,
+                           effectsPanelAvailable: effectsPanelAvailable, canShowSystemVideoEffects: canShowSystemVideoEffects,
+                           isRoomLockPending: isRoomLockPending, roomLockRequestedOn: roomLockRequestedOn)
     }
 
     /// The S1-derived fields from the snapshots the shell just published, plus the controls-only fields (CC1). The
@@ -270,7 +326,18 @@ struct CallControlsInputs: Equatable {
         isBrowserActive: Bool = false,
         activeAppId: String = "",
         hasOpenVote: Bool = false,
-        layoutMode: String = "auto"
+        layoutMode: String = "auto",
+        meetingLink: String = "",
+        captionsOn: Bool = false,
+        liveNotes: LiveNotesState = LiveNotesState.off,
+        isGameActive: Bool = false,
+        gameName: String = "",
+        canFlipCamera: Bool = false,
+        isFlipInFlight: Bool = false,
+        effectsPanelAvailable: Bool = false,
+        canShowSystemVideoEffects: Bool = false,
+        isRoomLockPending: Bool = false,
+        roomLockRequestedOn: Bool = false
     ) -> CallControlsInputs {
         let session = shell.session
         let confirmation = session.confirmation
@@ -283,7 +350,11 @@ struct CallControlsInputs: Equatable {
                     isWebinarQaEnabled: isWebinarQaEnabled, webinarQaUnseen: webinarQaUnseen,
                     attendeeCanRaiseHand: attendeeCanRaiseHand, moreAttention: moreAttention, isRoomLocked: isRoomLocked,
                     isWebinarEnabled: isWebinarEnabled, isBrowserActive: isBrowserActive, activeAppId: activeAppId,
-                    hasOpenVote: hasOpenVote, layoutMode: layoutMode)
+                    hasOpenVote: hasOpenVote, layoutMode: layoutMode, meetingLink: meetingLink, captionsOn: captionsOn,
+                    liveNotes: liveNotes, isGameActive: isGameActive, gameName: gameName, canFlipCamera: canFlipCamera,
+                    isFlipInFlight: isFlipInFlight, effectsPanelAvailable: effectsPanelAvailable,
+                    canShowSystemVideoEffects: canShowSystemVideoEffects, isRoomLockPending: isRoomLockPending,
+                    roomLockRequestedOn: roomLockRequestedOn)
     }
 
     /// CTL-2: the same inputs with every S1-derived field re-read from the shell snapshots and the controls-only fields
@@ -296,7 +367,11 @@ struct CallControlsInputs: Equatable {
                                      webinarQaUnseen: webinarQaUnseen, attendeeCanRaiseHand: attendeeCanRaiseHand,
                                      moreAttention: moreAttention, isRoomLocked: isRoomLocked, isWebinarEnabled: isWebinarEnabled,
                                      isBrowserActive: isBrowserActive, activeAppId: activeAppId, hasOpenVote: hasOpenVote,
-                                     layoutMode: layoutMode)
+                                     layoutMode: layoutMode, meetingLink: meetingLink, captionsOn: captionsOn, liveNotes: liveNotes,
+                                     isGameActive: isGameActive, gameName: gameName, canFlipCamera: canFlipCamera,
+                                     isFlipInFlight: isFlipInFlight, effectsPanelAvailable: effectsPanelAvailable,
+                                     canShowSystemVideoEffects: canShowSystemVideoEffects, isRoomLockPending: isRoomLockPending,
+                                     roomLockRequestedOn: roomLockRequestedOn)
     }
 
     /// The S1 row for a control id, or nil.

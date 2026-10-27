@@ -9,19 +9,27 @@ import SwiftUI
 // label and the state in the value), so VoiceOver and Voice Control read the real state from `isOn`.
 
 /// Switches on the control kind. Leave is the CTL-2 `LeaveControl` (LeaveControl+iOS.swift), which reads only
-/// `controls.leaveState`; `isAccessibilityText` is the uncapped text size the bar passes down (S30 1 c, 4 c).
+/// `controls.leaveState`; More is the CTL-5 `MoreControl` (MoreMenu+iOS.swift: the native menu or the dark fallback
+/// sheet). `isAccessibilityText`, `textSize` (uncapped) and `menuSpace` (the room above the bar) come from the bar
+/// (S30 1 c, 4 c, 5 c); `isVerticalBar` is the iPhone compact-height column, where More always takes the sheet (CL16).
 struct CallControlCell: View {
     let model: CallControlModel
     let controls: CallControlsPresenter
     let diameter: CGFloat
     let isAccessibilityText: Bool
+    var textSize: DynamicTypeSize = DynamicTypeSize.large
+    var menuSpace: CGFloat = 0
+    var isVerticalBar: Bool = false
 
     var body: some View {
         switch model.kind {
         case .microphone, .camera, .screenShare, .hand:
             CallControlToggleCell(model: model, controls: controls, diameter: diameter)
-        case .chat, .participants, .qa, .more:
+        case .chat, .participants, .qa:
             CallControlInvokerCell(model: model, controls: controls, diameter: diameter)
+        case .more:
+            MoreControl(model: model, controls: controls, diameter: diameter, textSize: textSize, menuSpace: menuSpace,
+                        isVerticalBar: isVerticalBar)
         case .leave:
             LeaveControl(controls: controls, diameter: diameter, isAccessibilityText: isAccessibilityText)
         }
@@ -87,8 +95,8 @@ struct CallControlToggleCell: View {
     }
 }
 
-/// Chat, Participants, Q&A and More: On, Engaged while their panel is current (`.isSelected`). They play nothing
-/// (S30 1 h). The badge is ink on coral, hidden from accessibility and folded into the value (F00 C06).
+/// Chat, Participants and Q&A: On, Engaged while their panel is current (`.isSelected`). They play nothing (S30 1 h).
+/// The badge is ink on coral, hidden from accessibility and folded into the value (F00 C06). More has its own control.
 struct CallControlInvokerCell: View {
     let model: CallControlModel
     let controls: CallControlsPresenter
@@ -124,8 +132,9 @@ struct CallControlInvokerCell: View {
     }
 }
 
-/// The glyph, or a small system spinner in its place while an acknowledgment is slow (D15: no pulse or shimmer).
-private struct CallControlGlyph: View {
+/// The glyph, or a small system spinner in its place while an acknowledgment is slow (D15: no pulse or shimmer). Also
+/// More's glyph (MoreMenu+iOS.swift).
+struct CallControlGlyph: View {
     let systemImage: String
     let showsSpinner: Bool
     let visual: CallControlVisual
@@ -162,8 +171,8 @@ private struct CallControlGlyph: View {
 }
 
 /// The R02 surface through the single glass entry, sized to the fitted diameter. Opaque renderings dim while pressed;
-/// glass gives the system interactive response instead, so it never dims twice.
-private struct CallControlSurfaceStyle: ButtonStyle {
+/// glass gives the system interactive response instead, so it never dims twice. More's sheet form uses it too.
+struct CallControlSurfaceStyle: ButtonStyle {
     let visual: CallControlVisual
     let isBlocked: Bool
     let diameter: CGFloat
@@ -174,7 +183,8 @@ private struct CallControlSurfaceStyle: ButtonStyle {
     }
 }
 
-private struct CallControlSurfaceBody<Content: View>: View {
+/// The surface itself; More's menu form draws it as the `Menu` label (a menu label takes no button style).
+struct CallControlSurfaceBody<Content: View>: View {
     let label: Content
     let isPressed: Bool
     let visual: CallControlVisual
@@ -228,7 +238,7 @@ private struct CallControlWarningMark: View {
     }
 }
 
-private struct CallControlValue: ViewModifier {
+struct CallControlValue: ViewModifier {
     let text: String?
 
     @ViewBuilder

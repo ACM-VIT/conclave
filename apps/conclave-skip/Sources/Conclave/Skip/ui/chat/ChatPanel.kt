@@ -2,6 +2,7 @@ package conclave.module
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
@@ -122,6 +123,7 @@ internal fun ChatPanel(
         ChatImageViewer(presenter, actions.photoRowId, onDismiss = { actions.closePhoto() })
     }
     ChatExternalLinkDialog(actions)
+    AssistantLinkDialog(actions)
 }
 
 /** 2 f: the locked banner for guests and the host note. */
@@ -149,6 +151,8 @@ private fun ChatAnnouncementRegion(presenter: ChatPresenter) {
     val announcement = presenter.announcement ?: return
     val text = ChatCopyAndroid.announcement(announcement)
     if (text.isEmpty()) return
+    // CH22: the fixture counts each posted announcement once (the `chat.announcement` readout, S40 4 l 2).
+    LaunchedEffect(announcement.id) { ChatDiagnostics.counters?.bump("chat.announcement." + announcement.kind) }
     Box(Modifier.size(1.dp).semantics {
         liveRegion = LiveRegionMode.Polite
         contentDescription = text
@@ -185,6 +189,46 @@ private fun ChatExternalLinkDialog(actions: ChatRowActions) {
             }
         },
         modifier = Modifier.testTag("chat.link.dialog"),
+    )
+}
+
+/**
+ * S40 4 d (CHT-7): the confirmation for a link in a Conclave AI answer: "This link opens a website outside Conclave.
+ * Only open links you trust." with the host (another app's link: "This link opens another app." plus the camera line
+ * while the camera does not continue in the background, S70 R70-5); Open link, Copy link, Cancel.
+ */
+@Composable
+private fun AssistantLinkDialog(actions: ChatRowActions) {
+    val url = actions.pendingAssistantUrl
+    if (url.isEmpty()) return
+    val lower = url.lowercase()
+    val isWeb = lower.startsWith("http://") || lower.startsWith("https://")
+    val host = runCatching { android.net.Uri.parse(url).host }.getOrNull().orEmpty()
+    AlertDialog(
+        onDismissRequest = { actions.pendingAssistantUrl = "" },
+        title = { ConclaveText(conclaveString("chat_link_title"), line = "chat.assistantLink.title") },
+        text = {
+            val body = if (isWeb) conclaveString("chat_link_body") else conclaveString("chat_link_body_app")
+            val camera = if (!isWeb && actions.presenter.showsCameraLine) " " + conclaveString("chat_link_camera_pauses") else ""
+            val hostLine = if (host.isNotEmpty()) "\n" + host else ""
+            ConclaveText(body + camera + hostLine, line = "chat.assistantLink.body")
+        },
+        confirmButton = {
+            Row {
+                TextButton(onClick = { actions.copyAssistantLink() }, modifier = Modifier.testTag("chat.assistantLink.copy")) {
+                    ConclaveText(conclaveString("chat_action_copy_link"), line = "chat.assistantLink.copy.label")
+                }
+                TextButton(onClick = { actions.confirmAssistantLink() }, modifier = Modifier.testTag("chat.assistantLink.open")) {
+                    ConclaveText(conclaveString("chat_link_open"), line = "chat.assistantLink.open.label")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { actions.pendingAssistantUrl = "" }) {
+                ConclaveText(conclaveString("ds_cancel"), line = "chat.assistantLink.cancel")
+            }
+        },
+        modifier = Modifier.testTag("chat.assistantLink.dialog"),
     )
 }
 

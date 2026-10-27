@@ -219,8 +219,8 @@ private struct HostEndRow: View {
     }
 }
 
-/// The pages of a host stack (R50-2): Host Controls and the meeting access and notice pages; the webinar pages arrive
-/// with PPL-5 (S50 9). Every container declares this as its destination for `PeopleRoute` values.
+/// The pages of a host stack (R50-2): Host Controls, the meeting access and notice pages, and the webinar pages (PPL-5,
+/// S50 9). Every container declares this as its destination for `PeopleRoute` values.
 struct HostPageView<Route: Hashable>: View {
     let people: PeoplePresenter
     let page: PeopleRoute
@@ -236,25 +236,13 @@ struct HostPageView<Route: Hashable>: View {
             AccessListPage(people: people)
         case .notice:
             NoticeComposerPage(people: people)
-        case .webinar, .attendeeCode, .customLink:
-            HostPendingPage(page: page)
+        case .webinar:
+            WebinarSettingsPage(people: people, link: link)
+        case .attendeeCode:
+            AttendeeCodePage(people: people)
+        case .customLink:
+            CustomLinkPage(people: people)
         }
-    }
-}
-
-/// Webinar Settings, Attendee Code and Custom Link are PPL-5's (S50 9); until then the push and Back work on an empty
-/// grouped page with the right title.
-private struct HostPendingPage: View {
-    let page: PeopleRoute
-
-    var body: some View {
-        List {
-            EmptyView()
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle(page == PeopleRoute.webinar ? ConclaveStrings.text("Webinar Settings") : ConclaveStrings.text("Host Controls"))
-        .navigationBarTitleDisplayMode(.inline)
-        .accessibilityIdentifier("host.page." + page.rawValue)
     }
 }
 

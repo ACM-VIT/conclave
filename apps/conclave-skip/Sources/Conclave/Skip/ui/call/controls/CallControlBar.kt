@@ -53,7 +53,8 @@ import kotlinx.coroutines.delay
  * 560 dp), the attendee three. Toggle widths and the overflow move come from the shared fit (ControlBarPolicy over
  * CompactBarFit): 321 dp at 360 dp, 353 dp at 412 dp, 545 dp wide. The bar reads only controls.bar through the cache;
  * each cell reads only its CallControlUi. Every click computes the gesture kind first and plays it only when the
- * presenter returns dispatched (S30 1 h); Chat, Participants, Q&A, More and Leave play nothing.
+ * presenter returns dispatched (S30 1 h); Chat, Participants, Q&A, More and Leave play nothing. CTL-5: More opens the
+ * in-call More sheet (MoreSheet.kt) and draws Engaged while it shows.
  */
 
 /** The controls presenter of the native call root, provided by whoever mounts CallRoot; no bar without it. */
@@ -105,8 +106,21 @@ private fun CallControlCell(controls: CallControlsPresenter, control: CallContro
     when (control.kind) {
         CallControlKind.microphone, CallControlKind.camera, CallControlKind.screenShare, CallControlKind.hand ->
             CallToggleCell(controls, control, width)
+        CallControlKind.more -> MoreControlCell(controls, control, width)
         else -> CallInvokerCell(controls, control, width)
     }
+}
+
+/** S30 5 d (CTL-5): More, Engaged while its sheet shows; the tap plays nothing (Q11) and composes the sheet, which a
+ *  role change to attendee disposes with this cell (5 f). */
+@Composable
+private fun MoreControlCell(controls: CallControlsPresenter, control: CallControlUi, width: Dp) {
+    var sheetOpen by remember { mutableStateOf(false) }
+    CallInvokerCell(controls, control, width, engaged = sheetOpen || control.visual == CallControlVisual.engaged, onClick = {
+        controls.tap(CallControlKind.more)
+        sheetOpen = true
+    })
+    if (sheetOpen) MoreSheet(controls, onDismissed = { sheetOpen = false })
 }
 
 /** Mic and Camera (optimistic: spinner after 600 ms) and Raise Hand and Share Screen (spinner at once, tooltips). */
@@ -143,13 +157,16 @@ private fun CallToggleCell(controls: CallControlsPresenter, control: CallControl
     }
 }
 
-/** Chat, Participants, Q&A and More: R01 On, Engaged with `selected` while their panel is current (CC18). */
+/** Chat, Participants, Q&A and More: R01 On, Engaged with `selected` while their panel (More: its sheet) is current
+ *  (CC18). */
 @Composable
-private fun CallInvokerCell(controls: CallControlsPresenter, control: CallControlUi, width: Dp) {
+private fun CallInvokerCell(
+    controls: CallControlsPresenter, control: CallControlUi, width: Dp,
+    engaged: Boolean = control.visual == CallControlVisual.engaged, onClick: () -> Unit = { controls.tap(control.kind) },
+) {
     val label = callControlLabel(control.kind)
     val value = callControlInvokerValue(control)
-    val engaged = control.visual == CallControlVisual.engaged
-    val colors = conclaveCallToggleColors(callControlVisual(control.visual))
+    val colors = conclaveCallToggleColors(callControlVisual(if (engaged) CallControlVisual.engaged else control.visual))
     CallControlTooltip(label) {
         ConclaveBadgedAnchor(count = control.badgeCount, identifier = "control.${control.id}", showsDot = control.showsDot) {
             Box(
@@ -157,7 +174,7 @@ private fun CallInvokerCell(controls: CallControlsPresenter, control: CallContro
                     .alpha(if (control.isBlocked) CONCLAVE_CALL_DISABLED_ALPHA else 1f)
                     .clip(CircleShape)
                     .background(Color(colors.container))
-                    .clickable(enabled = !control.isLeaving, role = Role.Button) { controls.tap(control.kind) }
+                    .clickable(enabled = !control.isLeaving, role = Role.Button) { onClick() }
                     .semantics {
                         contentDescription = label
                         if (engaged) selected = true

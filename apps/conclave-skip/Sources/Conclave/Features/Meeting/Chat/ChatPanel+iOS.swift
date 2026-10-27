@@ -38,6 +38,9 @@ final class ChatRowActions {
     @ObservationIgnored var pendingInsert = ""
     /// D23: a link that leaves Conclave waits here for its confirmation.
     var pendingExternalURL: URL? = nil
+    /// S40 4 c (CHT-7): a link in a Conclave AI answer waits here for the external link confirmation (every assistant
+    /// link confirms first, WEB CHT-32).
+    var pendingAssistantURL: URL? = nil
 
     init(chat: ChatPresenter) {
         self.chat = chat
@@ -74,6 +77,37 @@ final class ChatRowActions {
 
     func retry(_ rowId: String) {
         chat.retry(rowId: rowId)
+    }
+
+    /// S40 4 f: the asker's Try Again on a failed answer.
+    func retryAssistant(_ rowId: String) {
+        chat.retryAssistant(rowId: rowId)
+    }
+
+    /// S40 4 c: an answer's link asks first ("Open External Link?").
+    func openAssistantLink(_ url: URL) {
+        pendingAssistantURL = url
+    }
+
+    /// Open Link: http and https in the in-app browser (meeting links route in the app, `openLink`); another app's
+    /// link opens at once, since this dialog was its confirmation.
+    func confirmAssistantLink() {
+        guard let url = pendingAssistantURL else { return }
+        pendingAssistantURL = nil
+        let scheme = url.scheme?.lowercased() ?? ""
+        if scheme == "http" || scheme == "https" {
+            openLink(url)
+        } else {
+            UIApplication.shared.open(url)
+        }
+    }
+
+    /// Copy Link: the pasteboard plus the "Copied" announcement (iOS shows nothing else, 5 c).
+    func copyAssistantLink() {
+        guard let url = pendingAssistantURL else { return }
+        pendingAssistantURL = nil
+        UIPasteboard.general.string = url.absoluteString
+        chat.noteCopied()
     }
 
     func delete(_ rowId: String) {
@@ -245,6 +279,7 @@ struct ChatPanel: View {
             })
             .environment(\.chatPhotoNamespace, photoNamespace)
             .modifier(ChatExternalLinkConfirmation(actions: actions))
+            .modifier(ChatAssistantLinkConfirmation(actions: actions))
             .modifier(ChatAnnouncementPoster(chat: chat))
             .modifier(ChatFixtureBarHost())
             .modifier(ChatPhotoSheetHost(chat: chat, actions: actions))
@@ -332,7 +367,43 @@ private struct ChatExternalLinkConfirmation: ViewModifier {
     }
 }
 
-/// 2 i: posts the presenter's one-shot announcement (new messages, copied) at low priority.
+/// S40 4 c, g (CHT-7): the confirmation for a link in a Conclave AI answer: "This link opens a website outside
+/// Conclave. Only open links you trust." with the host (another app's link: "This link opens another app." plus the
+/// camera line while the camera does not continue in the background, S70 R70-5); Open Link, Copy Link, Cancel.
+private struct ChatAssistantLinkConfirmation: ViewModifier {
+    @Bindable var actions: ChatRowActions
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            ConclaveStrings.text("Open External Link?"),
+            isPresented: Binding(get: { actions.pendingAssistantURL != nil },
+                                 set: { if !$0 { actions.pendingAssistantURL = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button(ConclaveStrings.text("Open Link")) { actions.confirmAssistantLink() }
+            Button(ConclaveStrings.text("Copy Link")) { actions.copyAssistantLink() }
+            Button(ConclaveStrings.text("Cancel"), role: .cancel) { actions.pendingAssistantURL = nil }
+        } message: {
+            Text(message)
+        }
+    }
+
+    private var message: String {
+        guard let url = actions.pendingAssistantURL else { return "" }
+        let scheme = url.scheme?.lowercased() ?? ""
+        let isWeb = scheme == "http" || scheme == "https"
+        var text = isWeb ? ConclaveStrings.text("This link opens a website outside Conclave. Only open links you trust.")
+            : ConclaveStrings.text("This link opens another app.")
+        if !isWeb && actions.chat.showsCameraLine {
+            text += " " + ConclaveStrings.text("Your camera pauses while you're outside Conclave.")
+        }
+        let host = url.host() ?? ""
+        if !host.isEmpty { text += "\n" + host }
+        return text
+    }
+}
+
+/// 2 i: posts the presenter's one-shot announcement (new messages, copied, an answer completed) at low priority.
 private struct ChatAnnouncementPoster: ViewModifier {
     let chat: ChatPresenter
 
@@ -341,6 +412,9 @@ private struct ChatAnnouncementPoster: ViewModifier {
             guard let announcement = chat.announcement else { return }
             let text = ChatCopy.announcement(announcement)
             guard !text.isEmpty else { return }
+            #if DEBUG
+            ChatDiagnostics.counters?.bump("chat.announcement." + announcement.kind)
+            #endif
             var attributed = AttributedString(text)
             attributed.accessibilitySpeechAnnouncementPriority = .low
             AccessibilityNotification.Announcement(attributed).post()

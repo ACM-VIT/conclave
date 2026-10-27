@@ -140,8 +140,12 @@ internal fun peopleDialogCopy(context: Context, confirmation: PeopleConfirmation
             conclaveStringOf(context, "hst_cameras_off_message"), conclaveStringOf(context, "hst_cameras_off_confirm"), false, null)
         PeopleConfirmationKind.stopAllShares -> PeopleDialogCopy(conclaveStringOf(context, "hst_stop_shares_title"),
             conclaveStringOf(context, "hst_stop_shares_message"), conclaveStringOf(context, "hst_stop_shares_confirm"), false, null)
-        PeopleConfirmationKind.clearInviteCode, PeopleConfirmationKind.clearAttendeeCode -> PeopleDialogCopy(
+        PeopleConfirmationKind.clearInviteCode -> PeopleDialogCopy(
             conclaveStringOf(context, "hst_remove_code_title"), conclaveStringOf(context, "hst_remove_code_message"),
+            conclaveStringOf(context, "hst_remove_code_confirm"), true, null)
+        // S50 9 g: the attendee code page mirrors 7 g with its own strings.
+        PeopleConfirmationKind.clearAttendeeCode -> PeopleDialogCopy(
+            conclaveStringOf(context, "hst_remove_attendee_code_title"), conclaveStringOf(context, "hst_remove_attendee_code_message"),
             conclaveStringOf(context, "hst_remove_code_confirm"), true, null)
         PeopleConfirmationKind.block -> PeopleDialogCopy(conclaveStringOf(context, "hst_block_title", name),
             conclaveStringOf(context, "hst_block_message"), conclaveStringOf(context, "hst_block_confirm"), true, null)
@@ -281,6 +285,15 @@ internal fun peopleFailureMessageOf(context: Context, kind: String, name: String
     PeopleFailureCopy.codeRemove -> conclaveStringOf(context, "hst_fail_code_remove")
     PeopleFailureCopy.access -> conclaveStringOf(context, "hst_fail_access")
     PeopleFailureCopy.notice -> conclaveStringOf(context, "hst_fail_notice")
+    PeopleFailureCopy.link -> conclaveStringOf(context, "hst_fail_link")
+    PeopleFailureCopy.invite -> conclaveStringOf(context, "hst_fail_invite", name)
+    PeopleFailureCopy.inviteGone -> conclaveStringOf(context, "hst_fail_gone", name)
+    PeopleFailureCopy.cancelInvite -> conclaveStringOf(context, "hst_fail_cancel_invite")
+    PeopleFailureCopy.webinar -> conclaveStringOf(context, "hst_fail_webinar")
+    PeopleFailureCopy.qaSend -> conclaveStringOf(context, "qa_fail_send")
+    PeopleFailureCopy.qaRateLimited -> conclaveStringOf(context, "qa_rate_limited")
+    PeopleFailureCopy.qaTooShort -> conclaveStringOf(context, "qa_too_short")
+    PeopleFailureCopy.qaModerate -> conclaveStringOf(context, "qa_fail_moderate")
     else -> conclaveStringOf(context, "stg_toast_failed_generic")
 }
 
@@ -326,6 +339,13 @@ internal fun peopleAnnouncementText(announcement: StageAnnouncement): String? {
         PeopleAnnouncementKind.policyOn -> conclaveStringOf(context, "hst_announce_on", hostPolicyTitleOf(context, announcement.name))
         PeopleAnnouncementKind.policyOff -> conclaveStringOf(context, "hst_announce_off", hostPolicyTitleOf(context, announcement.name))
         PeopleAnnouncementKind.noticeSent -> conclaveStringOf(context, "hst_notice_sent")
+        PeopleAnnouncementKind.invitedToStage -> conclaveStringOf(context, "ppl_announce_invited", announcement.name)
+        PeopleAnnouncementKind.joinedStage -> conclaveStringOf(context, "ppl_announce_joined_stage", announcement.name)
+        PeopleAnnouncementKind.movedToAudience -> conclaveStringOf(context, "ppl_announce_demoted", announcement.name)
+        PeopleAnnouncementKind.newLinkCopied -> conclaveStringOf(context, "hst_announce_new_link")
+        PeopleAnnouncementKind.questionSent -> conclaveStringOf(context, "qa_announce_sent")
+        PeopleAnnouncementKind.qaOff -> conclaveStringOf(context, "qa_announce_off")
+        PeopleAnnouncementKind.newHost -> conclaveStringOf(context, "ppl_announce_new_host", announcement.name)
         else -> null
     }
 }

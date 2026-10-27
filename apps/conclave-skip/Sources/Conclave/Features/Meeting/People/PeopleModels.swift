@@ -221,6 +221,15 @@ struct PeopleFocusRequest: Equatable {
     let sectionId: String
 }
 
+/// The attendee side of a stage invitation (S50 0.5, 12; PH9): `webinar:promoted` from the host named here. `session`
+/// is the call session it arrived in, so a stale invitation is never accepted after a rejoin.
+struct StageInvitationModel: Equatable {
+    let id: Int
+    let promotedByName: String
+    let rejoinRoomId: String
+    let session: Int
+}
+
 /// R50-2: the one flat route type for the Participants stack and for the root Host Controls panel (whose stack starts
 /// at `hostControls`). Kotlin pushes the raw value onto the host's `PanelPageStack`. No `HostRoute` type exists.
 enum PeopleRoute: String, CaseIterable, Equatable {
@@ -327,6 +336,12 @@ struct PeopleInputs: Equatable {
     let isRenameDisabled: Bool
     /// PH8 (PPL-5): the demote emitter exists, so Move to Audience may show.
     let supportsMoveToAudience: Bool
+    /// PH8 (PPL-5): the attendee hand queue as the server last sent it (hosts and co-hosts only).
+    let webinarHandQueue: [PeopleWebinarHandInput]
+    /// PH8: a `webinar:handQueueChanged` arrived this call session (false for a host promoted mid-webinar, S50 10 f).
+    let webinarQueueKnown: Bool
+    /// PH9 interim (S50 Q15): attendees invited on stage from this device in this call session.
+    let stageInvites: [PeopleStageInviteInput]
 
     static func make(
         callSession: Int = 0,
@@ -353,7 +368,10 @@ struct PeopleInputs: Equatable {
         isDmEnabled: Bool = true,
         pinnedUserId: String = "",
         isRenameDisabled: Bool = false,
-        supportsMoveToAudience: Bool = false
+        supportsMoveToAudience: Bool = false,
+        webinarHandQueue: [PeopleWebinarHandInput] = [],
+        webinarQueueKnown: Bool = false,
+        stageInvites: [PeopleStageInviteInput] = []
     ) -> PeopleInputs {
         PeopleInputs(callSession: callSession, attempt: attempt, phase: phase, isNetworkOffline: isNetworkOffline,
                      localUserId: localUserId, participants: participants, isRosterLoaded: isRosterLoaded, isAdmin: isAdmin,
@@ -362,7 +380,8 @@ struct PeopleInputs: Equatable {
                      isWebinarEnabled: isWebinarEnabled, isWebinarPublic: isWebinarPublic, webinarLink: webinarLink,
                      isWebinarQaEnabled: isWebinarQaEnabled, webinarAttendeeCount: webinarAttendeeCount,
                      isDmEnabled: isDmEnabled, pinnedUserId: pinnedUserId, isRenameDisabled: isRenameDisabled,
-                     supportsMoveToAudience: supportsMoveToAudience)
+                     supportsMoveToAudience: supportsMoveToAudience, webinarHandQueue: webinarHandQueue,
+                     webinarQueueKnown: webinarQueueKnown, stageInvites: stageInvites)
     }
 
     /// The roster person with `userId`, ignoring leaving entries.

@@ -57,6 +57,8 @@ internal fun personRowTexts(context: Context, model: PersonRowModel, showsQueue:
         PersonDetail.presenting -> parts.add(conclaveStringOf(context, "ppl_detail_presenting"))
         PersonDetail.reconnecting -> parts.add(conclaveStringOf(context, "ppl_detail_reconnecting"))
         PersonDetail.stageInvited -> parts.add(conclaveStringOf(context, "ppl_detail_invited"))
+        // PPL-5 (S50 10 g): attendee hand-queue rows read "Attendee".
+        PersonDetail.attendee -> parts.add(conclaveStringOf(context, "ds_attendee"))
         else -> {}
     }
     if (model.messagesHidden) parts.add(conclaveStringOf(context, "ppl_detail_hidden"))

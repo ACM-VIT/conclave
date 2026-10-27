@@ -40,7 +40,11 @@ import androidx.compose.ui.unit.dp
  */
 
 /** What one LazyColumn item draws. */
-internal enum class PeopleItemKind { Notice, Invite, HostControls, Qa, Header, Person, Waiting, Loading, Footer, Empty }
+internal enum class PeopleItemKind {
+    Notice, Invite, HostControls, Qa, Header, Person, Waiting, Loading, Footer, Empty,
+    /** PPL-5 (S50 10): attendee hand-queue and invited rows, the watching count row and the Attendees footer. */
+    Attendee, Watching, AttendeesFooter,
+}
 
 /** One LazyColumn item: a stable key, its kind, and the section and row it belongs to. */
 internal data class PeopleListItem(
@@ -68,9 +72,22 @@ internal fun peopleListItems(snapshot: PeopleSnapshot, sections: List<PeopleSect
     }
     for (section in sections) {
         items.add(PeopleListItem(peopleHeaderKey(section.id), PeopleItemKind.Header, sectionId = section.id, count = section.count))
-        val kind = if (section.id == PeopleSectionID.waiting.rawValue) PeopleItemKind.Waiting else PeopleItemKind.Person
+        val isAttendees = section.id == PeopleSectionID.attendees.rawValue
+        if (isAttendees && !searching) items.add(PeopleListItem("watching", PeopleItemKind.Watching, sectionId = section.id))
         for (rowKey in section.rowIds) {
+            val kind = when {
+                section.id == PeopleSectionID.waiting.rawValue -> PeopleItemKind.Waiting
+                rowKey.startsWith(PeopleOrderPolicy.attendeePrefix) -> PeopleItemKind.Attendee
+                else -> PeopleItemKind.Person
+            }
             items.add(PeopleListItem("${section.id}:$rowKey", kind, sectionId = section.id, rowKey = rowKey))
+        }
+        if (isAttendees && !searching) items.add(PeopleListItem("f:${section.id}", PeopleItemKind.AttendeesFooter, sectionId = section.id))
+        if (section.id == PeopleSectionID.panelists.rawValue && !searching) {
+            val footer = PeopleRowPolicy.inMeetingFooter(snapshot)
+            if (footer == PeopleFooterKind.recovering || footer == PeopleFooterKind.offline) {
+                items.add(PeopleListItem("f:${section.id}", PeopleItemKind.Footer, sectionId = section.id, rowKey = footer.rawValue))
+            }
         }
         if (section.id == PeopleSectionID.inMeeting.rawValue && !searching) {
             if (!snapshot.isRosterLoaded) items.add(PeopleListItem("loading", PeopleItemKind.Loading, sectionId = section.id))
@@ -150,7 +167,7 @@ internal fun ParticipantsPage(
         } else {
             // PPL-4 (S50 6 to 8): Host controls and its pages on the same stack (R50-2); the host pages compose their
             // own confirmation leaf and snackbar reporter.
-            HostPageContent(people, top, reservation, snackbar, onPush = { pages?.push(it) })
+            HostPageContent(people, top, reservation, snackbar, onPush = { pages?.push(it) }, onPop = { pages?.pop() })
         }
     }
 }
@@ -218,8 +235,13 @@ private fun PeopleRoot(people: PeoplePresenter, reservation: PaddingValues, onOp
                     PeopleItemKind.Invite -> PeopleInviteRow(snapshot.inviteLink, snapshot.roomLabel)
                     PeopleItemKind.HostControls -> PeopleHostControlsRow(snapshot.accessSummary, onOpenHostControls)
                     PeopleItemKind.Qa -> PeopleQaRow(people)
-                    PeopleItemKind.Header -> ConclaveSectionHeader(title = conclaveString(peopleSectionTitleName(item.sectionId)),
-                        identifier = "people.section.${item.sectionId}.header", count = item.count)
+                    PeopleItemKind.Header -> if (item.sectionId == PeopleSectionID.attendees.rawValue) {
+                        // PPL-5: the Attendees header counts watchers in its own leaf (S50 10 k).
+                        WebinarAttendeesHeader(people)
+                    } else {
+                        ConclaveSectionHeader(title = conclaveString(peopleSectionTitleName(item.sectionId)),
+                            identifier = "people.section.${item.sectionId}.header", count = item.count)
+                    }
                     // Only Raised Hands rows read the queue size, so a hand change never recomposes the others.
                     PeopleItemKind.Person -> PeopleActionRow(people, item.rowKey, item.sectionId,
                         if (item.sectionId == PeopleSectionID.raisedHands.rawValue) queueCount else 0)
@@ -229,6 +251,10 @@ private fun PeopleRoot(people: PeoplePresenter, reservation: PaddingValues, onOp
                         identifier = "people.section.${item.sectionId}.footer")
                     PeopleItemKind.Empty -> ConclaveEmptyStatus(title = conclaveString("ds_no_results"),
                         body = conclaveString("ppl_no_match", query), icon = ConclaveIcons.SearchFill0, identifier = "people.search.empty")
+                    PeopleItemKind.Attendee -> WebinarAttendeeRow(people, item.rowKey, item.sectionId,
+                        if (item.sectionId == PeopleSectionID.raisedHands.rawValue) queueCount else 0)
+                    PeopleItemKind.Watching -> WebinarWatchingRow(people)
+                    PeopleItemKind.AttendeesFooter -> WebinarAttendeesFooter(people, snapshot)
                 }
             }
         }

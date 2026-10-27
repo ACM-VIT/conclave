@@ -32,6 +32,14 @@ final class SocketIOManager {
     var onWebinarAttendeeCountChanged: ((WebinarAttendeeCountChangedNotification) -> Void)?
     var onWebinarFeedChanged: ((WebinarFeedChangedNotification) -> Void)?
     var onWebinarParticipantJoined: ((WebinarParticipantJoinedNotification) -> Void)?
+    /// S50 PH7 (PPL-6): Q&A snapshot and changes.
+    var onWebinarQaChanged: ((WebinarQaChangedNotification) -> Void)?
+    var onWebinarQaSnapshot: ((WebinarQaSnapshot) -> Void)?
+    /// S50 PH8 (PPL-5): the attendee hand queue (hosts and co-hosts).
+    var onWebinarHandQueueChanged: ((WebinarHandQueueChangedNotification) -> Void)?
+    /// S50 PH9 (PPL-7): stage invitation and demotion.
+    var onWebinarPromoted: ((WebinarPromotedNotification) -> Void)?
+    var onWebinarDemoted: ((WebinarDemotedNotification) -> Void)?
     var onBrowserState: ((BrowserStateNotification) -> Void)?
     var onBrowserClosed: ((BrowserClosedNotification) -> Void)?
     var onAppsState: ((AppsStateNotification) -> Void)?
@@ -59,6 +67,7 @@ final class SocketIOManager {
     var onChatMessage: ((ChatMessage) -> Void)?
     var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Void)?
     var onChatReactionChanged: ((ChatReactionChangedNotification) -> Void)?
+    var onConclaveAssistantPacket: ((ConclaveAssistantMessageNotification) -> Void)?
     var onReaction: ((Reaction) -> Void)?
 
     var onHandRaised: ((HandRaisedNotification) -> Void)?
@@ -189,6 +198,17 @@ final class SocketIOManager {
     func updateWebinarLinkSlug(_ linkSlug: String?) async throws -> WebinarConfigSnapshot { fatalError() }
     func generateWebinarLink() async throws -> WebinarLinkResponse { fatalError() }
     func rotateWebinarLink() async throws -> WebinarLinkResponse { fatalError() }
+    /// S50 PH10.
+    func updateWebinarQaEnabled(_ enabled: Bool) async throws -> WebinarConfigSnapshot { fatalError() }
+    /// S50 PH8.
+    func promoteWebinarAttendee(userId: String) async throws { fatalError() }
+    func demoteWebinarParticipant(userId: String) async throws { fatalError() }
+    func setWebinarHandRaised(_ raised: Bool) async throws -> Bool { fatalError() }
+    func declineWebinarStage() async throws { fatalError() }
+    /// S50 PH7.
+    func submitWebinarQuestion(_ question: String) async throws -> String { fatalError() }
+    func upvoteWebinarQuestion(id: String) async throws -> WebinarQaUpvoteResponse { fatalError() }
+    func moderateWebinarQuestion(id: String, action: String, answerText: String?) async throws { fatalError() }
     func getBrowserState() async throws -> BrowserStateNotification { fatalError() }
     func launchBrowser(url: String) async throws -> LaunchBrowserResponse { fatalError() }
     func navigateBrowser(url: String) async throws -> LaunchBrowserResponse { fatalError() }

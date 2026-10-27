@@ -439,6 +439,8 @@ struct CallPresenceTests {
             .presenceEnded: "idle/none/inactive/1",
             // Batch 5 integrator (HD request B5-T4 R19): the PiP fixture is a live call.
             .pipSpeaker: "live/none/inactive/1",
+            // Batch 6 integrator (HD request B6-T8 R5): the receiver fixture is a live call.
+            .receiverCameraOff: "live/none/inactive/1",
         ]
         for state in SystemFixtureState.allCases {
             let session = SystemFixtureSession(state: state)

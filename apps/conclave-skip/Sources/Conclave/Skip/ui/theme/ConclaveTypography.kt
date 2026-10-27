@@ -5,6 +5,7 @@ import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 
 /** Material 3 baseline roles on the system sans-serif, which is Roboto on AOSP and Pixel (owner decision Q3).
@@ -55,6 +56,9 @@ internal fun ConclaveTextStyle.textStyle(weight: ConclaveTextWeight = ConclaveTe
  * form, which allocates once per base style.
  */
 internal fun TextStyle.tabular(): TextStyle = copy(fontFeatureSettings = "tnum")
+
+/** S40 4 d (CHT-7): the system monospace face for code in assistant answers (no bundled font). */
+internal fun TextStyle.monospaced(): TextStyle = copy(fontFamily = FontFamily.Monospace)
 
 @Composable
 internal fun rememberTabular(style: TextStyle): TextStyle = remember(style) { style.tabular() }

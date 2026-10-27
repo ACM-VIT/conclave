@@ -44,7 +44,7 @@ struct MeetingDetailsPanel: View {
                    onPromoteToLarge: { adapter.promoteToLarge() }) {
             MeetingDetailsList(stage: stage, webinarLinkProvider: webinarLinkProvider)
                 .navigationDestination(for: MeetingInfoRoute.self) { route in
-                    MeetingDetailsDestination(route: route, people: people)
+                    MeetingDetailsDestination(route: route, people: people, shell: shell)
                 }
         }
         .onChange(of: path.count) { previous, next in
@@ -363,13 +363,16 @@ private struct MeetingDetailsHostControlsRow: View {
 private struct MeetingDetailsDestination: View {
     let route: MeetingInfoRoute
     let people: PeoplePresenter?
+    let shell: MeetingShellPresenter
 
     var body: some View {
         switch route {
         case .host(let page):
             MeetingDetailsHostPage(route: page, people: people)
         case .attendeeSettings:
-            MeetingDetailsAttendeeSettings()
+            // SET-1 (RECONCILE R44): the call-scope Settings filtered for role attendee; only the privacy policy pushes.
+            SettingsAttendeeList(settings: shell.settings,
+                                 link: { route in route == SettingsRoute.privacy ? MeetingInfoRoute.privacyPolicy : nil })
         case .privacyPolicy:
             PrivacyPolicyScreen()
         }
@@ -390,26 +393,6 @@ private struct MeetingDetailsHostPage: View {
         } else {
             PeopleHostPage(route: route)
         }
-    }
-}
-
-/// The attendee path to Settings and the Privacy Policy (RECONCILE R44): the About rows that exist today. SET-1
-/// (batch 6) replaces this body with the S60 call-scope Settings filtered for role attendee (Data Saver, iOS Haptics,
-/// About with Export Diagnostics).
-private struct MeetingDetailsAttendeeSettings: View {
-    var body: some View {
-        List {
-            Section(ConclaveStrings.text("About")) {
-                NavigationLink(value: MeetingInfoRoute.privacyPolicy) {
-                    Text(ConclaveStrings.text("Privacy Policy"))
-                }
-                LabeledContent(ConclaveStrings.text("Version"), value: MeetingDetailsCopy.versionText())
-            }
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle(ConclaveStrings.text("Settings"))
-        .navigationBarTitleDisplayMode(.inline)
-        .accessibilityIdentifier("meetingInfo.page.attendeeSettings")
     }
 }
 

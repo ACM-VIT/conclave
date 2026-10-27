@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -69,7 +68,7 @@ import kotlinx.coroutines.launch
  * viewer opens on tap, a failed load retries on tap), GIF rows animate through coil-gif (the first frame under Remove
  * animations; stickers without a bubble; clips as a poster with the play glyph, no inline player until Media3 is
  * approved, Q6), and ready link cards follow the reactions. Media-only rows carry the summary semantics on the media
- * element. Voice and assistant markdown are CHT-6 and CHT-7.
+ * element. Voice rows are CHT-6's; Conclave AI rows are AssistantRow (CHT-7, AssistantRow.kt).
  */
 @Composable
 internal fun ChatRow(entry: ChatRowEntry, actions: ChatRowActions, sidePane: Boolean, maxBubble: Dp, highlighted: Boolean) {
@@ -85,6 +84,7 @@ internal fun ChatRow(entry: ChatRowEntry, actions: ChatRowActions, sidePane: Boo
             ChatRowKind.action -> ChatActionRow(row, actions)
             ChatRowKind.daySeparator -> ChatDayRow(row)
             ChatRowKind.unreadDivider -> ChatUnreadDivider()
+            ChatRowKind.assistant -> ChatSwipeToReply(row, actions) { AssistantRow(entry, actions, sidePane, maxBubble) }
             else -> ChatSwipeToReply(row, actions) { ChatMessageRow(row, actions, sidePane, maxBubble) }
         }
     }
@@ -355,11 +355,7 @@ private fun ChatBubbleText(row: ChatRowModel, tone: ConclaveBubbleTone, actions:
     val semantics = chatSummarySemantics(row, actions, ChatCopyAndroid.rowLabel(row))
     val linkColor = ConclaveBubbleColors.link(tone)
     val youColor = MaterialTheme.colorScheme.primary
-    if (row.kind == ChatRowKind.assistant && row.plainText.isEmpty()) {
-        // D10: a static state with the system spinner until CHT-7's thinking rows.
-        CircularProgressIndicator(Modifier.size(20.dp).then(semantics))
-        return
-    }
+    // Assistant rows never reach this text (AssistantRow, CHT-7).
     val text = buildAnnotatedString {
         for (span in row.spans) {
             when (span.kind) {
@@ -386,7 +382,7 @@ private fun ChatBubbleText(row: ChatRowModel, tone: ConclaveBubbleTone, actions:
  * "Message actions" and the custom actions (5 i). The bubble text carries it, or the media element for a media-only row.
  */
 @Composable
-private fun chatSummarySemantics(row: ChatRowModel, actions: ChatRowActions, label: String): Modifier {
+internal fun chatSummarySemantics(row: ChatRowModel, actions: ChatRowActions, label: String): Modifier {
     val context = LocalContext.current
     val value = ChatCopyAndroid.rowValue(context, row)
     val menuLabel = conclaveString("chat_message_actions")

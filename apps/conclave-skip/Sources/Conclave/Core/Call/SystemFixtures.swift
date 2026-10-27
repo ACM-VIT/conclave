@@ -15,6 +15,8 @@ enum SystemFixtureState: String, CaseIterable, Equatable {
     case presenceEnded = "presence-ended"
     /// SYS-4 (S70 SX1, 3 l2, 3 l3, 8 l2): a live call with a portrait remote speaker as the PiP target.
     case pipSpeaker = "pip-speaker"
+    /// SYS-5 (S70 4 l2): a live call on the receiver with the camera off, so the proximity rule arms.
+    case receiverCameraOff = "receiver-camera-off"
 }
 
 /// SX1 provider mode on iOS: `fake` drives the scripted cells, `real` uses the real `CXProvider` and
@@ -71,6 +73,8 @@ enum SystemFixtureScript {
             ]
         case .pipSpeaker:
             return [connecting, live(isMuted: true, isCameraOff: true)]
+        case .receiverCameraOff:
+            return [connecting, live(isMuted: false, isCameraOff: true)]
         }
     }
 
@@ -81,6 +85,12 @@ enum SystemFixtureScript {
     /// States that end with a system hold (the hold command, not an input).
     static func holdsAfterInputs(_ state: SystemFixtureState) -> Bool {
         state == .presenceOnHold
+    }
+
+    /// SYS-5: the audio route a fixture reports before its inputs (S70 4 l2). Only `receiver-camera-off` is on the
+    /// receiver; every other state stays on the speaker, so proximity never arms there.
+    static func audioRoute(for state: SystemFixtureState) -> AudioRouteKind {
+        state == .receiverCameraOff ? .receiver : .speaker
     }
 
     private static func live(isMuted: Bool, isCameraOff: Bool) -> CallPresenceInputs {
@@ -135,6 +145,7 @@ final class SystemFixtureSession {
         presence.onCommand = { [weak self] command in
             self?.dispatchedCommands.append(command)
         }
+        presence.reportAudioRoute(SystemFixtureScript.audioRoute(for: state))
         for step in SystemFixtureScript.inputs(for: state) {
             presence.apply(step)
         }
@@ -153,6 +164,12 @@ final class SystemFixtureSession {
         let result = presence.handle(kind, source: source, presenceSession: presence.snapshot.presenceSession)
         refreshReadouts()
         return result
+    }
+
+    /// SYS-5 (S70 4 l2): the fixture's route buttons; switching to the speaker releases proximity.
+    func setAudioRoute(_ kind: AudioRouteKind) {
+        presence.reportAudioRoute(kind)
+        refreshReadouts()
     }
 
     func refreshReadouts() {

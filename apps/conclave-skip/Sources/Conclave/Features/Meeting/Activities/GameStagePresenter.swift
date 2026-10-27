@@ -7,7 +7,10 @@ import Observation
 /// (the scoreboard and rematch) and `interaction` (pending and failure, per local move). Pushes are parsed once
 /// (`GameProjectionParser`, C6-15). A move's request id is client-local and bound to that emit's ack: pending clears on
 /// that ack or after a 10 s timeout mapped to `GameFailure.server`, never on a push, because the SFU broadcasts the new
-/// state before it acks the move (gameHandlers.ts:601-651). ACT-3 to ACT-6 extend `scene` with per-game models.
+/// state before it acks the move (gameHandlers.ts:601-651). ACT-3 to ACT-6 extend `scene` with per-game models: ACT-3
+/// builds the six prompt game scenes (S60 9 j) here, once per push, from the typed projections
+/// (`PromptSceneBuilder`, Games/Native/Scenes/PromptGameScenes.swift); private fields come only from the local
+/// person's own player view and only while that person holds a seat.
 @MainActor
 @Observable
 final class GameStagePresenter {
@@ -44,6 +47,12 @@ final class GameStagePresenter {
     @ObservationIgnored private var endPending = false
     @ObservationIgnored private var endFailed = false
     @ObservationIgnored private var rematchPending = false
+    /// Names seen during this game (seated players and the module rosters), so a vote target who left can still be
+    /// named ("%@ left. Vote again.", S60 9 f). Cleared when the game changes.
+    @ObservationIgnored private var knownPlayers: [GameNamedPlayer] = []
+    /// One-shot accessibility announcements already made for this game session (S60 9 i: the reveal, the vote result
+    /// and the Reaction go are announced once, however often a view reappears). Cleared in the lobby and on a new game.
+    @ObservationIgnored private var announced: [String] = []
 
     static let moveTimeoutMillis = 10000.0
 
@@ -65,7 +74,10 @@ final class GameStagePresenter {
             endPending = false
             endFailed = false
             rematchPending = false
+            knownPlayers = []
+            announced = []
         }
+        if next.phase == "lobby" { announced = [] }
         if rematchPending && (!next.isFinished || next.phase == "lobby") { rematchPending = false }
         let key = next.gameId + "|" + next.phase + "|" + next.publicViewJSON + "|" + next.playerViewJSON
         if key != parsedKey {
@@ -89,6 +101,7 @@ final class GameStagePresenter {
     func moveAcknowledged(requestId: String, success: Bool, serverText: String) {
         if requestId.isEmpty || requestId != pendingRequestId { return }
         cancelTimeout()
+        let ackedType = pendingType
         pendingRequestId = ""
         pendingType = ""
         if success {
@@ -97,7 +110,9 @@ final class GameStagePresenter {
         } else {
             failure = GameFailurePolicy.failure(serverText: serverText)
             failureText = failure == GameFailure.server ? serverText : ""
-            if failure == GameFailure.notAccepted { advanceFeedback(FeedbackKind.moveRejected) }
+            // A rejected bluff ("That is the real answer. Write a bluff.") is the S60 9 h rejection outcome too; R12
+            // names this presenter's rejection token `moveRejected` (S1 alone publishes `actionRejected`).
+            if failure == GameFailure.notAccepted || ackedType == "submit" { advanceFeedback(FeedbackKind.moveRejected) }
         }
         publishInteraction()
     }
@@ -173,6 +188,15 @@ final class GameStagePresenter {
         if hadEndFailure { rebuild() }
     }
 
+    /// Views only: true the first time `key` is claimed during this game session, so an announcement (the Trivia
+    /// reveal, the vote result, the Reaction go) is posted once even when its view appears again (S60 9 i).
+    func claimAnnouncement(_ key: String) -> Bool {
+        if key.isEmpty || announced.contains(key) { return false }
+        announced.append(key)
+        if announced.count > 40 { announced.removeFirst() }
+        return true
+    }
+
     /// The running game as the launcher needs it (Activities Now Playing and catalog gate).
     func summary() -> ActivityGameSummary {
         if !inputs.isActive { return ActivityGameSummary.none }
@@ -195,6 +219,8 @@ final class GameStagePresenter {
         endPending = false
         endFailed = false
         rematchPending = false
+        knownPlayers = []
+        announced = []
         if chrome.withRevision(0) != GameChromeModel.empty { chrome = GameChromeModel.empty.withRevision(chrome.revision + 1) }
         if scene.withRevision(0) != GameScene.empty { scene = GameScene.empty.withRevision(scene.revision + 1) }
         if countdown != nil { countdown = nil }
@@ -253,10 +279,32 @@ final class GameStagePresenter {
         }
         let lobby = GameStagePresenter.lobby(isHost: inputs.isHost, isSeated: isSeated, seat: seat, isRecovering: inputs.isRecovering,
                                              minPlayers: inputs.minPlayers, playerCount: inputs.players.count)
+        rememberPlayers()
+        // ACT-3 (S60 9 j): the prompt game scene of this push, built once; private fields only for a seated player.
+        let context = PromptSceneContext(localId: localId, isPlayer: seat == SeatState.player, isHost: inputs.isHost,
+                                         isRecovering: inputs.isRecovering, players: inputs.players, knownPlayers: knownPlayers)
+        var trivia: TriviaScene? = nil
+        if let projected = projection.trivia { trivia = PromptSceneBuilder.trivia(projected, context: context) }
+        var bluff: BluffScene? = nil
+        if let projected = projection.bluff { bluff = PromptSceneBuilder.bluff(projected, context: context) }
+        var wouldYouRather: ChoiceScene? = nil
+        if let projected = projection.wouldYouRather { wouldYouRather = PromptSceneBuilder.wouldYouRather(projected, context: context) }
+        var mostLikelyTo: PersonVoteScene? = nil
+        if let projected = projection.mostLikelyTo { mostLikelyTo = PromptSceneBuilder.mostLikelyTo(projected, context: context) }
+        var reaction: ReactionScene? = nil
+        if let projected = projection.reaction { reaction = PromptSceneBuilder.reaction(projected, context: context) }
+        var imposter: ImposterScene? = nil
+        if let projected = projection.imposter { imposter = PromptSceneBuilder.imposter(projected, context: context) }
+        let outcomes = [PromptOutcomePolicy.trivia(previous: scene.trivia, next: trivia),
+                        PromptOutcomePolicy.reaction(previous: scene.reaction, next: reaction)]
         let nextScene = GameScene(revision: scene.revision, kind: sceneKind(phase: phase, isSeated: isSeated), players: players,
                                   pendingJoiners: pending, options: GameStagePresenter.optionSummary(config: inputs.config, options: inputs.options),
-                                  lobby: lobby, projection: projection)
+                                  lobby: lobby, projection: projection, trivia: trivia, bluff: bluff, wouldYouRather: wouldYouRather,
+                                  mostLikelyTo: mostLikelyTo, reaction: reaction, imposter: imposter)
         if nextScene != scene { scene = nextScene.withRevision(scene.revision + 1) }
+        for outcome in outcomes where outcome != FeedbackKind.none {
+            advanceFeedback(outcome)
+        }
 
         var nextCountdown: CountdownModel? = nil
         if inputs.isActive && !inputs.isFinished && common.deadlineMillis > 0 {
@@ -282,6 +330,23 @@ final class GameStagePresenter {
             if isSeated && !projection.hasPlayerView { return GameSceneKind.privateView }
             return projection.kind
         }
+    }
+
+    /// Adds the names of this push (seated players, queued joiners and the vote rosters) to `knownPlayers`.
+    private func rememberPlayers() {
+        var seen: [GameNamedPlayer] = []
+        for player in inputs.players { seen.append(GameNamedPlayer(id: player.id, name: player.name)) }
+        for player in inputs.pendingJoiners { seen.append(GameNamedPlayer(id: player.id, name: player.name)) }
+        if let vote = projection.mostLikelyTo { seen.append(contentsOf: vote.players) }
+        if let vote = projection.imposter { seen.append(contentsOf: vote.players) }
+        for player in seen where !player.id.isEmpty && !player.name.isEmpty {
+            var known = false
+            for existing in knownPlayers where existing.id == player.id {
+                known = true
+            }
+            if !known { knownPlayers.append(player) }
+        }
+        while knownPlayers.count > 200 { knownPlayers.removeFirst() }
     }
 
     private func publishInteraction() {

@@ -31,16 +31,17 @@ final class ChatRowStore {
 
     var count: Int { entries.count }
 
-    /// Writes one row (equality-guarded) and indexes its message ids. Returns true when a visible value changed.
+    /// Writes one row and its assistant model (CHT-7; nil for other rows), equality-guarded, and indexes its message
+    /// ids. Returns true when a visible value changed.
     @discardableResult
-    func upsert(_ row: ChatRowModel, messageIds: [String]) -> Bool {
+    func upsert(_ row: ChatRowModel, messageIds: [String], assistant: AssistantRowModel? = nil) -> Bool {
         for messageId in messageIds {
             if !messageId.isEmpty { messageIndex[messageId] = row.id }
         }
         if let existing = entries[row.id] {
-            return existing.update(row)
+            return existing.update(row, assistant: assistant)
         }
-        entries[row.id] = ChatRowEntry(row: row)
+        entries[row.id] = ChatRowEntry(row: row, assistant: assistant)
         return true
     }
 

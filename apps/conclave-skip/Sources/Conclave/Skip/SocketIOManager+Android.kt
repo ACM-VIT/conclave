@@ -310,6 +310,8 @@ internal class SocketIOManager {
     internal var onChatMessage: ((ChatMessage) -> Unit)? = null
     internal var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Unit)? = null
     internal var onChatReactionChanged: ((ChatReactionChangedNotification) -> Unit)? = null
+    /** S40 CH7 (CHT-7): a relayed assistant packet's process state, before its text reaches onChatMessage. */
+    internal var onConclaveAssistantPacket: ((ConclaveAssistantMessageNotification) -> Unit)? = null
     internal var onReaction: ((Reaction) -> Unit)? = null
 
     internal var onHandRaised: ((HandRaisedNotification) -> Unit)? = null
@@ -1005,6 +1007,23 @@ internal class SocketIOManager {
             .put("timestamp", packet.timestamp)
             .put("expiresAt", packet.expiresAt)
             .put("signature", packet.signature)
+        // S40 CH7 (CHT-7): the signed process state, only when present. The SFU rebuilds the signing input from these
+        // fields (a dropped field fails the signature) and rejects a task whose query is not a string (never put null).
+        val reasoning = packet.reasoning
+        if (!reasoning.isNullOrEmpty()) payload.put("reasoning", reasoning)
+        if (packet.reasoningDone == true) payload.put("reasoningDone", true)
+        val tasks = packet.tasks
+        if (tasks != null && tasks.count > 0) {
+            val array = JSONArray()
+            for (task in tasks) {
+                val item = JSONObject().put("id", task.id).put("kind", task.kind).put("status", task.status)
+                val query = task.query
+                if (!query.isNullOrEmpty()) item.put("query", query)
+                array.put(item)
+            }
+            payload.put("tasks", array)
+        }
+        if (packet.errored == true) payload.put("errored", true)
         socket?.emit(SocketEvent.conclaveAnswer, payload)
     }
 
@@ -1379,6 +1398,58 @@ internal class SocketIOManager {
 
     private fun shouldEmitFireAndForget(): Boolean {
         return isConnected && socket != null && !activeRoomId.isNullOrBlank()
+    }
+
+    /** S50 PH10: Attendee Q&A through `webinar:updateConfig` (SFU webinar.ts:347-350). */
+    internal suspend fun updateWebinarQaEnabled(enabled: Boolean): WebinarConfigSnapshot {
+        return updateWebinarConfig(JSONObject().put("qaEnabled", enabled))
+    }
+
+    /** S50 PH8: `webinar:promoteAttendee` (`(data, callback)`, host only); the SFU tells only the attendee. */
+    internal suspend fun promoteWebinarAttendee(userId: String) {
+        emit(SocketEvent.webinarPromoteAttendee, mapOf("userId" to userId))
+    }
+
+    /** S50 PH8: `webinar:demoteParticipant`; on an attendee it only revokes the stage invite. */
+    internal suspend fun demoteWebinarParticipant(userId: String) {
+        emit(SocketEvent.webinarDemoteParticipant, mapOf("userId" to userId))
+    }
+
+    /** S50 PH8, S20 Q10: the attendee hand (`webinar:setHandRaised`); the ack echoes `raised`. */
+    internal suspend fun setWebinarHandRaised(raised: Boolean): Boolean {
+        val data = emit(SocketEvent.webinarSetHandRaised, mapOf("raised" to raised))
+        val obj = dataObject(data) ?: return raised
+        return boolField(obj, "raised") ?: raised
+    }
+
+    /** S50 PH8: `webinar:declineStage` is a `(callback)` handler, so it is emitted ack-only (no payload). */
+    internal suspend fun declineWebinarStage() {
+        emitAckOnly(SocketEvent.webinarDeclineStage)
+    }
+
+    /** S50 PH7: `webinar:qa:submit`; returns the new question id. */
+    internal suspend fun submitWebinarQuestion(question: String): String {
+        val data = emit(SocketEvent.webinarQaSubmit, mapOf("question" to question))
+        val obj = dataObject(data) ?: return ""
+        return stringField(obj, "id") ?: ""
+    }
+
+    /** S50 PH7: `webinar:qa:upvote`; the ack carries the viewer's own `upvotes` and `hasUpvoted`. */
+    internal suspend fun upvoteWebinarQuestion(id: String): WebinarQaUpvoteResponse {
+        val data = emit(SocketEvent.webinarQaUpvote, mapOf("id" to id))
+        val obj = dataObject(data) ?: return WebinarQaUpvoteResponse(success = true, upvotes = null, hasUpvoted = null)
+        return WebinarQaUpvoteResponse(
+            success = boolField(obj, "success"),
+            upvotes = intField(obj, "upvotes"),
+            hasUpvoted = boolField(obj, "hasUpvoted")
+        )
+    }
+
+    /** S50 PH7: `webinar:qa:moderate` (answering, answered, dismissed, reopen; a written answer up to 1,000). */
+    internal suspend fun moderateWebinarQuestion(id: String, action: String, answerText: String?) {
+        val payload = mutableMapOf<String, Any>("id" to id, "action" to action)
+        if (answerText != null) payload["answerText"] = answerText
+        emit(SocketEvent.webinarQaModerate, payload)
     }
 
     private suspend fun updateWebinarConfig(payload: JSONObject): WebinarConfigSnapshot {
@@ -2592,6 +2663,8 @@ internal class SocketIOManager {
             webinarRequiresInviteCode = boolField(obj, "webinarRequiresInviteCode"),
             webinarAttendeeCount = intField(obj, "webinarAttendeeCount"),
             webinarMaxAttendees = intField(obj, "webinarMaxAttendees"),
+            // S50 PH10: Attendee Q&A on.
+            webinarQaEnabled = boolField(obj, "webinarQaEnabled"),
             displayNameSnapshot = displayNameSnapshot
         )
     }
@@ -2723,6 +2796,34 @@ internal class SocketIOManager {
             reactions = null,
             ttsVoiceToken = null,
             suppressEmbeds = null
+        )
+    }
+
+    /** S40 CH7 (CHT-7): the relayed answer's process state, hand-rolled like the other decoders. */
+    private fun decodeConclaveAssistantPacket(value: Any?): ConclaveAssistantMessageNotification? {
+        val obj = jsonObject(value) ?: return null
+        val id = stringField(obj, "id") ?: return null
+        val rawTasks = obj.optJSONArray("tasks")
+        val tasks = mutableListOf<ConclaveAssistantRelayTask>()
+        if (rawTasks != null) {
+            for (index in 0 until rawTasks.length()) {
+                val entry = rawTasks.optJSONObject(index) ?: continue
+                val taskId = stringField(entry, "id") ?: continue
+                val kind = stringField(entry, "kind") ?: continue
+                val status = stringField(entry, "status") ?: continue
+                tasks.add(ConclaveAssistantRelayTask(id = taskId, kind = kind, status = status, query = stringField(entry, "query")))
+            }
+        }
+        return ConclaveAssistantMessageNotification(
+            id = id,
+            content = if (obj.has("content") && !obj.isNull("content")) obj.optString("content") else null,
+            done = boolField(obj, "done"),
+            timestamp = doubleField(obj, "timestamp"),
+            roomId = stringField(obj, "roomId"),
+            reasoning = if (obj.has("reasoning") && !obj.isNull("reasoning")) obj.optString("reasoning") else null,
+            reasoningDone = boolField(obj, "reasoningDone"),
+            tasks = if (rawTasks != null) skip.lib.Array(tasks) else null,
+            errored = boolField(obj, "errored")
         )
     }
 
@@ -3407,6 +3508,12 @@ internal class SocketIOManager {
 
         socket.on(SocketEvent.conclaveMessage, Emitter.Listener { args ->
             if (this.socket !== socket) return@Listener
+            // S40 CH7 (CHT-7): the packet's process state first; its text then goes through the chat pipeline.
+            decodeConclaveAssistantPacket(args.firstOrNull())?.let { packet ->
+                if (eventRoomIdMatchesActiveOrPending(packet.roomId, allowMissingRoomId = true)) {
+                    onConclaveAssistantPacket?.invoke(packet)
+                }
+            }
             val notification = decodeConclaveMessage(args.firstOrNull()) ?: return@Listener
             val roomId = activeRoomId ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId = true)) return@Listener

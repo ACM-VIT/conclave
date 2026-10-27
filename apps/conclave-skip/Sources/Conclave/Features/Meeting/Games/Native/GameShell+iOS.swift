@@ -117,6 +117,10 @@ struct GameShellScene: View {
             GameLobbyBody(scene: scene, chrome: chrome)
         case GameSceneKind.privateView:
             GameKitNotice(kind: .privateView, message: GameCopy.privateViewBody())
+        case GameSceneKind.trivia, GameSceneKind.bluff, GameSceneKind.wouldYouRather, GameSceneKind.mostLikelyTo,
+             GameSceneKind.reaction, GameSceneKind.imposter:
+            // ACT-3 (S60 9): the prompt game scenes, playing and results (Games/Native/Scenes).
+            PromptGameSceneBody(games: games)
         case GameSceneKind.unsupported:
             VStack(alignment: .leading, spacing: 10) {
                 GameKitNotice(kind: .unsupported, message: "", buttonTitle: storeURL.isEmpty ? "" : ConclaveStrings.text("Update App"),
@@ -246,6 +250,9 @@ struct GameShellBottomBar: View {
                                secondaryTitle: ConclaveStrings.text("End Game…"), secondaryRole: .destructive,
                                onSecondary: { endPrompt = true })
                     .modifier(GameShellEndDialog(games: games, name: chrome.name, isPresented: $endPrompt))
+            } else if chrome.phase == .playing {
+                // ACT-3 (S60 9 c): Skip Question, Next, Skip Writing, Reveal Now, Call the Vote, End Vote (seated host only).
+                PromptGameHostBar(games: games)
             }
         }
         .padding(.horizontal, 16)

@@ -90,6 +90,10 @@ private struct ParticipantsList: View {
                 }
                 ForEach(shown) { section in
                     Section {
+                        if section.id == PeopleSectionID.attendees.rawValue && !searching {
+                            // PPL-5 (S50 10 c): the watching count row, its own leaf on `people.attendeeCount`.
+                            WebinarWatchingRow(people: people)
+                        }
                         ForEach(section.rowIds, id: \.self) { key in
                             // Only Raised Hands rows read the queue size, so a hand change never re-evaluates the others.
                             PeopleSectionRow(people: people, sectionId: section.id, key: key,
@@ -101,11 +105,18 @@ private struct ParticipantsList: View {
                             ConclaveLoadingStatus(label: ConclaveStrings.text("Loading Participants"), identifier: "people.loading")
                         }
                     } header: {
-                        PeopleSectionHeader(section: section)
+                        if section.id == PeopleSectionID.attendees.rawValue {
+                            WebinarAttendeesHeader(people: people)
+                        } else {
+                            PeopleSectionHeader(section: section)
+                        }
                     } footer: {
-                        if section.id == PeopleSectionID.inMeeting.rawValue && !searching,
-                           let text = PeopleText.footer(PeopleRowPolicy.inMeetingFooter(snapshot)) {
-                            ConclaveSectionFooter(text, identifier: "people.section.inMeeting.footer")
+                        if section.id == PeopleSectionID.attendees.rawValue && !searching {
+                            WebinarAttendeesFooter(people: people, snapshot: snapshot)
+                        } else if (section.id == PeopleSectionID.inMeeting.rawValue || section.id == PeopleSectionID.panelists.rawValue)
+                                    && !searching,
+                                  let text = PeopleText.footer(PeopleRowPolicy.inMeetingFooter(snapshot)) {
+                            ConclaveSectionFooter(text, identifier: "people.section." + section.id + ".footer")
                         }
                     }
                     .id(section.id)
@@ -175,6 +186,10 @@ private struct PeopleSectionRow: View {
     var body: some View {
         if sectionId == PeopleSectionID.waiting.rawValue {
             PeopleWaitingRowView(entry: people.waiting.entry(for: key), probe: people.recompose)
+        } else if key.hasPrefix(PeopleOrderPolicy.attendeePrefix) {
+            // PPL-5 (S50 10 c): attendee hand-queue and invited rows carry their one inline action, not a Menu.
+            WebinarAttendeeRowView(people: people, key: key, sectionId: sectionId, queueCount: queueCount)
+                .accessibilityRotorEntry(id: sectionId + ":" + key, in: rotorNamespace)
         } else {
             let entry = people.rows.entry(for: key)
             // PPL-2 (S50 3 c): the trailing Menu, the accessibility actions, the context menu, the swipe and the

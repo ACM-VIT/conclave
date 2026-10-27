@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
 /*
@@ -49,7 +50,8 @@ internal enum class ConclaveBannerKind { Info, Warning, Error, Success, Reconnec
  *  now stays visible but disabled while an attempt is in flight. [onClick] stays last so callers can pass it as a
  *  trailing lambda (the gallery's `ConclaveBannerAction(title, id) {}`). */
 internal data class ConclaveBannerAction(
-    val title: String, val identifier: String, val enabled: Boolean = true, val onClick: () -> Unit,
+    val title: String, val identifier: String, val enabled: Boolean = true, val disabledDescription: String = "",
+    val onClick: () -> Unit,
 )
 
 /** Banner motion: an 8 dp move plus opacity over 120 ms, opacity only when animations are removed. The values are
@@ -94,7 +96,12 @@ internal fun ConclaveBanner(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         for (action in actions) {
                             TextButton(onClick = action.onClick, enabled = action.enabled,
-                                modifier = Modifier.heightIn(min = 48.dp).testTag(action.identifier)) {
+                                modifier = Modifier.heightIn(min = 48.dp).testTag(action.identifier).semantics {
+                                    // S70 6 i (SYS-6): a disabled Retry Now says why ("Retrying now").
+                                    if (!action.enabled && action.disabledDescription.isNotEmpty()) {
+                                        stateDescription = action.disabledDescription
+                                    }
+                                }) {
                                 ConclaveText(action.title, line = action.identifier)
                             }
                         }

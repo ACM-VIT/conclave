@@ -684,6 +684,8 @@ final class AudioRouteOwner {
         guard next != route else { return }
         route = next.withRevision(route.revision + 1)
         publishes += 1
+        // SYS-5 (S70 0.5 inputs table, 4 a): the presence arms proximity on the receiver route (equality guarded there).
+        presence?.reportAudioRoute(route.routeKind)
     }
 
     private func record(_ entry: String) {

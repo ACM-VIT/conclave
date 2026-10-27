@@ -73,7 +73,8 @@ import androidx.compose.ui.unit.dp
  * in: the profile, Sign out, Privacy policy and the error-colored Delete account with its AlertDialog. Signed out: the
  * value line, Continue with Google (Credential Manager's system sheet) with the Apple-account footnote (Q10), the
  * guest name and Privacy policy. Observes `account.snapshot` only. No coral fill: the Google row is neutral; text rows
- * carry no icons (H-06). The app-scope Settings row (SettingsKey) stays hidden until SET-1 (RECONCILE R26).
+ * carry no icons (H-06). SET-1 (RECONCILE R26, S10 5 d) adds the "Settings" row, which opens the app-scope Settings
+ * screen (`SettingsKey` in the premeeting back stack, AppSettingsScreen); it shows once the host passes onOpenSettings.
  * Back is disabled while the account is being deleted (S10 5 f).
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -83,6 +84,7 @@ internal fun AccountScreen(
     onBack: () -> Unit,
     onOpenPrivacy: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenSettings: (() -> Unit)? = null,
 ) {
     val snapshot = account.snapshot
     val scheme = MaterialTheme.colorScheme
@@ -156,7 +158,17 @@ internal fun AccountScreen(
                             onClick = { account.signOut() },
                         )
                     }
-                    // SETTINGS ROW SLOT: SET-1 adds the "Settings" row (SettingsKey) here, after Sign out.
+                    if (onOpenSettings != null) {
+                        item("settings") {
+                            AccountActionItem(
+                                title = conclaveString("set_title"),
+                                identifier = "account.settings",
+                                pending = false,
+                                enabled = snapshot.canDismiss,
+                                onClick = onOpenSettings,
+                            )
+                        }
+                    }
                     item("privacy") {
                         AccountActionItem(
                             title = conclaveString("pm_privacy_policy"),
@@ -219,7 +231,17 @@ internal fun AccountScreen(
                             onCommit = { name -> account.setGuestName(name) },
                         )
                     }
-                    // SETTINGS ROW SLOT: SET-1 adds the "Settings" row (SettingsKey) here, after the guest field.
+                    if (onOpenSettings != null) {
+                        item("settings") {
+                            AccountActionItem(
+                                title = conclaveString("set_title"),
+                                identifier = "account.settings",
+                                pending = false,
+                                enabled = true,
+                                onClick = onOpenSettings,
+                            )
+                        }
+                    }
                     item("privacy") {
                         AccountActionItem(
                             title = conclaveString("pm_privacy_policy"),

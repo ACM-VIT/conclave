@@ -234,6 +234,13 @@ struct ConclaveAssistantRelayPacket: Codable {
     let timestamp: Double
     let expiresAt: Double
     let signature: String
+    /// S40 CH7 (CHT-7): the signed process state (web `ConclaveAssistantRelayPacket`). Optional and omitted when absent
+    /// (synthesized Codable encodes nil as absent), so legacy packets and their signatures stay valid; the asker
+    /// forwards the route's packet unchanged, because the SFU checks the signature over these fields too.
+    var reasoning: String? = nil
+    var reasoningDone: Bool? = nil
+    var tasks: [ConclaveAssistantRelayTask]? = nil
+    var errored: Bool? = nil
 }
 
 struct SendReactionRequest: Codable {
@@ -768,6 +775,8 @@ struct JoinRoomResponse: Codable {
     let webinarRequiresInviteCode: Bool?
     let webinarAttendeeCount: Int?
     let webinarMaxAttendees: Int?
+    /// S50 PH10: Attendee Q&A on (`webinarQaEnabled` in the join ack, MC/types.ts:424).
+    let webinarQaEnabled: Bool?
     let displayNameSnapshot: [DisplayNameSnapshotUser]?
 
     enum CodingKeys: String, CodingKey {
@@ -790,6 +799,7 @@ struct JoinRoomResponse: Codable {
         case webinarRequiresInviteCode
         case webinarAttendeeCount
         case webinarMaxAttendees
+        case webinarQaEnabled
         case displayNameSnapshot
     }
 
@@ -813,6 +823,7 @@ struct JoinRoomResponse: Codable {
         webinarRequiresInviteCode: Bool? = nil,
         webinarAttendeeCount: Int? = nil,
         webinarMaxAttendees: Int? = nil,
+        webinarQaEnabled: Bool? = nil,
         displayNameSnapshot: [DisplayNameSnapshotUser]? = nil
     ) {
         self.rtpCapabilities = rtpCapabilities
@@ -834,6 +845,7 @@ struct JoinRoomResponse: Codable {
         self.webinarRequiresInviteCode = webinarRequiresInviteCode
         self.webinarAttendeeCount = webinarAttendeeCount
         self.webinarMaxAttendees = webinarMaxAttendees
+        self.webinarQaEnabled = webinarQaEnabled
         self.displayNameSnapshot = displayNameSnapshot
     }
 
@@ -865,6 +877,7 @@ struct JoinRoomResponse: Codable {
         self.webinarRequiresInviteCode = try container.decodeIfPresent(Bool.self, forKey: .webinarRequiresInviteCode)
         self.webinarAttendeeCount = try container.decodeIfPresent(Int.self, forKey: .webinarAttendeeCount)
         self.webinarMaxAttendees = try container.decodeIfPresent(Int.self, forKey: .webinarMaxAttendees)
+        self.webinarQaEnabled = try container.decodeIfPresent(Bool.self, forKey: .webinarQaEnabled)
         self.displayNameSnapshot = try container.decodeIfPresent([DisplayNameSnapshotUser].self, forKey: .displayNameSnapshot)
     }
 }
@@ -1263,6 +1276,11 @@ struct ConclaveAssistantMessageNotification: Codable {
     let done: Bool?
     let timestamp: Double?
     let roomId: String?
+    /// S40 CH7 (CHT-7): the relayed process state of someone else's answer (SFU `conclaveMessage`).
+    var reasoning: String? = nil
+    var reasoningDone: Bool? = nil
+    var tasks: [ConclaveAssistantRelayTask]? = nil
+    var errored: Bool? = nil
 }
 
 struct ChatHistorySnapshotNotification: Codable {
@@ -1840,6 +1858,8 @@ struct WebinarConfigSnapshot: Codable {
     let linkSlug: String?
     let feedMode: String?
     let hasLinkSlug: Bool
+    /// S50 PH10: Attendee Q&A on (`toWebinarConfigSnapshot`, SFU webinar.ts:369); nil from older servers.
+    let qaEnabled: Bool?
 
     init(
         roomId: String?,
@@ -1851,7 +1871,8 @@ struct WebinarConfigSnapshot: Codable {
         requiresInviteCode: Bool?,
         linkSlug: String?,
         feedMode: String?,
-        hasLinkSlug: Bool? = nil
+        hasLinkSlug: Bool? = nil,
+        qaEnabled: Bool? = nil
     ) {
         self.roomId = roomId
         self.enabled = enabled
@@ -1863,6 +1884,7 @@ struct WebinarConfigSnapshot: Codable {
         self.linkSlug = linkSlug
         self.feedMode = feedMode
         self.hasLinkSlug = hasLinkSlug ?? (linkSlug != nil)
+        self.qaEnabled = qaEnabled
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1875,6 +1897,7 @@ struct WebinarConfigSnapshot: Codable {
         case requiresInviteCode
         case linkSlug
         case feedMode
+        case qaEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -1889,6 +1912,7 @@ struct WebinarConfigSnapshot: Codable {
         linkSlug = try container.decodeIfPresent(String.self, forKey: .linkSlug)
         feedMode = try container.decodeIfPresent(String.self, forKey: .feedMode)
         hasLinkSlug = container.contains(.linkSlug)
+        qaEnabled = try container.decodeIfPresent(Bool.self, forKey: .qaEnabled)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1908,6 +1932,7 @@ struct WebinarConfigSnapshot: Codable {
             }
         }
         try container.encodeIfPresent(feedMode, forKey: .feedMode)
+        try container.encodeIfPresent(qaEnabled, forKey: .qaEnabled)
     }
 }
 
@@ -2033,6 +2058,50 @@ struct WebinarPromotedNotification: Codable {
 struct WebinarDemotedNotification: Codable {
     let roomId: String
     let webinarLinkSlug: String?
+}
+
+// MARK: - Webinar roles and Q&A requests (S50 PH7, PH8; webinarInteractionHandlers.ts)
+
+/// `webinar:promoteAttendee` and `webinar:demoteParticipant` (`{ userId }`, ack `{ success }` or `{ error }`).
+struct WebinarUserRequest: Codable {
+    let userId: String
+}
+
+/// `webinar:setHandRaised` ack: `{ success, raised }`.
+struct WebinarHandRaisedResponse: Codable {
+    let success: Bool?
+    let raised: Bool?
+}
+
+/// `webinar:qa:submit` (`{ question }`, 2 to 500 characters).
+struct WebinarQaSubmitRequest: Codable {
+    let question: String
+}
+
+/// `webinar:qa:submit` ack: `{ success, id }`.
+struct WebinarQaSubmitResponse: Codable {
+    let success: Bool?
+    let id: String?
+}
+
+/// `webinar:qa:upvote` (`{ id }`).
+struct WebinarQaUpvoteRequest: Codable {
+    let id: String
+}
+
+/// `webinar:qa:upvote` ack: the viewer's own projection, `{ success, upvotes, hasUpvoted }`.
+struct WebinarQaUpvoteResponse: Codable {
+    let success: Bool?
+    let upvotes: Int?
+    let hasUpvoted: Bool?
+}
+
+/// `webinar:qa:moderate` (`{ id, action, answerText? }`; action answering, answered, dismissed or reopen; answer up to
+/// 1,000 characters).
+struct WebinarQaModerateRequest: Codable {
+    let id: String
+    let action: String
+    let answerText: String?
 }
 
 struct WaitingRoomStatusNotification: Codable {

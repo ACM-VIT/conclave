@@ -134,11 +134,15 @@ private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: 
 
 @Composable
 private fun LobbyControls(premeeting: PremeetingPresenter, routeId: Int, snackbarHostState: SnackbarHostState) {
+    // S50 PH20 (RECONCILE R30): the promotion lobby keeps your identity and has no link or Share.
+    val isPromotion = premeeting.lobbyStatus?.takeIf { it.routeId == routeId }?.intent == LobbyIntent.promotion
     LobbyIssueBanner(premeeting, routeId)
     LobbyMicrophonePermissionBanner(premeeting)
     LobbyAudioItem(premeeting)
-    LobbyIdentityItems(premeeting, routeId)
-    MeetingLinkRow(premeeting, snackbarHostState)
+    if (!isPromotion) {
+        LobbyIdentityItems(premeeting, routeId)
+        MeetingLinkRow(premeeting, snackbarHostState)
+    }
     Spacer(Modifier.heightIn(min = 8.dp))
 }
 
@@ -192,8 +196,10 @@ private fun LobbyTitle(premeeting: PremeetingPresenter, key: PremeetingKey.Lobby
             else -> ""
         }
     }
+    // S10 6 g (RECONCILE R30): the promotion lobby's title is "Join as a speaker".
+    val title = if (status?.intent == LobbyIntent.promotion) conclaveString("pm_join_as_speaker") else (link?.roomLabel ?: key.roomId)
     Column {
-        Text(link?.roomLabel ?: key.roomId, style = MaterialTheme.typography.titleLarge, maxLines = 1,
+        Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1,
             overflow = TextOverflow.Ellipsis)
         if (subtitle.isNotEmpty()) {
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,

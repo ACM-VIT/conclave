@@ -65,6 +65,8 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
     var photoRowId by mutableStateOf("")
     /** CHT-5: the GIF picker (overlay sheet, or the side pane's in-pane page, S40 7 d). */
     var showsGifs by mutableStateOf(false)
+    /** CHT-7 (S40 4 d): a link in a Conclave AI answer waits here for the external link confirmation; "" when none. */
+    var pendingAssistantUrl by mutableStateOf("")
 
     fun openMenu(rowId: String) { menuRowId = rowId }
     fun closeMenu() { menuRowId = "" }
@@ -97,6 +99,37 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
     fun copyLink(rowId: String) { writeClip(presenter.linkText(rowId)) }
     fun toggle(rowId: String, emoji: String) { presenter.toggleReaction(rowId, emoji) }
     fun retry(rowId: String) { presenter.retry(rowId) }
+    /** S40 4 f: the asker's Try again on a failed answer. */
+    fun retryAssistant(rowId: String) { presenter.retryAssistant(rowId) }
+
+    /** S40 4 d: every link in an answer asks first ("Open external link?"). */
+    fun openAssistantLink(url: String) { pendingAssistantUrl = url }
+
+    /**
+     * Open link: meeting links route in the app (S10 4); http and https open in Custom Tabs on the call task, falling
+     * back to ACTION_VIEW; another app's link opens through the hand-off at once, since the dialog was its confirmation.
+     */
+    fun confirmAssistantLink() {
+        val url = pendingAssistantUrl
+        if (url.isEmpty()) return
+        pendingAssistantUrl = ""
+        val kind = NativeJoinLinkParser.classify(url)
+        if (kind == NativeJoinLinkKind.meeting || kind == NativeJoinLinkKind.webinar) {
+            ConclaveAppDelegate.shared.onOpenURL(url)
+            return
+        }
+        val lower = url.lowercase()
+        val isWeb = lower.startsWith("http://") || lower.startsWith("https://")
+        if (isWeb && ChatLinkLauncher.openInCustomTab(context, url)) return
+        NativeExternalHandoff.openExternalApp(url)
+    }
+
+    /** Copy link: the clipboard (the system confirmation on API 33 and later, the snackbar before). */
+    fun copyAssistantLink() {
+        val url = pendingAssistantUrl
+        pendingAssistantUrl = ""
+        writeClip(url)
+    }
     fun delete(rowId: String) { presenter.deleteFailed(rowId) }
     fun hideSender(userId: String) { presenter.hideSender(userId) }
     fun showSender(userId: String) { presenter.showSender(userId) }
@@ -193,6 +226,8 @@ internal object ChatCopyAndroid {
     fun announcement(announcement: ChatAnnouncement): String = when (announcement.kind) {
         "newMessage" -> conclaveString("chat_announce_message", announcement.name, announcement.text)
         "newMessages" -> conclavePlural("chat_announce_messages", announcement.count, announcement.count)
+        // CHT-7 (S40 4 i): one announcement when an answer completes, with its first sentence.
+        "assistantAnswered" -> conclaveString("chat_ax_assistant_answered", announcement.text)
         else -> ""
     }
 

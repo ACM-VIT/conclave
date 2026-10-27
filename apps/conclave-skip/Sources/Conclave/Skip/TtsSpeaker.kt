@@ -32,7 +32,8 @@ import skip.foundation.ProcessInfo
  * speaker, Bluetooth) and the voice call volume the volume keys control while call audio is live (SY18), never the
  * media stream; nothing here requests audio focus or changes the audio mode, and nothing starts while the owner
  * reports another app's audio, a hold or a media services reset. A personal voice (the sender's voice token) is
- * synthesized by the web route with a 15 s limit, then falls back to the system voice.
+ * synthesized by the web route with a 15 s limit, then falls back to the system voice. SET-4 adds the Settings
+ * Preview (togglePreview) and the standard voice list (loadStandardVoices).
  */
 internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueue()) {
     private var engine: TextToSpeech? = null
@@ -91,6 +92,20 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
     /** The legacy entry point (no message id, so no bubble state); kept until the core moves to enqueue. */
     internal fun speak(text: String, userId: String, displayName: String) {
         enqueue(messageId = "", userId = userId, displayName = displayName, text = text, voiceToken = "", isOwn = false)
+    }
+
+    /**
+     * Settings > Voice messages > Preview (S60 2 d, C6-22; SET-4): one fixed sentence (localized by the page) in the
+     * chosen standard voice through the call output, under the reserved VoicePreviewPolicy.messageId, so
+     * activeMessageId tells whether it plays. start false (Stop preview) stops it.
+     */
+    internal fun togglePreview(sentence: String, start: Boolean) {
+        if (VoicePreviewPolicy.isPreviewPlaying(activeMessageId = queue.activeMessageId)) {
+            queue.stop()
+            if (!start) return
+        }
+        if (!start) return
+        replay(messageId = VoicePreviewPolicy.messageId, userId = "", displayName = "", text = sentence, voiceToken = "")
     }
 
     // Engine
@@ -264,6 +279,36 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
         .build()
 
     internal companion object {
+        /**
+         * The system voices for [languageTag] in the shared order (S60 2 d), read from a short-lived engine whose
+         * init listener runs on the main thread; [onLoaded] runs on the main thread, with an empty list when the
+         * engine is unavailable. The call's own engine is never touched, so loading the list cannot interrupt a
+         * voice message.
+         */
+        internal fun loadStandardVoices(languageTag: String, onLoaded: (List<VoiceOptionModel>) -> Unit) {
+            val context = ProcessInfo.processInfo.androidContext.applicationContext
+            var probe: TextToSpeech? = null
+            probe = TextToSpeech(context) { status ->
+                val engine = probe
+                val voices = mutableListOf<VoiceOptionModel>()
+                if (status == TextToSpeech.SUCCESS && engine != null) {
+                    val available = try { engine.voices } catch (_: Throwable) { null }
+                    if (available != null) {
+                        for (voice in available) {
+                            val notInstalled = try {
+                                voice.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) == true
+                            } catch (_: Throwable) { false }
+                            if (notInstalled) continue
+                            voices.add(VoiceOptionModel(id = voice.name, name = voice.name, languageTag = voice.locale.toLanguageTag()))
+                        }
+                    }
+                }
+                try { engine?.shutdown() } catch (_: Throwable) {}
+                val ordered = VoicePreviewPolicy.options(skip.lib.Array(voices), languageTag = languageTag).toList()
+                Handler(Looper.getMainLooper()).post { onLoaded(ordered) }
+            }
+        }
+
         /** The system speech rate the app has always used. */
         internal const val RATE = 0.94f
         internal const val UTTERANCE_PREFIX = "conclave-tts-"

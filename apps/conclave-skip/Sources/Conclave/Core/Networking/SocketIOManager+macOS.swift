@@ -31,6 +31,12 @@ final class SocketIOManager {
     var onWebinarAttendeeCountChanged: ((WebinarAttendeeCountChangedNotification) -> Void)?
     var onWebinarFeedChanged: ((WebinarFeedChangedNotification) -> Void)?
     var onWebinarParticipantJoined: ((WebinarParticipantJoinedNotification) -> Void)?
+    /// S50 PH7, PH8, PH9 (PPL-5 to PPL-7).
+    var onWebinarQaChanged: ((WebinarQaChangedNotification) -> Void)?
+    var onWebinarQaSnapshot: ((WebinarQaSnapshot) -> Void)?
+    var onWebinarHandQueueChanged: ((WebinarHandQueueChangedNotification) -> Void)?
+    var onWebinarPromoted: ((WebinarPromotedNotification) -> Void)?
+    var onWebinarDemoted: ((WebinarDemotedNotification) -> Void)?
     var onBrowserState: ((BrowserStateNotification) -> Void)?
     var onBrowserClosed: ((BrowserClosedNotification) -> Void)?
     var onAppsState: ((AppsStateNotification) -> Void)?
@@ -59,6 +65,7 @@ final class SocketIOManager {
     var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Void)?
     /// S40 CH3: `chat:reactionChanged` (the complete set for one message).
     var onChatReactionChanged: ((ChatReactionChangedNotification) -> Void)?
+    var onConclaveAssistantPacket: ((ConclaveAssistantMessageNotification) -> Void)?
     var onReaction: ((Reaction) -> Void)?
 
     var onHandRaised: ((HandRaisedNotification) -> Void)?
@@ -283,6 +290,21 @@ final class SocketIOManager {
     func rotateWebinarLink() async throws -> WebinarLinkResponse {
         WebinarLinkResponse(slug: "", link: "", publicAccess: false, linkVersion: 0)
     }
+    /// S50 PH10.
+    func updateWebinarQaEnabled(_ enabled: Bool) async throws -> WebinarConfigSnapshot {
+        WebinarConfigSnapshot(roomId: nil, enabled: nil, publicAccess: nil, locked: nil, maxAttendees: nil, attendeeCount: nil, requiresInviteCode: nil, linkSlug: nil, feedMode: nil, qaEnabled: enabled)
+    }
+    /// S50 PH8 (test stubs record nothing; the host tests drive the presenter seam).
+    func promoteWebinarAttendee(userId: String) async throws { }
+    func demoteWebinarParticipant(userId: String) async throws { }
+    func setWebinarHandRaised(_ raised: Bool) async throws -> Bool { raised }
+    func declineWebinarStage() async throws { }
+    /// S50 PH7.
+    func submitWebinarQuestion(_ question: String) async throws -> String { "" }
+    func upvoteWebinarQuestion(id: String) async throws -> WebinarQaUpvoteResponse {
+        WebinarQaUpvoteResponse(success: true, upvotes: nil, hasUpvoted: nil)
+    }
+    func moderateWebinarQuestion(id: String, action: String, answerText: String?) async throws { }
     func getBrowserState() async throws -> BrowserStateNotification {
         BrowserStateNotification(active: false, url: nil, noVncUrl: nil, controllerUserId: nil, provider: nil, roomId: nil)
     }

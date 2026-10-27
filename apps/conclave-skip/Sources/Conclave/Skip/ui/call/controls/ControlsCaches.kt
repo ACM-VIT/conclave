@@ -6,8 +6,8 @@ package conclave.module
  * the observed property, even on a hit, so Compose stays subscribed; a snapshot rebuilds only on a new revision and an
  * unchanged control keeps its exact CallControlUi instance, so only the changed cell recomposes under key(id). Only
  * Kotlin scalars and transpiled String enums cross into the cell composables; no stability annotations on Skip
- * collections (R14). CTL-2 reads LeaveCache in LeaveControl.kt; CTL-3, CTL-5 and CTL-6 add AudioRouteCache, MoreCache and
- * ReactionsCache.
+ * collections (R14). CTL-2 reads LeaveCache in LeaveControl.kt; CTL-5 and CTL-6 (MoreSheet.kt) read MoreCache and
+ * ReactionsCache; CTL-3 adds AudioRouteCache.
  */
 
 /** One bar control as Kotlin scalars. `gesture` is ControlBarPolicy.gestureKind for the model (S30 1 h). */
@@ -127,5 +127,57 @@ internal class LeaveCache(private val presenter: CallControlsPresenter) {
         val previous = cached
         if (previous != null && previous.revision == state.revision) return previous
         return LeaveUi.from(state).also { cached = it }
+    }
+}
+
+/**
+ * `controls.more` as Kotlin values (CTL-5, CL14): the tiles in the S30 5 d order and the host rows from the shared
+ * MoreMenuPolicy, so the sheet never re-derives order or visibility. `snapshot` stays the transpiled value.
+ */
+internal class MoreUi(source: MoreSnapshot) {
+    val snapshot: MoreSnapshot = source
+    val revision: Int = source.revision
+    val isRecovering: Boolean = source.isRecovering
+    val meetingLink: String = source.meetingLink
+    val roomLabel: String = source.roomLabel
+    val layoutMode: String = source.layoutMode
+    val hasHostSection: Boolean = source.hasHostSection
+    val tiles: List<MoreItem> = buildList { for (item in MoreMenuPolicy.tiles(source)) add(item) }
+    val hostItems: List<MoreItem> = buildList { for (item in MoreMenuPolicy.hostItems(source)) add(item) }
+
+    fun item(id: MoreItemID): MoreItem? = snapshot.item(id)
+
+    fun opensPanel(id: MoreItemID): Boolean = MoreMenuPolicy.opensPanel(id)
+}
+
+internal class MoreCache(private val presenter: CallControlsPresenter) {
+    private var cached: MoreUi? = null
+
+    fun current(): MoreUi {
+        // Always read the observed property, even on a cache hit, to keep Compose subscribed.
+        val state = presenter.more
+        val previous = cached
+        if (previous != null && previous.revision == state.revision) return previous
+        return MoreUi(state).also { cached = it }
+    }
+}
+
+/** `controls.reactions` as Kotlin values (CTL-6, CL14): read only by the reaction rows, so sends never touch the tiles. */
+internal class ReactionsUi(source: ReactionPaletteSnapshot) {
+    val revision: Int = source.revision
+    val availability: ReactionAvailability = source.availability
+    val isAvailable: Boolean = source.isAvailable
+    val emoji: List<ReactionOptionModel> = buildList { for (option in source.emoji) add(option) }
+    val art: List<ReactionOptionModel> = buildList { for (option in source.art) add(option) }
+}
+
+internal class ReactionsCache(private val presenter: CallControlsPresenter) {
+    private var cached: ReactionsUi? = null
+
+    fun current(): ReactionsUi {
+        val state = presenter.reactions
+        val previous = cached
+        if (previous != null && previous.revision == state.revision) return previous
+        return ReactionsUi(state).also { cached = it }
     }
 }

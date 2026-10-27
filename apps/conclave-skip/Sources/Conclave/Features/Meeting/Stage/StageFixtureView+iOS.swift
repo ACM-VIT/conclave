@@ -67,6 +67,8 @@ private struct StageFixtureControls: View {
                 fixtureButton("Reactions", identifier: "stage.fixture.reactions") { session.replayReactions(); refresh += 1 }
                 fixtureButton("Join Burst", identifier: "stage.fixture.joinBurst") { session.postJoinBurst(); refresh += 1 }
                 fixtureButton("Dismiss Toast", identifier: "stage.fixture.dismissToast") { session.dismissCurrentToast(); refresh += 1 }
+                fixtureButton("Previews 1 Sender", identifier: "stage.fixture.previews.sameSender3") { session.postChatPreviewScript(named: "sameSender3"); refresh += 1 }
+                fixtureButton("Previews 3 Senders", identifier: "stage.fixture.previews.mixed3") { session.postChatPreviewScript(named: "mixed3"); refresh += 1 }
                 fixtureButton("Suspend Toasts", identifier: "stage.fixture.suspendToasts") { session.toggleToastSuspension(); refresh += 1 }
                 fixtureButton("Next Caption", identifier: "stage.fixture.nextCaption") { session.nextCaption(); refresh += 1 }
                 fixtureButton("Reconnect", identifier: "stage.fixture.reconnect") { session.toggleReconnecting(); refresh += 1 }
@@ -105,6 +107,10 @@ private struct StageFixtureReadouts: View {
             readout(session.countersReadout(), identifier: "stage.counters")
             readout(session.announcementsReadout(), identifier: "stage.announcements")
             readout(session.noticesReadout(), identifier: "stage.notices")
+            readout(session.chatPreviewReadout(), identifier: "chat.preview")
+            readout(session.settingsCallsReadout(), identifier: "wp3.calls")
+            readout(session.speakerTestReadout(), identifier: "speakerTest.count")
+            readout(session.voicePreviewReadout(), identifier: "voicePreview.count")
             readout(session.captionsReadout(), identifier: "stage.captions.readout")
             readout(session.activityReadout(), identifier: "game.emits")
             readout(session.panelReadout(), identifier: "panel.current")

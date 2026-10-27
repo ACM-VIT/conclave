@@ -9,7 +9,7 @@ import UIKit
 // (the context menu carries Copy). CHT-4 and CHT-5: photo rows show the bounded image in a fixed 240 by 180 box (the
 // viewer opens on tap, a failed load retries on tap), GIF rows animate only on screen (stickers without a bubble,
 // clips as a poster with the play glyph), and ready link cards follow the reactions. Media-only rows put the summary
-// on the media element. Voice and assistant markdown are CHT-6 and CHT-7.
+// on the media element. Voice rows are CHT-6's; Conclave AI rows are `AssistantRowView` (CHT-7, AssistantRow+iOS.swift).
 
 struct ChatRowView: View {
     let entry: ChatRowEntry
@@ -33,6 +33,8 @@ struct ChatRowView: View {
                 ChatDayRow(row: row)
             case .unreadDivider:
                 ChatUnreadDivider()
+            case .assistant:
+                AssistantRowView(entry: entry, actions: actions, avatarSize: min(avatarSize, 48))
             default:
                 ChatMessageRowView(row: row, actions: actions, avatarSize: min(avatarSize, 48))
             }
@@ -380,16 +382,11 @@ private struct ChatBubbleText: View {
 
     var body: some View {
         Group {
-            if row.kind == ChatRowKind.assistant && row.plainText.isEmpty {
-                // D10: a static state with the system spinner until CHT-7's thinking rows.
-                ProgressView()
-                    .controlSize(.small)
-            } else {
-                Text(attributed)
-                    .font(.body)
-                    .lineLimit(nil)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            // Assistant rows never reach this view (AssistantRowView, CHT-7).
+            Text(attributed)
+                .font(.body)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityLabel(ChatCopy.rowLabel(row))
         .accessibilityValue(ChatCopy.rowValue(row))
