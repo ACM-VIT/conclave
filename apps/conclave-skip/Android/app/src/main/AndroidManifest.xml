@@ -33,6 +33,11 @@
         <package android:name="com.google.android.apps.common.testing.services" tools:node="remove" />
     </queries>
 
+    <!-- android:localeConfig is generated: app/build.gradle.kts turns on
+         androidResources.generateLocaleConfig, which writes the locale config from
+         res/values* (default locale in res/resources.properties) and adds the attribute
+         to the merged manifest. Do not add it here: the manifest merger rejects a
+         hand-written localeConfig while generation is on (S70 14 d, SY13). -->
     <application
         android:label="${PRODUCT_NAME}"
         android:name=".AndroidAppMain"

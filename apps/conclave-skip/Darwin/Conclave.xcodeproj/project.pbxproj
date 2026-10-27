@@ -10,6 +10,7 @@
 		491F27822DA55B72004926EE /* Conclave in Frameworks */ = {isa = PBXBuildFile; productRef = 491F27812DA55B72004926EE /* Conclave */; };
 		491F27832DA55B72004926EE /* Conclave in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 491F27812DA55B72004926EE /* Conclave */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		496BDBEE2B8A7E9C00C09264 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 496BDBED2B8A7E9C00C09264 /* Localizable.xcstrings */; };
+		9E14C0A12F0B4D2A00C1A142 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 9E14C0A12F0B4D2A00C1A141 /* InfoPlist.xcstrings */; };
 		6D4A1F102E1B4D0A9C72A111 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 6D4A1F0F2E1B4D0A9C72A111 /* PrivacyInfo.xcprivacy */; };
 		7A6D6B2C2E4E4702A581F7A1 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 7A6D6B2B2E4E4702A581F7A1 /* PrivacyInfo.xcprivacy */; };
 		499CD43B2AC5B799001AE8D8 /* Main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49F90C2B2A52156200F06D93 /* Main.swift */; };
@@ -60,6 +61,7 @@
 /* Begin PBXFileReference section */
 		36B0F80D3E4E571FE785B302 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		4900101C2BACEA710000DE33 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		9E14C0A12F0B4D2A00C1A141 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
 		493609562A6B7EAE00C401E2 /* Conclave */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = Conclave; path = ..; sourceTree = "<group>"; };
 		496BDBEB2B89A47800C09264 /* Conclave.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Conclave.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		496BDBED2B8A7E9C00C09264 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; name = Localizable.xcstrings; path = ../Sources/Conclave/Resources/Localizable.xcstrings; sourceTree = "<group>"; };
@@ -164,6 +166,7 @@
 				5C11A1C02E9F4B7A00D1A001 /* AppIcon.icon */,
 				49F90C312A52156300F06D93 /* Entitlements.plist */,
 				4900101C2BACEA710000DE33 /* Info.plist */,
+				9E14C0A12F0B4D2A00C1A141 /* InfoPlist.xcstrings */,
 				6D4A1F0F2E1B4D0A9C72A111 /* PrivacyInfo.xcprivacy */,
 			);
 			name = App;
@@ -240,9 +243,6 @@
 			knownRegions = (
 				en,
 				Base,
-				es,
-				ja,
-				"zh-Hans",
 			);
 			mainGroup = 49F90C1F2A52156200F06D93;
 			productRefGroup = 496BDBEC2B89A47800C09264 /* Products */;
@@ -263,6 +263,7 @@
 				499CD4402AC5B799001AE8D8 /* Assets.xcassets in Resources */,
 				5C11A1C02E9F4B7A00D1A002 /* AppIcon.icon in Resources */,
 				496BDBEE2B8A7E9C00C09264 /* Localizable.xcstrings in Resources */,
+				9E14C0A12F0B4D2A00C1A142 /* InfoPlist.xcstrings in Resources */,
 				6D4A1F102E1B4D0A9C72A111 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

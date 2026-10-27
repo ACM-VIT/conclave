@@ -100,10 +100,17 @@ enum PendingUserRowsPolicy {
 @MainActor
 @Observable
 final class MeetingState {
+    /// WP2-S1 E2: the view model's single shell hook. Every field the shell presenter and `CallPresence` read
+    /// (contract-wp2-first-slice 3.2 inputs table) calls it from its `didSet`; chat arrays, the active speaker,
+    /// connection quality and other high-frequency fields never do. The view model installs exactly one closure and
+    /// rebinds it when `state` is replaced.
+    @ObservationIgnored var onShellInputChanged: (() -> Void)? = nil
+
     // Connection State
     var connectionState: ConnectionState = .disconnected {
         didSet {
             PerformanceDiagnostics.state("connectionState", old: "\(oldValue)", new: "\(connectionState)")
+            onShellInputChanged?()
         }
     }
     /// True from the first established-call interruption until replacement
@@ -118,20 +125,38 @@ final class MeetingState {
                 old: "\(oldValue)",
                 new: "\(isRecoveringConnection)"
             )
+            onShellInputChanged?()
         }
     }
     /// True while a connected call is moving through an expected app
     /// background/foreground transition. Transport recovery may briefly run,
     /// but it should not be presented as a user-facing outage.
-    var isResumingFromBackground: Bool = false
+    var isResumingFromBackground: Bool = false {
+        didSet { onShellInputChanged?() }
+    }
     var errorMessage: String?
-    var joinFormErrorMessage: String?
-    var meetingEndedNoticeMessage: String?
-    var serverRestartNotice: String?
+    var joinFormErrorMessage: String? = nil {
+        didSet { onShellInputChanged?() }
+    }
+    var meetingEndedNoticeMessage: String? = nil {
+        didSet { onShellInputChanged?() }
+    }
+    var serverRestartNotice: String? = nil {
+        didSet { onShellInputChanged?() }
+    }
     var adminNoticeMessage: String?
     var adminNoticeLevel: AdminNoticeLevel = .info
-    var isNetworkOffline: Bool = false
-    var waitingMessage: String?
+    var isNetworkOffline: Bool = false {
+        didSet { onShellInputChanged?() }
+    }
+    var waitingMessage: String? = nil {
+        didSet { onShellInputChanged?() }
+    }
+    /// WP2-S1 E1: the typed terminal outcome of the current call session, recorded before each terminal phase write
+    /// (the legacy `errorMessage` and notice strings are unchanged).
+    var terminalOutcome: MeetingTerminalOutcome? = nil {
+        didSet { onShellInputChanged?() }
+    }
 
     // Meeting-entry takeover: a branded Lottie overlay that covers connect →
     // join → media-settle so the user never sees the raw join spinner or the
@@ -140,14 +165,19 @@ final class MeetingState {
     var isEnteringMeeting: Bool = false {
         didSet {
             PerformanceDiagnostics.state("isEnteringMeeting", old: "\(oldValue)", new: "\(isEnteringMeeting)")
+            onShellInputChanged?()
         }
     }
-    var meetingEntryAction: MeetingEntryAction?
+    var meetingEntryAction: MeetingEntryAction? = nil {
+        didSet { onShellInputChanged?() }
+    }
     var meetingEntryStartedAt: Date?
     var meetingEntryGeneration: Int = 0
 
     // Room State
-    var roomId: String = ""
+    var roomId: String = "" {
+        didSet { onShellInputChanged?() }
+    }
     var isRoomLocked: Bool = false
     var isChatLocked: Bool = false
     var isNoGuests: Bool = false
@@ -156,7 +186,9 @@ final class MeetingState {
     // True while a picked chat image is uploading to the asset store.
     var isChatImageUploading: Bool = false
     var isTtsDisabled: Bool = false
-    var isReactionsDisabled: Bool = false
+    var isReactionsDisabled: Bool = false {
+        didSet { onShellInputChanged?() }
+    }
     var meetingRequiresInviteCode: Bool = false
     var adminAllowedUserKeys: [String] = []
     var adminLockedAllowedUserKeys: [String] = []
@@ -164,7 +196,9 @@ final class MeetingState {
     var isAdminAccessListRefreshing: Bool = false
 
     // Webinar State
-    var webinarRole: String?
+    var webinarRole: String? = nil {
+        didSet { onShellInputChanged?() }
+    }
     var isWebinarEnabled: Bool = false
     var isWebinarPublicAccess: Bool = false
     var isWebinarLocked: Bool = false
@@ -180,8 +214,12 @@ final class MeetingState {
     var userId: String
     var sfuUserId: String?
     var sessionId: String
-    var displayName: String = ""
-    var isAdmin: Bool = false
+    var displayName: String = "" {
+        didSet { onShellInputChanged?() }
+    }
+    var isAdmin: Bool = false {
+        didSet { onShellInputChanged?() }
+    }
     var hostUserId: String?
     var hostUserIds: [String] = []
 
@@ -191,23 +229,35 @@ final class MeetingState {
             if oldValue.count != participants.count {
                 PerformanceDiagnostics.state("participants.count", old: "\(oldValue.count)", new: "\(participants.count)")
             }
+            onShellInputChanged?()
         }
     }
     var displayNames: [String: String] = [:]
     var pendingUsers: [String: String] = [:] {
         didSet {
             pendingUserRows = PendingUserRowsPolicy.sortedRows(from: pendingUsers)
+            onShellInputChanged?()
         }
     }
     private(set) var pendingUserRows: [PendingUserRow] = []
     var hasInitialPresenceSnapshot: Bool = false
 
     // Media State
-    var isMuted: Bool = true
-    var isCameraOff: Bool = true
-    var isAudioOnlyMode: Bool = false
-    var isScreenSharing: Bool = false
-    var isHandRaised: Bool = false
+    var isMuted: Bool = true {
+        didSet { onShellInputChanged?() }
+    }
+    var isCameraOff: Bool = true {
+        didSet { onShellInputChanged?() }
+    }
+    var isAudioOnlyMode: Bool = false {
+        didSet { onShellInputChanged?() }
+    }
+    var isScreenSharing: Bool = false {
+        didSet { onShellInputChanged?() }
+    }
+    var isHandRaised: Bool = false {
+        didSet { onShellInputChanged?() }
+    }
     var videoQuality: VideoQuality = .standard
     var connectionQuality: ConnectionQuality = .unknown
     // Selected audio routes (mic input / speaker output). nil = follow the
@@ -248,7 +298,9 @@ final class MeetingState {
     var isGameEndArmed: Bool = false
 
     // Active States
-    var activeScreenShareUserId: String?
+    var activeScreenShareUserId: String? = nil {
+        didSet { onShellInputChanged?() }
+    }
     var activeSpeakerId: String? {
         didSet {
             PerformanceDiagnostics.state("activeSpeakerId", old: oldValue ?? "nil", new: activeSpeakerId ?? "nil")
@@ -286,10 +338,13 @@ final class MeetingState {
             }
         }
     }
-    var unreadChatCount: Int = 0
+    var unreadChatCount: Int = 0 {
+        didSet { onShellInputChanged?() }
+    }
     var isChatOpen: Bool = false {
         didSet {
             PerformanceDiagnostics.state("isChatOpen", old: "\(oldValue)", new: "\(isChatOpen)")
+            onShellInputChanged?()
         }
     }
     var isTranscriptOpen: Bool = false {

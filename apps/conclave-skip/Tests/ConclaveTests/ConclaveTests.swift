@@ -10276,7 +10276,16 @@ final class ConclaveTests: XCTestCase {
     func testDarwinPermissionPurposeStringsArePresentInAppAndExtensionPlists() throws {
         let appPlist = try sourcePlistDictionary("Darwin/Info.plist")
         let extensionPlist = try sourcePlistDictionary("Darwin/ScreenShareExtension/Info.plist")
-        let purposeStringKeys = [
+        // SYS-14 (S70 16 c, SY12, S10 0.8 C12): the app declares only the purpose strings it uses, and
+        // Darwin/InfoPlist.xcstrings localizes them (SYS14LocalizationInfraTests pins the copy and the catalog).
+        let appPurposeStringKeys = [
+            "NSCameraUsageDescription",
+            "NSMicrophoneUsageDescription",
+            "NSLocalNetworkUsageDescription",
+            "NSPhotoLibraryAddUsageDescription",
+        ]
+        // The broadcast extension keeps its checked-in plist until SYS-10 gives it its own catalog (S70 10 c, CE P12).
+        let extensionPurposeStringKeys = [
             "NSCameraUsageDescription",
             "NSMicrophoneUsageDescription",
             "NSBluetoothAlwaysUsageDescription",
@@ -10321,19 +10330,17 @@ final class ConclaveTests: XCTestCase {
 
         try assertPurposeStrings(
             appPlist,
-            keys: purposeStringKeys
+            keys: appPurposeStringKeys
         )
-        let temporaryLocationPurposes = try XCTUnwrap(
-            appPlist["NSLocationTemporaryUsageDescriptionDictionary"] as? [String: String]
-        )
-        XCTAssertFalse(
-            temporaryLocationPurposes["MeetingLocationSharing", default: ""]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .isEmpty
-        )
+        let declaredAppPurposeStringKeys = (appPlist.allKeys as? [String] ?? []).filter {
+            $0.hasSuffix("UsageDescription") || $0.hasSuffix("UsageDescriptionDictionary")
+        }
+        XCTAssertEqual(Set(declaredAppPurposeStringKeys), Set(appPurposeStringKeys))
+        XCTAssertNil(appPlist["NSUserNotificationsUsageDescription"])
+        XCTAssertNil(appPlist["NSLocationTemporaryUsageDescriptionDictionary"])
         try assertPurposeStrings(
             extensionPlist,
-            keys: purposeStringKeys
+            keys: extensionPurposeStringKeys
         )
         let extensionTemporaryLocationPurposes = try XCTUnwrap(
             extensionPlist["NSLocationTemporaryUsageDescriptionDictionary"] as? [String: String]
@@ -10438,39 +10445,18 @@ final class ConclaveTests: XCTestCase {
         let script = try String(contentsOf: sourceFileURL("Darwin/Scripts/apply-embedded-privacy-metadata.sh"))
         let project = try sourceFileContents("Darwin/Conclave.xcodeproj/project.pbxproj")
 
-        XCTAssertTrue(script.contains("patch_host_app_plist"))
-        XCTAssertTrue(script.contains("patch_conclave_framework"))
-        XCTAssertTrue(script.contains("patch_webrtc_framework"))
-        XCTAssertTrue(script.contains("patch_mediasoup_framework"))
-        XCTAssertTrue(script.contains("patch_remaining_frameworks"))
-        XCTAssertTrue(script.contains("patch_embedded_bundles"))
-        XCTAssertTrue(script.contains("patch_embedded_app_extensions"))
-        XCTAssertTrue(script.contains("${APP_INFO_PLIST}"))
-        XCTAssertTrue(script.contains("${PLUGINS_DIR}"))
-        XCTAssertTrue(script.contains("resign_code_bundle_if_needed \"$(dirname \""))
-        XCTAssertTrue(script.contains("${FRAMEWORKS_DIR}/WebRTC.framework"))
-        XCTAssertTrue(script.contains("${FRAMEWORKS_DIR}/Mediasoup.framework"))
-        XCTAssertTrue(script.contains("\"*.bundle/Info.plist\""))
-        XCTAssertTrue(script.contains("copy_privacy_manifest \"MediasoupFramework.xcprivacy\""))
-        XCTAssertTrue(script.contains("\"NSCameraUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSMicrophoneUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSLocalNetworkUsageDescription\""))
-        XCTAssertTrue(script.contains("NSLocationTemporaryUsageDescriptionDictionary"))
-        XCTAssertTrue(script.contains("\"NSContactsUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSCalendarsFullAccessUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSCalendarsWriteOnlyAccessUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSRemindersFullAccessUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSDocumentsFolderUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSSpeechRecognitionUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSSiriUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSFocusStatusUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSMotionUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSSensorKitUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSUserTrackingUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSUserNotificationsUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NFCReaderUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSHealthClinicalHealthRecordsShareUsageDescription\""))
-        XCTAssertEqual(script.components(separatedBy: "set_all_purpose_strings \"${plist_path}\"").count - 1, 6)
+        XCTAssertTrue(script.contains("apply_framework_privacy_manifest \"Conclave.framework\" \"ConclaveFramework.xcprivacy\""))
+        XCTAssertTrue(script.contains("apply_framework_privacy_manifest \"WebRTC.framework\" \"WebRTCFramework.xcprivacy\""))
+        XCTAssertTrue(script.contains("apply_framework_privacy_manifest \"Mediasoup.framework\" \"MediasoupFramework.xcprivacy\""))
+        XCTAssertTrue(script.contains("framework_path=\"${FRAMEWORKS_DIR}/${framework_name}\""))
+        XCTAssertTrue(script.contains("cp \"${manifest_path}\" \"${framework_path}/PrivacyInfo.xcprivacy\""))
+        XCTAssertTrue(script.contains("resign_code_bundle_if_needed \"${framework_path}\""))
+        // SYS-14 (S70 14 c, SY12): purpose strings come from Darwin/Info.plist and Darwin/InfoPlist.xcstrings only,
+        // so the phase never rewrites the built app, framework, bundle or extension plists.
+        XCTAssertFalse(script.contains("UsageDescription"))
+        XCTAssertFalse(script.contains("PlistBuddy"))
+        XCTAssertFalse(script.contains("set_all_purpose_strings"))
+        XCTAssertFalse(script.contains("${PLUGINS_DIR}"))
         XCTAssertTrue(project.contains("DED5F813849FF18CBE9AFB5A /* Embed App Extensions */,\n\t\t\t\t8D0E0D6B2E5A4A71B57E90C1 /* Apply embedded privacy metadata */,"))
         XCTAssertTrue(project.contains("\"$(SRCROOT)/PrivacyManifests/MediasoupFramework.xcprivacy\""))
     }

@@ -17,6 +17,18 @@
       "comment" : "Debug component gallery: truncation readout: truncated specimens, measured specimens, all specimens. Scripts read it, so the numbers stay ASCII digits in every language",
       "extractionState" : "manual"
     },
+    "%lld unread" : {
+      "comment" : "Call controls: value of the Chat control with the unread message count; the count badge itself is hidden from accessibility. Plural forms arrive with FND-1",
+      "extractionState" : "manual"
+    },
+    "Admit" : {
+      "comment" : "Person row: visible label of the button that lets a waiting person into the call",
+      "extractionState" : "manual"
+    },
+    "Admit %@" : {
+      "comment" : "Person row: accessibility label of the Admit button, with the waiting person’s name",
+      "extractionState" : "manual"
+    },
     "App" : {
       "comment" : "Debug component gallery: header for specimens in the system appearance",
       "extractionState" : "manual"
@@ -33,6 +45,22 @@
       "comment" : "Debug component gallery: specimen readout with a contrast verdict",
       "extractionState" : "manual"
     },
+    "Avery" : {
+      "comment" : "Debug component gallery: sample person name in the person row",
+      "extractionState" : "manual"
+    },
+    "Banners" : {
+      "comment" : "Debug component gallery: section title",
+      "extractionState" : "manual"
+    },
+    "Bar %.1f pt of %.1f pt" : {
+      "comment" : "Debug component gallery: bar width readout: the bar’s measured width, then the available width, in points. Scripts read it, so the numbers stay ASCII digits in every language",
+      "extractionState" : "manual"
+    },
+    "Bar Width" : {
+      "comment" : "Debug component gallery: label of the measured bar width readout",
+      "extractionState" : "manual"
+    },
     "Bold Text" : {
       "comment" : "Debug component gallery: readout name for the Bold Text setting",
       "extractionState" : "manual"
@@ -45,37 +73,40 @@
       "comment" : "Debug component gallery: inert specimen button in the bordered prominent style with the coral fill and its label color",
       "extractionState" : "manual"
     },
+    "Buttons" : {
+      "comment" : "Debug component gallery: section title",
+      "extractionState" : "manual"
+    },
+    "Call Controls" : {
+      "comment" : "Debug component gallery: section title",
+      "extractionState" : "manual"
+    },
+    "Camera" : {
+      "comment" : "Call controls: constant accessibility label of the camera toggle; its state is the value",
+      "extractionState" : "manual"
+    },
     "Cancel" : {
       "comment" : "Button title for cancelling a pending native app action",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cancelar"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Annuler"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "キャンセル"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "取消"
-          }
-        }
-      }
+      "extractionState" : "manual"
+    },
+    "Chat" : {
+      "comment" : "Call controls: accessibility label of the control that opens the chat panel",
+      "extractionState" : "manual"
+    },
+    "Check your connection and try again." : {
+      "comment" : "Debug component gallery: sample body of the error state",
+      "extractionState" : "manual"
     },
     "Close %@" : {
       "comment" : "Panel shell: accessibility label of the Close button, with the panel title",
+      "extractionState" : "manual"
+    },
+    "Commands" : {
+      "comment" : "Debug system fixture: label of the last system commands readout",
+      "extractionState" : "manual"
+    },
+    "Compact Width Override" : {
+      "comment" : "Hosting preview (Debug only): switch that forces a compact horizontal size class on the preview root, so an iPad panel moves from the inspector to a sheet",
       "extractionState" : "manual"
     },
     "Component Gallery" : {
@@ -84,6 +115,10 @@
     },
     "Components" : {
       "comment" : "Debug hosting preview section title for the component gallery",
+      "extractionState" : "manual"
+    },
+    "Conclave Meeting" : {
+      "comment" : "CallKit caller name on the lock screen and in the call pill when the meeting has no label yet (S70 1 g)",
       "extractionState" : "manual"
     },
     "Confirmation Action" : {
@@ -98,12 +133,28 @@
       "comment" : "Debug component gallery: section title for contrast specimens; also the readout name for the system contrast setting",
       "extractionState" : "manual"
     },
+    "Control Taps" : {
+      "comment" : "Debug component gallery: label of the readout that counts what the call controls’ gesture route recorded",
+      "extractionState" : "manual"
+    },
+    "Copy Link" : {
+      "comment" : "Debug component gallery: sample title of the text button",
+      "extractionState" : "manual"
+    },
     "Coral text on the call stage" : {
       "comment" : "Debug component gallery: contrast pair caption",
       "extractionState" : "manual"
     },
     "Coral text on the row background" : {
       "comment" : "Debug component gallery: contrast pair caption",
+      "extractionState" : "manual"
+    },
+    "Could Not Load" : {
+      "comment" : "Debug component gallery: sample title of the error state",
+      "extractionState" : "manual"
+    },
+    "Could not share your screen." : {
+      "comment" : "Debug component gallery: sample text of the error banner",
       "extractionState" : "manual"
     },
     "Dark" : {
@@ -118,12 +169,36 @@
       "comment" : "Debug component gallery: contrast verdict for a pair labeled not for text while it stays below 4.5",
       "extractionState" : "manual"
     },
+    "Delete Account" : {
+      "comment" : "Debug component gallery: sample title of the destructive row",
+      "extractionState" : "manual"
+    },
+    "Deny" : {
+      "comment" : "Person row: visible label of the button that refuses a waiting person",
+      "extractionState" : "manual"
+    },
+    "Deny %@" : {
+      "comment" : "Person row: accessibility label of the Deny button, with the waiting person’s name",
+      "extractionState" : "manual"
+    },
+    "Dismiss" : {
+      "comment" : "Banner: accessibility label of the close glyph that dismisses the banner",
+      "extractionState" : "manual"
+    },
     "Done" : {
       "comment" : "Debug component gallery: inert toolbar button on the confirmation action specimen page",
       "extractionState" : "manual"
     },
     "Fails" : {
       "comment" : "Debug component gallery: contrast verdict when the ratio misses its class",
+      "extractionState" : "manual"
+    },
+    "Force Opaque Controls" : {
+      "comment" : "Debug component gallery: switch that forces the opaque call control surface instead of Liquid Glass; off at every launch",
+      "extractionState" : "manual"
+    },
+    "Full Width Bar" : {
+      "comment" : "Debug component gallery: row and page title of the full width call control bar probe",
       "extractionState" : "manual"
     },
     "Gesture Route" : {
@@ -150,8 +225,20 @@
       "comment" : "Debug component gallery: section title for haptic mapping specimens",
       "extractionState" : "manual"
     },
+    "Headphones" : {
+      "comment" : "Debug component gallery: second choice of the sample single choice rows",
+      "extractionState" : "manual"
+    },
+    "Hold" : {
+      "comment" : "Debug system fixture: button that sends a system hold command (as CallKit does for Hold and Accept)",
+      "extractionState" : "manual"
+    },
     "In Call" : {
       "comment" : "Debug component gallery: header for specimens in the always-dark call appearance",
+      "extractionState" : "manual"
+    },
+    "In Progress" : {
+      "comment" : "Component: accessibility value (iOS) or state description (Android) of a button or row while its action runs",
       "extractionState" : "manual"
     },
     "Increased" : {
@@ -160,6 +247,14 @@
     },
     "Inert self-checks for type, haptics and contrast. Nothing here plays, records or connects." : {
       "comment" : "Debug component gallery: introduction under the title",
+      "extractionState" : "manual"
+    },
+    "Join Meeting" : {
+      "comment" : "Debug component gallery: sample title of the primary button",
+      "extractionState" : "manual"
+    },
+    "Joining" : {
+      "comment" : "Debug component gallery: sample title of the pending primary button",
       "extractionState" : "manual"
     },
     "Large text, needs 3" : {
@@ -182,12 +277,20 @@
       "comment" : "Debug hosting preview: button that opens the Layout panel from the call",
       "extractionState" : "manual"
     },
+    "Leave Call" : {
+      "comment" : "Call controls: accessibility label of the glyph-only red Leave control; no visible text (owner OQ3)",
+      "extractionState" : "manual"
+    },
     "Left to Right" : {
       "comment" : "Debug component gallery: readout value for left-to-right layout",
       "extractionState" : "manual"
     },
     "Light" : {
       "comment" : "Debug component gallery: readout value for light appearance",
+      "extractionState" : "manual"
+    },
+    "Live captions are on." : {
+      "comment" : "Debug component gallery: sample text of the information banner and the animated banner",
       "extractionState" : "manual"
     },
     "Live, App" : {
@@ -198,12 +301,56 @@
       "comment" : "Debug component gallery: header above contrast pairs resolved in the always-dark call appearance",
       "extractionState" : "manual"
     },
+    "Loading" : {
+      "comment" : "Status view: fallback label of a loading spinner when the screen names nothing more specific",
+      "extractionState" : "manual"
+    },
+    "Loading Participants" : {
+      "comment" : "Debug component gallery: sample label of the loading state",
+      "extractionState" : "manual"
+    },
     "Long Text" : {
       "comment" : "Debug component gallery: switch that doubles every specimen string to check clipping",
       "extractionState" : "manual"
     },
     "Mapper %@, contract %@" : {
       "comment" : "Debug component gallery: haptic row detail: the mapper token, then the contract token",
+      "extractionState" : "manual"
+    },
+    "Messages are visible to everyone in this call." : {
+      "comment" : "Debug component gallery: sample body of the empty state",
+      "extractionState" : "manual"
+    },
+    "Microphone" : {
+      "comment" : "Call controls: constant accessibility label of the microphone toggle; its state is the value",
+      "extractionState" : "manual"
+    },
+    "More" : {
+      "comment" : "Call controls: accessibility label of the control that opens more call options (Android uses ds_more_options)",
+      "extractionState" : "manual"
+    },
+    "Moved to More" : {
+      "comment" : "Debug component gallery: label of the readout naming the controls that did not fit and moved to More",
+      "extractionState" : "manual"
+    },
+    "Mute" : {
+      "comment" : "Call controls: Voice Control input label of the microphone toggle while it is on",
+      "extractionState" : "manual"
+    },
+    "Muted" : {
+      "comment" : "Call controls: state of the microphone toggle while the microphone is muted",
+      "extractionState" : "manual"
+    },
+    "Muted, Hand Raised" : {
+      "comment" : "Debug component gallery: spoken status of the sample person row",
+      "extractionState" : "manual"
+    },
+    "No Messages Yet" : {
+      "comment" : "Debug component gallery: sample title of the empty state",
+      "extractionState" : "manual"
+    },
+    "Noise Suppression" : {
+      "comment" : "Debug component gallery: sample title of the switch row",
       "extractionState" : "manual"
     },
     "Non-text, needs 3" : {
@@ -220,6 +367,10 @@
     },
     "Not for text" : {
       "comment" : "Debug component gallery: contrast class for pairs deliberately below the text threshold",
+      "extractionState" : "manual"
+    },
+    "Notifications" : {
+      "comment" : "Debug component gallery: sample title of the navigation row and its page",
       "extractionState" : "manual"
     },
     "Off" : {
@@ -254,8 +405,20 @@
       "comment" : "Debug component gallery: contrast verdict when the ratio meets its class",
       "extractionState" : "manual"
     },
+    "Presence" : {
+      "comment" : "Debug system fixture: label of the call presence readout (phase, surface, status, session)",
+      "extractionState" : "manual"
+    },
+    "Presenting" : {
+      "comment" : "Debug component gallery: sample detail line under the person name",
+      "extractionState" : "manual"
+    },
     "Ratio %@ against %@: %@" : {
       "comment" : "Debug component gallery: contrast verdict: ratio, contrast class, then Passes or Fails",
+      "extractionState" : "manual"
+    },
+    "Reconnecting to the call." : {
+      "comment" : "Debug component gallery: sample text of the reconnecting banner",
       "extractionState" : "manual"
     },
     "Recorded %lld, suppressed %lld, outcome route %lld, silent %lld" : {
@@ -274,8 +437,32 @@
       "comment" : "Debug hosting preview: button that reads the renderer and panel diagnostics again",
       "extractionState" : "manual"
     },
+    "Rejoin" : {
+      "comment" : "Debug component gallery: sample title of the tonal button",
+      "extractionState" : "manual"
+    },
+    "Remove From Meeting" : {
+      "comment" : "Debug component gallery: sample title of the destructive button",
+      "extractionState" : "manual"
+    },
+    "Resume" : {
+      "comment" : "Debug system fixture: button that sends a system resume command after a hold",
+      "extractionState" : "manual"
+    },
     "Right to Left" : {
       "comment" : "Debug component gallery: readout value for right-to-left layout",
+      "extractionState" : "manual"
+    },
+    "Room" : {
+      "comment" : "Debug component gallery: sample title of the value row",
+      "extractionState" : "manual"
+    },
+    "Rows" : {
+      "comment" : "Debug component gallery: section title",
+      "extractionState" : "manual"
+    },
+    "Sam" : {
+      "comment" : "Debug component gallery: sample name of the person waiting to join",
       "extractionState" : "manual"
     },
     "Sample text in this style" : {
@@ -284,32 +471,7 @@
     },
     "Save" : {
       "comment" : "Button title for saving native meeting settings",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Guardar"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Enregistrer"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "保存"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "保存"
-          }
-        }
-      }
+      "extractionState" : "manual"
     },
     "Secondary text on the call stage" : {
       "comment" : "Debug component gallery: contrast pair caption",
@@ -325,32 +487,22 @@
     },
     "Settings" : {
       "comment" : "Meeting settings entry point title",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Configuración"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Paramètres"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "設定"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "设置"
-          }
-        }
-      },
+      "extractionState" : "manual"
+    },
+    "Share Screen" : {
+      "comment" : "Call controls: constant accessibility label of the screen sharing toggle",
+      "extractionState" : "manual"
+    },
+    "Sharing" : {
+      "comment" : "Call controls: state of the screen sharing toggle while a share runs",
+      "extractionState" : "manual"
+    },
+    "Show Banner" : {
+      "comment" : "Debug component gallery: switch that shows and hides the animated banner",
+      "extractionState" : "manual"
+    },
+    "Show Loading" : {
+      "comment" : "Debug component gallery: switch that shows the spinner specimens; off at every launch",
       "extractionState" : "manual"
     },
     "Sidebar" : {
@@ -365,6 +517,10 @@
       "comment" : "Debug component gallery: readout name for the Smart Invert setting",
       "extractionState" : "manual"
     },
+    "Speaker" : {
+      "comment" : "Debug component gallery: first choice of the sample single choice rows",
+      "extractionState" : "manual"
+    },
     "Spotlight" : {
       "comment" : "Layout panel option: one large tile for the active speaker",
       "extractionState" : "manual"
@@ -375,6 +531,18 @@
     },
     "Standard" : {
       "comment" : "Debug component gallery: readout value for standard contrast",
+      "extractionState" : "manual"
+    },
+    "Status Views" : {
+      "comment" : "Debug component gallery: section title for loading, empty, error and offline states",
+      "extractionState" : "manual"
+    },
+    "System Commands" : {
+      "comment" : "Debug system fixture: section title of the buttons that send scripted system commands",
+      "extractionState" : "manual"
+    },
+    "System Fixture" : {
+      "comment" : "Debug system fixture: section title (S70 SX1; Debug builds only)",
       "extractionState" : "manual"
     },
     "System Prominent Chrome" : {
@@ -397,6 +565,14 @@
       "comment" : "Debug component gallery: explanation on the confirmation action specimen page",
       "extractionState" : "manual"
     },
+    "This page is a specimen. It does nothing." : {
+      "comment" : "Debug component gallery: body of the page the sample navigation row opens",
+      "extractionState" : "manual"
+    },
+    "This will load when you’re back online." : {
+      "comment" : "Status view: body of the offline state",
+      "extractionState" : "manual"
+    },
     "Token Pairs" : {
       "comment" : "Debug component gallery: header above contrast pairs computed from design tokens",
       "extractionState" : "manual"
@@ -405,16 +581,48 @@
       "comment" : "Debug component gallery: readout name for the number of specimens whose text is cut off",
       "extractionState" : "manual"
     },
+    "Try Again" : {
+      "comment" : "Status view: retry button under an error or offline state",
+      "extractionState" : "manual"
+    },
     "Typography" : {
       "comment" : "Debug component gallery: section title for text style specimens",
+      "extractionState" : "manual"
+    },
+    "Unmute" : {
+      "comment" : "Call controls: Voice Control input label of the microphone toggle while it is muted",
+      "extractionState" : "manual"
+    },
+    "Use Audio Only" : {
+      "comment" : "Debug component gallery: sample action on the warning banner",
       "extractionState" : "manual"
     },
     "Verify Table" : {
       "comment" : "Debug component gallery: button that compares the haptic mapper with the contract table",
       "extractionState" : "manual"
     },
+    "Very poor connection. Audio may cut out." : {
+      "comment" : "Debug component gallery: sample text of the warning banner",
+      "extractionState" : "manual"
+    },
+    "White glyph on the Leave red" : {
+      "comment" : "Debug component gallery: caption of the live contrast row for the white Leave glyph on the system red fill",
+      "extractionState" : "manual"
+    },
     "White label on the accent color" : {
       "comment" : "Debug component gallery: contrast pair caption",
+      "extractionState" : "manual"
+    },
+    "Would Announce" : {
+      "comment" : "Debug component gallery: the announcement a production banner would post; the silent gallery never posts it",
+      "extractionState" : "manual"
+    },
+    "Your notes were saved." : {
+      "comment" : "Debug component gallery: sample text of the success banner",
+      "extractionState" : "manual"
+    },
+    "You’re Offline" : {
+      "comment" : "Status view: title of the offline state",
       "extractionState" : "manual"
     },
     "outcome route only" : {

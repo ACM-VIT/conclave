@@ -14,6 +14,8 @@ public struct ConclaveRootView: View {
     @State private var appState = AppState.shared
     #if DEBUG && os(iOS) && !SKIP
     @State private var showsHostingPreview = ProcessInfo.processInfo.environment["CONCLAVE_HOSTING_PREVIEW"] == "1"
+    /// S70 SX1: `CONCLAVE_SYSTEM_FIXTURE=<state>` (Debug only) mounts the system fixture instead of the app.
+    @State private var systemFixture = SystemFixtureLaunch.state()
     #endif
 
     public init() {
@@ -21,7 +23,9 @@ public struct ConclaveRootView: View {
 
     public var body: some View {
         #if DEBUG && os(iOS) && !SKIP
-        if showsHostingPreview {
+        if let systemFixture {
+            SystemFixtureView(state: systemFixture, providerMode: SystemFixtureLaunch.providerMode())
+        } else if showsHostingPreview {
             NativeHostingPreview(onClose: { showsHostingPreview = false })
         } else {
             legacyRoot

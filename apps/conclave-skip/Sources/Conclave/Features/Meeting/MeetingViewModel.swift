@@ -495,9 +495,48 @@ enum BrowserActivityLoopPolicy {
 @Observable
 final class MeetingViewModel {
     // Process-wide so Activity/SwiftUI recreation can reattach to an active call.
-    static let shared = MeetingViewModel()
+    static let shared = MeetingViewModel.makeShared()
 
-    var state = MeetingState()
+    /// Only the process-wide view model drives the system call surfaces; previews and host tests never install them.
+    private static func makeShared() -> MeetingViewModel {
+        let viewModel = MeetingViewModel()
+        viewModel.installPlatformCallPresenceAdapters()
+        return viewModel
+    }
+
+    var state = MeetingState() {
+        didSet {
+            // Tests replace the state wholesale (S1C F11): rebind the one shell hook, never accumulate.
+            oldValue.onShellInputChanged = nil
+            bindShellInputs()
+        }
+    }
+
+    // MARK: - Session shell (WP2-S1) and call presence (SYS-1)
+
+    /// The meeting shell presenter every native screen reads (session, controls and entry snapshots, typed outcomes,
+    /// the action ledger and the per-session panel coordinator). Fed only through `requestShellRefresh()`.
+    let shell = MeetingShellPresenter()
+    /// S70 0.5 system call presence: the one snapshot CallKit, the Android call notification and the Debug readout
+    /// read, and the one entry for system commands.
+    let callPresence = CallPresence()
+    /// S1C ID: bumps for a new meeting intent only (`MeetingCallSessionPolicy`), never for a recovery or admission.
+    private(set) var callSessionSerial = 0 {
+        didSet { requestShellRefresh() }
+    }
+    private var terminalOutcomeSerial = 0
+    /// While above zero, hooked writes do not refresh; the batch end refreshes once (S1C ID, A19).
+    private var shellRefreshBatchDepth = 0
+    /// R70-11: set by the redirect path before the new call session starts, so the system call keeps its presence
+    /// session (and CallKit UUID); cleared once the redirected join is admitted, ends or fails.
+    private var redirectContinuationPending = false {
+        didSet { requestShellRefresh() }
+    }
+    /// S20 SC15 interim: when this call was first live, stable across recovery rejoins and redirects of one call.
+    private var presenceJoinedAtMillis: Double = 0 {
+        didSet { requestShellRefresh() }
+    }
+    private var cachedScreenShareSupport: Bool? = nil
 
     // MARK: - Reactions
 
@@ -518,16 +557,24 @@ final class MeetingViewModel {
     var isRejoinInFlight = false
     private var currentJoinInfo: SfuJoinInfo?
     private var currentRoomAliases: Set<String> = []
-    private var activeJoinAttemptId: UUID?
-    private var isIntentionalTeardownInProgress = false
-    private var meetingLifecycleGeneration = 0
+    private var activeJoinAttemptId: UUID? = nil {
+        didSet { requestShellRefresh() }
+    }
+    private var isIntentionalTeardownInProgress = false {
+        didSet { requestShellRefresh() }
+    }
+    private var meetingLifecycleGeneration = 0 {
+        didSet { requestShellRefresh() }
+    }
     private var reconnectAttempts = 0
     private var reconnectRetryTask: Task<Void, Never>?
     private var foregroundResumePresentationTask: Task<Void, Never>?
     private var pendingIceRestartTasks: [String: Task<Void, Never>] = [:]
     private var participantConnectionStatusTasks: [String: Task<Void, Never>] = [:]
     private var remoteConsumerBandwidthPolicyTask: Task<Void, Never>?
-    private var appForegroundAllowsRemoteVideoReceive = true
+    private var appForegroundAllowsRemoteVideoReceive = true {
+        didSet { requestShellRefresh() }
+    }
     private var webcamReceiverCapacityAuthorityGeneration = 0
     private var participantLeaveTokens: [String: UUID] = [:]
     private var departedParticipantUserIds: Set<String> = []
@@ -580,7 +627,9 @@ final class MeetingViewModel {
     private var ttsHighlightTask: Task<Void, Never>?
     // A mic, camera, screen-share, hand or camera-switch toggle is in flight
     // while the token it set is current; see releaseLocalToggleGuards().
-    private var muteToggleToken: UUID?
+    private var muteToggleToken: UUID? = nil {
+        didSet { requestShellRefresh() }
+    }
     private var isMuteToggleInFlight: Bool { muteToggleToken != nil }
     /// Bumped by every mute applyLocalMuteNow() applies (a server mute, or one
     /// that lands over a pending toggle). A pending unmute that sees it change
@@ -588,9 +637,13 @@ final class MeetingViewModel {
     private var localMuteIntentRevision = 0
     private var isReplacingLocalAudioProducer = false
     private var localAudioProducerReplacementToken: UUID?
-    private var cameraToggleToken: UUID?
+    private var cameraToggleToken: UUID? = nil {
+        didSet { requestShellRefresh() }
+    }
     private var isCameraToggleInFlight: Bool { cameraToggleToken != nil }
-    private var screenShareToggleToken: UUID?
+    private var screenShareToggleToken: UUID? = nil {
+        didSet { requestShellRefresh() }
+    }
     private var isScreenShareToggleInFlight: Bool { screenShareToggleToken != nil }
     private var videoPublishingPolicyRevision = 0
     /// Bumped by every camera intent, on or off: the user (in call, on the
@@ -601,7 +654,9 @@ final class MeetingViewModel {
     /// that is still the newest intent wins over a stale camera-on report:
     /// the newest intent wins.
     private var localCameraIntentRevision = 0
-    private var handRaiseToggleToken: UUID?
+    private var handRaiseToggleToken: UUID? = nil {
+        didSet { requestShellRefresh() }
+    }
     private var isHandRaiseToggleInFlight: Bool { handRaiseToggleToken != nil }
     #if os(macOS) && !SKIP
     /// Host-test seam (macOS host tests only; iOS and Android never compile
@@ -1038,6 +1093,14 @@ final class MeetingViewModel {
         setupNetworkBindings()
         setupSocketBindings()
         setupWebRTCBindings()
+        // WP2-S1 E3, E8 and SYS-1 SY1: one shell hook, one command closure per surface.
+        shell.onCommand = { [weak self] command, ticket in
+            self?.performShellCommand(command, ticket: ticket)
+        }
+        callPresence.onCommand = { [weak self] command in
+            self?.performSystemCallCommand(command)
+        }
+        bindShellInputs()
     }
 
     // MARK: - Transcription
@@ -1291,7 +1354,7 @@ final class MeetingViewModel {
             let eventContext = self.currentSocketEventContext()
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
-                await self.finishTerminalRoomError("The host has denied your request to join.")
+                await self.finishTerminalRoomError("The host has denied your request to join.", outcome: .denied)
             }
         }
 
@@ -1347,7 +1410,7 @@ final class MeetingViewModel {
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
                 let reason = notification.reason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                await self.finishTerminalRoomError(reason.isEmpty ? "You were removed from the meeting" : reason)
+                await self.finishTerminalRoomError(reason.isEmpty ? "You were removed from the meeting" : reason, outcome: .removed)
             }
         }
 
@@ -1357,7 +1420,7 @@ final class MeetingViewModel {
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
                 let reason = notification.reason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                await self.finishTerminalRoomError(reason.isEmpty ? "Room closed" : "Room closed: \(reason)")
+                await self.finishTerminalRoomError(reason.isEmpty ? "Room closed" : "Room closed: \(reason)", outcome: .roomClosed)
             }
         }
 
@@ -2262,7 +2325,10 @@ final class MeetingViewModel {
             recoveryStartedAt = nil
             recoveryWatchdogTask = nil
             Task { @MainActor [weak self] in
-                await self?.finishJoinFailure("Couldn't reconnect to the meeting. Check your connection and try again.")
+                await self?.finishJoinFailure(
+                    "Couldn't reconnect to the meeting. Check your connection and try again.",
+                    outcome: .connectionLost
+                )
             }
             return false
         }
@@ -2377,7 +2443,7 @@ final class MeetingViewModel {
         socketManager.disconnect()
 
         guard reconnectAttempts < maxReconnectAttempts else {
-            await finishJoinFailure(error.localizedDescription)
+            await finishJoinFailure(error.localizedDescription, outcome: .connectionLost)
             return
         }
 
@@ -2599,6 +2665,10 @@ final class MeetingViewModel {
                 await cleanupAbandonedJoinAttempt(cleanupMedia: true, joinAttemptId: joinAttemptId)
                 return
             }
+            if presenceJoinedAtMillis == 0 {
+                presenceJoinedAtMillis = Date().timeIntervalSince1970 * 1000
+            }
+            redirectContinuationPending = false
             state.connectionState = ConnectionState.joined
             persistMeetingResumeSnapshot()
             if isRecoveryJoin, let displayNameSnapshot = response.displayNameSnapshot {
@@ -5756,9 +5826,22 @@ final class MeetingViewModel {
         )
         PerformanceDiagnostics.memory("join_room_start")
         let isRecoveryJoin = isRejoinInFlight
+        let previousConnectionState = state.connectionState
+        // S1C ID (A19): the call session, the generation and the attempt id change inside one refresh batch, so the
+        // shell sees exactly one identity change carrying all three. No return sits in this block.
+        beginShellRefreshBatch()
+        if MeetingCallSessionPolicy.startsNewCallSession(
+            isRecoveryJoin: isRecoveryJoin,
+            reuseExistingSocket: reuseExistingSocket,
+            previousConnectionState: previousConnectionState
+        ) {
+            callSessionSerial += 1
+            if !redirectContinuationPending {
+                presenceJoinedAtMillis = 0
+            }
+        }
         meetingLifecycleGeneration += 1
         let joinAttemptId = UUID()
-        let previousConnectionState = state.connectionState
         let shouldStayInMeetingShell = isRejoinInFlight
             || previousConnectionState == .waiting
             || previousConnectionState == .reconnecting
@@ -5766,6 +5849,7 @@ final class MeetingViewModel {
             || previousConnectionState == .joining
         activeJoinAttemptId = joinAttemptId
         releaseLocalToggleGuards()
+        endShellRefreshBatch()
         lastJoinActivityAt = Date()
         clearPendingPreAckRoomEvents()
         if !reuseExistingSocket && (!isRecoveryJoin || socketManager.isConnected) {
@@ -5796,6 +5880,7 @@ final class MeetingViewModel {
         // where we wipe it, or it would leak into the next meeting's banner.
         self.state.errorMessage = nil
         self.state.meetingEndedNoticeMessage = nil
+        self.state.terminalOutcome = nil
         self.isIntentionalLeave = false
         self.isIntentionalTeardownInProgress = false
         self.shouldRejoinAfterReconnect = false
@@ -5893,6 +5978,7 @@ final class MeetingViewModel {
                 if response.status == "waiting" {
                     resetLiveRoomSnapshotStateForJoin()
                     applyJoinSnapshot(response)
+                    redirectContinuationPending = false
                     state.connectionState = ConnectionState.waiting
                     persistMeetingResumeSnapshot()
                     clearConnectionRecovery()
@@ -6018,6 +6104,8 @@ final class MeetingViewModel {
             user: nil
         )
 
+        // R70-11: the system call continues through the redirect (same presence session and CallKit UUID).
+        redirectContinuationPending = true
         isIntentionalLeave = true
         isIntentionalTeardownInProgress = true
         shouldRejoinAfterReconnect = false
@@ -6761,6 +6849,7 @@ final class MeetingViewModel {
         HapticManager.shared.trigger(.light)
         #endif
         let leavingGeneration = meetingLifecycleGeneration
+        recordTerminalOutcome(.left, serverText: "")
         activeJoinAttemptId = nil
         isIntentionalLeave = true
         isIntentionalTeardownInProgress = true
@@ -6775,12 +6864,15 @@ final class MeetingViewModel {
         Task {
             await cleanup(lifecycleGeneration: leavingGeneration)
             guard meetingLifecycleGeneration == leavingGeneration else { return }
+            // One refresh for both writes: the shell never sees a torn-down call as in call between them.
+            beginShellRefreshBatch()
             isIntentionalTeardownInProgress = false
             state.connectionState = ConnectionState.disconnected
+            endShellRefreshBatch()
         }
     }
 
-    private func finishTerminalRoomError(_ message: String) async {
+    private func finishTerminalRoomError(_ message: String, outcome: MeetingTerminalOutcomeKind) async {
         isIntentionalLeave = true
         shouldRejoinAfterReconnect = false
         isRejoinInFlight = false
@@ -6788,6 +6880,7 @@ final class MeetingViewModel {
         resetReconnectRetryState()
         clearMeetingResumeSnapshot()
         clearMeetingEntry()
+        recordTerminalOutcome(outcome, serverText: message)
         state.connectionState = ConnectionState.error
         state.errorMessage = message
         state.waitingMessage = nil
@@ -6802,14 +6895,19 @@ final class MeetingViewModel {
     }
 
     private func finishRoomEnded(_ message: String, endedBy: String?) async {
-        await finishMeetingEnded(showNotice: !isRoomEndedByLocalUser(endedBy), message: message)
+        let endedByLocalUser = isRoomEndedByLocalUser(endedBy)
+        await finishMeetingEnded(
+            showNotice: !endedByLocalUser,
+            message: message,
+            outcome: endedByLocalUser ? .endedByYou : .endedByHost
+        )
     }
 
     private func finishLocalMeetingEnded() async {
-        await finishMeetingEnded(showNotice: false, message: nil)
+        await finishMeetingEnded(showNotice: false, message: nil, outcome: .endedByYou)
     }
 
-    private func finishMeetingEnded(showNotice: Bool, message: String?) async {
+    private func finishMeetingEnded(showNotice: Bool, message: String?, outcome: MeetingTerminalOutcomeKind) async {
         guard !isIntentionalTeardownInProgress else { return }
         let endingGeneration = meetingLifecycleGeneration
         isIntentionalLeave = true
@@ -6820,6 +6918,7 @@ final class MeetingViewModel {
         resetReconnectRetryState()
         clearMeetingResumeSnapshot()
         clearMeetingEntry()
+        recordTerminalOutcome(outcome, serverText: message ?? "")
         state.connectionState = ConnectionState.disconnected
         state.errorMessage = nil
         state.waitingMessage = nil
@@ -6852,7 +6951,7 @@ final class MeetingViewModel {
         return trimmed.isEmpty ? "The host ended this meeting. You are back on the home screen." : trimmed
     }
 
-    private func finishJoinFailure(_ message: String) async {
+    private func finishJoinFailure(_ message: String, outcome: MeetingTerminalOutcomeKind = .joinFailed) async {
         let failureGeneration = meetingLifecycleGeneration
         let resolvedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let preservedRoomId = state.roomId
@@ -6875,6 +6974,7 @@ final class MeetingViewModel {
         state.displayName = preservedDisplayName
         state.isMuted = preservedIsMuted
         state.isCameraOff = preservedIsCameraOff
+        recordTerminalOutcome(outcome, serverText: resolvedMessage)
         state.connectionState = ConnectionState.error
         state.errorMessage = resolvedMessage.isEmpty ? "Failed to join the meeting." : resolvedMessage
         #if !SKIP
@@ -6883,6 +6983,7 @@ final class MeetingViewModel {
     }
 
     private func finishRecoverableJoinFormFailure(_ message: String) {
+        redirectContinuationPending = false
         activeJoinAttemptId = nil
         currentJoinInfo = nil
         isIntentionalLeave = true
@@ -6902,13 +7003,223 @@ final class MeetingViewModel {
         #endif
     }
 
+    // MARK: - Session Shell (WP2-S1) and Call Presence Inputs (SYS-1)
+
+    /// S1C E5: the public identity the shell and every native screen key their work to.
+    var sessionIdentity: MeetingSessionIdentity {
+        MeetingSessionIdentity(
+            callSession: callSessionSerial,
+            attempt: meetingLifecycleGeneration,
+            attemptToken: activeJoinAttemptId?.uuidString ?? ""
+        )
+    }
+
+    /// S1C E3: installs the one shell hook on the current state and publishes it.
+    private func bindShellInputs() {
+        state.onShellInputChanged = { [weak self] in
+            self?.requestShellRefresh()
+        }
+        requestShellRefresh()
+    }
+
+    /// S1C E6: pushes fresh inputs to the shell presenter, then to the call presence (SY1: the presence reads the
+    /// session snapshot the shell just published). Suppressed inside a refresh batch; the batch end refreshes once.
+    private func requestShellRefresh() {
+        guard shellRefreshBatchDepth == 0 else { return }
+        shell.apply(makeShellInputs())
+        callPresence.apply(makeCallPresenceInputs())
+    }
+
+    private func beginShellRefreshBatch() {
+        shellRefreshBatchDepth += 1
+    }
+
+    private func endShellRefreshBatch() {
+        shellRefreshBatchDepth = max(0, shellRefreshBatchDepth - 1)
+        guard shellRefreshBatchDepth == 0 else { return }
+        requestShellRefresh()
+    }
+
+    /// S1C 3.2 inputs table. Never errorMessage, the active speaker, connection quality, audio levels or chat arrays.
+    func makeShellInputs() -> MeetingShellInputs {
+        MeetingShellInputs(
+            identity: sessionIdentity,
+            connectionState: state.connectionState,
+            isRecoveringConnection: state.isRecoveringConnection,
+            isResumingFromBackground: state.isResumingFromBackground,
+            isNetworkOffline: state.isNetworkOffline,
+            serverRestartNotice: state.serverRestartNotice,
+            waitingMessage: state.waitingMessage,
+            joinFormErrorMessage: state.joinFormErrorMessage,
+            meetingEndedNoticeMessage: state.meetingEndedNoticeMessage,
+            isEnteringMeeting: state.isEnteringMeeting,
+            meetingEntryAction: state.meetingEntryAction,
+            roomId: state.roomId,
+            displayName: state.displayName,
+            isAdmin: state.isAdmin,
+            isWebinarAttendee: state.isWebinarAttendee,
+            isMuted: state.isMuted,
+            isCameraOff: state.isCameraOff,
+            isAudioOnlyMode: state.isAudioOnlyMode,
+            isScreenSharing: state.isScreenSharing,
+            isHandRaised: state.isHandRaised,
+            hasActiveRemoteScreenShare: state.hasActiveRemoteScreenShare,
+            isScreenShareSupported: screenShareSupported(),
+            unreadChatCount: state.unreadChatCount,
+            isChatOpen: state.isChatOpen,
+            pendingUsersCount: state.pendingUsersCount,
+            isReactionsDisabled: state.isReactionsDisabled,
+            terminalOutcome: state.terminalOutcome,
+            micToggleInFlight: isMuteToggleInFlight,
+            cameraToggleInFlight: isCameraToggleInFlight,
+            screenShareToggleInFlight: isScreenShareToggleInFlight,
+            handToggleInFlight: isHandRaiseToggleInFlight,
+            isTearingDown: isIntentionalTeardownInProgress
+        )
+    }
+
+    /// SY1: the presence inputs from the S1 session snapshot plus the media fields (S70 0.5 inputs table).
+    func makeCallPresenceInputs() -> CallPresenceInputs {
+        let session = shell.session
+        return CallPresenceInputs(
+            callSession: session.identity.callSession,
+            sessionPhase: session.phase,
+            outcome: session.outcome?.kind,
+            roomLabel: session.roomLabel,
+            isWebinarAttendee: session.isWebinarAttendee,
+            isMuted: state.isMuted,
+            isCameraOff: state.isCameraOff,
+            isScreenSharing: state.isScreenSharing,
+            joinedAtMillis: presenceJoinedAtMillis,
+            isMicrophonePending: isMuteToggleInFlight,
+            isAppActive: appForegroundAllowsRemoteVideoReceive,
+            multitaskingCameraAccessEnabled: false,
+            isRedirectContinuation: redirectContinuationPending
+        )
+    }
+
+    /// Static per process (S1C 3.2); read once so a refresh never calls into ReplayKit.
+    private func screenShareSupported() -> Bool {
+        if let cached = cachedScreenShareSupport {
+            return cached
+        }
+        let supported = state.isScreenShareSupported
+        cachedScreenShareSupport = supported
+        return supported
+    }
+
+    /// S1C E7: the typed outcome, recorded before the terminal phase write. Legacy text is unchanged.
+    private func recordTerminalOutcome(_ kind: MeetingTerminalOutcomeKind, serverText: String) {
+        terminalOutcomeSerial += 1
+        redirectContinuationPending = false
+        state.terminalOutcome = MeetingTerminalOutcome(
+            id: terminalOutcomeSerial,
+            callSession: callSessionSerial,
+            kind: kind,
+            serverText: serverText
+        )
+    }
+
+    /// S1C E8: each shell intent reaches the existing implementation; the presenter never owns media state.
+    private func performShellCommand(_ command: MeetingShellCommand, ticket: MeetingActionTicket?) {
+        switch command {
+        case .toggleMicrophone:
+            toggleMute()
+        case .toggleCamera:
+            toggleCamera()
+        case .toggleScreenShare:
+            toggleScreenShare()
+        case .toggleHand:
+            toggleHandRaise { [weak self] result in
+                guard let self, let ticket else { return }
+                self.shell.finish(ticket, result)
+            }
+        case .leave:
+            // Leave always works and cannot fail: its ticket completes before the teardown changes the identity.
+            if let ticket {
+                shell.finish(ticket, MeetingActionResult.completed)
+            }
+            leaveRoom()
+        case .endForEveryone:
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let result = await self.endMeetingForEveryoneResult(onAcknowledged: { [weak self] in
+                    guard let self, let ticket else { return }
+                    self.shell.finish(ticket, MeetingActionResult.completed)
+                })
+                guard let ticket, result.kind != .completed else { return }
+                self.shell.finish(ticket, result)
+            }
+        case .retry:
+            resetError()
+        case .dismissOutcome:
+            if state.connectionState == .error {
+                resetError()
+            } else {
+                dismissMeetingEndedNotice()
+            }
+        }
+    }
+
+    /// SY1 command table (S70 0.5): `CallPresence` already answered `.dispatched`. Microphone commands enter the S1
+    /// path (`shell.toggleMicrophone()`, whose CC21 rule lets a mute over a pending unmute reach `applyLocalMuteNow`);
+    /// no system command plays a haptic (S70 D7).
+    private func performSystemCallCommand(_ command: SystemCallCommand) {
+        switch command.kind {
+        case .mute:
+            switch shell.session.phase {
+            case .entering, .waiting:
+                applyEntryMuteFromSystem()
+            default:
+                if shell.toggleMicrophone() != .dispatched, !state.isMuted {
+                    // Never dropped: a mute the row cannot take (blocked mid-teardown) still applies.
+                    toggleMute()
+                }
+            }
+        case .unmute:
+            shell.toggleMicrophone()
+        case .leave:
+            if shell.leave() == .unavailable {
+                leaveRoom()
+            }
+        case .hold:
+            // O2: the call resumes muted (fail closed), so mute as the hold starts.
+            if !state.isMuted {
+                shell.toggleMicrophone()
+            }
+        case .resume, .returnToCall:
+            break
+        }
+    }
+
+    /// Interim S10 0.8 C1 for a system mute before admission (ENT-1 adds `setEntryMediaIntent`): the join publishes
+    /// from `state.isMuted`, and a microphone start already in flight is cancelled at once, as on the reconnecting
+    /// screen.
+    private func applyEntryMuteFromSystem() {
+        guard !state.isMuted else { return }
+        state.isMuted = true
+        syncCallPresenceState()
+        webRTCClient.suspendLocalAudioForRecovery()
+    }
+
+    /// Only `MeetingViewModel.shared` drives the system surfaces (S70 0.5: the platform installs its set once).
+    private func installPlatformCallPresenceAdapters() {
+        #if os(iOS) && !SKIP
+        callPresence.adapters = CallPresenceAdapters([CallKitPresenceAdapter.shared.makeAdapter(for: callPresence)])
+        #elseif SKIP
+        callPresence.adapters = CallNotificationBridge.presenceAdapters(presence: callPresence)
+        #endif
+    }
+
     // MARK: - System Call Presence
 
-    /// Brings up the OS-level call presence so the call survives backgrounding
-    /// and gets system mute/leave controls. iOS = CallKit + audio-session
-    /// interruption recovery; Android = the ongoing-call foreground service.
-    /// Idempotent (guarded by the underlying managers) and gated on being in a
-    /// joined call via CallSessionCoordinator.
+    /// Brings up the in-call system pieces once joined: keep awake, the iOS
+    /// audio-session interruption recovery, the Android PiP wiring and the
+    /// notification permission prompt. The system call itself (CallKit on
+    /// iOS, the CallStyle call notification service on Android) follows the
+    /// `CallPresence` snapshot through its adapters (S70 SY1), so this no
+    /// longer starts or updates it. Idempotent and gated on being in a joined
+    /// call via CallSessionCoordinator.
     func activateCallPresence() {
         CallSessionCoordinator.shared.register(self)
         guard CallSessionCoordinator.shared.isInCall else { return }
@@ -6931,18 +7242,16 @@ final class MeetingViewModel {
             }
         }
         CallAudioSession.shared.begin()
-        CallKitManager.shared.reportCallStarted(title: state.roomId.isEmpty ? "Conclave meeting" : state.roomId)
-        CallKitManager.shared.updateMuteState(muted: state.isMuted)
         #endif
         webRTCClient.activateCallAudioSession()
         #if SKIP
         CallActionDispatcher.register(
-            mute: { self.toggleMute() },
-            leave: { self.leaveRoom() },
             pipEntered: { self.handlePictureInPictureEntered() },
             pipRefresh: { self.handlePictureInPictureRefresh() }
         )
-        CallNotificationBridge.startCall(muted: state.isMuted, cameraOff: state.isCameraOff)
+        // Posts the call notification from the current snapshot if the service is not running yet (a start the
+        // system refused in the background retries here, in the foreground).
+        CallNotificationBridge.repostCurrent()
         PipController.setInCall(active: true)
         PipController.setMuted(value: state.isMuted)
         PipManager.configureForActiveCall(active: true, muted: state.isMuted)
@@ -6994,7 +7303,7 @@ final class MeetingViewModel {
                 return
             }
             guard granted, CallSessionCoordinator.shared.isInCall else { return }
-            CallNotificationBridge.updateCallState(muted: self.state.isMuted, cameraOff: self.state.isCameraOff)
+            CallNotificationBridge.repostCurrent()
         }
     }
     #endif
@@ -7088,7 +7397,6 @@ final class MeetingViewModel {
         #if os(iOS) && !SKIP
         CallAudioSession.shared.setCategoryOptionsProvider(nil)
         CallAudioSession.shared.setRouteReassertionHandler(nil)
-        CallKitManager.shared.reportCallEnded()
         CallAudioSession.shared.end()
         #endif
         #if SKIP
@@ -7098,7 +7406,6 @@ final class MeetingViewModel {
         // re-arms the once-per-process ask for the next call.
         PermissionHelper.dropQueuedNotificationsPermissionRequest()
         CallActionDispatcher.clear()
-        CallNotificationBridge.stopCall()
         PipManager.configureForActiveCall(active: false, muted: state.isMuted)
         PipManager.exitPip()
         resetPipVideoTracking()
@@ -7118,13 +7425,12 @@ final class MeetingViewModel {
     }
 
     private func syncCallPresenceState() {
+        // SY1: CallPresence diffs the new inputs and fans out to the system adapters (CallKit, the Android call
+        // notification); this sync point keeps the resume snapshot and the PiP action label.
+        requestShellRefresh()
         guard CallSessionCoordinator.shared.isInCall else { return }
         persistMeetingResumeSnapshot()
-        #if os(iOS) && !SKIP
-        CallKitManager.shared.updateMuteState(muted: state.isMuted)
-        #endif
         #if SKIP
-        CallNotificationBridge.updateCallState(muted: state.isMuted, cameraOff: state.isCameraOff)
         PipController.setMuted(value: state.isMuted)
         // If we're already in PiP, refresh the Mute/Unmute RemoteAction label.
         if PipController.inPipMode {
@@ -7429,6 +7735,7 @@ final class MeetingViewModel {
 
     func resetError() {
         clearConnectionRecovery()
+        state.terminalOutcome = nil
         state.connectionState = ConnectionState.disconnected
         state.errorMessage = nil
         state.joinFormErrorMessage = nil
@@ -7449,6 +7756,7 @@ final class MeetingViewModel {
 
     func dismissMeetingEndedNotice() {
         state.meetingEndedNoticeMessage = nil
+        state.terminalOutcome = nil
     }
 
     func dismissAdminNotice() {
@@ -8145,21 +8453,44 @@ final class MeetingViewModel {
     }
     #endif
 
-    func toggleHandRaise() {
-        guard state.connectionState == .joined,
-              !state.isWebinarAttendee,
-              !isHandRaiseToggleInFlight else { return }
+    /// E9 (S1C 3.4, intake amendment 3): reports a typed result at every exit, with the existing guard order. The
+    /// S1 hand ticket binds to the F7 token release: `setHandRaisedState` frees its guard only while it owns
+    /// `handRaiseToggleToken`, and the result is reported after that release, so a ticket never outlives its guard.
+    func toggleHandRaise(onResult: ((MeetingActionResult) -> Void)? = nil) {
+        guard state.connectionState == .joined else {
+            let failure: MeetingActionFailure = state.connectionState == .disconnected || state.connectionState == .error
+                ? .notConnected
+                : .notJoined
+            onResult?(MeetingActionResult.failed(failure))
+            return
+        }
+        guard !state.isWebinarAttendee else {
+            onResult?(MeetingActionResult.failed(.roleRequired))
+            return
+        }
+        guard !isHandRaiseToggleInFlight else {
+            onResult?(MeetingActionResult.cancelled)
+            return
+        }
         let newState = !state.isHandRaised
         let actionContext = currentCallActionContext()
         #if !SKIP
         HapticManager.shared.trigger(.medium)
         #endif
         Task { @MainActor in
-            guard isCurrentJoinedCall(actionContext) else { return }
+            guard isCurrentJoinedCall(actionContext) else {
+                onResult?(MeetingActionResult.interrupted)
+                return
+            }
             do {
-                _ = try await setHandRaisedState(newState)
+                let applied = try await setHandRaisedState(newState)
+                onResult?(MeetingHandToggleTokenPolicy.ticketResult(
+                    applied: applied,
+                    stillCurrentAttempt: isCurrentJoinedCall(actionContext)
+                ))
             } catch {
                 applyActionError(error, context: actionContext)
+                onResult?(MeetingActionFailurePolicy.result(for: error))
             }
         }
     }
@@ -11040,25 +11371,38 @@ final class MeetingViewModel {
         }
     }
 
+    /// The legacy Bool contract (`MoreSheetView`), unchanged: true only when the meeting ended.
     func endMeetingForEveryone(message: String? = nil) async -> Bool {
+        let result = await endMeetingForEveryoneResult(message: message)
+        return result.kind == .completed
+    }
+
+    /// E10 (S1C 3.4): the typed result. `onAcknowledged` runs after the success check and before the local teardown,
+    /// so the ticket completes while its identity is still current; a context change after the ack is `interrupted`
+    /// (R09 needs to tell it from a failure).
+    func endMeetingForEveryoneResult(
+        message: String? = nil,
+        onAcknowledged: (() -> Void)? = nil
+    ) async -> MeetingActionResult {
         let actionKey = "endRoom"
-        guard let actionToken = beginAdminAction(actionKey) else { return false }
+        guard let actionToken = beginAdminAction(actionKey) else { return MeetingActionResult.cancelled }
         let actionContext = currentCallActionContext()
         defer { finishAdminAction(actionKey, token: actionToken) }
-        guard isCurrentJoinedCall(actionContext) else { return false }
+        guard isCurrentJoinedCall(actionContext) else { return MeetingActionResult.failed(.notJoined) }
 
         let trimmedMessage = message?.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             let response: AdminEndRoomResponse = try await socketManager.endRoomNow(message: trimmedMessage?.isEmpty == false ? trimmedMessage : nil)
-            guard isCurrentJoinedCall(actionContext) else { return false }
+            guard isCurrentJoinedCall(actionContext) else { return MeetingActionResult.interrupted }
             if response.success == false {
                 throw MeetingActionResponseError(message: response.error ?? "Failed to end meeting.")
             }
+            onAcknowledged?()
             await finishLocalMeetingEnded()
-            return true
+            return MeetingActionResult.completed
         } catch {
             applyActionError(error, context: actionContext)
-            return false
+            return MeetingActionFailurePolicy.result(for: error)
         }
     }
 

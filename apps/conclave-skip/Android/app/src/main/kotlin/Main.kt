@@ -7,6 +7,7 @@ import skip.ui.*
 
 import android.app.Application
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.graphics.Color as AndroidColor
 import android.os.Handler
 import android.os.Looper
@@ -73,9 +74,16 @@ open class MainActivity: AppCompatActivity {
             var showsHostingPreview by remember {
                 mutableStateOf(BuildConfig.DEBUG && intent?.getBooleanExtra("conclave.hostingPreview", false) == true)
             }
+            // S70 SX1: Debug-only system fixture (standalone CallPresence; never WebRTC, audio, capture or network).
+            val systemFixture = remember {
+                val debuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                if (BuildConfig.DEBUG && debuggable) intent?.getStringExtra("conclave.systemFixture") else null
+            }
             val saveableStateHolder = rememberSaveableStateHolder()
             if (PipController.inPipMode && PipController.isInCall) {
                 PipContent()
+            } else if (systemFixture != null && !PipController.isInCall) {
+                SystemFixtureRoot(systemFixture)
             } else if (showsHostingPreview && !PipController.isInCall) {
                 // The library cannot see the app build type; it also checks FLAG_DEBUGGABLE at run time.
                 NativeHostingPreviewRoot(fixtureEligible = BuildConfig.DEBUG, onClose = { showsHostingPreview = false })
@@ -157,6 +165,11 @@ open class MainActivity: AppCompatActivity {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.action == CallActionDispatcher.ACTION_RETURN_TO_CALL) {
+            // The activity is already in front; record returnToCall against the posted presence session.
+            CallActionDispatcher.returnToCall(intent.getIntExtra(CallActionDispatcher.EXTRA_PRESENCE_SESSION, -1))
+            return
+        }
         handleIncomingDeepLink(intent)
     }
 

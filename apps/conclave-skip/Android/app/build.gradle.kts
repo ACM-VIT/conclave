@@ -127,6 +127,15 @@ android {
         buildConfig = true
     }
 
+    // Per-app language (S70 14 d, SY13): AGP generates the locale config from the app's
+    // res/values* folders and adds android:localeConfig to the merged manifest, so the
+    // Android 13+ language list names only languages that ship. The unqualified
+    // resources' locale lives in src/main/res/resources.properties. Never also set
+    // android:localeConfig by hand: the manifest merger rejects it while this is on.
+    androidResources {
+        generateLocaleConfig = true
+    }
+
     lint {
         disable.add("Instantiatable")
         disable.add("MissingPermission")

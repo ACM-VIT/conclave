@@ -8,15 +8,22 @@ struct NativePanelPresentation: Identifiable, Equatable {
 }
 
 /// iOS panel host state (PS 6.4), host-testable on macOS; the SwiftUI modifiers stay in the `+iOS` files.
-/// The sheet logic moved here unchanged from `NativePanelSheet+iOS.swift`: the closing native identity
-/// outlives binding loss and is released only by its onDismiss. WP1-3b1 adds the sheet detent selection and
-/// fixture drafts keyed by presentation ID; the inspector rows and style migration land in WP1-3b2. Every
-/// transition is value-guarded, so `onChange`-driven re-entry is idempotent.
+/// Sheet: the closing native identity outlives binding loss and is released only by its onDismiss. Inspector: a
+/// column is not a modal presentation, so a dismissal is acknowledged at once and a replacement swaps the content
+/// while the column stays open. A window-class change moves the shown request between the two without any
+/// coordinator call (WP1-3b2): the sheet leaves as a migration whose late callbacks acknowledge nothing, and drafts
+/// keyed by presentation ID carry over. Every transition is value-guarded, so `onChange`-driven re-entry is
+/// idempotent.
 @MainActor
 @Observable
 final class NativePanelHostAdapter {
+    /// The last style passed to `synchronize`.
+    private(set) var style: PanelHostStyle = .sheet
     private(set) var sheetItem: NativePanelPresentation? = nil
     private(set) var sheetClosing: NativePanelPresentation? = nil
+    /// The closing sheet left because the panel moved to the inspector, not because it was dismissed.
+    private(set) var sheetClosingIsMigration = false
+    private(set) var inspectorItem: NativePanelPresentation? = nil
     /// The detent selection for the current sheet item; reset to its initial detent per presentation.
     private(set) var detent: PanelDetent = .large
     /// presentationID -> fixture draft text. Presentation IDs never reset, so a key is never reused.
@@ -24,9 +31,28 @@ final class NativePanelHostAdapter {
 
     var capturedSheet: NativePanelPresentation? { sheetClosing ?? sheetItem }
 
+    /// Follows the coordinator in the current style.
     func synchronize(_ coordinator: PanelCoordinator) {
+        synchronize(coordinator, style: style)
+    }
+
+    /// Follows the coordinator in `style`, migrating a shown request when the style changed.
+    func synchronize(_ coordinator: PanelCoordinator, style: PanelHostStyle) {
+        if self.style != style { self.style = style }
+        if style == .inspector {
+            synchronizeInspector(coordinator)
+        } else {
+            synchronizeSheet(coordinator)
+        }
+        // After any acknowledgment above, so an acknowledged presentation's draft leaves at once.
+        dropDrafts(keeping: coordinator.snapshot)
+    }
+
+    private func synchronizeSheet(_ coordinator: PanelCoordinator) {
+        // Inspector to sheet while shown: the column closes with no coordinator call, and the same request shows
+        // in a sheet below, once no earlier sheet is still leaving.
+        if inspectorItem != nil { inspectorItem = nil }
         let state = coordinator.snapshot
-        dropDrafts(keeping: state)
         guard sheetClosing == nil else { return }
         if let item = sheetItem {
             if state.session != item.session || state.current?.presentationID != item.request.presentationID || state.isDismissing {
@@ -37,7 +63,7 @@ final class NativePanelHostAdapter {
             if state.isDismissing {
                 // Coalesced requests can close before native presentation ever started.
                 coordinator.didDismiss(session: state.session, presentationID: request.presentationID)
-                synchronize(coordinator)
+                synchronizeSheet(coordinator)
             } else {
                 sheetItem = NativePanelPresentation(session: state.session, request: request)
                 let initial = PanelPresentationPolicy.initialSheetDetent(request.panel)
@@ -46,8 +72,35 @@ final class NativePanelHostAdapter {
         }
     }
 
+    private func synchronizeInspector(_ coordinator: PanelCoordinator) {
+        if let item = sheetItem {
+            let state = coordinator.snapshot
+            sheetClosing = item
+            sheetItem = nil
+            // Sheet to inspector while shown: a migration, never a dismissal. A sheet the coordinator is already
+            // closing stays a real dismissal and is acknowledged by its own onDismiss.
+            if state.session == item.session && state.current?.presentationID == item.request.presentationID && !state.isDismissing {
+                sheetClosingIsMigration = true
+            }
+        }
+        // A real sheet dismissal in flight: follow the coordinator after its onDismiss.
+        if sheetClosing != nil && !sheetClosingIsMigration { return }
+        var state = coordinator.snapshot
+        if state.isDismissing, let current = state.current {
+            coordinator.didDismiss(session: state.session, presentationID: current.presentationID)
+            state = coordinator.snapshot
+        }
+        var next: NativePanelPresentation? = nil
+        if let current = state.current, !state.isDismissing {
+            next = NativePanelPresentation(session: state.session, request: current)
+        }
+        if inspectorItem != next { inspectorItem = next }
+    }
+
     func sheetBindingLost(_ captured: NativePanelPresentation?, coordinator: PanelCoordinator) {
         guard let captured, captured == capturedSheet else { return }
+        // A sheet that leaves because its panel moved to the inspector was not dismissed by anyone.
+        if sheetClosingIsMigration && sheetClosing == captured { return }
         if coordinator.snapshot.session == captured.session &&
             coordinator.snapshot.current?.presentationID == captured.request.presentationID {
             coordinator.dismiss(cancelPending: false)
@@ -58,9 +111,23 @@ final class NativePanelHostAdapter {
 
     func sheetDidDismiss(_ captured: NativePanelPresentation?, coordinator: PanelCoordinator) {
         guard let captured, sheetClosing == captured else { return }
+        let migration = sheetClosingIsMigration
         sheetClosing = nil
-        coordinator.didDismiss(session: captured.session, presentationID: captured.request.presentationID)
-        synchronize(coordinator)
+        if sheetClosingIsMigration { sheetClosingIsMigration = false }
+        if !migration {
+            coordinator.didDismiss(session: captured.session, presentationID: captured.request.presentationID)
+        }
+        synchronize(coordinator, style: style)
+    }
+
+    /// The person closed the inspector (Escape, or the compact adaptation's own dismissal): dismiss, keeping a
+    /// pending replacement, and acknowledge at once.
+    func inspectorClosedByUser(_ coordinator: PanelCoordinator) {
+        guard style == .inspector, let item = inspectorItem else { return }
+        let state = coordinator.snapshot
+        guard state.session == item.session, state.current?.presentationID == item.request.presentationID else { return }
+        coordinator.dismiss(cancelPending: false)
+        synchronizeInspector(coordinator)
     }
 
     /// The sheet's selection binding. Only a detent the shown panel offers is accepted.
@@ -81,9 +148,10 @@ final class NativePanelHostAdapter {
         drafts[presentationID] ?? ""
     }
 
-    /// Only the shown or closing presentation keeps a draft.
+    /// Only the shown or closing presentation keeps a draft, in a sheet or in the inspector.
     func setDraft(_ text: String, for presentationID: Int) {
-        guard capturedSheet?.request.presentationID == presentationID, drafts[presentationID] != text else { return }
+        let shown = capturedSheet?.request.presentationID == presentationID || inspectorItem?.request.presentationID == presentationID
+        guard shown, drafts[presentationID] != text else { return }
         drafts[presentationID] = text
     }
 

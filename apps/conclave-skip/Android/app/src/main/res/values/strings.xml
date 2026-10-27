@@ -72,6 +72,45 @@
     <string name="native_gallery_live_on_secondary_container">On secondary container text on secondary container</string>
     <string name="native_gallery_live_error">Error text on surface</string>
     <string name="native_gallery_expected">Appendix C %1$.3f</string>
+    <!-- Component gallery additions (WP1-2b): sections, specimens, the compact bar probe and Show loading. -->
+    <string name="native_gallery_show_loading">Show loading</string>
+    <string name="native_gallery_buttons">Buttons</string>
+    <string name="native_gallery_call_controls">Call controls</string>
+    <string name="native_gallery_rows">Rows</string>
+    <string name="native_gallery_banners">Banners</string>
+    <string name="native_gallery_status">Status views</string>
+    <string name="native_gallery_column_app">App</string>
+    <string name="native_gallery_column_in_call">In call</string>
+    <string name="native_gallery_join">Join meeting</string>
+    <string name="native_gallery_rejoin">Rejoin</string>
+    <string name="native_gallery_copy_link">Copy link</string>
+    <string name="native_gallery_remove">Remove from meeting</string>
+    <string name="native_gallery_joining">Joining</string>
+    <string name="native_gallery_bar_readout">Bar %1$s dp of %2$s dp</string>
+    <string name="native_gallery_bar_moved">Moved off the bar: %1$s</string>
+    <string name="native_gallery_bar_moved_none">Nothing moved off the bar</string>
+    <string name="native_gallery_room">Room</string>
+    <string name="native_gallery_notifications">Notifications</string>
+    <string name="native_gallery_delete_account">Delete account</string>
+    <string name="native_gallery_speaker">Speaker</string>
+    <string name="native_gallery_headphones">Headphones</string>
+    <string name="native_gallery_noise_suppression">Noise suppression</string>
+    <string name="native_gallery_name_avery">Avery</string>
+    <string name="native_gallery_person_detail">Presenting</string>
+    <string name="native_gallery_person_status">Muted, hand raised</string>
+    <string name="native_gallery_name_sam">Sam</string>
+    <string name="native_gallery_banner_info">Live captions are on.</string>
+    <string name="native_gallery_banner_warning">Very poor connection. Audio may cut out.</string>
+    <string name="native_gallery_banner_error">Could not share your screen.</string>
+    <string name="native_gallery_banner_success">Your notes were saved.</string>
+    <string name="native_gallery_banner_reconnecting">Reconnecting to the call.</string>
+    <string name="native_gallery_banner_action">Use audio only</string>
+    <string name="native_gallery_show_banner">Show banner</string>
+    <string name="native_gallery_loading_participants">Loading participants</string>
+    <string name="native_gallery_empty_title">No messages yet</string>
+    <string name="native_gallery_empty_body">Messages are visible to everyone in this call.</string>
+    <string name="native_gallery_error_title">Could not load</string>
+    <string name="native_gallery_error_body">Check your connection and try again.</string>
 
     <!-- Debug semantics exporter in the hosting preview. -->
     <string name="native_semantics_title">Semantics export</string>
@@ -95,4 +134,38 @@
     <!-- Hosting preview controls added with the panels. -->
     <string name="native_panel_open_layout">Layout panel</string>
     <string name="native_panel_refresh_readouts">Refresh readouts</string>
+
+    <!-- Design system components (WP1-2b): ds_ -->
+    <string name="ds_in_progress">In progress</string>
+    <string name="ds_leave_call">Leave call</string>
+    <string name="ds_unread_count">%1$d unread</string>
+    <string name="ds_dismiss">Dismiss</string>
+    <string name="ds_try_again">Try again</string>
+    <string name="ds_loading">Loading</string>
+    <string name="ds_offline_title">You’re offline</string>
+    <string name="ds_offline_body">This will load when you’re back online.</string>
+    <string name="ds_admit">Admit</string>
+    <string name="ds_deny">Deny</string>
+    <string name="ds_admit_name">Admit %1$s</string>
+    <string name="ds_deny_name">Deny %1$s</string>
+    <string name="ds_microphone">Microphone</string>
+    <string name="ds_camera">Camera</string>
+    <string name="ds_share_screen">Share screen</string>
+    <string name="ds_chat">Chat</string>
+    <string name="ds_more_options">More options</string>
+    <string name="ds_state_on">On</string>
+    <string name="ds_state_muted">Muted</string>
+    <string name="ds_state_off">Off</string>
+    <string name="ds_state_sharing">Sharing</string>
+
+    <!-- Call notification, notification channel and system fixture (SYS-1): sys_ -->
+    <string name="sys_call_fallback_title">Conclave meeting</string>
+    <string name="sys_call_waiting">Asking to join</string>
+    <string name="sys_call_joining">Joining…</string>
+    <string name="sys_call_reconnecting">Reconnecting…</string>
+    <string name="sys_call_on_hold">On hold</string>
+    <string name="sys_call_mute">Mute</string>
+    <string name="sys_call_unmute">Unmute</string>
+    <string name="sys_channel_call">Ongoing call</string>
+    <string name="sys_channel_call_desc">Shows while you’re in a meeting so you can mute or hang up.</string>
 </resources>

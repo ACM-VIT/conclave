@@ -3,10 +3,12 @@ import SwiftUI
 import UIKit
 
 /// Debug-only component gallery inside the hosting preview (TG 4.1): typography, haptic, contrast and
-/// system-prominent self-checks. It is collapsed by default and each section builds its rows only while it is
-/// expanded, the same lazy pattern as the icon gallery. It is inert: nothing here plays a haptic, starts media
-/// or a session, uses the network or runs a timer. Haptic specimens record the gesture route's decision.
-/// Strings come from the module String Catalog (Q14); Apple title case for controls and titles (Q13).
+/// system-prominent self-checks, and the WP1-2b components (buttons, call controls, rows, banners and status
+/// views). It is collapsed by default and each section builds its rows only while it is expanded, the same lazy
+/// pattern as the icon gallery. It is inert: nothing here plays a haptic, starts media or a session, uses the
+/// network or runs a timer. Haptic specimens and call controls record the gesture route's decision. Spinners
+/// appear only while Show Loading is on. Strings come from the module String Catalog (Q14); Apple title case for
+/// controls and titles (Q13).
 struct NativeComponentGalleryDisclosure: View {
     @State private var expanded = false
 
@@ -24,6 +26,9 @@ struct NativeComponentGalleryDisclosure: View {
 
 private struct NativeComponentGalleryContent: View {
     @State private var longText = false
+    // Show Loading and Force Opaque Controls start off and are never saved.
+    @State private var showLoading = false
+    @State private var forceOpaque = false
     @State private var overflow = GalleryOverflowLedger()
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.legibilityWeight) private var legibilityWeight
@@ -33,14 +38,19 @@ private struct NativeComponentGalleryContent: View {
     var body: some View {
         let probe = GalleryProbe(ledger: overflow, configuration: [
             String(describing: dynamicTypeSize), legibilityWeight == .bold ? "bold" : "regular",
-            longText ? "long" : "short", String(describing: horizontalSizeClass), String(describing: verticalSizeClass),
+            longText ? "long" : "short", showLoading ? "loading" : "idle",
+            String(describing: horizontalSizeClass), String(describing: verticalSizeClass),
         ].joined(separator: ","))
         Text(ConclaveStrings.text("Inert self-checks for type, haptics and contrast. Nothing here plays, records or connects."))
             .font(.subheadline)
             .foregroundStyle(HostingTheme.secondaryText)
-        GalleryEnvironmentReadout(probe: probe)
+        GalleryEnvironmentReadout(probe: probe, specimenCount: GallerySpecimens.ids(showLoading: showLoading).count)
         Toggle(ConclaveStrings.text("Long Text"), isOn: $longText)
             .accessibilityIdentifier(ComponentGalleryCatalog.longTextToggleID)
+        Toggle(ConclaveStrings.text("Show Loading"), isOn: $showLoading)
+            .accessibilityIdentifier(ComponentGalleryCatalog.showLoadingToggleID)
+        Toggle(ConclaveStrings.text("Force Opaque Controls"), isOn: $forceOpaque)
+            .accessibilityIdentifier(ComponentGalleryCatalog.forceOpaqueToggleID)
         GallerySectionDisclosure(section: .typography, title: ConclaveStrings.text("Typography")) {
             TypeSpecimenRows(longText: longText, probe: probe)
         }
@@ -52,6 +62,22 @@ private struct NativeComponentGalleryContent: View {
         }
         GallerySectionDisclosure(section: .systemProminent, title: ConclaveStrings.text("System Prominent Chrome")) {
             SystemProminentSpecimens(probe: probe)
+        }
+        GallerySectionDisclosure(section: .buttons, title: ConclaveStrings.text("Buttons")) {
+            ButtonSpecimens(longText: longText, showLoading: showLoading, probe: probe)
+        }
+        GallerySectionDisclosure(section: .callControls, title: ConclaveStrings.text("Call Controls")) {
+            CallControlSpecimens(forceOpaque: forceOpaque, probe: probe)
+                .environment(\.conclaveForceOpaqueControls, forceOpaque)
+        }
+        GallerySectionDisclosure(section: .rows, title: ConclaveStrings.text("Rows")) {
+            RowSpecimens(longText: longText, probe: probe)
+        }
+        GallerySectionDisclosure(section: .banners, title: ConclaveStrings.text("Banners")) {
+            BannerSpecimens(longText: longText, showLoading: showLoading, probe: probe)
+        }
+        GallerySectionDisclosure(section: .status, title: ConclaveStrings.text("Status Views")) {
+            StatusSpecimens(longText: longText, showLoading: showLoading, probe: probe)
         }
     }
 }
@@ -188,6 +214,7 @@ private struct TruncationProbe: ViewModifier {
 
 private struct GalleryEnvironmentReadout: View {
     let probe: GalleryProbe
+    let specimenCount: Int
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -213,7 +240,7 @@ private struct GalleryEnvironmentReadout: View {
         LabeledContent(ConclaveStrings.text("Truncated Text"), value: ConclaveStrings.machineReadable(
             "%lld truncated, %lld of %lld specimens measured",
             probe.ledger.truncatedCount(in: probe.configuration), probe.ledger.measuredCount(in: probe.configuration),
-            GallerySpecimens.ids.count
+            specimenCount
         ))
         .accessibilityIdentifier(ComponentGalleryCatalog.overflowID)
     }
@@ -501,6 +528,7 @@ private struct LiveContrastSpec {
     let caption: String
     let foreground: Color
     let background: Color
+    var requirement: ContrastRequirement = .text
 }
 
 /// System and trait-dependent colors resolved in each column's environment (light or dark, standard or
@@ -529,6 +557,13 @@ private struct LiveContrastRows: View {
             specs.append(LiveContrastSpec(name: "secondaryTextGrouped", caption: ConclaveStrings.text("Secondary text on the system grouped background"),
                                           foreground: HostingTheme.secondaryText, background: Color(uiColor: .systemGroupedBackground)))
         }
+        if inCall {
+            // WP1-2b: the Leave glyph on the dynamic system red, a glyph pair (3:1). Under Increase Contrast it reads
+            // about 2.94 until FND-1 ships the approved iosInCallLeaveHighContrast fill (owner OQ4).
+            specs.append(LiveContrastSpec(name: "leaveWhite", caption: ConclaveStrings.text("White glyph on the Leave red"),
+                                          foreground: HostingTheme.token(DesignTokens.neutralWhite), background: Color(uiColor: .systemRed),
+                                          requirement: .nonText))
+        }
         specs.append(LiveContrastSpec(name: "accentWhite", caption: ConclaveStrings.text("White label on the accent color"),
                                       foreground: Color.white, background: Color.accentColor))
         return specs
@@ -537,14 +572,23 @@ private struct LiveContrastRows: View {
     var body: some View {
         ForEach(Self.specs(inCall: inCall), id: \.name) { spec in
             LiveContrastRow(id: ComponentGalleryCatalog.liveContrastID(spec.name, inCall: inCall), caption: spec.caption,
+                            requirement: spec.requirement,
                             foreground: spec.foreground, background: spec.background, longText: longText, probe: probe)
         }
     }
 }
 
-/// Every probed specimen, so the readout can say how many were measured in the current configuration.
+/// Every probed specimen, so the readout can say how many were measured in the current configuration. The
+/// spinner specimens count only while Show Loading draws them.
 private enum GallerySpecimens {
-    @MainActor static let ids: Set<String> = {
+    @MainActor static func ids(showLoading: Bool) -> Set<String> {
+        showLoading ? withLoading : idle
+    }
+
+    @MainActor private static let idle = base.union(ComponentGalleryCatalog.componentSpecimenIDs(showLoading: false))
+    @MainActor private static let withLoading = base.union(ComponentGalleryCatalog.componentSpecimenIDs(showLoading: true))
+
+    @MainActor private static let base: Set<String> = {
         var ids = Set(ComponentGalleryCatalog.contrastPairs.map { $0.id })
         for style in ConclaveTextStyle.allCases {
             for weight in ConclaveTextWeight.allCases { ids.insert(ComponentGalleryCatalog.typeSpecimenID(style, weight)) }
@@ -565,6 +609,7 @@ private enum GallerySpecimens {
 private struct LiveContrastRow: View {
     let id: String
     let caption: String
+    let requirement: ContrastRequirement
     let foreground: Color
     let background: Color
     let longText: Bool
@@ -575,7 +620,7 @@ private struct LiveContrastRow: View {
         ContrastRowLayout(foreground: foreground, background: background) {
             Text(galleryText(caption, longText: longText))
                 .layoutPriority(1)
-            Text(galleryText(GalleryColor.verdict(foreground, on: background, in: environment, .text), longText: longText))
+            Text(galleryText(GalleryColor.verdict(foreground, on: background, in: environment, requirement), longText: longText))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -757,6 +802,482 @@ private struct InCallNavigationBar: ViewModifier {
                 .toolbarBackground(.visible, for: .navigationBar)
         } else {
             content
+        }
+    }
+}
+
+// MARK: Components (WP1-2b)
+
+/// Draws a section's specimens in the App column (system appearance) and the In call column (always dark, on the
+/// stage color, without touching the window). Call controls exist only in a call, so they skip the App column.
+private struct ComponentColumns<Column: View>: View {
+    let inCallOnly: Bool
+    @ViewBuilder let column: (Bool) -> Column
+
+    var body: some View {
+        if !inCallOnly {
+            GalleryHeader(title: ConclaveStrings.text("App"))
+            column(false)
+        }
+        Group {
+            GalleryHeader(title: ConclaveStrings.text("In Call"))
+            column(true)
+        }
+        .environment(\.colorScheme, .dark)
+        .listRowBackground(HostingTheme.token(DesignTokens.iosInCallStage))
+    }
+}
+
+/// One component specimen with its identifier underneath, measured as one stack. The component goes first and
+/// is sized first. Components carry no line cap of their own (OQ-2b-5), so the probe sees real truncation.
+private struct ComponentSpecimen<Specimen: View>: View {
+    let id: String
+    let probe: GalleryProbe
+    @ViewBuilder let specimen: () -> Specimen
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            specimen()
+                .layoutPriority(1)
+            Text(verbatim: id)
+                .font(.caption)
+                .foregroundStyle(HostingTheme.secondaryText)
+        }
+        .modifier(TruncationProbe(id: id, probe: probe))
+    }
+}
+
+/// A list row specimen: the row itself is the list row, so it keeps its system chevron, traits and separators.
+private struct RowSpecimen<Row: View>: View {
+    let id: String
+    let probe: GalleryProbe
+    @ViewBuilder let row: () -> Row
+
+    var body: some View {
+        row()
+            .layoutPriority(1)
+            .modifier(TruncationProbe(id: id, probe: probe))
+    }
+}
+
+// MARK: Buttons
+
+private struct ButtonSpecimens: View {
+    let longText: Bool
+    let showLoading: Bool
+    let probe: GalleryProbe
+
+    var body: some View {
+        ComponentColumns(inCallOnly: false) { inCall in
+            ForEach(ComponentGalleryCatalog.specimenIDs(.buttons, showLoading: showLoading), id: \.self) { base in
+                let id = ComponentGalleryCatalog.columnID(base, inCall: inCall)
+                ComponentSpecimen(id: id, probe: probe) {
+                    button(base, id: id)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func button(_ base: String, id: String) -> some View {
+        switch base {
+        case ComponentGalleryCatalog.buttonTonalID:
+            ConclaveButton(galleryText(ConclaveStrings.text("Rejoin"), longText: longText), role: .tonal, identifier: id) {}
+        case ComponentGalleryCatalog.buttonTextID:
+            ConclaveButton(galleryText(ConclaveStrings.text("Copy Link"), longText: longText), role: .text, identifier: id) {}
+        case ComponentGalleryCatalog.buttonDestructiveID:
+            ConclaveButton(galleryText(ConclaveStrings.text("Remove From Meeting"), longText: longText), role: .destructive,
+                           identifier: id) {}
+        case ComponentGalleryCatalog.buttonPendingID:
+            ConclaveButton(galleryText(ConclaveStrings.text("Joining"), longText: longText), role: .primary, isPending: true,
+                           identifier: id) {}
+        default:
+            ConclaveButton(galleryText(ConclaveStrings.text("Join Meeting"), longText: longText), role: .primary, identifier: id) {}
+        }
+    }
+}
+
+// MARK: Call controls (In call only)
+
+/// Off, On, Engaged and disabled toggles, Leave, the Chat badge and the compact bar. Taps record the gesture
+/// route's decision in the Control Taps readout; Leave, Chat and More never change it (Q11, F00 C04 e).
+private struct CallControlSpecimens: View {
+    let forceOpaque: Bool
+    let probe: GalleryProbe
+    @State private var record = HapticRecord()
+
+    var body: some View {
+        ComponentColumns(inCallOnly: true) { _ in
+            LabeledContent(ConclaveStrings.text("Control Taps"), value: ConclaveStrings.machineReadable(
+                "Recorded %lld, suppressed %lld, outcome route %lld, silent %lld",
+                record.recorded, record.suppressed, record.outcomeRoute, record.silent
+            ))
+            .accessibilityIdentifier(ComponentGalleryCatalog.controlRecordID)
+            toggles
+            leave
+            badge
+            bar
+            NavigationLink(ConclaveStrings.text("Full Width Bar")) {
+                CompactBarProbePage(forceOpaque: forceOpaque, route: route)
+            }
+            .accessibilityIdentifier(ComponentGalleryCatalog.compactBarProbeID)
+        }
+    }
+
+    /// The real route decision with the preference and app state read now; nothing reaches a haptic engine.
+    private var route: ConclaveGestureRoute {
+        .recordOnly { kind in
+            record.add(kind, ConclaveGestureFeedback.decision(
+                for: kind,
+                enabled: ConclaveFeedback.isEnabled(),
+                active: UIApplication.shared.applicationState == .active
+            ))
+        }
+    }
+
+    private var toggles: some View {
+        let id = ComponentGalleryCatalog.columnID(ComponentGalleryCatalog.toggleCallID, inCall: true)
+        return ComponentSpecimen(id: id, probe: probe) {
+            HStack(spacing: CGFloat(DesignTokens.space12)) {
+                ConclaveCallToggle(title: ConclaveStrings.text("Microphone"), value: ConclaveStrings.text("Muted"),
+                                   systemImage: ConclaveSymbols.micSlashFill, state: .off,
+                                   inputLabels: [ConclaveStrings.text("Unmute"), ConclaveStrings.text("Microphone")],
+                                   feedback: .micOn, gestureRoute: route, identifier: id + ".off") {}
+                ConclaveCallToggle(title: ConclaveStrings.text("Microphone"), value: ConclaveStrings.text("On"),
+                                   systemImage: ConclaveSymbols.micFill, state: .on,
+                                   inputLabels: [ConclaveStrings.text("Mute"), ConclaveStrings.text("Microphone")],
+                                   feedback: .micOff, gestureRoute: route, identifier: id + ".on") {}
+                ConclaveCallToggle(title: ConclaveStrings.text("Share Screen"), value: ConclaveStrings.text("Sharing"),
+                                   systemImage: ConclaveSymbols.rectangleInsetFilledOnRectangle, state: .engaged,
+                                   gestureRoute: route, identifier: id + ".engaged") {}
+                ConclaveCallToggle(title: ConclaveStrings.text("Camera"), value: ConclaveStrings.text("On"),
+                                   systemImage: ConclaveSymbols.videoFill, state: .on, isEnabled: false,
+                                   feedback: .cameraOff, gestureRoute: route, identifier: id + ".disabled") {}
+            }
+        }
+    }
+
+    private var leave: some View {
+        let id = ComponentGalleryCatalog.columnID(ComponentGalleryCatalog.leaveID, inCall: true)
+        return ComponentSpecimen(id: id, probe: probe) {
+            ConclaveLeaveButton(identifier: id) {}
+        }
+    }
+
+    private var badge: some View {
+        let id = ComponentGalleryCatalog.columnID(ComponentGalleryCatalog.badgeCountID, inCall: true)
+        return ComponentSpecimen(id: id, probe: probe) {
+            HStack(spacing: CGFloat(DesignTokens.space12)) {
+                ConclaveCallInvoker(title: ConclaveStrings.text("Chat"), systemImage: ConclaveSymbols.message, badgeCount: 3,
+                                    identifier: id + ".count") {}
+                ConclaveCallInvoker(title: ConclaveStrings.text("Chat"), systemImage: ConclaveSymbols.message, badgeCount: 120,
+                                    identifier: id + ".overflow") {}
+                ConclaveCallInvoker(title: ConclaveStrings.text("Chat"), systemImage: ConclaveSymbols.messageFill, isEngaged: true,
+                                    badgeCount: 3, identifier: id + ".open") {}
+            }
+        }
+    }
+
+    private var bar: some View {
+        let id = ComponentGalleryCatalog.columnID(ComponentGalleryCatalog.compactBarID, inCall: true)
+        return ComponentSpecimen(id: id, probe: probe) {
+            FittedCompactBar(identifier: id, movedID: ComponentGalleryCatalog.columnID(ComponentGalleryCatalog.compactBarMovedID, inCall: true),
+                             route: route)
+        }
+    }
+}
+
+/// The legacy compact set (Mic, Camera, Share Screen, Chat, More, Leave) fitted to the width it gets, with the
+/// stated move order of OQ-2b-3; the readout names what moved to More.
+private struct FittedCompactBar: View {
+    let identifier: String
+    let movedID: String
+    let route: ConclaveGestureRoute
+    @State private var available: CGFloat = 0
+
+    var body: some View {
+        ConclaveScaledControlDiameter { scaled in
+            let plan = compactBarPlan(scaled: scaled, available: available)
+            VStack(alignment: .leading, spacing: 8) {
+                CompactBarComposition(plan: plan, scaled: scaled, route: route, identifier: identifier)
+                LabeledContent(ConclaveStrings.text("Moved to More"), value: movedText(plan))
+                    .accessibilityIdentifier(movedID)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            if width != available { available = width }
+        }
+    }
+}
+
+/// The plan for a measured width; nil until the width is known, which draws every control.
+private func compactBarPlan(scaled: CGFloat, available: CGFloat) -> CompactBarPlan? {
+    guard available > 0 else { return nil }
+    return CompactBarFit.iosPlan(controlIDs: ComponentGalleryCatalog.compactBarControls + [CompactBarFit.leaveControlID],
+                                 moveOrder: ComponentGalleryCatalog.compactBarMoveOrder,
+                                 scaledDiameter: Double(scaled), available: Double(available))
+}
+
+private func movedText(_ plan: CompactBarPlan?) -> String {
+    let moved = plan?.moved ?? []
+    guard !moved.isEmpty else { return ConclaveStrings.text("None") }
+    return moved.map { compactBarControlName($0) }.joined(separator: ", ")
+}
+
+private func compactBarControlName(_ id: String) -> String {
+    switch id {
+    case ComponentGalleryCatalog.compactBarMicrophone: return ConclaveStrings.text("Microphone")
+    case ComponentGalleryCatalog.compactBarCamera: return ConclaveStrings.text("Camera")
+    case ComponentGalleryCatalog.compactBarShareScreen: return ConclaveStrings.text("Share Screen")
+    case ComponentGalleryCatalog.compactBarChat: return ConclaveStrings.text("Chat")
+    case ComponentGalleryCatalog.compactBarMore: return ConclaveStrings.text("More")
+    default: return id
+    }
+}
+
+/// The composition itself: real controls, the plan's diameter and spacing, Leave last.
+private struct CompactBarComposition: View {
+    let plan: CompactBarPlan?
+    let scaled: CGFloat
+    let route: ConclaveGestureRoute
+    let identifier: String
+
+    var body: some View {
+        let moved = plan?.moved ?? []
+        let diameter = plan.map { CGFloat($0.targetWidth) } ?? scaled
+        let spacing = plan.map { CGFloat($0.spacing) } ?? CGFloat(DesignTokens.space12)
+        ConclaveControlBar(spacing: spacing, identifier: identifier) {
+            if !moved.contains(ComponentGalleryCatalog.compactBarMicrophone) {
+                ConclaveCallToggle(title: ConclaveStrings.text("Microphone"), value: ConclaveStrings.text("On"),
+                                   systemImage: ConclaveSymbols.micFill, state: .on, diameter: diameter,
+                                   inputLabels: [ConclaveStrings.text("Mute"), ConclaveStrings.text("Microphone")],
+                                   feedback: .micOff, gestureRoute: route, identifier: identifier + ".microphone") {}
+            }
+            if !moved.contains(ComponentGalleryCatalog.compactBarCamera) {
+                ConclaveCallToggle(title: ConclaveStrings.text("Camera"), value: ConclaveStrings.text("Off"),
+                                   systemImage: ConclaveSymbols.videoSlashFill, state: .off, diameter: diameter,
+                                   feedback: .cameraOn, gestureRoute: route, identifier: identifier + ".camera") {}
+            }
+            if !moved.contains(ComponentGalleryCatalog.compactBarShareScreen) {
+                // Share Screen is On while idle and Engaged while sharing, never Off (F00 C04 f).
+                ConclaveCallToggle(title: ConclaveStrings.text("Share Screen"), value: ConclaveStrings.text("Off"),
+                                   systemImage: ConclaveSymbols.rectangleOnRectangle, state: .on, diameter: diameter,
+                                   gestureRoute: route, identifier: identifier + ".shareScreen") {}
+            }
+            if !moved.contains(ComponentGalleryCatalog.compactBarChat) {
+                ConclaveCallInvoker(title: ConclaveStrings.text("Chat"), systemImage: ConclaveSymbols.message, badgeCount: 3,
+                                    diameter: diameter, identifier: identifier + ".chat") {}
+            }
+            if !moved.contains(ComponentGalleryCatalog.compactBarMore) {
+                ConclaveCallInvoker(title: ConclaveStrings.text("More"), systemImage: ConclaveSymbols.ellipsis,
+                                    diameter: diameter, identifier: identifier + ".more") {}
+            }
+            ConclaveLeaveButton(diameter: diameter, identifier: identifier + ".leave") {}
+        }
+    }
+}
+
+/// The full-bleed probe (TG 4.2, PN 3.5 R6): the bar in a plain full-width stack, so no inset-grouped margin
+/// narrows it. "Bar W pt of A pt" reads the bar's intrinsic width and the width inside the safe area, in ASCII.
+private struct CompactBarProbePage: View {
+    let forceOpaque: Bool
+    let route: ConclaveGestureRoute
+    @State private var available: CGFloat = 0
+    @State private var barWidth: CGFloat = 0
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            HostingTheme.token(DesignTokens.iosInCallStage)
+                .ignoresSafeArea()
+            ConclaveScaledControlDiameter { scaled in
+                let plan = compactBarPlan(scaled: scaled, available: available)
+                VStack(spacing: CGFloat(DesignTokens.space16)) {
+                    CompactBarComposition(plan: plan, scaled: scaled, route: route, identifier: ComponentGalleryCatalog.compactBarID)
+                        .fixedSize()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                            if width != barWidth { barWidth = width }
+                        }
+                    LabeledContent(ConclaveStrings.text("Bar Width"), value: ConclaveStrings.machineReadable(
+                        "Bar %.1f pt of %.1f pt", Double(barWidth), Double(available)
+                    ))
+                    .accessibilityIdentifier(ComponentGalleryCatalog.compactBarReadoutID)
+                    LabeledContent(ConclaveStrings.text("Moved to More"), value: movedText(plan))
+                        .accessibilityIdentifier(ComponentGalleryCatalog.compactBarMovedID)
+                }
+                .padding(.vertical, CGFloat(DesignTokens.space16))
+            }
+            .frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                if width != available { available = width }
+            }
+        }
+        .environment(\.conclaveForceOpaqueControls, forceOpaque)
+        .navigationTitle(ConclaveStrings.text("Full Width Bar"))
+        .navigationBarTitleDisplayMode(.inline)
+        .modifier(InCallNavigationBar(enabled: true))
+    }
+}
+
+// MARK: Rows
+
+private struct RowSpecimens: View {
+    let longText: Bool
+    let probe: GalleryProbe
+    @State private var noiseSuppression = true
+    @State private var route = "speaker"
+
+    var body: some View {
+        ComponentColumns(inCallOnly: false) { inCall in
+            ForEach(ComponentGalleryCatalog.specimenIDs(.rows, showLoading: false), id: \.self) { base in
+                let id = ComponentGalleryCatalog.columnID(base, inCall: inCall)
+                RowSpecimen(id: id, probe: probe) {
+                    row(base, id: id)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func row(_ base: String, id: String) -> some View {
+        switch base {
+        case ComponentGalleryCatalog.rowNavigationID:
+            ConclaveNavigationRow(title: galleryText(ConclaveStrings.text("Notifications"), longText: longText), identifier: id) {
+                RowDestinationPage()
+            }
+        case ComponentGalleryCatalog.rowDestructiveID:
+            ConclaveDestructiveRow(title: galleryText(ConclaveStrings.text("Delete Account"), longText: longText), identifier: id) {}
+        case ComponentGalleryCatalog.rowSelectableID:
+            VStack(spacing: 0) {
+                ConclaveSelectableRow(title: galleryText(ConclaveStrings.text("Speaker"), longText: longText),
+                                      isSelected: route == "speaker", identifier: id + ".speaker") { route = "speaker" }
+                ConclaveSelectableRow(title: galleryText(ConclaveStrings.text("Headphones"), longText: longText),
+                                      isSelected: route == "headphones", identifier: id + ".headphones") { route = "headphones" }
+            }
+        case ComponentGalleryCatalog.toggleRowID:
+            ConclaveToggleRow(title: galleryText(ConclaveStrings.text("Noise Suppression"), longText: longText),
+                              isOn: $noiseSuppression, identifier: id)
+        case ComponentGalleryCatalog.rowPersonID:
+            // Avatar stand-in at palette index 7 (#14B8A6), the C07 color for this name (OQ-2b-8).
+            ConclavePersonRow(name: galleryText(ConclaveStrings.text("Avery"), longText: longText),
+                              detail: galleryText(ConclaveStrings.text("Presenting"), longText: longText),
+                              statusValue: ConclaveStrings.text("Muted, Hand Raised"),
+                              statusSymbols: [ConclaveSymbols.micSlashFill, ConclaveSymbols.handRaisedFill],
+                              avatarPaletteIndex: 7, identifier: id)
+        case ComponentGalleryCatalog.rowPersonWaitingID:
+            ConclaveWaitingPersonRow(name: galleryText(ConclaveStrings.text("Sam"), longText: longText), avatarPaletteIndex: 9,
+                                     identifier: id, onDeny: {}, onAdmit: {})
+        default:
+            ConclaveValueRow(title: galleryText(ConclaveStrings.text("Room"), longText: longText),
+                             value: ComponentGalleryCatalog.sampleRoomCode, identifier: id)
+        }
+    }
+}
+
+private struct RowDestinationPage: View {
+    var body: some View {
+        List {
+            Text(ConclaveStrings.text("This page is a specimen. It does nothing."))
+        }
+        .navigationTitle(ConclaveStrings.text("Notifications"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: Banners
+
+/// Static banners never animate and never announce here (the silent gallery suppresses announcements and shows
+/// what a production banner would say). Only the motion specimen appears and disappears; it is not counted.
+private struct BannerSpecimens: View {
+    let longText: Bool
+    let showLoading: Bool
+    let probe: GalleryProbe
+    @State private var showsBanner = false
+
+    var body: some View {
+        ComponentColumns(inCallOnly: false) { inCall in
+            ForEach(ComponentGalleryCatalog.specimenIDs(.banners, showLoading: showLoading), id: \.self) { base in
+                let id = ComponentGalleryCatalog.columnID(base, inCall: inCall)
+                ComponentSpecimen(id: id, probe: probe) {
+                    banner(base, id: id, inCall: inCall)
+                }
+            }
+        }
+        Group {
+            Toggle(ConclaveStrings.text("Show Banner"), isOn: $showsBanner)
+                .accessibilityIdentifier(ComponentGalleryCatalog.bannerMotionToggleID)
+            LabeledContent(ConclaveStrings.text("Would Announce"),
+                           value: showsBanner ? motionText : ConclaveStrings.text("None"))
+                .accessibilityIdentifier(ComponentGalleryCatalog.bannerAnnouncementID)
+            ConclaveBannerPresence(isPresented: showsBanner) {
+                ConclaveBanner(kind: .info, text: motionText, surface: .inCall, announces: false,
+                               identifier: ComponentGalleryCatalog.bannerMotionID)
+            }
+        }
+        .environment(\.colorScheme, .dark)
+        .listRowBackground(HostingTheme.token(DesignTokens.iosInCallStage))
+    }
+
+    private var motionText: String {
+        galleryText(ConclaveStrings.text("Live captions are on."), longText: longText)
+    }
+
+    private func banner(_ base: String, id: String, inCall: Bool) -> some View {
+        let surface: ConclaveBannerSurface = inCall ? .inCall : .app
+        switch base {
+        case ComponentGalleryCatalog.bannerWarningID:
+            return ConclaveBanner(kind: .warning, text: galleryText(ConclaveStrings.text("Very poor connection. Audio may cut out."), longText: longText),
+                                  surface: surface,
+                                  actions: [ConclaveBannerAction(title: ConclaveStrings.text("Use Audio Only"), identifier: id + ".action", action: {})],
+                                  announces: false, identifier: id)
+        case ComponentGalleryCatalog.bannerErrorID:
+            return ConclaveBanner(kind: .error, text: galleryText(ConclaveStrings.text("Could not share your screen."), longText: longText),
+                                  surface: surface, onDismiss: {}, announces: false, identifier: id)
+        case ComponentGalleryCatalog.bannerSuccessID:
+            return ConclaveBanner(kind: .success, text: galleryText(ConclaveStrings.text("Your notes were saved."), longText: longText),
+                                  surface: surface, announces: false, identifier: id)
+        case ComponentGalleryCatalog.bannerReconnectingID:
+            return ConclaveBanner(kind: .reconnecting, text: galleryText(ConclaveStrings.text("Reconnecting to the call."), longText: longText),
+                                  surface: surface, announces: false, identifier: id)
+        default:
+            return ConclaveBanner(kind: .info, text: motionText, surface: surface, announces: false, identifier: id)
+        }
+    }
+}
+
+// MARK: Status views
+
+private struct StatusSpecimens: View {
+    let longText: Bool
+    let showLoading: Bool
+    let probe: GalleryProbe
+
+    var body: some View {
+        ComponentColumns(inCallOnly: false) { inCall in
+            ForEach(ComponentGalleryCatalog.specimenIDs(.status, showLoading: showLoading), id: \.self) { base in
+                let id = ComponentGalleryCatalog.columnID(base, inCall: inCall)
+                ComponentSpecimen(id: id, probe: probe) {
+                    status(base, id: id)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func status(_ base: String, id: String) -> some View {
+        switch base {
+        case ComponentGalleryCatalog.statusLoadingID:
+            ConclaveLoadingStatus(label: galleryText(ConclaveStrings.text("Loading Participants"), longText: longText), identifier: id)
+        case ComponentGalleryCatalog.statusEmptyID:
+            ConclaveEmptyStatus(title: galleryText(ConclaveStrings.text("No Messages Yet"), longText: longText),
+                                message: galleryText(ConclaveStrings.text("Messages are visible to everyone in this call."), longText: longText),
+                                systemImage: ConclaveSymbols.message, identifier: id)
+        case ComponentGalleryCatalog.statusOfflineID:
+            ConclaveOfflineStatus(identifier: id, onRetry: {})
+        default:
+            ConclaveErrorStatus(title: galleryText(ConclaveStrings.text("Could Not Load"), longText: longText),
+                                message: galleryText(ConclaveStrings.text("Check your connection and try again."), longText: longText),
+                                systemImage: ConclaveSymbols.exclamationmarkTriangleFill, identifier: id, onRetry: {})
         }
     }
 }

@@ -25,9 +25,10 @@ extension EnvironmentValues {
 /// The shared iOS panel chrome (PS 7.4): navigation stack, inline title, Close and the scoped appearance.
 /// Close sits at `.topBarTrailing`, not `.confirmationAction`, because Close commits nothing and iOS 26 can
 /// draw a confirmation item as a white label on the accent fill (A17, owner default Q12). Hardware Escape
-/// reaches it through `.keyboardShortcut(.cancelAction)`. Sheet content scopes its color scheme with
-/// `.preferredColorScheme`, which stays inside the presentation; inspector content (WP1-3b2) only sets the
-/// environment, because `.preferredColorScheme` there would retheme the whole window.
+/// reaches it through `.keyboardShortcut(.cancelAction)`, and the VoiceOver escape gesture closes too. Sheet content
+/// scopes its color scheme with `.preferredColorScheme`, which stays inside the presentation; inspector content
+/// (WP1-3b2) only sets the environment, because `.preferredColorScheme` there would retheme the whole window. An
+/// inspector is not modal, so on open VoiceOver focus moves to its heading (PS 7.7); a sheet moves focus itself.
 struct PanelShell<Content: View>: View {
     let title: String
     let presentation: PanelPresentation
@@ -37,6 +38,7 @@ struct PanelShell<Content: View>: View {
     let onClose: () -> Void
     let onPromoteToLarge: () -> Void
     @ViewBuilder let content: () -> Content
+    @AccessibilityFocusState private var headingFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -48,15 +50,36 @@ struct PanelShell<Content: View>: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         PanelCloseButton(title: title, action: onClose)
                     }
+                    if hostStyle == .inspector {
+                        // The inspector's visible title doubles as the heading VoiceOver lands on when it opens.
+                        ToolbarItem(placement: .principal) {
+                            Text(title)
+                                .font(.headline)
+                                .accessibilityAddTraits(.isHeader)
+                                .accessibilityFocused($headingFocused)
+                        }
+                    }
                 }
         }
         .environment(\.panelPromoteToLargeDetent, PanelPromoteToLargeDetentAction(action: onPromoteToLarge))
+        .accessibilityAction(.escape) { onClose() }
+        .task {
+            guard hostStyle == .inspector else { return }
+            // After the column has presented, so the system's own focus move does not override this one.
+            try? await Task.sleep(for: .milliseconds(PanelShellFocus.delayMilliseconds))
+            headingFocused = true
+        }
         .modifier(PanelAppearanceScope(hostStyle: hostStyle, scheme: scheme))
     }
 
     private var scheme: ColorScheme {
         presentation.appearance == .inCall ? .dark : systemScheme
     }
+}
+
+private enum PanelShellFocus {
+    /// Long enough for the inspector column to finish presenting.
+    static let delayMilliseconds = 400
 }
 
 /// Close with the system close role on iOS 26 and later; the labeled xmark before it (icon contract). Both say

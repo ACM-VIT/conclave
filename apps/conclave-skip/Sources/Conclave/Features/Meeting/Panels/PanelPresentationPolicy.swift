@@ -51,9 +51,10 @@ enum PanelPresentationPolicy {
     /// Android non-compact height class.
     static let regularMinHeight = 480.0
     static let paneWidth = 360.0
-    /// WP1-3b1 default for the parameter below (plan amendment A2); WP1-3b2 flips it to true. Tests pass the
-    /// parameter explicitly, so both branches stay covered after the flip.
-    static let sideStylesEnabled = false
+    /// The default for the parameter below (plan amendment A2). WP1-3b2 turned side styles on: an iPad or an
+    /// expanded Android window shows the inspector or the side pane. Tests pass the parameter explicitly, so both
+    /// branches stay covered.
+    static let sideStylesEnabled = true
 
     /// An Android window measured by the host's own constraints, in dp.
     static func androidWindow(width: Double, height: Double) -> PanelWindow {

@@ -8,15 +8,19 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
@@ -198,10 +202,12 @@ internal class PanelHostReadout {
 
 /**
  * The Android panel host (PS 8.3, 8.5). The stage is the first child of one Row, created once and never moved
- * or made conditional; the full overlay sits above it. The host measures its own constraints, so the decision
- * is right in multi-window and on foldables. It only translates the coordinator into containers and reports
- * removal back after composition disposal; it never presents or resets. WP1-3b2 adds the side pane after the
- * stage and moves the panel content with `movableContentOf`.
+ * or made conditional; the expanded side pane follows it in the same Row and the full overlay sits above it.
+ * The host measures its own constraints, so the decision is right in multi-window and on foldables. It only
+ * translates the coordinator into containers and reports removal back after composition disposal; it never
+ * presents or resets. One movable content per presentation carries the page between the overlay and the side
+ * pane when the window class changes (WP1-3b2, PS 9.2): its remembered state and its mount survive the move, so
+ * nothing is acknowledged and the coordinator keeps its request.
  */
 @Composable
 internal fun NativePanelHost(
@@ -220,12 +226,22 @@ internal fun NativePanelHost(
         val decision = remember(request, window.horizontalRegular, window.verticalRegular) {
             if (request == null) null else panelHostDecision(request, window)
         }
-        val overlay = decision != null && decision.style == PanelHostStyle.overlay && panelContainerVisible(state)
+        val visible = panelContainerVisible(state)
+        val overlay = decision != null && decision.style == PanelHostStyle.overlay && visible
+        val sidePane = decision != null && decision.style == PanelHostStyle.sidePane && visible
         val coverage = if (overlay && decision != null) decision.coverage else PanelStageCoverage.none
         val covered = coverage == PanelStageCoverage.full
         val back = remember(state.session, request?.presentationID) { PanelBackProgress() }
+        val latestPanel by rememberUpdatedState(panel)
+        val movablePanel = remember(state.session, request?.presentationID) {
+            val session = state.session
+            val shown = request
+            if (shown == null) null else movableContentOf { variant: InCallPageVariant, current: PanelHostDecision ->
+                latestPanel(session, shown, current, variant)
+            }
+        }
         systemBars(panelBarInputs(state, decision))
-        SideEffect { readout.update(decision, overlay) }
+        SideEffect { readout.update(decision, overlay || sidePane) }
         Row(Modifier.fillMaxSize()) {
             // The stage container alone reads the coverage, so opening a panel never recomposes stage tiles.
             // Covered: hidden from accessibility, and keyboard focus cannot enter it from the overlay.
@@ -237,8 +253,16 @@ internal fun NativePanelHost(
             ) {
                 stage(coverage)
             }
+            // Non-modal: the stage stays visible and reachable, and traversal reads the stage, then the pane.
+            if (sidePane && request != null && decision != null && movablePanel != null) {
+                PanelSidePane(decision) {
+                    if (!state.isDismissing) {
+                        key(state.session, request.presentationID) { movablePanel(InCallPageVariant.SidePane, decision) }
+                    }
+                }
+            }
         }
-        if (overlay && request != null && decision != null) {
+        if (overlay && request != null && decision != null && movablePanel != null) {
             // A Surface filling the window blocks pointer input from reaching the covered stage (AND-9). Its own
             // theme matches the page, so the container never shows another color between two panels.
             HostingTheme(inCall = decision.inCallAppearance) {
@@ -255,9 +279,7 @@ internal fun NativePanelHost(
                     color = MaterialTheme.colorScheme.surface,
                 ) {
                     if (!state.isDismissing) {
-                        key(state.session, request.presentationID) {
-                            panel(state.session, request, decision, InCallPageVariant.Overlay)
-                        }
+                        key(state.session, request.presentationID) { movablePanel(InCallPageVariant.Overlay, decision) }
                     }
                 }
             }
@@ -274,9 +296,32 @@ internal fun NativePanelHost(
                 throw cancelled
             }
         }
-        LaunchedEffect(overlay) {
-            val target = focus.tracker.update(overlay) ?: return@LaunchedEffect
+        // A move between the overlay and the side pane keeps the panel visible, so it restores nothing; a close
+        // from either returns focus to the opener.
+        val panelVisible = overlay || sidePane
+        LaunchedEffect(panelVisible) {
+            val target = focus.tracker.update(panelVisible) ?: return@LaunchedEffect
             requestPanelFocus(PANEL_FOCUS_ATTEMPTS, awaitFrame = { withFrameNanos { } }) { focus.restore(target) }
+        }
+    }
+}
+
+/**
+ * The expanded side pane (PS 8.3): a 1 dp divider and a fixed-width page container after the stage in the same
+ * Row, so the stage only narrows and the pane sits at the end, mirroring to the start in right-to-left layouts.
+ * It is not modal and is never laid over the stage.
+ */
+@Composable
+private fun PanelSidePane(decision: PanelHostDecision, content: @Composable () -> Unit) {
+    HostingTheme(inCall = decision.inCallAppearance) {
+        Row(Modifier.fillMaxHeight().testTag("panel.sidePane")) {
+            VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Surface(
+                modifier = Modifier.width(decision.paneWidthDp.dp).fillMaxHeight().focusGroup(),
+                color = MaterialTheme.colorScheme.surface,
+            ) {
+                content()
+            }
         }
     }
 }

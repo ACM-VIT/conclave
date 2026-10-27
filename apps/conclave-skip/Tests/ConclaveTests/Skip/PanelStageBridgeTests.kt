@@ -17,12 +17,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotStateObserver
 import androidx.compose.ui.Modifier
@@ -255,6 +259,51 @@ class PanelStageBridgeTests {
         lifetime.acknowledgeAbsent() // still mounted: waits for disposal
         assertTrue(panels.snapshot.isDismissing)
         lifetime.disposed(1, shown.current!!.presentationID)
+        assertNull(panels.snapshot.current)
+    }
+
+    /** WP1-3b2 (PS 8.3, 9.2): a window-class change moves the page between the overlay and the side pane without a
+     *  disposal, so nothing is acknowledged, the container stays visible and focus is not restored. */
+    @Test fun styleMoveWithoutDisposeNeverAcknowledges() {
+        assertTrue("WP1-3b2 turned side styles on", PanelPresentationPolicy.sideStylesEnabled)
+        val panels = PanelCoordinator(session = 1)
+        val lifetime = NativePanelOverlayLifetime(panels)
+        panels.present(MeetingPanel.settings, from = PanelInvoker.settings)
+        val shown = panels.snapshot
+        val request = shown.current!!
+        lifetime.mounted(1, request.presentationID)
+        val phone = PanelPresentationPolicy.androidWindow(width = 411.0, height = 891.0)
+        val tablet = PanelPresentationPolicy.androidWindow(width = 1280.0, height = 800.0)
+        val expanded = panelHostDecision(request, tablet)
+        val compact = panelHostDecision(request, phone)
+        assertEquals(PanelHostStyle.sidePane, expanded.style)
+        assertEquals(PanelStageCoverage.none, expanded.coverage)
+        assertEquals(360, expanded.paneWidthDp)
+        assertFalse(expanded.showsMiniTile)
+        assertEquals(PanelHostStyle.overlay, compact.style)
+        assertTrue(compact.showsMiniTile)
+        // Owner default Q8 (3): medium width keeps the full overlay.
+        assertEquals(PanelHostStyle.overlay, panelHostDecision(request, PanelPresentationPolicy.androidWindow(width = 720.0, height = 1000.0)).style)
+        for (window in listOf(tablet, phone, tablet, phone)) {
+            panelHostDecision(request, window)
+            lifetime.acknowledgeAbsent()
+            assertTrue(panelContainerVisible(panels.snapshot))
+            assertEquals(shown, panels.snapshot)
+        }
+        // The system bars follow the overlay only; with the side pane the root keeps them.
+        assertEquals(PanelBarInputs(overlayVisible = false, overlayInCall = false), panelBarInputs(panels.snapshot, expanded))
+        assertTrue(panelBarInputs(panels.snapshot, compact).overlayVisible)
+        // A move keeps the panel visible, so the focus tracker restores nothing until a real close.
+        val tracker = PanelFocusTracker()
+        tracker.invoked("panel.open.settings")
+        assertNull(tracker.update(true))
+        assertNull(tracker.update(true))
+        assertEquals("panel.open.settings", tracker.update(false))
+        // Close from the side pane disposes and acknowledges exactly as the overlay does.
+        panels.dismiss(cancelPending = true)
+        lifetime.acknowledgeAbsent()
+        assertTrue(panels.snapshot.isDismissing)
+        lifetime.disposed(1, request.presentationID)
         assertNull(panels.snapshot.current)
     }
 
@@ -498,6 +547,9 @@ class PanelStageBridgeTests {
         val presenter = NativeHostingPresenter()
         val lifetime = NativePanelOverlayLifetime(presenter.panels)
         val focus = PanelInvokerFocus()
+        val readout = PanelHostReadout()
+        // WP1-3b2, the side-pane variant: an expanded host constraint (1280 x 800 dp) instead of the window.
+        var wide by mutableStateOf(false)
         var stageFactories = 0
         var stageReleases = 0
         var panelMounts = 0
@@ -506,11 +558,12 @@ class PanelStageBridgeTests {
         var plainFocused = false
         activity.setContent {
             CompositionLocalProvider(LocalRendererLedger provides presenter.renderers) {
+              Box(if (wide) Modifier.requiredSize(1280.dp, 800.dp) else Modifier.fillMaxSize()) {
                 NativePanelHost(
                     panels = presenter.panels,
                     lifetime = lifetime,
                     focus = focus,
-                    readout = PanelHostReadout(),
+                    readout = readout,
                     systemBars = { },
                     stage = { _ ->
                         Column(Modifier.fillMaxSize()) {
@@ -541,6 +594,7 @@ class PanelStageBridgeTests {
                         }
                     },
                 )
+              }
             }
         }
         settleHost()
@@ -580,6 +634,30 @@ class PanelStageBridgeTests {
         }
         assertNull(presenter.panels.snapshot.current)
         assertEquals(7, panelMounts)
+        assertEquals(3, stageFactories)
+        assertEquals(0, stageReleases)
+        assertEquals(launch, presenter.renderers.summary())
+        // WP1-3b2 side-pane variant: an expanded host shows the side pane beside the stage, and window-class
+        // changes move the same page between the side pane and the overlay: no remount, no acknowledgment, no
+        // stage renderer recreated.
+        wide = true
+        settleHost()
+        presenter.panels.present(MeetingPanel.settings, from = PanelInvoker.settings)
+        settleHost()
+        assertEquals(8, panelMounts)
+        assertEquals("style=sidePane coverage=none", readout.style)
+        val sideShown = presenter.panels.snapshot
+        for (expanded in listOf(false, true, false, true)) {
+            wide = expanded
+            settleHost()
+            assertEquals("a move never remounts the page", 8, panelMounts)
+            assertEquals(sideShown, presenter.panels.snapshot)
+            assertEquals(if (expanded) "style=sidePane coverage=none" else "style=overlay coverage=full", readout.style)
+        }
+        presenter.panels.dismiss(cancelPending = true)
+        settleHost()
+        assertNull(presenter.panels.snapshot.current)
+        assertEquals("style=none coverage=none", readout.style)
         assertEquals(3, stageFactories)
         assertEquals(0, stageReleases)
         assertEquals(launch, presenter.renderers.summary())

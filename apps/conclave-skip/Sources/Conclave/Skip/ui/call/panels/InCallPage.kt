@@ -8,10 +8,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.rememberScrollState
@@ -22,6 +24,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -56,8 +59,10 @@ internal fun miniTileReservationDp(landscape: Boolean, tileVisible: Boolean): In
 
 /**
  * One keyed page of a retained-stage panel (PS 8.4). The host acknowledges removal only after this composition
- * disposes. On explicit open the page moves focus to its title, so TalkBack and the keyboard enter the overlay
- * (PS 8.10); the pane title announces it and the traversal group keeps its content together.
+ * disposes. On explicit open the page moves focus to its title, so TalkBack and the keyboard enter the overlay or
+ * the side pane (PS 8.10); a later move between the two (a window-class change) keeps the page composed and does
+ * not move focus again. The pane title announces it and the traversal group keeps its content together. The side
+ * pane takes the keyboard inset inside itself and only the top, end and bottom safe-drawing insets.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -86,17 +91,20 @@ internal fun InCallPage(
     // The tile shows on the overlay only and hides while a composer has the keyboard.
     val tileVisible = miniTile != null && variant == InCallPageVariant.Overlay && !(hasComposer && imeVisible)
     val reservation = miniTileReservationDp(landscape, tileVisible).dp
-    if (variant == InCallPageVariant.Overlay) {
-        LaunchedEffect(Unit) {
+    // Keyed to the page, not to the variant, so moving between the overlay and the side pane never runs it again.
+    LaunchedEffect(Unit) {
+        if (variant != InCallPageVariant.Sheet) {
             // Retried for a few frames until the title has attached and accepted focus (PS 8.10).
             requestPanelFocus(PANEL_FOCUS_ATTEMPTS, awaitFrame = { withFrameNanos { } }) { titleFocus.requestFocusOrFalse() }
         }
     }
+    val sidePane = variant == InCallPageVariant.SidePane
+    val sidePaneSides = WindowInsetsSides.Top + WindowInsetsSides.End + WindowInsetsSides.Bottom
     HostingTheme(inCall = appearance == PanelAppearance.inCall) {
         Scaffold(
             modifier = Modifier.fillMaxSize().imePadding().testTag("panel.page")
                 .semantics { paneTitle = title; isTraversalGroup = true },
-            contentWindowInsets = WindowInsets.safeDrawing,
+            contentWindowInsets = if (sidePane) WindowInsets.safeDrawing.only(sidePaneSides) else WindowInsets.safeDrawing,
             topBar = {
                 TopAppBar(
                     title = {
@@ -104,6 +112,8 @@ internal fun InCallPage(
                             .semantics { heading() })
                     },
                     navigationIcon = { PanelNavigationIcon(title, variant, onClose) },
+                    windowInsets = if (sidePane) TopAppBarDefaults.windowInsets.only(WindowInsetsSides.Top + WindowInsetsSides.End)
+                        else TopAppBarDefaults.windowInsets,
                 )
             },
         ) { insets ->

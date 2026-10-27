@@ -1498,6 +1498,141 @@ struct LocalToggleGuardRecoveryTests {
         #expect(call.media.hasLocalAudioProducer)
         await call.finish()
     }
+
+    // MARK: SYS-1 and WP2-S1 (system commands through CallPresence, the shell ledger across attempts)
+
+    /// SYS-1 (S70 1 l2): a system mute command while an unmute is pending reaches the in-flight mute path
+    /// (`applyLocalMuteNow`, WP2-S1c) through `CallPresence` and the shell's CC21 rule, and ends muted. While that
+    /// applied mute owns the guard a system unmute is a duplicate (the adapter fails it back), and CallKit's echo of
+    /// the mute is already in effect.
+    @Test
+    func systemMuteCommandWhileAnUnmuteIsPendingEndsMutedAndASystemUnmuteFailsClosed() async {
+        let call = RejoinHarness()
+        call.media.testModelsLocalAudioState = true
+        #expect(await call.joinWithPausedMicrophone())
+        let session = call.generation
+        let presence = call.viewModel.callPresence
+        #expect(presence.snapshot.phase == .live)
+        let presenceSession = presence.snapshot.presenceSession
+        call.calls.hold("setAudioEnabled(true)")
+        call.viewModel.toggleMute()
+        #expect(!call.viewModel.state.isMuted)
+        #expect(await settle { call.calls.isHolding("setAudioEnabled(true)") })
+        call.calls.hold("setAudioEnabled(false)")
+
+        #expect(presence.handle(.mute, source: .callKit, presenceSession: presenceSession) == .dispatched)
+        #expect(call.viewModel.state.isMuted)
+        #expect(presence.snapshot.isMuted)
+        // The local mute reached the media session before the acknowledgement.
+        #expect(call.calls.count("suspendLocalAudioForRecovery", inGeneration: session) == 1)
+        #expect(await settle { call.calls.isHolding("setAudioEnabled(false)") })
+        #expect(presence.handle(.unmute, source: .callKit, presenceSession: presenceSession) == .duplicate)
+        #expect(call.viewModel.state.isMuted)
+        #expect(presence.handle(.mute, source: .callKit, presenceSession: presenceSession) == .alreadyInEffect)
+        #expect(presence.handle(.mute, source: .notification, presenceSession: presenceSession + 1) == .stale)
+
+        call.calls.release("setAudioEnabled(true)")
+        #expect(await settle { call.endedToggleCount("toggleMute") == 2 })
+        call.calls.release("setAudioEnabled(false)")
+        #expect(await settle { call.endedToggleCount("applyLocalMuteNow") == 1 })
+        #expect(await call.reportsHandled())
+        #expect(call.calls.count("reassertLocalAudioProducerUnmuted") == 0)
+        #expect(call.viewModel.state.isMuted)
+        #expect(call.viewModel.state.errorMessage == nil)
+        #expect(presence.commandLog == [
+            "mute:callKit:dispatched", "unmute:callKit:duplicate", "mute:callKit:alreadyInEffect", "mute:notification:stale"
+        ])
+        await call.finish()
+    }
+
+    /// WP2-S1 E9 (intake amendment 3): the shell's hand ticket is bound to the F7 token release. A recovery start
+    /// interrupts the pending ticket at once (S1C ACK), the rejoin releases the guard, the orphaned raise's late
+    /// acknowledgement resolves nothing, and a new raise works in the recovered call.
+    @Test
+    func handTicketIsInterruptedByARejoinAndItsLateAcknowledgementIsDropped() async {
+        let call = RejoinHarness()
+        #expect(await call.join())
+        let shell = call.viewModel.shell
+        call.calls.hold("setHandRaised(true)")
+        #expect(shell.toggleHand() == .dispatched)
+        #expect(await settle { call.calls.isHolding("setHandRaised(true)") })
+        guard let ticket = shell.ledger.pendingTicket(.hand) else {
+            Issue.record("the hand intent took no ticket")
+            await call.finish()
+            return
+        }
+        #expect(shell.controls.rows.first { $0.id == "hand" }?.isPending == true)
+        #expect(shell.toggleHand() == .duplicate)
+
+        #expect(await call.rejoin())
+        #expect(shell.ledger.result(of: ticket.id)?.kind == .interrupted)
+        await call.land()
+        #expect(shell.controls.rows.first { $0.id == "hand" }?.isPending == false)
+
+        call.calls.release("setHandRaised(true)")
+        #expect(await settle { call.endedToggleCount("setHandRaisedState") == 1 })
+        #expect(shell.ledger.result(of: ticket.id)?.kind == .interrupted)
+        #expect(!call.viewModel.state.isHandRaised)
+
+        #expect(shell.toggleHand() == .dispatched)
+        #expect(await settle { call.viewModel.state.isHandRaised })
+        #expect(await settle { shell.ledger.pending.isEmpty })
+        await call.finish()
+    }
+
+    /// WP2-S1 A19 (`roomSwitchPublishesOneCoherentIdentity`): a `joinRoom` that starts a new call session while a
+    /// hand ticket is pending and an end-for-everyone confirmation is open changes the published identity exactly
+    /// once, with the new call session, attempt and token together; the ticket resolves cancelled, not interrupted;
+    /// no publish mixes the old confirmation, pending rows or outcome with the new identity.
+    @Test
+    func roomSwitchPublishesOneCoherentIdentity() async {
+        let call = RejoinHarness()
+        #expect(await call.join())
+        let shell = call.viewModel.shell
+        call.viewModel.state.isAdmin = true
+        call.calls.hold("setHandRaised(true)")
+        #expect(shell.toggleHand() == .dispatched)
+        #expect(await settle { call.calls.isHolding("setHandRaised(true)") })
+        shell.requestEndForEveryone(from: .more)
+        #expect(shell.session.confirmation != nil)
+        let before = shell.session.identity
+        guard let ticket = shell.ledger.pendingTicket(.hand) else {
+            Issue.record("the hand intent took no ticket")
+            await call.finish()
+            return
+        }
+
+        var sessions: [MeetingSessionSnapshot] = []
+        var rows: [MeetingControlRowsState] = []
+        shell.onPublish = { session, controls, _ in
+            sessions.append(session)
+            rows.append(controls)
+        }
+        let heldBefore = call.calls.heldCount("cleanup(notifyLocalState: false)")
+        call.viewModel.joinRoom(roomId: "room-b", displayName: "Local User", clientId: "test-client")
+        shell.onPublish = nil
+
+        var changes = 0
+        var last = before
+        for session in sessions where session.identity != last {
+            changes += 1
+            last = session.identity
+        }
+        #expect(changes == 1)
+        let first = sessions.first { $0.identity != before }
+        #expect(first?.identity.callSession == before.callSession + 1)
+        #expect(first?.identity.attempt == before.attempt + 1)
+        #expect(first?.identity.attemptToken.isEmpty == false && first?.identity.attemptToken != before.attemptToken)
+        for (index, session) in sessions.enumerated() where session.identity.callSession != before.callSession {
+            #expect(session.confirmation == nil)
+            #expect(session.outcome == nil)
+            #expect(!rows[index].rows.contains { $0.isPending })
+        }
+        #expect(shell.ledger.result(of: ticket.id)?.kind == .cancelled)
+        #expect(shell.feedbackState == MeetingShellFeedbackState(session: before.callSession + 1, token: FeedbackToken.baseline))
+        #expect(await settle { call.calls.heldCount("cleanup(notifyLocalState: false)") == heldBefore + 1 })
+        await call.finish()
+    }
 }
 
 /// A call whose join attempts come from the real `joinRoom`.
