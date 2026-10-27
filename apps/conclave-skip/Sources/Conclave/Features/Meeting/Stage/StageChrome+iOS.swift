@@ -3,8 +3,8 @@ import Accessibility
 import SwiftUI
 
 // S20 7 and 8 (STG-4): the top chrome (meeting capsule plus the system route picker in one glass cluster through the
-// single glass entry), the flat status chips (never glass, they stay while chrome hides), the bar slot (spec 30
-// fills it) and chrome visibility. `StageChromeLayer` is the only view that reads `chrome.state.isHidden`; it owns
+// single glass entry), the flat status chips (never glass, they stay while chrome hides), the bar slot (the S30 control
+// bar, CTL-1) and chrome visibility. `StageChromeLayer` is the only view that reads `chrome.state.isHidden`; it owns
 // `.persistentSystemOverlays` and the status bar. The one timer is a view-local one-shot keyed on the arm serial:
 // nothing ticks while chrome is hidden or blocked (RR8).
 
@@ -39,7 +39,7 @@ struct StageChromeLayer: View {
     let stage: StagePresenter
     let chrome: StageChromeVisibility
     let forceScreenReader: Bool
-    @State private var layerWidth: CGFloat = 0
+    @State private var layerSize: CGSize = .zero
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.accessibilitySwitchControlEnabled) private var switchControl
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -55,7 +55,7 @@ struct StageChromeLayer: View {
         let state = chrome.state
         let hidden = state.isHidden
         let compactHeight = verticalSizeClass == .compact
-        let capsuleMax = horizontalSizeClass == .regular ? 360 : max(120, layerWidth * ConclaveChromeMetrics.capsuleMaxWidthFraction)
+        let capsuleMax = horizontalSizeClass == .regular ? 360 : max(120, layerSize.width * ConclaveChromeMetrics.capsuleMaxWidthFraction)
         ZStack {
             VStack(alignment: .leading, spacing: 8) {
                 StageTopRow(stage: stage, capsuleMaxWidth: capsuleMax)
@@ -69,12 +69,14 @@ struct StageChromeLayer: View {
             .padding(.horizontal, CGFloat(DesignTokens.space12))
             .padding(.top, CGFloat(DesignTokens.space12))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            StageBarSlot(shell: shell, stage: stage)
+            StageBarSlot(shell: shell, stage: stage, available: layerSize)
                 .opacity(ChromeAutoHidePolicy.chromeOpacity(state))
                 .allowsHitTesting(!hidden)
                 .accessibilityHidden(hidden)
                 .accessibilitySortPriority(0.5)
                 .padding(CGFloat(DesignTokens.space12))
+                // The compact-height column sits below the route control (S30 1 b, S20 7).
+                .padding(.top, compactHeight ? CGFloat(ControlBarPolicy.iosRouteSlot) : 0)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: compactHeight ? .trailing : .bottom)
         }
         // Any interaction with visible chrome re-arms the timer; empty areas pass taps to the canvas below.
@@ -83,7 +85,7 @@ struct StageChromeLayer: View {
         .persistentSystemOverlays(hidden ? .hidden : .automatic)
         // The status bar hides with chrome only in compact-height landscape (S20 1 c).
         .statusBarHidden(hidden && compactHeight)
-        .onGeometryChange(for: CGFloat.self) { proxy in proxy.size.width } action: { width in layerWidth = width }
+        .onGeometryChange(for: CGSize.self) { proxy in proxy.size } action: { size in layerSize = size }
         .onChange(of: canAutoHide, initial: true) { _, value in chrome.setCanAutoHide(value) }
         .onChange(of: screenReader) { _, on in
             if on { chrome.send(ChromeVisibilityEvent.screenReaderOn) }
@@ -145,8 +147,17 @@ enum StageAnnouncementText {
         switch announcement.kind {
         case StageAnnouncement.joinedKind:
             return ConclaveStrings.format("Joined %@", announcement.name)
+        // STG-5 (S70 R70-1): recovery starts and ends on the same one-shot channel (HD request B4-T4 R4).
+        case StageNoticeAnnouncementKind.reconnecting:
+            return ConclaveStrings.text("Reconnecting")
+        case StageNoticeAnnouncementKind.reconnected:
+            return ConclaveStrings.text("Reconnected")
+        // STG-9 (S20 11 g, i; HD request B4-T8 R7): activity start and end, with the app's localized name.
+        case ActivityStagePolicy.startedAnnouncement, ActivityStagePolicy.endedAnnouncement:
+            return ActivityStageCopy.announcement(kind: announcement.kind, name: announcement.name) ?? announcement.name
         default:
-            return announcement.name
+            // STG-2 pin announcements (TileMenu+iOS.swift; HD request B4-T5 R8).
+            return TileAnnouncementText.text(announcement) ?? announcement.name
         }
     }
 }
@@ -247,7 +258,7 @@ struct StageNowPlayingChip: View {
 
     var body: some View {
         if let chip = stage.chrome.nowPlaying {
-            let name = chip.name.isEmpty ? ConclaveStrings.text("Activity") : chip.name
+            let name = ActivityStageCopy.displayName(kind: chip.kind, name: chip.name)
             ConclaveStageChip(title: ConclaveStrings.format("%@ Is Running", name), systemImage: StageNowPlayingChip.symbol(chip.kind),
                               actionTitle: ConclaveStrings.text("Show"), identifier: "stage.chip.nowPlaying",
                               onAction: { stage.showHiddenActivity() },
@@ -302,16 +313,24 @@ private struct StageShareInviteChipGate: View {
     }
 }
 
-/// The control bar slot. Spec 30 (CTL-1) fills it through a request against this file; until then it reserves no
-/// pixels (the canvas already reserves the bar's space) and draws nothing.
+/// The control bar slot (S30 1, CTL-1). The controls presenter arrives through the environment from whoever mounts the
+/// call root (the native call route and the controls fixture), so the call root's signature stays the stage owner's;
+/// without one the slot reserves no pixels (the canvas already reserves the bar's space) and draws nothing. The bar is
+/// an overlay sibling of the canvas: showing, hiding or recomposing it never relayouts tiles (S30 1 k).
 struct StageBarSlot: View {
     let shell: MeetingShellPresenter
     let stage: StagePresenter
+    let available: CGSize
+    @Environment(CallControlsPresenter.self) private var controls: CallControlsPresenter?
 
     var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .accessibilityHidden(true)
+        if let controls {
+            CallControlBar(controls: controls, available: available)
+        } else {
+            Color.clear
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
     }
 }
 #endif

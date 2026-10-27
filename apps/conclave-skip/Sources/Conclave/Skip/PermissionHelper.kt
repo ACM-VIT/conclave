@@ -1,7 +1,11 @@
 package conclave.module
 
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -532,5 +536,65 @@ object PermissionHelper {
     private fun finishNotificationsPermission(granted: Boolean, answered: Boolean = true) {
         lastNotificationsPermissionRequestAnswered = granted || answered
         drainPermissionCallbacks(NOTIFICATIONS_REQUEST_CODE, null).forEach { it(granted) }
+    }
+
+    // MARK: Media permission status (ENT-3, S10 0.5 MediaPermissionStatusProvider; WP3)
+
+    private const val MEDIA_PERMISSION_PREFS = "conclave.mediaPermissions"
+
+    /**
+     * The lobby's status for "camera" or "microphone" as a MediaPermissionState raw value: "unavailable" without
+     * camera hardware, "granted", "notDetermined" before the first request, "denied" after a refused one. Android
+     * cannot tell "never asked" from "denied for good" by itself, so the first request is remembered.
+     */
+    fun mediaPermissionState(kind: String): String {
+        val context = ProcessInfo.processInfo.androidContext
+        if (kind == "camera" && !context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+            return "unavailable"
+        }
+        val granted = if (kind == "camera") hasCameraPermission() else hasRecordAudioPermission()
+        if (granted) return "granted"
+        return if (wasMediaPermissionRequested(kind)) "denied" else "notDetermined"
+    }
+
+    /** Whether the system would show its prompt again (S10 7 d): before the first request, or while it asks for a rationale. */
+    fun canAskMediaPermissionAgain(kind: String): Boolean {
+        val granted = if (kind == "camera") hasCameraPermission() else hasRecordAudioPermission()
+        if (granted || !wasMediaPermissionRequested(kind)) return true
+        val activity = UIApplication.shared.androidActivity ?: return false
+        val permission = if (kind == "camera") android.Manifest.permission.CAMERA else android.Manifest.permission.RECORD_AUDIO
+        return try {
+            ActivityCompat.shouldShowRequestPermissionRationale(activity, permission)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /** Remembered before the lobby's request so a later refusal reads "denied", not "notDetermined". */
+    fun markMediaPermissionRequested(kind: String) {
+        val context = ProcessInfo.processInfo.androidContext
+        context.getSharedPreferences(MEDIA_PERMISSION_PREFS, Context.MODE_PRIVATE).edit().putBoolean(kind, true).apply()
+    }
+
+    private fun wasMediaPermissionRequested(kind: String): Boolean {
+        val context = ProcessInfo.processInfo.androidContext
+        return context.getSharedPreferences(MEDIA_PERMISSION_PREFS, Context.MODE_PRIVATE).getBoolean(kind, false)
+    }
+
+    /** S10 7 d: the app's system settings page (ACTION_APPLICATION_DETAILS_SETTINGS). */
+    fun openAppSettings(): Boolean {
+        val activity = UIApplication.shared.androidActivity
+        val context = activity ?: ProcessInfo.processInfo.androidContext.applicationContext
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+        if (activity == null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (error: Throwable) {
+            debugLog("[PermissionHelper] Failed to open app settings: ${error}")
+            false
+        }
     }
 }

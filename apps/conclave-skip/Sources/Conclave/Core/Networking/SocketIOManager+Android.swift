@@ -58,6 +58,7 @@ final class SocketIOManager {
 
     var onChatMessage: ((ChatMessage) -> Void)?
     var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Void)?
+    var onChatReactionChanged: ((ChatReactionChangedNotification) -> Void)?
     var onReaction: ((Reaction) -> Void)?
 
     var onHandRaised: ((HandRaisedNotification) -> Void)?
@@ -144,6 +145,7 @@ final class SocketIOManager {
     func closeProducer(producerId: String) async throws { fatalError() }
 
     func sendChat(content: String, gif: ChatGifAttachment? = nil, image: ChatImageAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil) async throws -> ChatMessage { fatalError() }
+    func toggleChatReaction(messageId: String, emoji: String) async throws -> [ChatMessageReaction] { fatalError() }
     func authorizeChatImageUpload() async throws -> ChatImageUploadAuthorization { fatalError() }
     func requestConclaveAuthorization(answerId: String, questionMessageId: String) async throws -> ConclaveAuthorizeResponse { fatalError() }
     func relayConclaveAnswer(_ packet: ConclaveAssistantRelayPacket) { fatalError() }

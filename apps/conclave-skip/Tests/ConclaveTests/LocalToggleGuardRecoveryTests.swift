@@ -1633,6 +1633,29 @@ struct LocalToggleGuardRecoveryTests {
         #expect(await settle { call.calls.heldCount("cleanup(notifyLocalState: false)") == heldBefore + 1 })
         await call.finish()
     }
+
+    /// S40 CH11 (CHT-2): the native chat composer routes `/mute` to the guarded directional branch of
+    /// `executeChatCommand`, never to the S1 toggle intents, so a mute sent while an unmute owns the guard mutes at once
+    /// through `applyLocalMuteNow` (WP2-S1c) and the pending unmute's late completion leaves it muted.
+    @Test
+    func nativeChatMuteDuringAPendingUnmuteMutesAtOnce() async {
+        let call = RejoinHarness()
+        #expect(await call.join())
+        call.calls.hold("startProducingAudio")
+        call.viewModel.toggleMute()
+        #expect(await settle { call.calls.isHolding("startProducingAudio") })
+        #expect(!call.viewModel.state.isMuted)
+
+        call.viewModel.performChatCommand(ChatCommandRequest.make(.send, text: "/mute", emoji: ChatRouteKind.command.rawValue))
+        #expect(await settle { call.viewModel.state.isMuted })
+
+        call.calls.release("startProducingAudio")
+        #expect(await settle { call.endedToggleCount("toggleMute") == 1 })
+        #expect(call.viewModel.state.isMuted)
+        // A command adds no chat message of its own (web parity).
+        #expect(call.viewModel.state.chatMessages.isEmpty)
+        await call.finish()
+    }
 }
 
 /// A call whose join attempts come from the real `joinRoom`.

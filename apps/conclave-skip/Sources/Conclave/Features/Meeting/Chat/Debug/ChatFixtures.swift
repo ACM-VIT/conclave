@@ -1,0 +1,514 @@
+import Foundation
+
+// S40 0.9 (CHT-1 to CHT-3): the Debug chat fixture, `CONCLAVE_CHAT_FIXTURE=<state>` (iOS launch environment) and the
+// intent extra `conclave.chatFixture` (Android, FLAG_DEBUGGABLE), layered on the S20 SL14 stage fixture: it installs
+// scripted inputs into the stage fixture shell's own `ChatPresenter`, with no socket, network, audio or capture. The
+// presenter's `onCommand` appends to an action log (readout `chat.fixture.actions`) and the driver plays the core's
+// part (acknowledgements, reaction toggles, failures). Shared (transpiled) so both platforms and both test hosts read
+// the same states. CHT-4 to CHT-8 add their states (attachment, voice, previews) here.
+
+/// Fixture states owned by CHT-1 to CHT-3. Raw values are the launch values.
+enum ChatFixtureState: String, CaseIterable, Equatable {
+    case empty = "chat-empty"
+    case busy = "chat-busy"
+    case unread12 = "chat-unread-12"
+    case lockedGuest = "chat-locked-guest"
+    case lockedHost = "chat-locked-host"
+    case reconnecting = "chat-reconnecting"
+    case offline = "chat-offline"
+    case privateMode = "chat-private-mode"
+    case reply = "chat-reply"
+    case suggestionsCommands = "chat-suggestions-commands"
+    case suggestionsMentions = "chat-suggestions-mentions"
+    case longText = "chat-long-text"
+}
+
+/// Driver scripts, each started by the Debug control `chat.fixture.<script>` (0.9).
+enum ChatFixtureScriptName: String, CaseIterable {
+    case remote5 = "remote:5"
+    case remote1 = "remote:1"
+    case ownSend
+    case ackTimeout
+    case reactionFail
+    case peerReplyToOwn
+    case hideSender
+    case resetCounters
+}
+
+/// Fixture-build diagnostics (CH22): body evaluation and recomposition counters and the open latency samples. Views
+/// bump them only through `ChatDiagnostics.counters`, which only the fixture sets.
+@MainActor
+final class ChatFixtureCounters {
+    private(set) var counts: [String: Int] = [:]
+    private(set) var openLatencies: [Double] = []
+
+    init() {}
+
+    func bump(_ key: String) {
+        counts[key] = (counts[key] ?? 0) + 1
+    }
+
+    func count(_ key: String) -> Int {
+        counts[key] ?? 0
+    }
+
+    func recordOpenLatency(_ millis: Double) {
+        openLatencies.append(millis)
+    }
+
+    /// The p50 or p95 of the open latencies (0 when none).
+    func openLatencyPercentile(_ percentile: Double) -> Double {
+        if openLatencies.isEmpty { return 0 }
+        let sorted = openLatencies.sorted()
+        var index = Int(Double(sorted.count - 1) * percentile + 0.5)
+        if index < 0 { index = 0 }
+        if index >= sorted.count { index = sorted.count - 1 }
+        return sorted[index]
+    }
+
+    func reset() {
+        counts = [:]
+    }
+}
+
+/// The diagnostics hook views read. Nil outside the fixture, so release and normal Debug runs count nothing.
+@MainActor
+enum ChatDiagnostics {
+    static var counters: ChatFixtureCounters? = nil
+    /// The installed fixture driver; the panels show their Debug script controls only while it is set.
+    static var driver: ChatFixtureDriver? = nil
+}
+
+/// The scripted people and rows (0.9). The local person is Jordan Lee.
+enum ChatFixtureScript {
+    static let localUserId = "jordan@example.com#fixture"
+    static let localName = "Jordan Lee"
+    static let averyId = "avery@example.com#web-1"
+    static let samId = "sam@example.com#web-2"
+    static let priyaId = "priya@example.com#web-3"
+    static let leftId = "morgan@example.com#web-4"
+
+    static func roster(longNames: Bool = false) -> [ChatRosterEntry] {
+        [
+            ChatRosterEntry(userId: localUserId, name: localName, isPresent: true),
+            ChatRosterEntry(userId: averyId, name: longNames ? "Avery Montgomery-Castellanos de la Vega" : "Avery Lee", isPresent: true),
+            ChatRosterEntry(userId: samId, name: "Sam Rivera", isPresent: true),
+            ChatRosterEntry(userId: priyaId, name: "Priya Patel", isPresent: true),
+            ChatRosterEntry(userId: leftId, name: "Morgan Diaz", isPresent: false),
+        ]
+    }
+
+    static func inputs(for state: ChatFixtureState, nowMillis: Double) -> ChatInputs {
+        var gate = ChatSendGate.open
+        var isLocked = false
+        var isHost = false
+        switch state {
+        case .lockedGuest:
+            gate = ChatSendGate.locked
+            isLocked = true
+        case .lockedHost:
+            isLocked = true
+            isHost = true
+        case .reconnecting:
+            gate = ChatSendGate.reconnecting
+        case .offline:
+            gate = ChatSendGate.offline
+        default:
+            break
+        }
+        let messages: [ChatMessageInput]
+        switch state {
+        case .empty:
+            messages = []
+        case .busy:
+            messages = busyMessages(nowMillis: nowMillis)
+        case .longText:
+            messages = longTextMessages(nowMillis: nowMillis)
+        default:
+            messages = shortConversation(nowMillis: nowMillis)
+        }
+        let localRows: [ChatLocalRow] = state == ChatFixtureState.busy ? busyLocalRows(nowMillis: nowMillis) : []
+        return ChatInputs.make(callSession: 1, roomId: "abc-defg-hij", localUserId: localUserId, localName: localName,
+                               messages: messages, localRows: localRows, isLocked: isLocked, privateEnabled: true,
+                               photosEnabled: true, voiceEnabled: true, reactionsEnabled: true, gate: gate, isHost: isHost,
+                               roster: roster(longNames: state == ChatFixtureState.longText),
+                               assistant: AssistantAvailability.available)
+    }
+
+    static func message(_ id: String, from userId: String, name: String, _ content: String, at millis: Double,
+                        isOwn: Bool = false, clientId: String = "", isDirect: Bool = false, target: String = "",
+                        targetName: String = "", reply: ChatReplyRef? = nil, reactions: [ChatReactionInput] = [],
+                        delivery: ChatDelivery = ChatDelivery.delivered, failure: ChatFailure = ChatFailure.none,
+                        isRetryable: Bool = false, imageURL: String = "", gifURL: String = "", gifTitle: String = "",
+                        isAssistant: Bool = false, isHistory: Bool = true) -> ChatMessageInput {
+        ChatMessageInput.make(id: id, clientId: clientId, senderId: userId, senderName: name, isOwn: isOwn,
+                              isAssistant: isAssistant, content: content, timestampMillis: millis, isDirect: isDirect,
+                              dmTargetUserId: target, dmTargetName: targetName, reply: reply, imageURL: imageURL,
+                              imageFileName: imageURL.isEmpty ? "" : "photo.jpg", gifURL: gifURL, gifTitle: gifTitle,
+                              delivery: delivery, failure: failure, isRetryable: isRetryable, reactions: reactions,
+                              isHistory: isHistory)
+    }
+
+    static func shortConversation(nowMillis: Double) -> [ChatMessageInput] {
+        let base = nowMillis - 600_000
+        return [
+            message("s-1", from: averyId, name: "Avery Lee", "Can you share the deck?", at: base),
+            message("s-2", from: averyId, name: "Avery Lee", "Starting in 2 min", at: base + 20_000),
+            message("s-3", from: localUserId, name: localName, "Sure, one sec", at: base + 60_000, isOwn: true, clientId: "c-3",
+                    reactions: [ChatReactionInput(emoji: "👍", userIds: [averyId, samId], includesMe: false),
+                                ChatReactionInput(emoji: "😂", userIds: [priyaId], includesMe: false)]),
+            message("s-4", from: samId, name: "Sam Rivera", "Agenda is at docs.example.com/agenda.", at: base + 120_000),
+        ]
+    }
+
+    static func busyMessages(nowMillis: Double) -> [ChatMessageInput] {
+        let yesterday = nowMillis - 86_400_000
+        let base = nowMillis - 1_800_000
+        var cap: [ChatReactionInput] = []
+        for emoji in ChatReactionRules.emojis {
+            cap.append(ChatReactionInput(emoji: emoji, userIds: [averyId], includesMe: false))
+        }
+        for extra in ["🔥", "✅", "👀", "🙏"] {
+            cap.append(ChatReactionInput(emoji: extra, userIds: [samId], includesMe: false))
+        }
+        let replyToAvery = ChatReplyRef(messageId: "s-y1", authorName: "Avery Lee", isAuthorYou: false,
+                                        preview: "Morning! Agenda is in the doc", media: "", isPrivate: false)
+        let replyToOwn = ChatReplyRef(messageId: "s-6", authorName: localName, isAuthorYou: true, preview: "On my way",
+                                      media: "", isPrivate: false)
+        let replyToPhoto = ChatReplyRef(messageId: "s-9", authorName: "Priya Patel", isAuthorYou: false, preview: "",
+                                        media: "photo", isPrivate: false)
+        return [
+            message("s-y1", from: averyId, name: "Avery Lee", "Morning! Agenda is in the doc", at: yesterday),
+            message("s-y2", from: averyId, name: "Avery Lee", "https://docs.example.com/agenda", at: yesterday + 30_000),
+            message("s-1", from: samId, name: "Sam Rivera", "/me waves", at: base),
+            message("s-2", from: averyId, name: "Avery Lee", "Ready when you are @jordanlee", at: base + 60_000),
+            message("s-3", from: averyId, name: "Avery Lee", "Also, email me at avery@example.com", at: base + 70_000),
+            message("s-4", from: averyId, name: "Avery Lee", "Replying here", at: base + 80_000, reply: replyToAvery),
+            message("s-5", from: priyaId, name: "Priya Patel", "Can you mute your laptop?", at: base + 120_000, isDirect: true,
+                    target: localUserId, targetName: localName),
+            message("s-6", from: localUserId, name: localName, "On my way", at: base + 180_000, isOwn: true, clientId: "c-6",
+                    reactions: [ChatReactionInput(emoji: "👍", userIds: [localUserId, averyId], includesMe: true)]),
+            message("s-7", from: localUserId, name: localName, "Done, sorry about that", at: base + 190_000, isOwn: true,
+                    clientId: "c-7", isDirect: true, target: priyaId, targetName: "Priya Patel"),
+            message("s-8", from: samId, name: "Sam Rivera", "Same here", at: base + 240_000, reply: replyToOwn),
+            message("s-9", from: priyaId, name: "Priya Patel", "photo.jpg", at: base + 300_000,
+                    imageURL: "file:///fixture/chat-photo.jpg"),
+            message("s-10", from: samId, name: "Sam Rivera", "Nice shot", at: base + 320_000, reply: replyToPhoto),
+            message("s-11", from: averyId, name: "Avery Lee", "Party time", at: base + 360_000,
+                    gifURL: "file:///fixture/chat-gif.gif", gifTitle: "Party time"),
+            message("s-12", from: averyId, name: "Avery Lee", "Everything gets a reaction", at: base + 420_000, reactions: cap),
+            message("s-13", from: ConclaveAssistantChatIdentity.userId, name: ConclaveAssistantChatIdentity.displayName,
+                    "The agenda covers three items: budget, hiring and the launch date.", at: base + 480_000,
+                    isAssistant: true),
+            message("optimistic-c-14", from: localUserId, name: localName, "Sending this now", at: nowMillis - 2_000,
+                    isOwn: true, clientId: "c-14", delivery: ChatDelivery.sending),
+            message("optimistic-c-15", from: localUserId, name: localName, "This one timed out", at: nowMillis - 1_500,
+                    isOwn: true, clientId: "c-15", delivery: ChatDelivery.failed, failure: ChatFailure.timedOut,
+                    isRetryable: true),
+            message("optimistic-c-16", from: localUserId, name: localName, "This one is too private", at: nowMillis - 1_000,
+                    isOwn: true, clientId: "c-16", delivery: ChatDelivery.failed, failure: ChatFailure.privateTargetLeft,
+                    isRetryable: false),
+        ]
+    }
+
+    static func busyLocalRows(nowMillis: Double) -> [ChatLocalRow] {
+        let base = nowMillis - 1_800_000
+        return [
+            ChatLocalRow(id: "l-1", text: "You're already muted.", notice: ChatNotice.alreadyMuted, isError: false,
+                         timestampMillis: base + 200_000),
+            ChatLocalRow(id: "l-2", text: "Command /camera failed: Camera is unavailable.", notice: ChatNotice.none,
+                         isError: true, timestampMillis: base + 260_000),
+        ]
+    }
+
+    static func longTextMessages(nowMillis: Double) -> [ChatMessageInput] {
+        var long = ""
+        while ChatComposerPolicy.utf16Length(long) < 990 {
+            long += "Pseudo long text wraps everywhere without clipping. "
+        }
+        let longName = "Avery Montgomery-Castellanos de la Vega"
+        return [
+            message("s-1", from: averyId, name: longName, long, at: nowMillis - 120_000),
+            message("s-2", from: averyId, name: longName, "Supercalifragilisticexpialidociouslylongunbrokenwordthatmustwrap",
+                    at: nowMillis - 60_000),
+        ]
+    }
+
+    /// Twelve remote messages that arrive after the base conversation (the unread state).
+    static func unreadMessages(nowMillis: Double) -> [ChatMessageInput] {
+        var result: [ChatMessageInput] = []
+        var index = 0
+        while index < 12 {
+            result.append(message("s-u" + String(index), from: index % 2 == 0 ? samId : averyId,
+                                  name: index % 2 == 0 ? "Sam Rivera" : "Avery Lee", "Unread message " + String(index + 1),
+                                  at: nowMillis - 60_000 + Double(index * 1000), isHistory: false))
+            index += 1
+        }
+        return result
+    }
+}
+
+/// The fixture driver: installs a state into a presenter, logs every command and plays the core's part.
+@MainActor
+final class ChatFixtureDriver {
+    let state: ChatFixtureState
+    let chat: ChatPresenter
+    let counters = ChatFixtureCounters()
+    private(set) var inputs: ChatInputs
+    private(set) var actionLog: [String] = []
+    private var nextId = 100
+    private var failNextSend = false
+    private var failNextReaction = false
+    private var sleep: (Double) async -> Void = { millis in
+        try? await Task.sleep(nanoseconds: UInt64(max(0.0, millis) * 1_000_000.0))
+    }
+
+    init(state: ChatFixtureState, chat: ChatPresenter, nowMillis: Double = Date().timeIntervalSince1970 * 1000.0) {
+        self.state = state
+        self.chat = chat
+        inputs = ChatFixtureScript.inputs(for: state, nowMillis: nowMillis)
+    }
+
+    /// Applies the state and takes over `onCommand`. Debug diagnostics turn on.
+    func install() {
+        ChatDiagnostics.counters = counters
+        ChatDiagnostics.driver = self
+        chat.onCommand = { [weak self] request in
+            self?.handle(request)
+        }
+        chat.apply(inputs, change: ChatInputChange.messages)
+        let key = ChatComposerPolicy.draftKey(roomId: inputs.roomId, privateToUserId: "")
+        switch state {
+        case .unread12:
+            var messages = inputs.messages
+            for message in ChatFixtureScript.unreadMessages(nowMillis: Date().timeIntervalSince1970 * 1000.0) {
+                messages.append(message)
+            }
+            replace(messages: messages)
+        case .privateMode:
+            chat.setPrivateTo(userId: ChatFixtureScript.averyId)
+        case .reply:
+            chat.beginReply(rowId: "s-1")
+        case .suggestionsCommands:
+            chat.drafts.setText("/", for: key)
+        case .suggestionsMentions:
+            chat.drafts.setText("@", for: key)
+        default:
+            break
+        }
+    }
+
+    /// The `chat.fixture.actions` readout: one line per command.
+    var actionsReadout: String {
+        actionLog.joined(separator: "\n")
+    }
+
+    /// The `chat.openLatency` readout: p50 and p95 in milliseconds (ASCII digits for scripts).
+    var openLatencyReadout: String {
+        "p50=" + String(Int(counters.openLatencyPercentile(0.5))) + " p95=" + String(Int(counters.openLatencyPercentile(0.95)))
+    }
+
+    /// Installs a state into a stage fixture shell's presenter and opens the Chat panel (the layer on SL14).
+    static func installOnStage(state: ChatFixtureState, shell: MeetingShellPresenter) -> ChatFixtureDriver {
+        let driver = ChatFixtureDriver(state: state, chat: shell.chat)
+        driver.install()
+        shell.panels.present(MeetingPanel.chat, from: PanelInvoker.call)
+        return driver
+    }
+
+    /// The launch value to a state (iOS `CONCLAVE_CHAT_FIXTURE`, Android `conclave.chatFixture`).
+    static func state(named raw: String?) -> ChatFixtureState? {
+        guard let raw = raw else { return nil }
+        return ChatFixtureState(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    func run(_ script: ChatFixtureScriptName) {
+        switch script {
+        case .remote5:
+            playRemote(count: 5)
+        case .remote1:
+            playRemote(count: 1)
+        case .ownSend:
+            chat.send(text: "Own message from the fixture")
+        case .ackTimeout:
+            failNextSend = true
+            chat.send(text: "This send times out")
+        case .reactionFail:
+            failNextReaction = true
+        case .peerReplyToOwn:
+            playPeerReplyToOwn()
+        case .hideSender:
+            chat.hideSender(userId: ChatFixtureScript.averyId)
+        case .resetCounters:
+            counters.reset()
+        }
+    }
+
+    private func handle(_ request: ChatCommandRequest) {
+        actionLog.append(request.logLine)
+        switch request.kind {
+        case .send:
+            handleSend(request)
+        case .retry:
+            settle(rowId: request.rowId, delivered: true)
+        case .discard:
+            var kept: [ChatMessageInput] = []
+            for message in inputs.messages {
+                if message.rowId != request.rowId { kept.append(message) }
+            }
+            replace(messages: kept)
+        case .react:
+            handleReaction(request)
+        default:
+            break
+        }
+    }
+
+    private func handleSend(_ request: ChatCommandRequest) {
+        if request.emoji == ChatRouteKind.command.rawValue { return }
+        nextId += 1
+        let clientId = "c-" + String(nextId)
+        var text = request.text
+        var isDirect = false
+        var target = ""
+        if request.emoji == ChatRouteKind.privateText.rawValue, let parsed = ChatCommandParser.parseDirectMessage(text) {
+            text = parsed.body
+            isDirect = true
+            target = request.userId
+        }
+        var reply: ChatReplyRef? = nil
+        if !request.rowId.isEmpty {
+            let row = chat.rows.entry(for: request.rowId).row
+            reply = ChatReplyRef(messageId: row.serverId, authorName: row.senderName, isAuthorYou: row.isOwn,
+                                 preview: row.plainText, media: "", isPrivate: row.privacy != ChatPrivacy.everyone)
+        }
+        let sending = ChatFixtureScript.message("optimistic-" + clientId, from: ChatFixtureScript.localUserId,
+                                                name: ChatFixtureScript.localName, text, at: Date().timeIntervalSince1970 * 1000.0,
+                                                isOwn: true, clientId: clientId, isDirect: isDirect, target: target,
+                                                targetName: target.isEmpty ? "" : "Avery Lee", reply: reply,
+                                                delivery: ChatDelivery.sending, isHistory: false)
+        var messages = inputs.messages
+        messages.append(sending)
+        replace(messages: messages)
+        let fails = failNextSend
+        failNextSend = false
+        let wait = sleep
+        Task { @MainActor [weak self] in
+            await wait(fails ? 2500.0 : 300.0)
+            guard let self = self else { return }
+            self.settle(rowId: clientId, delivered: !fails)
+        }
+    }
+
+    private func settle(rowId: String, delivered: Bool) {
+        var messages: [ChatMessageInput] = []
+        for message in inputs.messages {
+            if message.rowId != rowId {
+                messages.append(message)
+                continue
+            }
+            let serverId = delivered ? "s-" + rowId : message.id
+            messages.append(ChatMessageInput.make(
+                id: serverId, clientId: message.clientId, senderId: message.senderId, senderName: message.senderName,
+                isOwn: message.isOwn, content: message.content, timestampMillis: message.timestampMillis,
+                isDirect: message.isDirect, dmTargetUserId: message.dmTargetUserId, dmTargetName: message.dmTargetName,
+                reply: message.reply, delivery: delivered ? ChatDelivery.delivered : ChatDelivery.failed,
+                failure: delivered ? ChatFailure.none : ChatFailure.timedOut, isRetryable: !delivered,
+                reactions: message.reactions, isHistory: false))
+        }
+        replace(messages: messages)
+    }
+
+    private func handleReaction(_ request: ChatCommandRequest) {
+        if failNextReaction {
+            failNextReaction = false
+            var rows = inputs.localRows
+            nextId += 1
+            rows.append(ChatLocalRow(id: "f-" + String(nextId), text: "Your reaction couldn't be added.",
+                                     notice: ChatNotice.reactionFailed, isError: true,
+                                     timestampMillis: Date().timeIntervalSince1970 * 1000.0))
+            inputs = ChatInputs.make(callSession: inputs.callSession, roomId: inputs.roomId, localUserId: inputs.localUserId,
+                                     localName: inputs.localName, messages: inputs.messages, localRows: rows,
+                                     isLocked: inputs.isLocked, privateEnabled: inputs.privateEnabled,
+                                     photosEnabled: inputs.photosEnabled, voiceEnabled: inputs.voiceEnabled,
+                                     reactionsEnabled: inputs.reactionsEnabled, gate: inputs.gate, isHost: inputs.isHost,
+                                     roster: inputs.roster, assistant: inputs.assistant)
+            chat.apply(inputs, change: ChatInputChange.messages)
+            return
+        }
+        var messages: [ChatMessageInput] = []
+        for message in inputs.messages {
+            if message.serverId != request.messageId {
+                messages.append(message)
+                continue
+            }
+            var wire: [ChatMessageReaction] = []
+            for reaction in message.reactions {
+                wire.append(ChatMessageReaction(emoji: reaction.emoji, userIds: reaction.userIds))
+            }
+            let toggled = ChatReactionRules.toggled(wire, emoji: request.emoji, userId: ChatFixtureScript.localUserId)
+            var next: [ChatReactionInput] = []
+            for reaction in toggled {
+                next.append(ChatReactionInput(emoji: reaction.emoji, userIds: reaction.userIds,
+                                              includesMe: reaction.userIds.contains(ChatFixtureScript.localUserId)))
+            }
+            messages.append(ChatMessageInput.make(
+                id: message.id, clientId: message.clientId, senderId: message.senderId, senderName: message.senderName,
+                isOwn: message.isOwn, isAssistant: message.isAssistant, content: message.content,
+                timestampMillis: message.timestampMillis, isDirect: message.isDirect, dmTargetUserId: message.dmTargetUserId,
+                dmTargetName: message.dmTargetName, reply: message.reply, imageURL: message.imageURL,
+                imageFileName: message.imageFileName, gifURL: message.gifURL, gifTitle: message.gifTitle,
+                delivery: message.delivery, failure: message.failure, isRetryable: message.isRetryable, reactions: next,
+                isHistory: message.isHistory))
+        }
+        replace(messages: messages)
+    }
+
+    private func playRemote(count: Int) {
+        let wait = sleep
+        Task { @MainActor [weak self] in
+            var index = 0
+            while index < count {
+                await wait(300.0)
+                guard let self = self else { return }
+                self.nextId += 1
+                let id = "s-r" + String(self.nextId)
+                var messages = self.inputs.messages
+                messages.append(ChatFixtureScript.message(id, from: ChatFixtureScript.samId, name: "Sam Rivera",
+                                                          "Remote message " + String(index + 1),
+                                                          at: Date().timeIntervalSince1970 * 1000.0, isHistory: false))
+                self.replace(messages: messages)
+                index += 1
+            }
+        }
+    }
+
+    /// CH1: an own message is acknowledged, then a peer replies to it; the quote jumps to the own row id.
+    private func playPeerReplyToOwn() {
+        nextId += 1
+        let clientId = "c-" + String(nextId)
+        let serverId = "s-" + clientId
+        let now = Date().timeIntervalSince1970 * 1000.0
+        var messages = inputs.messages
+        messages.append(ChatFixtureScript.message(serverId, from: ChatFixtureScript.localUserId, name: ChatFixtureScript.localName,
+                                                  "Acknowledged own message", at: now, isOwn: true, clientId: clientId,
+                                                  isHistory: false))
+        messages.append(ChatFixtureScript.message("s-peer" + clientId, from: ChatFixtureScript.averyId, name: "Avery Lee",
+                                                  "Replying to your message", at: now + 1000,
+                                                  reply: ChatReplyRef(messageId: serverId, authorName: ChatFixtureScript.localName,
+                                                                      isAuthorYou: true, preview: "Acknowledged own message",
+                                                                      media: "", isPrivate: false),
+                                                  isHistory: false))
+        replace(messages: messages)
+    }
+
+    private func replace(messages: [ChatMessageInput]) {
+        inputs = ChatInputs.make(callSession: inputs.callSession, roomId: inputs.roomId, localUserId: inputs.localUserId,
+                                 localName: inputs.localName, messages: messages, localRows: inputs.localRows,
+                                 isLocked: inputs.isLocked, privateEnabled: inputs.privateEnabled,
+                                 photosEnabled: inputs.photosEnabled, voiceEnabled: inputs.voiceEnabled,
+                                 reactionsEnabled: inputs.reactionsEnabled, gate: inputs.gate, isHost: inputs.isHost,
+                                 roster: inputs.roster, assistant: inputs.assistant)
+        chat.apply(inputs, change: ChatInputChange.messages)
+    }
+}

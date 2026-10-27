@@ -13,6 +13,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -37,10 +38,15 @@ import androidx.compose.ui.unit.dp
 /** Called only by MainActivity's explicit debug launch route. */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-fun StageFixtureRoot(stateName: String, patternName: String? = null, forceScreenReader: Boolean = false) {
+fun StageFixtureRoot(stateName: String, patternName: String? = null, forceScreenReader: Boolean = false, chatStateName: String? = null) {
     val state = StageFixtureScript.state(named = stateName) ?: StageFixtureState.grid6
     val session = remember(state) {
         StageFixtureSession(state = state, pattern = StageFixtureScript.pattern(named = patternName), forceScreenReader = forceScreenReader)
+    }
+    LaunchedEffect(session) {
+        // S40 0.9 (HD request B4-T1 R3): `conclave.chatFixture` layers the chat fixture on this stage fixture and opens Chat.
+        val chatState = ChatFixtureDriver.state(named = chatStateName)
+        if (chatState != null) ChatFixtureDriver.installOnStage(state = chatState, shell = session.shell)
     }
     Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
         CallRoot(
@@ -48,6 +54,7 @@ fun StageFixtureRoot(stateName: String, patternName: String? = null, forceScreen
             stage = session.stage,
             renderers = StageRenderers.probes(session.renderers, session.pattern),
             forceScreenReader = session.forceScreenReader,
+            activitySession = session.activity,
             onMinimize = { session.minimize() },
         )
         HostingTheme(inCall = true) {
@@ -72,12 +79,20 @@ private fun StageFixtureControls(session: StageFixtureSession, modifier: Modifie
             FixtureButton("Speak hidden", "stage.fixture.speakHidden") { session.speakHiddenParticipant(); refresh++ }
             FixtureButton("Next role", "stage.fixture.rolesNext") { session.nextRolesSweepStep(); refresh++ }
             FixtureButton("Reactions", "stage.fixture.reactions") { session.replayReactions(); refresh++ }
+            FixtureButton("Join burst", "stage.fixture.joinBurst") { session.postJoinBurst(); refresh++ }
+            FixtureButton("Dismiss toast", "stage.fixture.dismissToast") { session.dismissCurrentToast(); refresh++ }
+            FixtureButton("Suspend toasts", "stage.fixture.suspendToasts") { session.toggleToastSuspension(); refresh++ }
+            FixtureButton("Next caption", "stage.fixture.nextCaption") { session.nextCaption(); refresh++ }
+            FixtureButton("Reconnect", "stage.fixture.reconnect") { session.toggleReconnecting(); refresh++ }
             FixtureButton("Refresh", "stage.fixture.refresh") { refresh++ }
             val tick = refresh
             FixtureReadout(session.renderersReadout(), "stage.renderers", tick)
             FixtureReadout(session.layoutReadout(), "stage.layout", tick)
             FixtureReadout(session.countersReadout(), "stage.counters", tick)
             FixtureReadout(session.announcementsReadout(), "stage.announcements", tick)
+            FixtureReadout(session.noticesReadout(), "stage.notices", tick)
+            FixtureReadout(session.captionsReadout(), "stage.captions.readout", tick)
+            FixtureReadout(session.activityReadout(), "game.emits", tick)
             FixtureReadout(session.panelReadout(), "panel.current", tick)
             FixtureReadout(session.chromeReadout(), "chrome.transient", tick)
             FixtureReadout(session.recomposeReadout(), "stage.recompose", tick)

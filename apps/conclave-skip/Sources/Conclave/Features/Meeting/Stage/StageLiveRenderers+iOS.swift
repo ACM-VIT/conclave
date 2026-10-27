@@ -23,7 +23,7 @@ struct StageLiveVideo: View {
     var body: some View {
         #if canImport(WebRTC)
         StageVideoSurface(track: StageLiveTracks.track(userId: userId, isLocal: isLocal, isShare: isShare, videoKey: videoKey),
-                          fit: fit, isMirrored: isMirrored)
+                          fit: fit, isMirrored: isMirrored, slotId: slotId)
         #else
         Color.clear
         #endif
@@ -49,6 +49,8 @@ struct StageVideoSurface: UIViewRepresentable {
     let track: RTCVideoTrack?
     let fit: StageVideoFit
     let isMirrored: Bool
+    /// S20 SC11 (STG-7): the slot whose decoded frame size this renderer reports.
+    var slotId: String = ""
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -60,17 +62,22 @@ struct StageVideoSurface: UIViewRepresentable {
         view.isUserInteractionEnabled = false
         view.accessibilityIgnoresInvertColors = true
         apply(to: view)
+        // HD request B4-T6 R8: the delegate reports `setSize:` on the main queue, never inside a frame callback (RR6).
+        view.delegate = context.coordinator.sizes
+        context.coordinator.sizes.configure(slotId: slotId, store: context.environment.rendererFrameSizes)
         context.coordinator.attach(track: track, to: view)
         return view
     }
 
     func updateUIView(_ uiView: RTCMTLVideoView, context: Context) {
         context.coordinator.attach(track: track, to: uiView)
+        context.coordinator.sizes.configure(slotId: slotId, store: context.environment.rendererFrameSizes)
         apply(to: uiView)
     }
 
     static func dismantleUIView(_ uiView: RTCMTLVideoView, coordinator: Coordinator) {
         coordinator.attach(track: nil, to: uiView)
+        coordinator.sizes.detach()
     }
 
     private func apply(to view: RTCMTLVideoView) {
@@ -82,6 +89,8 @@ struct StageVideoSurface: UIViewRepresentable {
 
     final class Coordinator {
         weak var attachedTrack: RTCVideoTrack?
+        /// The view holds its delegate weakly; the coordinator owns it.
+        let sizes = RendererFrameSizeObserver()
 
         func attach(track: RTCVideoTrack?, to view: RTCMTLVideoView) {
             if attachedTrack === track { return }

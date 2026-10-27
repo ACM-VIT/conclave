@@ -381,6 +381,26 @@ enum MeetingDisplayNamePresentation {
     }
 }
 
+/// S40 CH2: where an own send stands. `delivered` is every received or acknowledged message; `sending` from the
+/// optimistic append until the acknowledgement or the echo; `failed` keeps the row and its text with retry and
+/// discard. The chat presenter derives `sendingSlow` from `sending` after 1 s (one presenter task per send).
+enum ChatMessageDelivery: String, Equatable {
+    case delivered, sending, failed
+}
+
+/// S40 CH2, CH10: the delivery state of an own send. `failure` is a `ChatFailure` raw value ("" while sending);
+/// `serverText` is kept for logging only and never reaches the UI as copy. `isRetryable` decides Try Again.
+struct ChatSendStatus: Equatable {
+    let delivery: ChatMessageDelivery
+    let failure: String
+    let serverText: String
+    let isRetryable: Bool
+
+    static let sending = ChatSendStatus(delivery: .sending, failure: "", serverText: "", isRetryable: false)
+}
+
+/// A rebuilt (never copied) message: every new field must reach each reconstruction site listed in
+/// apps/conclave-skip/AGENTS.md ("Chat Message Reconstruction Sites"), or it silently vanishes.
 struct ChatMessage: Identifiable, Equatable {
     let id: String
     let userId: String
@@ -395,6 +415,13 @@ struct ChatMessage: Identifiable, Equatable {
     let dmTargetDisplayName: String?
     let roomId: String?
     let replyTo: ChatReplyPreview?
+    /// S40 CH1: the optimistic id of an own send (`optimistic-<UUID>`), kept after the acknowledgement or the echo
+    /// replaces `id` with the server id, so the chat row id never changes. Nil for everyone else's messages.
+    let clientId: String?
+    /// S40 CH2: nil for delivered messages (every received message and every acknowledged own send).
+    let sendStatus: ChatSendStatus?
+    /// S40 CH3: the complete server set (meeting-core `ChatMessage.reactions`), replaced, never merged.
+    let reactions: [ChatMessageReaction]
 
     init(
         id: String = UUID().uuidString,
@@ -408,7 +435,10 @@ struct ChatMessage: Identifiable, Equatable {
         dmTargetUserId: String? = nil,
         dmTargetDisplayName: String? = nil,
         roomId: String? = nil,
-        replyTo: ChatReplyPreview? = nil
+        replyTo: ChatReplyPreview? = nil,
+        clientId: String? = nil,
+        sendStatus: ChatSendStatus? = nil,
+        reactions: [ChatMessageReaction] = []
     ) {
         self.id = id
         self.userId = userId
@@ -422,6 +452,14 @@ struct ChatMessage: Identifiable, Equatable {
         self.dmTargetDisplayName = dmTargetDisplayName
         self.roomId = roomId
         self.replyTo = replyTo
+        self.clientId = clientId
+        self.sendStatus = sendStatus
+        self.reactions = reactions
+    }
+
+    /// The delivery state with nil read as delivered.
+    var delivery: ChatMessageDelivery {
+        sendStatus?.delivery ?? ChatMessageDelivery.delivered
     }
 }
 

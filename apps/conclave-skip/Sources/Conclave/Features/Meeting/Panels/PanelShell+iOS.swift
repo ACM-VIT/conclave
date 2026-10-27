@@ -131,7 +131,7 @@ struct PanelShell<Content: View, Page: Hashable>: View {
             .navigationBarTitleDisplayMode(.inline)
             .modifier(PanelBarMinimization())
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: PanelShellToolbar.closePlacement) {
                     PanelCloseButton(title: title, action: onClose)
                 }
                 if hostStyle == .inspector {
@@ -160,6 +160,17 @@ extension PanelShell where Page == Never {
 private enum PanelShellFocus {
     /// Long enough for the inspector column to finish presenting.
     static let delayMilliseconds = 400
+}
+
+/// Close at the trailing edge (A17, Q12); on iOS 27 pinned there, so a search drawer never pushes it into the overflow
+/// menu (S50 1 c, F00 C20 c).
+private enum PanelShellToolbar {
+    static var closePlacement: ToolbarItemPlacement {
+        if #available(iOS 27.0, *) {
+            return .topBarPinnedTrailing
+        }
+        return .topBarTrailing
+    }
 }
 
 /// Close with the system close role on iOS 26 and later; the labeled xmark before it (icon contract). Both say

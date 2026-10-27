@@ -204,6 +204,54 @@ struct RTCVideoViewRepresentable: UIViewRepresentable {
     }
 }
 
+// MARK: - Renderer frame size (S20 SC11, S70 R70-10; STG-7)
+
+/// Reports one renderer's decoded frame size into the stage's `RendererFrameSizeStore`, which the PiP target frame
+/// reads (SYS-4 sizes `preferredContentSize` from it). Attach it as the `RTCMTLVideoView` delegate: the view calls
+/// `videoView(_:didChangeVideoSize:)` on the main queue whenever `setSize(_:)` reports a new size, rotation included, so
+/// nothing runs inside a frame callback and no sink moves (RR6, `apps/conclave-skip/AGENTS.md` media invariants). The
+/// store is equality guarded, so an unchanged size republishes nothing. The view holds its delegate weakly; the
+/// representable's coordinator owns this object.
+final class RendererFrameSizeObserver: NSObject, RTCVideoViewDelegate {
+    private(set) var slotId = ""
+    private(set) weak var store: RendererFrameSizeStore?
+
+    /// Points the observer at a slot and a store; a change forgets the old slot's size in the old store.
+    @MainActor
+    func configure(slotId: String, store: RendererFrameSizeStore?) {
+        if slotId == self.slotId && store === self.store { return }
+        detach()
+        self.slotId = slotId
+        self.store = store
+    }
+
+    /// The renderer left its slot (dismantled or moved).
+    @MainActor
+    func detach() {
+        if !slotId.isEmpty { store?.remove(slotId: slotId) }
+        slotId = ""
+        store = nil
+    }
+
+    func videoView(_ videoView: RTCVideoRenderer, didChangeVideoSize size: CGSize) {
+        let width = Int(size.width)
+        let height = Int(size.height)
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { self.report(width: width, height: height) }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated { self?.report(width: width, height: height) }
+            }
+        }
+    }
+
+    @MainActor
+    private func report(width: Int, height: Int) {
+        guard let store, !slotId.isEmpty else { return }
+        store.report(slotId: slotId, width: width, height: height)
+    }
+}
+
 // MARK: - Video Grid Item
 
 struct VideoGridItem: View {

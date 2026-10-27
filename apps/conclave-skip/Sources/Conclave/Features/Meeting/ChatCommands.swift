@@ -305,6 +305,33 @@ enum ChatMessageContentPolicy {
         return nil
     }
 
+    /// S40 3 f: the whole `/me` or `/action` body with every line kept (the native chat rows; the legacy chat keeps
+    /// the first line through `actionText`).
+    static func fullActionText(from content: String) -> String? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let text = fullCommandText(in: trimmed, command: "/me") {
+            return text
+        }
+        if let text = fullCommandText(in: trimmed, command: "/action") {
+            return text
+        }
+        if trimmed.hasPrefix("* ") {
+            let text = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        }
+        return nil
+    }
+
+    private static func fullCommandText(in content: String, command: String) -> String? {
+        guard content.lowercased().hasPrefix(command) else { return nil }
+        let remainder = String(content.dropFirst(command.count))
+        guard let separator = remainder.first, separator.isWhitespace || separator.isNewline else {
+            return nil
+        }
+        let text = remainder.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
     private static func commandText(in content: String, command: String) -> String? {
         guard content.lowercased().hasPrefix(command) else { return nil }
 
@@ -356,11 +383,26 @@ struct SystemMessage: Identifiable, Equatable {
     let id: String
     let type: SystemMessageType
     let timestamp: Date
-    
-    init(id: String = UUID().uuidString, type: SystemMessageType, timestamp: Date = Date()) {
+    /// S40 3 g: a `ChatNotice` raw value when the row is one of the localized command notices ("Chat cleared",
+    /// "You're already muted." ...), so the native chat resolves catalog copy instead of the English `displayText`;
+    /// "" for every other row (the legacy chat keeps reading `displayText`).
+    let notice: String
+
+    init(id: String = UUID().uuidString, type: SystemMessageType, timestamp: Date = Date(), notice: String = "") {
         self.id = id
         self.type = type
         self.timestamp = timestamp
+        self.notice = notice
+    }
+
+    /// Error tone for the native row (S40 3 c): failed commands.
+    var isError: Bool {
+        switch type {
+        case .commandFailed:
+            return true
+        default:
+            return false
+        }
     }
     
     var displayText: String {
@@ -377,6 +419,7 @@ struct SystemMessage: Identifiable, Equatable {
     static func == (lhs: SystemMessage, rhs: SystemMessage) -> Bool {
         lhs.id == rhs.id &&
         lhs.timestamp == rhs.timestamp &&
-        lhs.displayText == rhs.displayText
+        lhs.displayText == rhs.displayText &&
+        lhs.notice == rhs.notice
     }
 }

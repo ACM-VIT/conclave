@@ -398,11 +398,17 @@ wiring any new ack event.
 init default silently vanishes at any site that omits it. When adding a field
 (gif, image, replyTo, ...), update ALL of: `normalizedChatMessage` (both
 branches), `refreshChatDisplayName`, `mergedConclaveAssistantMessage`,
-`appendOptimisticChatMessage` in MeetingViewModel.swift; the Kotlin decoders
-`decodeChatMessageObject` / `decodeChatReplyPreviewObject` /
-`decodeConclaveAssistantMessage` in SocketIOManager+Android.kt (hand-rolled
-JSON, NOT transpiled); and the test fixtures. The image field was dropped by
-`normalizedChatMessage` on every receive until 2026-07-17.
+`appendOptimisticChatMessage`, `rebuiltChatMessage` (the one helper that
+rebuilds identity, delivery and reactions: the echo swap,
+`replaceOptimisticChatMessage`, `acknowledgeRetainedChat`,
+`markChatSendFailed`, `retryChatSend`, `applyChatReactions`) in
+MeetingViewModel.swift; the Kotlin decoders `decodeChatMessageObject` /
+`decodeChatReplyPreviewObject` / `decodeConclaveAssistantMessage`,
+`toChatMessage` and `decodeChatReactionsArray` in SocketIOManager+Android.kt
+(hand-rolled JSON, NOT transpiled); and the test fixtures. The image field was
+dropped by `normalizedChatMessage` on every receive until 2026-07-17. The
+`ChatMessage` fields `clientId`, `sendStatus` and `reactions` (S40 CH1 to CH3)
+must survive every site above.
 
 ## Media Threading And Lifecycle Invariants
 

@@ -43,6 +43,59 @@ enum StageFixtureState: String, CaseIterable, Equatable {
     case reactionsBurst25 = "reactions-burst-25"
     case reactionsBurst40 = "reactions-burst-40"
     case hideTiles = "hide-tiles"
+    // STG-5 notice lanes (S20 10 l) and TRN-1 captions (S60 5 l). The notice states keep the grid-4 stage.
+    case knock1 = "knock-1"
+    case knock2 = "knock-2"
+    case offline = "offline"
+    case captivePortal = "captive-portal"
+    case reconnecting2 = "reconnecting-2"
+    case reconnectingInFlight = "reconnecting-inflight"
+    case serverRestart = "server-restart"
+    case onHold = "on-hold"
+    case audioPaused = "audio-paused"
+    case shareStalled = "share-stalled"
+    case hostNotice = "host-notice"
+    case hostNoticeLong = "host-notice-long"
+    case liveNotes = "live-notes"
+    case catchUp = "catch-up"
+    case veryPoor = "very-poor"
+    case permissionMicrophone = "permission-mic"
+    case notificationsOff = "notifications-off"
+    case toastJoins = "toast-joins"
+    case toastHand = "toast-hand"
+    case toastFailure = "toast-failure"
+    case toastChat = "toast-chat"
+    case toastRoute = "toast-route"
+    case captionsLive = "captions-live"
+    case captionsPartial = "captions-partial"
+    case captionsQuiet = "captions-quiet"
+    case captionsAttendee = "captions-attendee"
+    // STG-2 (S20 3 l, 4 l)
+    case oneOnOneCameraOff = "oneOnOne-cameraOff"
+    case grid3CameraOn = "grid-3-cameraOn"
+    case spotlightPinnedSelf = "spotlight-pinned-self"
+    case spotlightPinned9 = "spotlight-pinned-9"
+    case presentationPinned = "presentation-pinned"
+    case sidebar14 = "sidebar-14"
+    case tileReconnecting = "tile-reconnecting"
+    // STG-9, ACT-1, ACT-2 (S20 11 l, S60 7 l, 8 l): raw values equal `ActivityFixtureState` raw values.
+    case gameTrivia6 = "game-trivia-6"
+    case appAndGame = "app-and-game"
+    case gameLobbyHost = "game-lobby-host"
+    case gameLobbyHostUnseated = "game-lobby-host-unseated"
+    case gameLobbyImposter2 = "game-lobby-imposter-2"
+    case gameSpectator = "game-spectator"
+    case gameResults = "game-results"
+    case gameUnsupported = "game-unsupported"
+    case gamePrivateLoading = "game-private-loading"
+    case appOpening = "app-opening"
+    case appFailed = "app-failed"
+    case activitiesHostIdle = "activities-host-idle"
+    case activitiesParticipantIdle = "activities-participant-idle"
+    case activitiesVote = "activities-vote"
+    case activitiesVoteZero = "activities-vote-zero"
+    case activitiesGameLive = "activities-game-live"
+    case activitiesRecovering = "activities-recovering"
 }
 
 /// Pure scripts per state, shared by the fixture roots and both test hosts.
@@ -162,6 +215,165 @@ enum StageFixtureScript {
             rows[3] = StageParticipantInput.make(userId: remoteId(2), displayName: remoteName(2), isMuted: false,
                                                  isCameraOff: true, joinSerial: 3)
             return copy(base(count: 6), participants: rows, hideTilesWithoutVideo: true)
+        case .captionsLive, .captionsPartial, .captionsQuiet:
+            return copy(base(count: 4), captionsOn: true, liveNotes: LiveNotesState.live)
+        case .captionsAttendee:
+            return copy(base(count: 4), captionsOn: true, liveNotes: LiveNotesState.live, isWebinarAttendee: true)
+        case .liveNotes, .catchUp:
+            return copy(base(count: 4), liveNotes: LiveNotesState.live)
+        case .knock1, .knock2, .offline, .captivePortal, .reconnecting2, .reconnectingInFlight, .serverRestart, .onHold,
+             .audioPaused, .shareStalled, .hostNotice,
+             .hostNoticeLong, .veryPoor, .permissionMicrophone, .notificationsOff, .toastJoins, .toastHand, .toastFailure,
+             .toastChat, .toastRoute:
+            return base(count: 4)
+        case .oneOnOneCameraOff:
+            return base(count: 2, remoteCamerasOn: false, localCameraOn: true)
+        case .grid3CameraOn:
+            return copy(base(count: 3, localCameraOn: true), selfViewMode: "tile")
+        case .spotlightPinnedSelf:
+            return copy(base(count: 3, localCameraOn: true), selfViewMode: "tile", pinnedUserId: localUserId)
+        case .spotlightPinned9:
+            return copy(base(count: 9), pinnedUserId: remoteId(0))
+        case .presentationPinned:
+            return copy(inputs(for: .presentation), pinnedUserId: remoteId(1))
+        case .sidebar14:
+            return base(count: 14)
+        case .tileReconnecting:
+            return reconnectingStep(true)
+        case .gameTrivia6, .appAndGame, .gameLobbyHost, .gameLobbyHostUnseated, .gameLobbyImposter2, .gameSpectator, .gameResults,
+             .gameUnsupported, .gamePrivateLoading, .appOpening, .appFailed, .activitiesHostIdle, .activitiesParticipantIdle,
+             .activitiesVote, .activitiesVoteZero, .activitiesGameLive, .activitiesRecovering:
+            return ActivityFixtureScript.stageInputs(named: state.rawValue, base: base(count: 6))
+        }
+    }
+
+    /// S20 3 c: r2 reconnecting with the SFU's "ping timeout" reason, or back (the tile shows "Back Online" for 4.5 s).
+    static func reconnectingStep(_ reconnecting: Bool) -> StageInputs {
+        var rows = roster(count: 4)
+        rows[2] = StageParticipantInput.make(userId: remoteId(1), displayName: remoteName(1), isMuted: false, isCameraOff: false,
+                                             isReconnecting: reconnecting, reconnectReason: reconnecting ? "ping timeout" : "",
+                                             joinSerial: 2, videoKey: "probe:" + remoteId(1))
+        return copy(base(count: 4), participants: rows)
+    }
+
+    // MARK: Notices and captions (STG-5, TRN-1)
+
+    static let hostNoticeText = "We start the demo in five minutes."
+    static let hostNoticeLongText = "Please keep your microphone muted while the guest speaker presents, and use the raised "
+        + "hand when you have a question so we can take them in order. The recording and the slides will be shared in the "
+        + "chat after the session, together with the links mentioned during the talk."
+
+    /// The notice inputs per state: you are a host in a room of four with the presence snapshot done; nil for the
+    /// stage-only states (their notice lanes stay empty).
+    static func noticeInputs(_ state: StageFixtureState) -> StageNoticeInputs? {
+        switch state {
+        case .knock1:
+            return noticeBase(pendingUserIds: ["w1"], pendingFirstName: "Sam")
+        case .knock2:
+            return noticeBase(pendingUserIds: ["w1", "w2"], pendingFirstName: "Sam")
+        case .offline:
+            return noticeBase(isOffline: true, pendingUserIds: ["w1"], pendingFirstName: "Sam")
+        case .captivePortal:
+            return noticeBase(isOffline: true, isCaptivePortal: true)
+        case .reconnecting2:
+            return noticeBase(isRecovering: true, reconnectAttempt: 2)
+        case .reconnectingInFlight:
+            return noticeBase(isRecovering: true, reconnectAttempt: 2, isRecoveryAttemptInFlight: true)
+        case .serverRestart:
+            return noticeBase(hasServerRestartNotice: true)
+        case .onHold:
+            return noticeBase(isOnHold: true, pendingUserIds: ["w1"], pendingFirstName: "Sam")
+        case .audioPaused:
+            return noticeBase(isAudioPaused: true)
+        case .shareStalled:
+            return noticeBase(shareIssue: MeetingNoticePolicy.shareIssueNotSending)
+        case .liveNotes:
+            return noticeBase(liveNotes: LiveNotesState.live)
+        case .catchUp:
+            return noticeBase(liveNotes: LiveNotesState.live, catchUpMinutes: 7)
+        case .veryPoor:
+            return noticeBase(connectionQuality: ConnectionQuality.emergency)
+        case .permissionMicrophone:
+            return noticeBase(microphonePermissionRevoked: true)
+        case .notificationsOff:
+            return noticeBase(showsNotificationsPrime: true)
+        case .hostNotice, .hostNoticeLong, .toastJoins, .toastHand, .toastFailure, .toastChat, .toastRoute, .captionsLive,
+             .captionsPartial, .captionsQuiet, .captionsAttendee:
+            return noticeBase()
+        default:
+            return nil
+        }
+    }
+
+    static func noticeBase(isOffline: Bool = false, isCaptivePortal: Bool = false, isRecovering: Bool = false,
+                           reconnectAttempt: Int = 0, isRecoveryAttemptInFlight: Bool = false,
+                           hasServerRestartNotice: Bool = false, isOnHold: Bool = false, isAudioPaused: Bool = false,
+                           pendingUserIds: [String] = [], pendingFirstName: String = "", shareIssue: String = "",
+                           liveNotes: LiveNotesState = LiveNotesState.off, catchUpMinutes: Int = 0,
+                           connectionQuality: ConnectionQuality = ConnectionQuality.good,
+                           microphonePermissionRevoked: Bool = false, showsNotificationsPrime: Bool = false) -> StageNoticeInputs {
+        StageNoticeInputs.make(callSession: 1, isHost: true, localUserId: localUserId, participantCount: 4,
+                               hasInitialPresenceSnapshot: true, isOffline: isOffline, isCaptivePortal: isCaptivePortal,
+                               isRecovering: isRecovering, reconnectAttempt: reconnectAttempt, reconnectAttemptLimit: 5,
+                               isRecoveryAttemptInFlight: isRecoveryAttemptInFlight,
+                               hasServerRestartNotice: hasServerRestartNotice, isOnHold: isOnHold, isAudioPaused: isAudioPaused,
+                               pendingUserIds: pendingUserIds, pendingFirstName: pendingFirstName, shareIssue: shareIssue,
+                               shareIssueSerial: shareIssue.isEmpty ? 0 : 1, liveNotes: liveNotes,
+                               catchUpMinutes: catchUpMinutes, connectionQuality: connectionQuality,
+                               microphonePermissionRevoked: microphonePermissionRevoked,
+                               showsNotificationsPrime: showsNotificationsPrime)
+    }
+
+    /// The scripted events per state, posted once after the notice inputs.
+    static func noticeEvents(_ state: StageFixtureState) -> [StageEvent] {
+        switch state {
+        case .hostNotice:
+            return [StageEvent.make(kind: StageEventKind.hostNotice, userId: "r1", name: remoteName(0), serverText: hostNoticeText,
+                                    detail: "info")]
+        case .hostNoticeLong:
+            return [StageEvent.make(kind: StageEventKind.hostNotice, userId: "r1", name: remoteName(0),
+                                    serverText: hostNoticeLongText, detail: "warning")]
+        case .toastJoins:
+            return joinBurst()
+        case .toastHand:
+            return [StageEvent.make(kind: StageEventKind.handRaised, userId: "r1", name: remoteName(0)),
+                    StageEvent.make(kind: StageEventKind.handRaised, userId: "r2", name: remoteName(1))]
+        case .toastFailure:
+            return [StageEvent.make(kind: StageEventKind.actionFailed, detail: "hand")]
+        case .toastChat:
+            return [StageEvent.make(kind: StageEventKind.chatPreview, userId: "r1", name: remoteName(0), messageId: "m1",
+                                    detail: "Can you share the deck?")]
+        case .toastRoute:
+            return [StageEvent.make(kind: StageEventKind.routeChanged, name: "AirPods Pro", detail: "bluetooth")]
+        default:
+            return []
+        }
+    }
+
+    /// Three people join in a row: one toast for the first, then "Ben and 1 other joined" coalesced (S20 10 f).
+    static func joinBurst() -> [StageEvent] {
+        [StageEvent.make(kind: StageEventKind.userJoined, userId: "j1", name: "Avery Lee"),
+         StageEvent.make(kind: StageEventKind.userJoined, userId: "j2", name: "Ben"),
+         StageEvent.make(kind: StageEventKind.userJoined, userId: "j3", name: "Cai")]
+    }
+
+    /// Caption screenshot states hold their line instead of hiding it after 6 s of silence.
+    static func holdsCaption(_ state: StageFixtureState) -> Bool {
+        state == StageFixtureState.captionsLive || state == StageFixtureState.captionsPartial
+            || state == StageFixtureState.captionsAttendee
+    }
+
+    /// The scripted caption line per state (S60 5 b): a final line, a partial line, or none (the quiet placeholder).
+    static func captionLine(_ state: StageFixtureState) -> CaptionLine? {
+        switch state {
+        case .captionsLive, .captionsAttendee:
+            return CaptionLine(speakerName: remoteName(0), text: "so the deck is ready for review", isFinal: true,
+                               updatedAtMillis: 0, isVisible: true)
+        case .captionsPartial:
+            return CaptionLine(speakerName: "Sam", text: "and then we probably need to dec", isFinal: false, updatedAtMillis: 0,
+                               isVisible: true)
+        default:
+            return nil
         }
     }
 
@@ -235,7 +447,7 @@ enum StageFixtureScript {
                      isGameActive: Bool? = nil, gameName: String? = nil, screenShareUserId: String? = nil,
                      isRoomLocked: Bool? = nil, captionsOn: Bool? = nil, liveNotes: LiveNotesState? = nil,
                      isAloneConfirmed: Bool? = nil, isHandRaised: Bool? = nil, handToggleInFlight: Bool? = nil,
-                     isRecovering: Bool? = nil, isFrontCamera: Bool? = nil) -> StageInputs {
+                     isRecovering: Bool? = nil, isFrontCamera: Bool? = nil, isWebinarAttendee: Bool? = nil) -> StageInputs {
         StageInputs.make(
             callSession: source.callSession, isInCall: source.isInCall, localUserId: source.localUserId,
             roomLabel: source.roomLabel, meetingLink: source.meetingLink,
@@ -246,7 +458,7 @@ enum StageFixtureScript {
             activeAppName: source.activeAppName, isBrowserActive: source.isBrowserActive,
             isGameActive: isGameActive ?? source.isGameActive, gameName: gameName ?? source.gameName,
             screenShareUserId: screenShareUserId ?? source.screenShareUserId,
-            isLocalScreenSharing: source.isLocalScreenSharing, isWebinarAttendee: source.isWebinarAttendee,
+            isLocalScreenSharing: source.isLocalScreenSharing, isWebinarAttendee: isWebinarAttendee ?? source.isWebinarAttendee,
             webinarSpeakerUserId: source.webinarSpeakerUserId, isRoomLocked: isRoomLocked ?? source.isRoomLocked,
             captionsOn: captionsOn ?? source.captionsOn, liveNotes: liveNotes ?? source.liveNotes,
             isAloneConfirmed: isAloneConfirmed ?? source.isAloneConfirmed, canFlipCamera: source.canFlipCamera,
@@ -283,11 +495,14 @@ final class StageFixtureCounters {
     private(set) var renderTargetResize = 0
     private(set) var generateWebinarLink = 0
     private(set) var commands: [String] = []
+    /// STG-5: chimes that reached the fixture's recording output (never audio) and notice actions sent to the core.
+    private(set) var chimes: [String] = []
 
     func recordMicrophone() { toggleMicrophone += 1 }
     func recordMinimize() { minimize += 1 }
     func recordLeave() { leave += 1 }
     func recordRenderTargetResize() { renderTargetResize += 1 }
+    func recordChime(_ kind: String) { chimes.append(kind) }
     func recordCommand(_ name: String) {
         commands.append(name)
         if commands.count > 10 { commands.removeFirst() }
@@ -309,22 +524,30 @@ final class StageFixtureSession {
     let forceScreenReader: Bool
     let shell: MeetingShellPresenter
     let stage: StagePresenter
+    /// STG-9, ACT-1, ACT-2: the fixture's activity presenters and the recording owner behind the `game.emits` readout.
+    let activity: ActivitySession
+    let activityOwner = ActivityFixtureOwner()
     let renderers = RendererIdentityLedger()
     let counters = StageFixtureCounters()
     private(set) var inputs: StageInputs
     private(set) var rolesSweepStep = 0
+    private var captionStep = 0
     private var isMuted = true
     private var isCameraOff = true
 
+    /// `initialInputs` replaces the state's scripted stage inputs (fixtures layered on the stage, such as People, pass
+    /// their own roster); the notice, event and caption scripts still follow `state`.
     init(state: StageFixtureState, pattern: RendererProbePattern = RendererProbePattern.staticPattern,
-         forceScreenReader: Bool = false) {
+         forceScreenReader: Bool = false, initialInputs: StageInputs? = nil) {
         self.state = state
         self.pattern = pattern
         self.forceScreenReader = forceScreenReader
         let owner = MeetingShellPresenter()
         shell = owner
-        stage = StagePresenter(shell: owner)
-        inputs = StageFixtureScript.inputs(for: state)
+        let stagePresenter = StagePresenter(shell: owner)
+        stage = stagePresenter
+        activity = ActivitySession(shell: owner, stage: stagePresenter)
+        inputs = initialInputs ?? StageFixtureScript.inputs(for: state)
         let local = inputs.participant(StageFixtureScript.localUserId)
         isMuted = local?.isMuted ?? true
         isCameraOff = local?.isCameraOff ?? true
@@ -337,6 +560,10 @@ final class StageFixtureSession {
         shell.panels.onSnapshotChanged = { [weak self] in
             self?.stage.panelSnapshotChanged()
         }
+        if StageFixtureScript.holdsCaption(state) {
+            // Screenshot states keep their caption line; `captions-quiet` keeps the real 6 s silence rule.
+            stage.captions.sleep = { _ in try? await Task.sleep(nanoseconds: 3_600_000_000_000) }
+        }
         if inputs.isRecovering {
             // Admission first, so the recovery keeps the stage (S10 0.4).
             shell.apply(StageFixtureScript.shellInputs(StageFixtureScript.copy(inputs, isRecovering: false), isMuted: isMuted,
@@ -344,6 +571,8 @@ final class StageFixtureSession {
         }
         shell.apply(StageFixtureScript.shellInputs(inputs, isMuted: isMuted, isCameraOff: isCameraOff))
         stage.apply(inputs)
+        activity.bindStage()
+        ActivityFixtureScript.apply(named: state.rawValue, session: activity, owner: activityOwner)
         if state == StageFixtureState.nowPlaying {
             stage.setShowsVideoOverActivity(true)
         }
@@ -351,6 +580,57 @@ final class StageFixtureSession {
         if reactionCount > 0 {
             stage.reactionsChanged(StageFixtureScript.reactions(count: reactionCount))
         }
+        // STG-5: notice sounds reach a recording output only (no audio in any silent run); notice actions are counted.
+        let counters = self.counters
+        stage.sounds.output = { kind in counters.recordChime(kind) }
+        stage.onNoticeCommand = { command in counters.recordCommand("notice:" + command.actionId) }
+        if let notices = StageFixtureScript.noticeInputs(state) {
+            stage.applyNotices(notices)
+        }
+        for event in StageFixtureScript.noticeEvents(state) {
+            stage.post(event)
+        }
+        if let line = StageFixtureScript.captionLine(state) {
+            stage.captionChanged(line)
+        }
+    }
+
+    // MARK: Notice scripts (STG-5, TRN-1)
+
+    /// Posts the three-join burst (coalescing cell).
+    func postJoinBurst() {
+        for event in StageFixtureScript.joinBurst() {
+            stage.post(event)
+        }
+    }
+
+    /// What the toast host does when the shown toast leaves.
+    func dismissCurrentToast() {
+        if let current = stage.toast {
+            stage.dismissNotice(id: current.id)
+        }
+    }
+
+    /// Opens or closes the compact sheet suspension (RECONCILE R3 cell) without a real panel.
+    func toggleToastSuspension() {
+        stage.setToastLaneSuspended(!stage.notices.isToastLaneSuspended)
+    }
+
+    /// A new caption line (cycles final and partial text).
+    func nextCaption() {
+        captionStep += 1
+        let partial = captionStep % 2 == 1
+        stage.captionChanged(CaptionLine(speakerName: StageFixtureScript.remoteName(captionStep % 4),
+                                         text: partial ? "and then we probably need to" : "so the deck is ready for review",
+                                         isFinal: !partial, updatedAtMillis: 0, isVisible: true))
+    }
+
+    func noticesReadout() -> String { stage.noticesReadout() }
+
+    func captionsReadout() -> String {
+        let line = stage.captions.line
+        return "active=" + (stage.captionsActive ? "1" : "0") + " visible=" + (line.isVisible ? "1" : "0") + " final="
+            + (line.isFinal ? "1" : "0") + " updates=" + String(stage.captions.publishCount)
     }
 
     /// The Magic Tap closure and its fixture button (S20 1 l4): exactly the same call.
@@ -386,6 +666,18 @@ final class StageFixtureSession {
     func replayReactions() {
         stage.reactionsChanged([])
         stage.reactionsChanged(StageFixtureScript.reactions(count: max(1, StageFixtureScript.reactionCount(for: state))))
+    }
+
+    /// `stage.fixture.reconnect`: toggles r2 between reconnecting and back (S20 3 c "Back Online").
+    func toggleReconnecting() {
+        let reconnecting = !(inputs.participant(StageFixtureScript.remoteId(1))?.isReconnecting ?? false)
+        inputs = StageFixtureScript.reconnectingStep(reconnecting)
+        stage.apply(inputs)
+    }
+
+    /// `game.emits`: the game shell's emits and the launcher's commands, recorded by the fixture owner.
+    func activityReadout() -> String {
+        "game.emits=" + activityOwner.emitsReadout() + " activities=" + activityOwner.commandsReadout()
     }
 
     // MARK: Readouts (outside the stage subtree, PS 7.6)

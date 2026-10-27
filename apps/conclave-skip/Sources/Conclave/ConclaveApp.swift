@@ -21,6 +21,12 @@ public struct ConclaveRootView: View {
     @State private var systemFixture = SystemFixtureLaunch.state()
     /// S20 SL14: `CONCLAVE_STAGE_FIXTURE=<state>` (Debug only) mounts the stage fixture instead of the app.
     @State private var stageFixture = StageFixtureLaunch.state()
+    /// S30 CL13 (CTL-1, HD request B4-T6 R3): `CONCLAVE_STAGE_FIXTURE=controls-<state>` mounts the controls fixture
+    /// (`StageFixtureLaunch` returns nil for those values).
+    @State private var controlsFixture = ControlsFixtureLaunch.state()
+    /// S50 PL12 (PPL-1, HD request B4-T7 R5): `CONCLAVE_PEOPLE_FIXTURE=<state>` (Debug only) mounts the People fixture
+    /// over the stage fixture.
+    @State private var peopleFixture = PeopleFixtureLaunch.state()
     /// S10 L9: `CONCLAVE_PREMEETING_FIXTURE=<state>` (Debug only) mounts the premeeting fixture route with standalone
     /// presenters; it never creates the view model.
     @State private var premeetingFixture = PremeetingFixtureScript.state(named: NativeRouteFlags.shared.premeetingFixture)
@@ -33,6 +39,10 @@ public struct ConclaveRootView: View {
         #if DEBUG && os(iOS) && !SKIP
         if let systemFixture {
             SystemFixtureView(state: systemFixture, providerMode: SystemFixtureLaunch.providerMode())
+        } else if let controlsFixture {
+            ControlsFixtureView(state: controlsFixture)
+        } else if let peopleFixture {
+            PeopleFixtureView(state: peopleFixture)
         } else if let stageFixture {
             StageFixtureView(state: stageFixture)
         } else if let premeetingFixture {

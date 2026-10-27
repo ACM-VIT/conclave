@@ -71,6 +71,9 @@ struct StageCanvas: View {
             }
         }
         .ignoresSafeArea()
+        // STG-2: tile controls (your flip control) fade with chrome; injecting the object never makes the canvas body
+        // observe it.
+        .environment(chrome)
         .onGeometryChange(for: StageCanvasGeometry.self) { proxy in
             StageCanvasGeometry(width: Double(proxy.size.width), height: Double(proxy.size.height),
                                 top: Double(proxy.safeAreaInsets.top), bottom: Double(proxy.safeAreaInsets.bottom),

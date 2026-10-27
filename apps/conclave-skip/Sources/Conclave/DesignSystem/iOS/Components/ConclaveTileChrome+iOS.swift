@@ -73,7 +73,7 @@ struct ConclaveTileChrome<Renderer: View, SelfViewAccessory: View>: View {
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .environment(\.colorScheme, .dark)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(model.isLocal ? ConclaveStrings.text("You") : model.displayName)
+        .accessibilityLabel(ConclaveTileText.label(model))
         .modifier(TileValue(model: model, speaking: speaking))
         .accessibilityActions {
             ForEach(actions) { item in
@@ -107,6 +107,14 @@ private struct TileValue: ViewModifier {
 
 /// Localized state words for the tile value (F00 C08 g).
 enum ConclaveTileText {
+    /// S20 3 i: "You" for yours; the name plus "Host" or "AI" otherwise (joined like the tile value).
+    static func label(_ model: TileChromeModel) -> String {
+        if model.isLocal { return ConclaveStrings.text("You") }
+        if model.isVoiceAgent { return model.displayName + ", " + ConclaveStrings.text("AI") }
+        if model.isHost { return model.displayName + ", " + ConclaveTag.title(.host) }
+        return model.displayName
+    }
+
     static func state(_ kind: TileChromeStateKind) -> String {
         switch kind {
         case .muted: return ConclaveStrings.text("Muted")
@@ -142,8 +150,17 @@ private struct CameraOffFace: View {
     var body: some View {
         ZStack {
             HostingTheme.token(DesignTokens.iosInCallTile)
-            ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(model.avatarSeed), size: .tile,
-                           diameter: CGFloat(TileChromePolicy.avatarSize(density)))
+            if model.isVoiceAgent {
+                Image(systemName: ConclaveSymbols.waveform)
+                    .font(.system(size: CGFloat(TileChromePolicy.avatarSize(density)) * 0.5, weight: .semibold))
+                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                    .frame(width: CGFloat(TileChromePolicy.avatarSize(density)), height: CGFloat(TileChromePolicy.avatarSize(density)))
+                    .background(HostingTheme.inCallLabelScrim, in: Circle())
+                    .accessibilityHidden(true)
+            } else {
+                ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(model.avatarSeed), size: .tile,
+                               diameter: CGFloat(TileChromePolicy.avatarSize(density)))
+            }
         }
     }
 }
@@ -230,6 +247,11 @@ private struct TileNamePill: View {
             PillWaveform(state: speaking)
             Text(model.isLocal ? ConclaveStrings.text("You") : model.displayName)
                 .lineLimit(1)
+            if model.isVoiceAgent {
+                Text(ConclaveStrings.text("AI"))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(HostingTheme.inCallTextSecondary)
+            }
         }
         .font(density == .dense ? .caption2 : .footnote)
         .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))

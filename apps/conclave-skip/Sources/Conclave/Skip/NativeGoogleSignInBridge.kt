@@ -13,6 +13,7 @@ import androidx.credentials.GetCredentialResponse
 import androidx.credentials.exceptions.ClearCredentialException
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.NoCredentialException
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
@@ -22,12 +23,27 @@ import skip.foundation.Bundle
 import skip.foundation.ProcessInfo
 import skip.ui.UIApplication
 
+/*
+ * ENT-7 (S10 5 d, m): every callback carries (token, name, email, errorCode, errorMessage). The code is one of the
+ * ERROR_ constants below and is what the native Account screen reads (NativeAuthService.kind(forGoogleBridgeCode:)
+ * maps it to NativeAuthErrorKind); the message stays developer-facing for logs and the legacy join screen, which
+ * still shows it, so its wording is unchanged.
+ */
 object NativeGoogleSignInBridge {
     private const val SIGN_IN_TIMEOUT_MS = 120_000L
 
+    const val ERROR_CANCELLED = "cancelled"
+    const val ERROR_NOT_CONFIGURED = "not_configured"
+    const val ERROR_UNAVAILABLE = "unavailable"
+    const val ERROR_IN_PROGRESS = "in_progress"
+    const val ERROR_TIMED_OUT = "timed_out"
+    const val ERROR_NO_CREDENTIAL = "no_credential"
+    const val ERROR_INVALID_RESPONSE = "invalid_response"
+    const val ERROR_FAILED = "failed"
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private val mainExecutor = Executor { mainHandler.post(it) }
-    private var pendingCallback: ((String?, String?, String?, String?) -> Unit)? = null
+    private var pendingCallback: ((String?, String?, String?, String?, String?) -> Unit)? = null
     private var pendingTimeout: Runnable? = null
     private var pendingCancellation: CancellationSignal? = null
 
@@ -38,25 +54,25 @@ object NativeGoogleSignInBridge {
             ConnectionResult.SUCCESS
     }
 
-    fun requestIdToken(callback: (String?, String?, String?, String?) -> Unit) {
+    fun requestIdToken(callback: (String?, String?, String?, String?, String?) -> Unit) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
             mainHandler.post { requestIdToken(callback) }
             return
         }
         val clientId = webClientId()
         if (clientId.isBlank()) {
-            callback(null, null, null, "Google Sign-In is not configured for this native build.")
+            callback(null, null, null, ERROR_NOT_CONFIGURED, "Google Sign-In is not configured for this native build.")
             return
         }
 
         val activity = UIApplication.shared.androidActivity
         if (activity == null) {
-            callback(null, null, null, "Google Sign-In needs an active app window.")
+            callback(null, null, null, ERROR_UNAVAILABLE, "Google Sign-In needs an active app window.")
             return
         }
 
         if (pendingCallback != null) {
-            callback(null, null, null, "Google Sign-In is already in progress.")
+            callback(null, null, null, ERROR_IN_PROGRESS, "Google Sign-In is already in progress.")
             return
         }
 
@@ -82,18 +98,18 @@ object NativeGoogleSignInBridge {
                             if (credential !is CustomCredential ||
                                 credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
                             ) {
-                                finish(null, null, null, "Google Sign-In returned an unsupported credential.")
+                                finish(null, null, null, ERROR_INVALID_RESPONSE, "Google Sign-In returned an unsupported credential.")
                                 return
                             }
                             val identity = GoogleIdTokenCredential.createFrom(credential.data)
                             val token = identity.idToken.trim()
                             if (token.isEmpty()) {
-                                finish(null, null, null, "Google Sign-In did not return an identity token.")
+                                finish(null, null, null, ERROR_INVALID_RESPONSE, "Google Sign-In did not return an identity token.")
                                 return
                             }
-                            finish(token, identity.displayName, identity.id, null)
+                            finish(token, identity.displayName, identity.id, null, null)
                         } catch (exception: Exception) {
-                            finish(null, null, null, exception.localizedMessage ?: "Google Sign-In failed.")
+                            finish(null, null, null, ERROR_INVALID_RESPONSE, exception.localizedMessage ?: "Google Sign-In failed.")
                         }
                     }
 
@@ -104,13 +120,20 @@ object NativeGoogleSignInBridge {
                         } else {
                             error.localizedMessage ?: "Google Sign-In failed."
                         }
-                        finish(null, null, null, message)
+                        finish(null, null, null, errorCode(error), message)
                     }
                 },
             )
         } catch (throwable: Throwable) {
-            finish(null, null, null, throwable.localizedMessage ?: "Unable to start Google Sign-In.")
+            finish(null, null, null, ERROR_FAILED, throwable.localizedMessage ?: "Unable to start Google Sign-In.")
         }
+    }
+
+    /** The typed code of a Credential Manager failure: the system sheet closed, no Google account, or another error. */
+    internal fun errorCode(error: GetCredentialException): String = when (error) {
+        is GetCredentialCancellationException -> ERROR_CANCELLED
+        is NoCredentialException -> ERROR_NO_CREDENTIAL
+        else -> ERROR_FAILED
     }
 
     fun cancel(message: String = "Google Sign-In was cancelled.") {
@@ -118,7 +141,7 @@ object NativeGoogleSignInBridge {
             mainHandler.post { cancel(message) }
             return
         }
-        finish(null, null, null, message)
+        finish(null, null, null, ERROR_CANCELLED, message)
     }
 
     fun clearCredentialState() {
@@ -145,20 +168,20 @@ object NativeGoogleSignInBridge {
         }
     }
 
-    private fun finish(token: String?, name: String?, email: String?, error: String?) {
+    private fun finish(token: String?, name: String?, email: String?, errorCode: String?, error: String?) {
         clearTimeout()
         val callback = pendingCallback
         pendingCallback = null
         val cancellation = pendingCancellation
         pendingCancellation = null
         cancellation?.cancel()
-        callback?.invoke(token, name, email, error)
+        callback?.invoke(token, name, email, errorCode, error)
     }
 
     private fun scheduleTimeout() {
         clearTimeout()
         val timeout = Runnable {
-            finish(null, null, null, "Google Sign-In timed out.")
+            finish(null, null, null, ERROR_TIMED_OUT, "Google Sign-In timed out.")
         }
         pendingTimeout = timeout
         mainHandler.postDelayed(timeout, SIGN_IN_TIMEOUT_MS)

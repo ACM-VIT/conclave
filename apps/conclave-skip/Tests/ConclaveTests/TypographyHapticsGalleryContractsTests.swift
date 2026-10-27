@@ -530,6 +530,8 @@ struct TypographyHapticsGalleryContractsTests {
         files += try sourceFiles(under: "Sources/Conclave/Features/Meeting/Chat", extensions: ["swift"])
         files += try sourceFiles(under: "Sources/Conclave/Features/Meeting/Webinar", extensions: ["swift"])
         files += try sourceFiles(under: "Sources/Conclave/Features/Meeting/Transcript", extensions: ["swift"])
+        // ENT-3 (S10 R9; batch 4, HD request B4-T2 R4): the pre-join lobby never takes glass (the system bars only).
+        files += try sourceFiles(under: "Sources/Conclave/Features/Lobby", extensions: ["swift"])
         files.append("Sources/Conclave/App/PlatformRoot+iOS.swift")
         let galleryFile = "Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"
         // WP1-2b (PN 3.5 A1) made the R02 control surface the single glass entry; owner OQ2 (2026-10-26) sanctions
@@ -655,7 +657,11 @@ struct TypographyHapticsGalleryContractsTests {
                      // presenting strings. StageFixtureRoot.kt stays out (Debug fixture labels are literal).
                      "Sources/Conclave/Skip/ui/call/stage/CallRoot.kt", "Sources/Conclave/Skip/ui/call/stage/StageCanvas.kt",
                      "Sources/Conclave/Skip/ui/call/stage/SlotView.kt", "Sources/Conclave/Skip/ui/call/stage/StageChrome.kt",
-                     "Sources/Conclave/Skip/ui/call/stage/Reactions.kt"]
+                     "Sources/Conclave/Skip/ui/call/stage/Reactions.kt",
+                     // STG-5 (batch 4, HD request B4-T4 R6): the notice lanes and the captions strip.
+                     "Sources/Conclave/Skip/ui/call/stage/NoticeLanes.kt", "Sources/Conclave/Skip/ui/call/stage/CaptionsStrip.kt",
+                     // STG-2 (batch 4, HD request B4-T5 R12): the tile menu (it names ds_flip_camera and no literal Text).
+                     "Sources/Conclave/Skip/ui/call/stage/TileMenu.kt"]
             + Self.androidComponentFiles {
             let text = try source(file)
             // Names appear at call sites or in tables such as the live role list.
@@ -677,19 +683,31 @@ struct TypographyHapticsGalleryContractsTests {
             for value in forms.values { #expect(!containsDash(value) && regexMatches(#"%(?![0-9]\$)"#, in: value).isEmpty, "\(name)") }
         }
         // SYS-1 owns the sys_ resources (the call notification and the system fixture); T/CallPresenceTests.swift pins
-        // the names its builder asks for. SYS-2 owns the ctl_route_ audio route names; T/SYS2AudioRoutingTests.swift
-        // and T/Skip/SYS2AudioRouteBridgeTests.kt pin them (batch 2 integrator). ENT-1 and ENT-2 own the pm_
-        // premeeting names (S10 copy tables); T/ENT2JoinCodeTests.swift pins them (batch 3, HD request B3-T1 R1).
-        // STG-1 and STG-4 own the stg_ stage names; T/StagePoliciesTests.swift and T/Skip/StageBridgeTests.kt use
-        // them (batch 3, HD request B3-T2 R7).
+        // the names its builder asks for. S30 owns the ctl_ names: SYS-2's ctl_route_ audio route names
+        // (T/SYS2AudioRoutingTests.swift and T/Skip/SYS2AudioRouteBridgeTests.kt, batch 2 integrator), the S20 10 g
+        // control toasts and the recap banner from STG-5 (batch 4, HD request B4-T4 R6), and CTL-1's other control
+        // names; T/ControlsPoliciesTests.swift and T/Skip/ControlsBridgeTests.kt use them (batch 4, HD request B4-T6
+        // R12). ENT-1 and ENT-2 own the pm_ premeeting names (S10 copy tables); T/ENT2JoinCodeTests.swift pins them
+        // (batch 3, HD request B3-T1 R1). STG-1 and STG-4 own the stg_ stage names; T/StagePoliciesTests.swift and
+        // T/Skip/StageBridgeTests.kt use them (batch 3, HD request B3-T2 R7). STG-2 (batch 4, HD request B4-T5 R12)
+        // and PPL-2 own the ppl_ people-action names (S50 3 g, RECONCILE R19); T/STG2TileTests.swift and
+        // T/Skip/STG2TileBridgeTests.kt pin the ones the tile menu uses. PPL-1 owns the ppl_ People names (S50 copy
+        // tables); T/PeopleHostPoliciesTests.swift and T/Skip/PeopleHostBridgeTests.kt pin them (batch 4, HD request
+        // B4-T7 R8). CHT-1 to CHT-3 own the chat_ names (S40 copy tables); T/ChatPoliciesTests.swift and
+        // T/Skip/ChatBridgeTests.kt use them (batch 4 integrator). ACT-1 and ACT-2 own the S60 act_, gm_, br_ and app_
+        // names and the shared set_ recovery line; T/ActivityProjectionTests.swift checks every one the activity
+        // sources name (batch 4, HD request B4-T8 R10).
         let galleryNames = Set(resources.keys.filter {
-            !$0.hasPrefix("sys_") && !$0.hasPrefix("ctl_route_") && !$0.hasPrefix("pm_") && !$0.hasPrefix("stg_")
+            !$0.hasPrefix("sys_") && !$0.hasPrefix("ctl_") && !$0.hasPrefix("pm_") && !$0.hasPrefix("stg_")
+                && !$0.hasPrefix("ppl_") && !$0.hasPrefix("chat_") && !$0.hasPrefix("act_") && !$0.hasPrefix("gm_")
+                && !$0.hasPrefix("br_") && !$0.hasPrefix("app_") && !$0.hasPrefix("set_")
         })
         #expect(used == galleryNames, "unused or missing resources: \(used.symmetricDifference(galleryNames).sorted())")
         for (name, value) in resources {
             #expect(name.hasPrefix("native_gallery_") || name.hasPrefix("native_semantics_") || name.hasPrefix("native_panel_")
-                    || name.hasPrefix("ds_") || name.hasPrefix("sys_") || name.hasPrefix("ctl_route_") || name.hasPrefix("pm_")
-                    || name.hasPrefix("stg_"), "\(name)")
+                    || name.hasPrefix("ds_") || name.hasPrefix("sys_") || name.hasPrefix("ctl_") || name.hasPrefix("pm_")
+                    || name.hasPrefix("stg_") || name.hasPrefix("ppl_") || name.hasPrefix("chat_") || name.hasPrefix("act_")
+                    || name.hasPrefix("gm_") || name.hasPrefix("br_") || name.hasPrefix("app_") || name.hasPrefix("set_"), "\(name)")
             #expect(!containsDash(value), "\(name)")
             #expect(!value.contains("'"), "\(name) needs an escaped apostrophe")
             // Positional format arguments only, so translations can reorder them.

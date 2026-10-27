@@ -57,6 +57,7 @@ final class TranscriptService {
         guard state.connectionStatus == .idle || state.connectionStatus == .error else { return }
         state.connectionStatus = .connecting
         state.errorMessage = nil
+        state.setIssue(.none)
         didRequestClose = false
         openGeneration += 1
         let generation = openGeneration
@@ -100,6 +101,7 @@ final class TranscriptService {
         reconnectTask?.cancel()
         reconnectTask = nil
         reconnectAttempt = 0
+        state.recordFailedAttempts(0)
         webSocket?.close()
         webSocket = nil
         startAfterConnect = false
@@ -112,15 +114,41 @@ final class TranscriptService {
         }
     }
 
+    /// C6-11 Retry (the `unavailable` phase): resets the backoff and connects now.
+    func retryConnection() {
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnectAttempt = 0
+        state.recordFailedAttempts(0)
+        if state.connectionStatus == .connecting {
+            state.connectionStatus = .idle
+        }
+        Task { await open() }
+    }
+
+    /// RECONCILE R52 (C6-27): the first caller of `getTranscriptSfuRelayStatus()`. The view model probes once on join
+    /// for non-attendees and again after a recovery rejoin (web `useMeetingTranscript`); a failed probe keeps the last
+    /// known value.
+    func probeRelayAvailability() async {
+        do {
+            let status = try await socketManager.getTranscriptSfuRelayStatus()
+            state.setRelay(status.available ? RelayAvailability.available : RelayAvailability.unavailable)
+        } catch {
+            // Unknown stays unknown; the next probe decides.
+        }
+    }
+
     // MARK: - Controller actions
 
     func startTranscription(options: TranscriptStartOptions = TranscriptStartOptions()) {
         let isTakeover = state.sessionStatus == "takeover_needed"
         guard isTakeover ? state.canTakeover : state.canStart else {
             state.errorMessage = "You do not have permission to control this transcript."
+            state.setIssue(.noPermission)
             return
         }
         state.errorMessage = nil
+        state.setIssue(.none)
         // Capture before overwriting the status: the send may be deferred
         // until the socket opens, and "starting" would mask the takeover.
         pendingStartIsTakeover = isTakeover
@@ -143,6 +171,7 @@ final class TranscriptService {
         guard state.canStop || state.isLive else { return }
         guard state.connectionStatus == .connected else {
             state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            state.setIssue(.controlsReconnecting)
             return
         }
         state.sessionStatus = "stopping"
@@ -159,13 +188,16 @@ final class TranscriptService {
     func pauseTranscription() -> Bool {
         guard state.canPause else {
             state.errorMessage = "You do not have permission to pause this transcript."
+            state.setIssue(.noPermission)
             return false
         }
         guard state.connectionStatus == .connected else {
             state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            state.setIssue(.controlsReconnecting)
             return false
         }
         state.errorMessage = nil
+        state.setIssue(.none)
         return sendJSON(["type": "session.pause"])
     }
 
@@ -173,13 +205,16 @@ final class TranscriptService {
     func resumeTranscription() -> Bool {
         guard state.canPause else {
             state.errorMessage = "You do not have permission to resume this transcript."
+            state.setIssue(.noPermission)
             return false
         }
         guard state.connectionStatus == .connected else {
             state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            state.setIssue(.controlsReconnecting)
             return false
         }
         state.errorMessage = nil
+        state.setIssue(.none)
         return sendJSON(["type": "session.resume"])
     }
 
@@ -189,16 +224,19 @@ final class TranscriptService {
         guard !trimmed.isEmpty else { return false }
         guard state.canAsk else {
             state.errorMessage = "You do not have permission to ask about this transcript."
+            state.setIssue(.noPermission)
             return false
         }
         guard state.connectionStatus == .connected else {
             state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            state.setIssue(.controlsReconnecting)
             return false
         }
 
         let id = "qa-\(Int(Date().timeIntervalSince1970 * 1000.0))-\(String(UUID().uuidString.prefix(6)).lowercased())"
         let now = Date().timeIntervalSince1970 * 1000.0
         state.errorMessage = nil
+        state.setIssue(.none)
         state.beginQuestion(id: id, question: trimmed, timestamp: now)
         let didSend = sendJSON(["type": "qa.ask", "id": id, "question": trimmed])
         if !didSend {
@@ -218,13 +256,16 @@ final class TranscriptService {
     func refreshMinutes() -> Bool {
         guard state.canAsk else {
             state.errorMessage = "You do not have permission to refresh meeting minutes."
+            state.setIssue(.noPermission)
             return false
         }
         guard state.connectionStatus == .connected else {
             state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            state.setIssue(.controlsReconnecting)
             return false
         }
         state.errorMessage = nil
+        state.setIssue(.none)
         return sendJSON(["type": "minutes.refresh"])
     }
 
@@ -258,6 +299,8 @@ final class TranscriptService {
         guard !didRequestClose, reconnectTask == nil else { return }
         let attempt = reconnectAttempt
         reconnectAttempt += 1
+        // C6-11: 8 failed attempts in a row read as `unavailable` (with Retry); reconnecting continues at the 10 s cap.
+        state.recordFailedAttempts(reconnectAttempt)
         let reconnectDelaysNanoseconds: [UInt64] = [
             UInt64(500_000_000),
             UInt64(1_000_000_000),
@@ -319,12 +362,14 @@ final class TranscriptService {
             return
         }
         reconnectAttempt = 0
+        state.recordFailedAttempts(0)
         if state.errorMessage == "Reconnecting transcription automatically…" {
             state.errorMessage = nil
         }
 
         switch type {
         case "snapshot":
+            state.markSessionSnapshot()
             applyProviderKeyAvailability(envelope)
             if let session = envelope["session"] as? [String: Any] {
                 applySession(session)
@@ -378,6 +423,7 @@ final class TranscriptService {
         case "error":
             if let message = envelope["message"] as? String, !message.isEmpty {
                 state.errorMessage = message
+                state.setIssue(.server, serverText: message)
             }
             // Don't leave the controls stuck in a busy state on a worker error.
             if state.sessionStatus == "starting" || state.sessionStatus == "stopping" {
@@ -413,6 +459,7 @@ final class TranscriptService {
             if response == nil || response?.success == false {
                 if !automatic {
                     self.state.errorMessage = response?.reason ?? "Transcription audio relay could not start."
+                    self.state.setIssue(.relayFailed)
                     self.sendJSON([
                         "type": "session.relayFailed",
                         "message": response?.reason ?? "Transcription audio relay could not start."
@@ -421,6 +468,9 @@ final class TranscriptService {
             } else {
                 self.state.errorMessage = TranscriptRecoveryErrorPolicy
                     .errorAfterSuccessfulRelayRecovery(self.state.errorMessage)
+                if self.state.issue == .relayFailed || self.state.issue == .controlsReconnecting {
+                    self.state.setIssue(.none)
+                }
             }
         }
     }
@@ -471,6 +521,17 @@ final class TranscriptService {
             let rawError = (session["error"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             let nextError = rawError?.isEmpty == false ? rawError : nil
             if state.errorMessage != nextError { state.errorMessage = nextError }
+            if let text = nextError {
+                state.setIssue(.server, serverText: text)
+            } else if state.issue == .server {
+                state.setIssue(.none)
+            }
+        }
+        // Web TRN-14: the session start (server clock) drives the catch-up offer for late joiners.
+        if let startedAt = Self.doubleValue(session["startedAt"]) {
+            state.applySessionStartedAt(startedAt)
+        } else if let status = session["status"] as? String, status == "idle" {
+            state.applySessionStartedAt(0.0)
         }
     }
 

@@ -4,7 +4,7 @@ import Foundation
 /// by Android's MainActivity before the first frame, only behind the `premeeting` route flag (never for the L9
 /// fixture, which builds standalone presenters). Order matters: identity first, so the presenter never sees a signed-in
 /// session go to signed out (which clears recents, Q4), then the synchronous bootstrap from the device store, then the
-/// link target for the app delegate (S10 0.8 C9).
+/// link target for the app delegate (S10 0.8 C9), then the lobby hooks (ENT-3).
 enum PremeetingAppWiring {
     private static var installed = false
 
@@ -25,6 +25,15 @@ enum PremeetingAppWiring {
         presenter.store = store
         presenter.bootstrap(user: appState.currentUser, recents: store.load())
         ConclaveAppDelegate.shared.registerPremeeting(presenter)
+        // ENT-3 (S10 6 j): the lobby's core, preview, permission, route and presence hooks, production only.
+        LobbyProductionHooks.install(presenter: presenter, viewModel: viewModel, appState: appState)
+        // ENT-7 (HD request B4-T3 R8): a provider sign-in in flight feeds `isSigningIn`, so a link that arrives
+        // meanwhile waits until auth completes (S10 invariant 9); then the account coordinator, its first identity
+        // and the launch session refresh.
+        presenter.account.onSigningInChanged = { signingIn in
+            viewModel.setPremeetingSigningIn(signingIn)
+        }
+        AccountAppWiring.install(appState: appState, account: presenter.account, premeeting: presenter)
     }
 
     @MainActor
@@ -35,5 +44,7 @@ enum PremeetingAppWiring {
             accountName: PremeetingPresenter.accountName(user),
             accountSeed: user?.id ?? ""
         )
+        // ENT-7: the account presenter's identity (name, email, provider, guest record) from the same hook.
+        AccountAppWiring.pushIdentity(appState: appState, account: viewModel.premeeting.account)
     }
 }

@@ -4,32 +4,58 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import org.webrtc.VideoTrack
 import skip.ui.UIApplication
 
@@ -61,7 +87,7 @@ internal fun SlotView(
             ConclaveOverflowTile(count = overflowCount, identities = identities, identifier = "stage.overflow",
                 onClick = { stage.openPeople(destination = PanelDestination.none) }, modifier = modifier)
         }
-        StageSlot.activityId -> StageActivityCard(stage.layout.activityKind, modifier)
+        StageSlot.activityId -> ActivityStageCard(stage, modifier)
         else -> ParticipantTile(slot, stage.tileChrome.entry(slot.userId), stage.speaking.state(slot.userId),
             stage.bindings.binding(slot.id), stage, renderers, modifier)
     }
@@ -83,6 +109,12 @@ internal fun stageSlotModel(model: TileChromeModel, isShare: Boolean): TileChrom
         isVoiceAgent = false)
 }
 
+/**
+ * One participant or share slot (SL6) with the STG-2 tile anatomy: the tile menu on long press at the press point
+ * (S20 3 d), its items as TalkBack custom actions, the Unpin target over the pinned badge (S20 4 d), the 1:1 camera-off
+ * caption (S20 3 d) and the reconnect reason with "Back online" (S20 3 c; F00 C08 f). Every overlay is a leaf that reads
+ * only what it shows and every modifier is present for every role, so the renderer's structure never changes (D15).
+ */
 @Composable
 private fun ParticipantTile(
     slot: StageSlot, entry: TileChromeEntry, speaking: TileSpeakingState, binding: RendererBinding, stage: StagePresenter,
@@ -94,15 +126,29 @@ private fun ParticipantTile(
     val minimized = role == StageSlotRole.selfMinimized
     // stage.recompose.<slotId> (SL14): the fixture ledger counts tile compositions; production passes no ledger.
     SideEffect { renderers.ledger?.composed(key = slot.id) }
+    val haptics = rememberConclaveHaptics()
+    val menuState = rememberTileMenuState()
+    val titles = rememberTileMenuTitles()
+    val kind = stage.kind
+    val menu = remember(slot, model, kind, titles) { stageTileMenu(slot, model, kind, titles) }
+    val actions = remember(menu) { stageTileActions(menu, stage) }
+    val actionsLabel = conclaveString("stg_tile_actions")
     Box(modifier) {
         ConclaveTileChrome(
             model = model,
             speaking = speaking,
             identifier = "stage.tile.${slot.id}",
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().tileLongPress(menu.hasItems) { at ->
+                haptics.gesture(FeedbackKind.longPress)
+                menuState.open(at)
+            },
             variant = if (role.isSelfView) ConclaveTileVariant.SelfView else ConclaveTileVariant.Grid,
             spotlight = role == StageSlotRole.spotlightMain,
             cornerRadius = stageCornerRadius(role),
+            actions = actions,
+            haptics = haptics,
+            accessibilityLongPressLabel = if (menu.hasItems) actionsLabel else null,
+            onAccessibilityLongPress = if (menu.hasItems) { { menuState.open(Offset.Zero) } } else null,
         ) {
             StageRendererSlot(slot.id, slot.userId, model.isLocal, isShare, slot.fit, binding, stage, renderers,
                 Modifier.fillMaxSize().graphicsLayer { alpha = if (minimized) 0f else 1f })
@@ -111,8 +157,139 @@ private fun ParticipantTile(
             ConclaveStageChip(title = conclaveString("ds_you"), identifier = "stage.selfView.minimized",
                 modifier = Modifier.align(Alignment.Center), onClick = { stage.setSelfViewMode("floating") })
         }
+        TileReconnectDetail(entry, isShare, Modifier.fillMaxSize())
+        OneOnOneCameraOffCaption(slot, entry, stage, isShare, Modifier.fillMaxSize())
+        TileUnpinTarget(slot, entry, stage, isShare, Modifier.align(Alignment.TopEnd))
+        TileMenuAnchor(menuState, menu, stage, "stage.tile.menu.${slot.id}", Modifier.align(AbsoluteAlignment.TopLeft))
     }
 }
+
+/** Places the content horizontally centered with its top `gap` below the parent's vertical center. */
+private fun Modifier.belowCenter(gap: Dp): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints.copy(minWidth = 0, minHeight = 0))
+    val width = constraints.maxWidth
+    val height = constraints.maxHeight
+    val offset = gap.roundToPx()
+    layout(width, height) {
+        placeable.placeRelative((width - placeable.width) / 2, height / 2 + offset)
+    }
+}
+
+/**
+ * The pinned badge on the spotlight main is itself an IconButton-sized (48 dp) target "Unpin %1$s" (S20 4 d): an
+ * invisible Button node centered on the badge the chrome draws.
+ */
+@Composable
+private fun TileUnpinTarget(slot: StageSlot, entry: TileChromeEntry, stage: StagePresenter, isShare: Boolean, modifier: Modifier) {
+    if (slot.role != StageSlotRole.spotlightMain) return
+    val model = entry.model
+    if (!TileFeaturePolicy.showsUnpinTarget(role = slot.role, isPinned = model.isPinned, isShare = isShare)) return
+    val size = TileFeaturePolicy.unpinTargetAndroid
+    val label = conclaveString("stg_unpin_name", model.displayName)
+    val top = TileFeaturePolicy.unpinTargetTopInset(density = TileChromeDensity.spotlight, targetSize = size)
+    val end = TileFeaturePolicy.unpinTargetTrailingInset(model = model, density = TileChromeDensity.spotlight, targetSize = size)
+    Box(
+        modifier.padding(top = top.dp, end = end.dp).size(size.dp).testTag("stage.tile.unpin")
+            .clickable(role = Role.Button, onClick = { stage.clearPin() })
+            .clearAndSetSemantics { contentDescription = label; this.role = Role.Button },
+    )
+}
+
+/**
+ * 1:1 with the remote camera off (S20 3 d, 3 l4): the chrome centers the 96 dp avatar; the name (titleLarge) and
+ * "Camera off" (bodyMedium, onSurfaceVariant) hang 8 dp below it. Hidden from TalkBack: the tile node says both.
+ */
+@Composable
+private fun OneOnOneCameraOffCaption(slot: StageSlot, entry: TileChromeEntry, stage: StagePresenter, isShare: Boolean, modifier: Modifier) {
+    if (slot.role != StageSlotRole.spotlightMain || isShare) return
+    val model = entry.model
+    if (model.isLocal || !model.isCameraOff) return
+    if (!TileFeaturePolicy.showsOneOnOneCaption(kind = stage.kind, role = slot.role, isLocal = model.isLocal, isCameraOff = model.isCameraOff)) return
+    val scheme = MaterialTheme.colorScheme
+    val gap = (TileChromePolicy.avatarSize(TileChromeDensity.spotlight) / 2.0 + 8.0).dp
+    Box(modifier.semantics { hideFromAccessibility() }) {
+        Column(
+            Modifier.belowCenter(gap).padding(horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ConclaveText(model.displayName, line = "stage.oneOnOne.name", style = MaterialTheme.typography.titleLarge,
+                color = scheme.onSurface, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            ConclaveText(conclaveString("stg_camera_off_caption"), line = "stage.oneOnOne.caption",
+                style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
+        }
+    }
+}
+
+/**
+ * The reconnect reason under the chrome's centered "Reconnecting" pill, then "Back online" for 4.5 s once the person is
+ * back (S20 3 c; F00 C08 f; web STG-15), each change announced once through a polite live region. The pill fades
+ * 120 ms. Remote tiles only; the first composition never announces.
+ */
+@Composable
+private fun TileReconnectDetail(entry: TileChromeEntry, isShare: Boolean, modifier: Modifier) {
+    val model = entry.model
+    val reconnecting = model.isReconnecting && !model.isLocal && !isShare
+    var backOnline by remember { mutableStateOf(false) }
+    var wasReconnecting by remember { mutableStateOf(false) }
+    var hasRun by remember { mutableStateOf(false) }
+    var announcement by remember { mutableStateOf("") }
+    val reason = tileReconnectReason(model.reconnectReason)
+    val reconnectingWord = conclaveString("ds_state_reconnecting")
+    val backOnlineWord = conclaveString("ds_state_back_online")
+    LaunchedEffect(reconnecting) {
+        val firstRun = !hasRun
+        hasRun = true
+        if (reconnecting) {
+            wasReconnecting = true
+            backOnline = false
+            if (!firstRun) announcement = tileAnnouncementWords(listOf(model.displayName, reconnectingWord, reason))
+            return@LaunchedEffect
+        }
+        if (!wasReconnecting) return@LaunchedEffect
+        wasReconnecting = false
+        backOnline = true
+        announcement = tileAnnouncementWords(listOf(model.displayName, backOnlineWord))
+        delay(TileFeaturePolicy.backOnlineMillis.toLong())
+        backOnline = false
+    }
+    val ext = LocalConclaveExtendedColors.current
+    val scheme = MaterialTheme.colorScheme
+    val density = LocalDensity.current
+    // Half the chrome's labelMedium pill (16 sp line, 4 dp padding each side) plus 4 dp.
+    val gap = with(density) { 8.sp.toDp() } + 8.dp
+    Box(modifier) {
+        if (reconnecting) {
+            ConclaveText(reason, line = "tile.reconnect.reason", style = MaterialTheme.typography.labelSmall, color = scheme.onSurface,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.belowCenter(gap).clip(CircleShape).background(ext.labelScrim)
+                    .padding(horizontal = 8.dp, vertical = 2.dp).semantics { hideFromAccessibility() })
+        }
+        AnimatedVisibility(visible = backOnline, modifier = Modifier.align(Alignment.Center),
+            enter = fadeIn(ConclaveMotion.fast()), exit = fadeOut(ConclaveMotion.fast())) {
+            ConclaveText(backOnlineWord, line = "tile.reconnect.backOnline", style = MaterialTheme.typography.labelMedium,
+                color = scheme.onSurface,
+                modifier = Modifier.clip(CircleShape).background(ext.labelScrim).padding(horizontal = 8.dp, vertical = 4.dp)
+                    .semantics { hideFromAccessibility() })
+        }
+        if (announcement.isNotEmpty()) {
+            Box(Modifier.size(1.dp).semantics {
+                liveRegion = LiveRegionMode.Polite
+                contentDescription = announcement
+            })
+        }
+    }
+}
+
+@Composable
+private fun tileReconnectReason(raw: String): String = when (TileFeaturePolicy.reconnectReasonKind(raw)) {
+    "timeout" -> conclaveString("stg_reason_timeout")
+    "network" -> conclaveString("stg_reason_network")
+    else -> conclaveString("stg_reason_interrupted")
+}
+
+/** One announcement joined like the tile value. */
+private fun tileAnnouncementWords(parts: List<String>): String = parts.filter { it.isNotEmpty() }.joinToString(", ")
 
 /**
  * The renderer leaf: the only reader of the slot's RendererBinding (SL4); never an accessibility node, never inside a
@@ -155,18 +332,6 @@ internal fun stageLiveTrack(userId: String, isLocal: Boolean, isShare: Boolean, 
     }
     val consumerUserId = if (isShare) "$userId-screen" else userId
     return client.remoteVideoTrack(forUserId = consumerUserId)?.rtcVideoTrack
-}
-
-/** The activity card placeholder (S20 11): a flat raised surface; STG-9 hosts the content. */
-@Composable
-private fun StageActivityCard(kind: String, modifier: Modifier) {
-    val ext = LocalConclaveExtendedColors.current
-    Surface(
-        modifier = modifier.testTag("stage.activity.$kind"),
-        shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        border = BorderStroke(1.dp, ext.border),
-    ) {}
 }
 
 /**

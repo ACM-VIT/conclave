@@ -1,0 +1,112 @@
+package conclave.module
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+
+/*
+ * S50 PL12 (PPL-1): the Android Debug People fixture root, layered on the S20 SL14 stage fixture. MainActivity mounts
+ * it for the intent extra `conclave.peopleFixture=<state>` (BuildConfig.DEBUG plus FLAG_DEBUGGABLE, HD request B4-T7
+ * R5); the stage fixture's `conclave.stageFixturePattern` and `conclave.stageForceScreenReader` apply. The native call
+ * root draws the probe stage with the native Participants page; scripts and readouts sit beside the stage, never
+ * inside the page or the stage (PS 7.6). Standalone presenters (PeopleFixtureSession, shared with iOS); never
+ * MeetingViewModel, WebRTC, audio, capture or network.
+ */
+
+/** Called only by MainActivity's explicit debug launch route. */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+fun PeopleFixtureRoot(stateName: String, patternName: String? = null, forceScreenReader: Boolean = false) {
+    val state = PeopleFixtureScript.state(named = stateName) ?: PeopleFixtureState.host6
+    val session = remember(state) {
+        PeopleFixtureSession(state = state, pattern = StageFixtureScript.pattern(named = patternName), forceScreenReader = forceScreenReader)
+    }
+    LaunchedEffect(session) {
+        // Open the way the state's cell does (the knock View for Waiting, the hand toast View for Raised Hands).
+        session.open(destination = PeopleFixtureScript.openDestination(state))
+        if (state == PeopleFixtureState.lostHost) {
+            delay(PeopleFixtureScript.lostHostDelayMillis.toLong())
+            session.loseHost()
+        }
+    }
+    Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
+        CallRoot(
+            shell = session.shell,
+            stage = session.stage,
+            people = session.people,
+            renderers = StageRenderers.probes(session.stageSession.renderers, session.stageSession.pattern),
+            forceScreenReader = session.stageSession.forceScreenReader,
+            onMinimize = { session.stageSession.minimize() },
+        )
+        HostingTheme(inCall = true) {
+            PeopleFixtureControls(session, Modifier.align(Alignment.CenterStart))
+        }
+    }
+}
+
+@Composable
+private fun PeopleFixtureControls(session: PeopleFixtureSession, modifier: Modifier) {
+    var expanded by remember { mutableStateOf(true) }
+    var refresh by remember { mutableIntStateOf(0) }
+    val ext = LocalConclaveExtendedColors.current
+    Column(
+        modifier.padding(start = 8.dp).widthIn(max = 220.dp).background(ext.labelScrim, RoundedCornerShape(8.dp)).padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        FixtureButton("Fixture", "people.fixture.toggle") { expanded = !expanded }
+        if (expanded) {
+            FixtureButton("Open", "people.fixture.open") { session.open(destination = PanelDestination.none); refresh++ }
+            FixtureButton("Knock view", "people.fixture.knockView") { session.open(destination = PanelDestination.peopleWaiting); refresh++ }
+            FixtureButton("Hand view", "people.fixture.handView") { session.open(destination = PanelDestination.peopleRaisedHands); refresh++ }
+            FixtureButton("Speakers", "people.fixture.speakers") { session.runSpeakerScript(); refresh++ }
+            FixtureButton("Mute row", "people.fixture.mute") { session.scriptedMute(); refresh++ }
+            FixtureButton("Lose host", "people.fixture.loseHost") { session.loseHost(); refresh++ }
+            FixtureButton("Refresh", "people.fixture.refresh") { refresh++ }
+            val tick = refresh
+            FixtureReadout(session.revisionReadout(), "people.revision", tick)
+            FixtureReadout(session.recomposeReadout(), "people.recompose", tick)
+            FixtureReadout(session.focusReadout(), "people.focus", tick)
+            FixtureReadout(session.countersReadout(), "people.counters", tick)
+            FixtureReadout(session.panelReadout(), "panel.current", tick)
+            FixtureReadout(session.renderersReadout(), "stage.renderers", tick)
+        }
+    }
+}
+
+@Composable
+private fun FixtureButton(title: String, tag: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.heightIn(min = 48.dp).testTag(tag)) {
+        // Debug fixture labels are not user-facing copy (the stage fixture does the same).
+        Text(title, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+@Composable
+private fun FixtureReadout(text: String, tag: String, tick: Int) {
+    Text(text, modifier = Modifier.testTag(tag), color = MaterialTheme.colorScheme.onSurface,
+        style = MaterialTheme.typography.labelSmall, maxLines = 4)
+}

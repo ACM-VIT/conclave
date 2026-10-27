@@ -25,7 +25,9 @@ struct PremeetingRouteTarget: Equatable {
 /// self-observation: SkipModel has no `withObservationTracking`). Mute and camera intent are never stored here.
 ///
 /// Published separately so a leaf observes only what it draws: `path` and the sheet flags (the root), `home` (Home),
-/// `root` (the 0.4 call branch), `lobbyStatus` (the lobby), `outcome`, `switchPrompt` and `feedbackState`.
+/// `root` (the 0.4 call branch), the six lobby snapshots (ENT-3: `lobbyMedia` for the card, `lobbyStatus` for the
+/// bottom block, `lobbyPresence`, `lobbyIdentity`, `lobbyLink`, `lobbyAudio`), `outcome`, `switchPrompt` and
+/// `feedbackState`. The lobby reaches the core, media and the network only through `lobbyHooks`.
 @MainActor
 @Observable
 final class PremeetingPresenter {
@@ -33,6 +35,12 @@ final class PremeetingPresenter {
     private(set) var home: HomeSnapshot = HomeSnapshot.empty
     private(set) var root: PremeetingRootDecision = PremeetingRootDecision.home
     private(set) var lobbyStatus: LobbyStatusSnapshot? = nil
+    /// ENT-3 (S10 0.5): the other five lobby snapshots, each observed by one leaf.
+    private(set) var lobbyMedia: LobbyMediaSnapshot? = nil
+    private(set) var lobbyPresence: LobbyPresenceSnapshot? = nil
+    private(set) var lobbyIdentity: LobbyIdentitySnapshot? = nil
+    private(set) var lobbyLink: LobbyLinkSnapshot? = nil
+    private(set) var lobbyAudio: LobbyAudioSnapshot? = nil
     private(set) var outcome: OutcomeModel? = nil
     /// iOS sheet; Android pushes `.account` instead (S10 5).
     private(set) var isJoinSheetPresented = false
@@ -43,12 +51,21 @@ final class PremeetingPresenter {
     /// Premeeting async outcomes as tokens (F00 8; S10 0.5): `validationFailed` on a rejected join submit. The root
     /// consumer reads it beside the shell's stream and plays only `DeliveredTokenKinds`.
     private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
+    /// ENT-7 (S10 5): the Account presenter, app-scoped with this presenter (the L9 fixture gets a standalone one).
+    let account = AccountPresenter()
 
     /// Core only: the view model forwards commands to the S1 shell. Nil in the L9 fixture and in tests.
     @ObservationIgnored var onCommand: ((PremeetingCommand) -> Void)? = nil
     /// The device store; nil keeps recents in memory (fixture, tests).
     @ObservationIgnored var store: RecentMeetingsStore? = nil
     @ObservationIgnored var nowMillis: () -> Double = { Date().timeIntervalSince1970 * 1000.0 }
+    /// ENT-3: the core, preview, permission, route and presence hooks (production wiring only; nil in the L9 fixture
+    /// unless it scripts them, and in tests unless they record them).
+    @ObservationIgnored var lobbyHooks: LobbyCoreHooks? = nil
+    /// The New Meeting code generator (tests inject a sequence; C17 regenerates through it).
+    @ObservationIgnored var generateRoomCode: () -> String = { EntryPolicies.generateRoomCode() }
+    /// The presence poll interval (S10 0.5 task table: 10 s; tests shorten it).
+    @ObservationIgnored var presenceIntervalMillis: Double = LobbyPresencePolicy.pollIntervalMillis
 
     @ObservationIgnored private var inputs = PremeetingInputs.make()
     @ObservationIgnored private var records: [RecentMeetingRecord] = []
@@ -71,8 +88,33 @@ final class PremeetingPresenter {
     @ObservationIgnored private var rejoinExpiryTask: Task<Void, Never>? = nil
     @ObservationIgnored private var scheduledRejoinKey = ""
     @ObservationIgnored private var publishCount = 0
+    // ENT-3 lobby state (per lobby route; reset when another lobby opens)
+    @ObservationIgnored private var device = LobbyDeviceInputs.initial
+    @ObservationIgnored private var lobbyRouteId = 0
+    @ObservationIgnored private var visibleLobbyRouteId = 0
+    @ObservationIgnored private var guestNameDraft = ""
+    @ObservationIgnored private var inviteCodeDraft = ""
+    @ObservationIgnored private var formIssue = LobbyFormIssue.none
+    @ObservationIgnored private var formIssueBaselineKey = ""
+    @ObservationIgnored private var appliedFormIssueKey = ""
+    @ObservationIgnored private var chosenOutputKind = ""
+    @ObservationIgnored private var chosenInputId = ""
+    @ObservationIgnored private var presenceHasResult = false
+    @ObservationIgnored private var presenceCount: Int? = nil
+    @ObservationIgnored private var presenceRoomId = ""
+    @ObservationIgnored private var presenceTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var collisionTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var isStarting = false
+    @ObservationIgnored private var previewRequested = false
+    @ObservationIgnored private var previewHandedOff = false
+    @ObservationIgnored private var presenceFetches = 0
+    @ObservationIgnored private var joinRequests = 0
 
     init() {
+        // ENT-7 (S10 5 e): the account's async outcomes (signInSucceeded, sessionExpired) join this token stream.
+        account.onFeedback = { [weak self] kind in
+            self?.advanceFeedback(kind)
+        }
     }
 
     // MARK: - Diagnostics (tests, fixture self-check)
@@ -80,9 +122,17 @@ final class PremeetingPresenter {
     var currentInputs: PremeetingInputs { inputs }
     /// Every assignment to a published value (the L9 self-check reads it).
     var snapshotPublishCount: Int { publishCount }
-    /// Live presenter tasks (S1C 3.3 TEAR): only the Rejoin wake-up, and only while a card is published.
-    var liveTaskCount: Int { rejoinExpiryTask == nil ? 0 : 1 }
+    /// Live presenter tasks (S1C 3.3 TEAR): the Rejoin wake-up while a card is published, the lobby presence poll while
+    /// a lobby is visible in `editing`, and the C17 code check while a start is in flight.
+    var liveTaskCount: Int {
+        (rejoinExpiryTask == nil ? 0 : 1) + (presenceTask == nil ? 0 : 1) + (collisionTask == nil ? 0 : 1)
+    }
     var recentRecords: [RecentMeetingRecord] { records }
+    /// ENT-3 Debug counters (S10 6 l6: polling stops when the lobby is popped).
+    var presenceFetchCount: Int { presenceFetches }
+    var joinRequestCount: Int { joinRequests }
+    var isStartInFlight: Bool { collisionTask != nil }
+    var currentDeviceInputs: LobbyDeviceInputs { device }
 
     /// The target behind a pushed route (the lobby, ENT-3; tests).
     func target(forRoute id: Int) -> PremeetingRouteTarget? {
@@ -157,6 +207,13 @@ final class PremeetingPresenter {
         }
         publishRoot(decision)
         refreshOutcome(next, decision: decision)
+        if decision.root == .call && previousRoot.root != .call {
+            // The publish latch (S60 C6-8, Q16 B): the call owns the camera from now on.
+            handOffPreview()
+        } else if previousRoot.root == .call && decision.root == .premeeting {
+            previewHandedOff = false
+            lobbyHooks?.resetPreviewLatch?()
+        }
 
         if decision.showsOutcome {
             // S10 0.4: the outcome screen is the premeeting root content.
@@ -177,7 +234,11 @@ final class PremeetingPresenter {
                 setPathValue([makeTarget(from: target, intent: .join).route])
             }
         }
-        refreshLobbyStatus()
+        if !previous.isAppActive && next.isAppActive && visibleLobbyRouteId != 0 {
+            // S10 7 c, d: permissions and routes are re-read on foreground.
+            lobbyHooks?.refreshDevices?()
+        }
+        refreshLobby()
 
         let homeInputsChanged = previous.isSignedIn != next.isSignedIn
             || previous.accountName != next.accountName
@@ -191,6 +252,10 @@ final class PremeetingPresenter {
             || (!previous.isAppActive && next.isAppActive)
         if homeInputsChanged {
             republishHome()
+        }
+        if !previous.isAppActive && next.isAppActive {
+            // ENT-7 (HD request B4-T3 R5): a stored sign-in is re-validated on foreground.
+            account.appDidBecomeActive()
         }
         if previous.isSigningIn && !next.isSigningIn && !queuedLink.isEmpty {
             // Invariant 9: a link that arrived during sign-in applies after auth completes.
@@ -222,7 +287,7 @@ final class PremeetingPresenter {
             }
         }
         setPathValue(accepted)
-        refreshLobbyStatus()
+        refreshLobby()
     }
 
     // MARK: - Home actions
@@ -269,6 +334,8 @@ final class PremeetingPresenter {
 
     func accountSheetDidDismiss() {
         setAccountSheet(false)
+        // ENT-7 (HD request B4-T3 R3): Close cancels a sign-in still in flight; a completed one stays.
+        account.didDismiss()
         flushPendingTarget()
     }
 
@@ -311,15 +378,31 @@ final class PremeetingPresenter {
 
     /// iOS presents the Account sheet; Android pushes the Account page (S10 5). The Account content is ENT-7.
     func openAccount() {
+        // ENT-7 (HD request B4-T3 R2): a lobby that needs an account opens Account with that context (S10 5 a, f), and
+        // the provider fetch runs once per presentation, never on Home (S10 5 k).
+        if let status = lobbyStatus, status.issue == LobbyIssue.signInRequired {
+            self.account.setContext(AccountContext.signInRequired)
+        }
+        self.account.didPresent()
         #if SKIP
-        let account = PremeetingRouteTarget(routeId: allocateRouteId(), kind: .account, intent: .join, roomId: "",
-                                            title: "", joinMode: .meeting, meetingInviteCode: nil,
-                                            webinarInviteCode: nil, clientId: nil, allowRoomCreation: false)
-        targets.append(account)
-        setPathValue(path + [account.route])
+        let accountTarget = PremeetingRouteTarget(routeId: allocateRouteId(), kind: .account, intent: .join, roomId: "",
+                                                  title: "", joinMode: .meeting, meetingInviteCode: nil,
+                                                  webinarInviteCode: nil, clientId: nil, allowRoomCreation: false)
+        targets.append(accountTarget)
+        setPathValue(path + [accountTarget.route])
         #else
         setAccountSheet(true)
         #endif
+    }
+
+    /// ENT-7 (S10 5 d): Android pushes the Privacy page above Account (`PrivacyKey`); iOS pushes it inside the Account
+    /// sheet's own stack and never calls this.
+    func openPrivacyPolicy() {
+        let privacy = PremeetingRouteTarget(routeId: allocateRouteId(), kind: .privacyPolicy, intent: .join, roomId: "",
+                                            title: "", joinMode: .meeting, meetingInviteCode: nil,
+                                            webinarInviteCode: nil, clientId: nil, allowRoomCreation: false)
+        targets.append(privacy)
+        setPathValue(path + [privacy.route])
     }
 
     func openStoreListing() {
@@ -333,6 +416,200 @@ final class PremeetingPresenter {
     /// Cancel while connecting or waiting: `shell.leave()` (no haptic, Q11).
     func cancelJoin() {
         if let onCommand = onCommand { onCommand(.leave) }
+    }
+
+    // MARK: - Lobby (ENT-3, S10 6 j)
+
+    /// The lobby view appeared (iOS `.task(id:)`, Android composition): devices are re-read, the presence poll and the
+    /// preview may start. Keyed by route, so a replaced lobby's late disappearance never stops the new one.
+    func lobbyDidAppear(routeId: Int) {
+        guard let target = topLobbyTarget(), target.routeId == routeId else { return }
+        visibleLobbyRouteId = routeId
+        lobbyHooks?.refreshDevices?()
+        refreshLobby()
+    }
+
+    /// The lobby view left (popped, replaced, covered by a pushed page): presence stops and the preview stops unless
+    /// the call took the camera (the hand-off).
+    func lobbyDidDisappear(routeId: Int) {
+        guard visibleLobbyRouteId == routeId else { return }
+        visibleLobbyRouteId = 0
+        stopPresencePolling()
+        updatePreviewDemand()
+    }
+
+    /// S10 0.8 C1: the lobby's only media intent path (`setEntryMediaIntent`); never a state write. A first tap with
+    /// the permission undetermined asks for it and shows the intended state meanwhile (S10 7 c); a denied permission
+    /// keeps the toggle off (the issue row or card overlay explains it), except where Android may ask again.
+    func setMicIntent(_ on: Bool) {
+        guard lobbyStatus != nil else { return }
+        if on && !mayTurnOn(LobbyMediaKind.microphone) {
+            return
+        }
+        lobbyHooks?.setEntryMediaIntent?(on, inputs.cameraIntentOn)
+    }
+
+    func setCameraIntent(_ on: Bool) {
+        guard lobbyStatus != nil else { return }
+        if on && !mayTurnOn(LobbyMediaKind.camera) {
+            return
+        }
+        lobbyHooks?.setEntryMediaIntent?(inputs.micIntentOn, on)
+    }
+
+    /// The camera facing for the preview and the call (S20 SC8 / S60 C6-2, one delta through the preview owner).
+    func flipCamera() {
+        lobbyHooks?.flipPreview?()
+    }
+
+    /// The guest name as typed, capped at 40 (DisplayNamePolicy); the field keeps its own text.
+    func setGuestName(_ name: String) {
+        let capped = DisplayNamePolicy.capped(name)
+        guard capped != guestNameDraft else { return }
+        guestNameDraft = capped
+        refreshLobby()
+    }
+
+    func setInviteCode(_ code: String) {
+        guard code != inviteCodeDraft else { return }
+        inviteCodeDraft = code
+        if formIssue.inviteCodeInvalid {
+            formIssue = LobbyFormIssue(issue: .none, needsInviteCode: formIssue.needsInviteCode, inviteCodeInvalid: false)
+            refreshLobby()
+        }
+    }
+
+    /// Start Meeting or Join (S10 6 j, 8). `newMeeting` first runs the C17 code check (R49).
+    func startOrJoin() {
+        guard let target = topLobbyTarget(), let status = lobbyStatus, status.routeId == target.routeId else { return }
+        guard status.mode == .editing || status.mode == .failed, !isStarting else { return }
+        guard !blockedByUpdate() else { return }
+        guard primaryReason(for: target) == .none else { return }
+        if target.intent == .newMeeting && lobbyHooks?.fetchPresence != nil {
+            isStarting = true
+            let routeId = target.routeId
+            collisionTask = Task { @MainActor [weak self] in
+                await self?.runCollisionCheck(routeId: routeId)
+            }
+            refreshLobby()
+            return
+        }
+        submitJoin(target)
+    }
+
+    /// The inline failed block's Try Again (S10 0.4 initial `joinFailed`): the same join again.
+    func retryJoin() {
+        startOrJoin()
+    }
+
+    /// `LobbyMediaKind` raw value (S10 7): the system prompt or the Android queue.
+    func requestPermission(_ kind: String) {
+        lobbyHooks?.requestPermission?(kind)
+    }
+
+    func openSystemSettings() {
+        lobbyHooks?.openSystemSettings?()
+    }
+
+    /// RECONCILE R31: the S60 Effects content over the lobby (hidden until `EffectsAvailability == .panel`).
+    func openEffects() {
+        guard lobbyMedia?.showsEffects == true else { return }
+        lobbyHooks?.openEffects?()
+    }
+
+    /// S10 0.8 C2: an intent stored for the routing owner to apply once at join; never `setAudioOutput`.
+    func selectAudioOutput(kind: String) {
+        guard lobbyStatus != nil else { return }
+        chosenOutputKind = kind
+        lobbyHooks?.setPrejoinAudioRouteIntent?(kind, chosenInputId)
+        refreshAudioSnapshot()
+    }
+
+    /// S10 0.8 C2 for the iOS Microphone row; never `setAudioInput`.
+    func selectAudioInput(id: String) {
+        guard lobbyStatus != nil else { return }
+        chosenInputId = id
+        lobbyHooks?.setPrejoinAudioRouteIntent?(chosenOutputKind, id)
+        refreshAudioSnapshot()
+    }
+
+    /// iOS: the system route picker closed. The new system route is read and recorded as the prejoin intent (S10 6 c).
+    func routePickerDidDismiss() {
+        let before = device.currentOutputId
+        lobbyHooks?.refreshDevices?()
+        guard device.currentOutputId != before else { return }
+        for option in device.outputs where option.id == device.currentOutputId {
+            selectAudioOutput(kind: option.kind.rawValue)
+        }
+    }
+
+    // MARK: - Lobby device inputs (WP3 services; equality-guarded)
+
+    func applyPreview(state: PreviewState, sessionId: Int, isFrontCamera: Bool, interruption: PreviewInterruption) {
+        let next = device.withPreview(state: state, sessionId: sessionId, isFrontCamera: isFrontCamera,
+                                      interruption: interruption)
+        guard next != device else { return }
+        device = next
+        refreshMediaSnapshot()
+    }
+
+    func applyPermissions(microphone: MediaPermissionState, camera: MediaPermissionState,
+                          canAskAgainMicrophone: Bool, canAskAgainCamera: Bool) {
+        let next = device.withPermissions(microphone: microphone, camera: camera,
+                                          canAskAgainMicrophone: canAskAgainMicrophone,
+                                          canAskAgainCamera: canAskAgainCamera)
+        guard next != device else { return }
+        device = next
+        refreshMediaSnapshot()
+        updatePreviewDemand()
+    }
+
+    func applyAudioRoutes(outputs: [AudioRouteOption], currentOutputId: String, inputOptions: [AudioRouteOption],
+                          currentInputId: String) {
+        let next = device.withRoutes(outputs: outputs, currentOutputId: currentOutputId, inputs: inputOptions,
+                                     currentInputId: currentInputId)
+        guard next != device else { return }
+        device = next
+        refreshAudioSnapshot()
+    }
+
+    /// S60 `EffectsAvailability` (R31); nothing publishes `.panel` yet.
+    func applyEffects(available: Bool, active: Bool) {
+        let next = device.withEffects(available: available, active: active)
+        guard next != device else { return }
+        device = next
+        refreshMediaSnapshot()
+    }
+
+    /// A permission request answered. A refusal returns the intent it was asked for to off (fail closed), with no
+    /// second gesture (S10 7 c).
+    func permissionRequestFinished(kind: String, granted: Bool) {
+        guard !granted, lobbyStatus != nil else { return }
+        if kind == LobbyMediaKind.microphone.rawValue && inputs.micIntentOn {
+            lobbyHooks?.setEntryMediaIntent?(false, inputs.cameraIntentOn)
+        } else if kind == LobbyMediaKind.camera.rawValue && inputs.cameraIntentOn {
+            lobbyHooks?.setEntryMediaIntent?(inputs.micIntentOn, false)
+        }
+    }
+
+    /// Whether a toggle may turn on now. Undetermined (or Android's ask-again) requests the permission and lets the
+    /// intent show while the prompt is up; denied, restricted or no hardware keep it off.
+    private func mayTurnOn(_ kind: LobbyMediaKind) -> Bool {
+        let permission = kind == .camera ? device.cameraPermission : device.micPermission
+        let canAskAgain = kind == .camera ? device.canAskAgainCamera : device.canAskAgainMicrophone
+        switch permission {
+        case .granted:
+            return true
+        case .notDetermined:
+            lobbyHooks?.requestPermission?(kind.rawValue)
+            return true
+        case .denied:
+            guard canAskAgain, lobbyHooks?.requestPermission != nil else { return false }
+            lobbyHooks?.requestPermission?(kind.rawValue)
+            return true
+        case .restricted, .unavailable:
+            return false
+        }
     }
 
     // MARK: - Outcome
@@ -356,7 +633,7 @@ final class PremeetingPresenter {
             publishRoot(PremeetingRootDecision.home)
         }
         setPathValue([])
-        refreshLobbyStatus()
+        refreshLobby()
         onCommand?(.dismissOutcome)
     }
 
@@ -411,7 +688,7 @@ final class PremeetingPresenter {
         case .replaceLobby:
             guard !blockedByUpdate() else { return }
             setPathValue([makeTarget(from: parsed, intent: .join).route])
-            refreshLobbyStatus()
+            refreshLobby()
         case .prompt:
             let current = busy
                 ? EntryPolicies.roomLabel(inputs.roomLabel.isEmpty ? inputs.currentRoomId : inputs.roomLabel)
@@ -447,7 +724,7 @@ final class PremeetingPresenter {
         } else {
             awaitingHomeTarget = nil
             setPathValue([makeTarget(from: target, intent: .join).route])
-            refreshLobbyStatus()
+            refreshLobby()
         }
     }
 
@@ -494,7 +771,7 @@ final class PremeetingPresenter {
             targets.append(target)
         }
         setPathValue([target.route])
-        refreshLobbyStatus()
+        refreshLobby()
     }
 
     private func makeTarget(from parsed: NativeJoinLinkTarget, intent: LobbyIntent) -> PremeetingRouteTarget {
@@ -712,19 +989,34 @@ final class PremeetingPresenter {
                                 serverDetail: next.outcomeServerText))
     }
 
-    private func refreshLobbyStatus() {
+    // MARK: - Private: the lobby (ENT-3, S10 6)
+
+    /// Rebuilds the six lobby snapshots for the lobby on top (each published only when it changed), then the presence
+    /// poll and the preview demand follow. No lobby on top clears all six and stops both.
+    private func refreshLobby() {
         guard let target = topLobbyTarget() else {
-            publishLobbyStatus(nil)
+            clearLobby()
             return
         }
+        if target.routeId != lobbyRouteId {
+            beginLobby(target)
+        }
+        updateFormIssue()
         let mode = root.lobbyMode ?? LobbyMode.editing
         var issue = LobbyIssue.none
+        var issueServerText = ""
         if inputs.updateRequired {
             issue = .updateRequired
         } else if mode == .failed {
             issue = inputs.outcomeServerText.isEmpty ? .failedUnknown : .failedServerText
+            issueServerText = inputs.outcomeServerText
         } else if inputs.isNetworkOffline && mode == .editing {
             issue = .offline
+        } else if mode == .editing && formIssue.issue != .none {
+            issue = formIssue.issue
+            if issue == .failedServerText {
+                issueServerText = MeetingErrorClassifier.cleanServerText(inputs.noticeText)
+            }
         }
         var waiting = WaitingKind.standard
         if root.showsReconnecting {
@@ -732,18 +1024,278 @@ final class PremeetingPresenter {
         } else if inputs.isNetworkOffline && mode == .waiting {
             waiting = .offline
         }
+        let reason = primaryReason(for: target)
         publishLobbyStatus(LobbyStatusSnapshot(
             routeId: target.routeId,
             intent: target.intent,
             mode: mode,
             issue: issue,
-            issueServerText: mode == .failed ? inputs.outcomeServerText : "",
-            // The stand-in lobby has no Start or Join until ENT-3 brings the join coordinator.
-            isPrimaryEnabled: false,
-            primaryReason: "",
+            issueServerText: issueServerText,
+            isPrimaryEnabled: root.root == .premeeting
+                && LobbyPrimaryPolicy.isEnabled(mode: mode, reason: reason, isStarting: isStarting),
+            primaryReason: LobbyPrimaryPolicy.snapshotValue(reason),
             showsSlowNotice: false,
-            waitingKind: waiting
+            waitingKind: waiting,
+            isPrimaryPending: isStarting
         ))
+        refreshMediaSnapshot()
+        refreshPresenceSnapshot()
+        setLobbyIdentity(LobbySnapshotPolicy.identity(
+            routeId: target.routeId,
+            isSignedIn: inputs.isSignedIn,
+            accountName: inputs.accountName,
+            accountSeed: inputs.accountSeed,
+            guestName: guestNameDraft,
+            formIssue: formIssue
+        ))
+        setLobbyLink(LobbySnapshotPolicy.link(routeId: target.routeId, intent: target.intent, roomId: target.roomId,
+                                              title: target.title, clientId: target.clientId))
+        refreshAudioSnapshot()
+        updatePresencePolling()
+        updatePreviewDemand()
+    }
+
+    private func primaryReason(for target: PremeetingRouteTarget) -> LobbyPrimaryReason {
+        LobbyPrimaryPolicy.reason(intent: target.intent, isSignedIn: inputs.isSignedIn, guestName: guestNameDraft,
+                                  isOffline: inputs.isNetworkOffline, updateRequired: inputs.updateRequired)
+    }
+
+    /// Another lobby opened: the drafts, the form issue, the route choice and presence start fresh. The guest name
+    /// seeds from the stored guest record (AppState, pushed as the identity's name). A form error already in the
+    /// session belongs to an earlier lobby and is never shown here.
+    private func beginLobby(_ target: PremeetingRouteTarget) {
+        cancelLobbyTasks()
+        lobbyRouteId = target.routeId
+        guestNameDraft = inputs.isSignedIn ? "" : DisplayNamePolicy.capped(inputs.accountName)
+        inviteCodeDraft = ""
+        formIssue = LobbyFormIssue.none
+        formIssueBaselineKey = inputs.notice == .formError ? sessionNoticeKey(inputs) : ""
+        appliedFormIssueKey = ""
+        chosenOutputKind = ""
+        chosenInputId = ""
+        presenceHasResult = false
+        presenceCount = nil
+        presenceRoomId = ""
+        isStarting = false
+    }
+
+    private func clearLobby() {
+        cancelLobbyTasks()
+        isStarting = false
+        if lobbyRouteId != 0 {
+            lobbyRouteId = 0
+        }
+        visibleLobbyRouteId = 0
+        publishLobbyStatus(nil)
+        setLobbyMedia(nil)
+        setLobbyPresence(nil)
+        setLobbyIdentity(nil)
+        setLobbyLink(nil)
+        setLobbyAudio(nil)
+        updatePreviewDemand()
+    }
+
+    private func cancelLobbyTasks() {
+        stopPresencePolling()
+        collisionTask?.cancel()
+        collisionTask = nil
+    }
+
+    /// S10 6 f form errors from the S1 `formError` notice: classified once per notice, cleared when a new attempt
+    /// starts; once the invite field showed it stays for this lobby.
+    private func updateFormIssue() {
+        if inputs.phase == .entering || inputs.phase == .waiting {
+            if formIssue.issue != .none || formIssue.inviteCodeInvalid {
+                formIssue = LobbyFormIssue(issue: .none, needsInviteCode: formIssue.needsInviteCode, inviteCodeInvalid: false)
+            }
+            return
+        }
+        guard inputs.phase == .home, inputs.notice == .formError else { return }
+        let key = sessionNoticeKey(inputs)
+        guard key != formIssueBaselineKey, key != appliedFormIssueKey else { return }
+        appliedFormIssueKey = key
+        let classified = LobbyIssuePolicy.classify(formError: inputs.noticeText, enteredInviteCode: inviteCodeDraft)
+        formIssue = LobbyFormIssue(issue: classified.issue,
+                                   needsInviteCode: classified.needsInviteCode || formIssue.needsInviteCode,
+                                   inviteCodeInvalid: classified.inviteCodeInvalid)
+    }
+
+    private func refreshMediaSnapshot() {
+        guard lobbyRouteId != 0 else { return }
+        let name = LobbySnapshotPolicy.avatarName(isSignedIn: inputs.isSignedIn, accountName: inputs.accountName,
+                                                  guestName: guestNameDraft)
+        setLobbyMedia(LobbySnapshotPolicy.media(
+            routeId: lobbyRouteId,
+            micIntentOn: inputs.micIntentOn,
+            cameraIntentOn: inputs.cameraIntentOn,
+            device: device,
+            avatarName: name,
+            avatarSeed: inputs.isSignedIn ? inputs.accountSeed : ""
+        ))
+    }
+
+    private func refreshPresenceSnapshot() {
+        guard lobbyRouteId != 0, let target = self.target(forRoute: lobbyRouteId) else { return }
+        let mode = root.lobbyMode ?? LobbyMode.editing
+        let kind = LobbyPresencePolicy.kind(hasResult: presenceHasResult, count: presenceCount, intent: target.intent,
+                                            mode: mode)
+        setLobbyPresence(LobbyPresenceSnapshot(routeId: lobbyRouteId, kind: kind,
+                                               count: kind == .count ? (presenceCount ?? 0) : 0))
+    }
+
+    private func refreshAudioSnapshot() {
+        guard lobbyRouteId != 0 else { return }
+        setLobbyAudio(LobbyAudioPolicy.snapshot(routeId: lobbyRouteId, device: device, chosenOutputKind: chosenOutputKind,
+                                                chosenInputId: chosenInputId))
+    }
+
+    /// The 10 s poll (S10 0.5 task table): only while the lobby is visible, the app is active and the mode is
+    /// `editing`, never for a fresh code or the promotion lobby, and only with a presence hook.
+    private func updatePresencePolling() {
+        guard let target = topLobbyTarget(), lobbyHooks?.fetchPresence != nil else {
+            stopPresencePolling()
+            return
+        }
+        let mode = root.lobbyMode ?? LobbyMode.editing
+        let wanted = root.root == .premeeting && LobbyPresencePolicy.polls(
+            intent: target.intent, mode: mode, isVisible: visibleLobbyRouteId == target.routeId,
+            isAppActive: inputs.isAppActive, roomId: target.roomId)
+        guard wanted else {
+            stopPresencePolling()
+            return
+        }
+        if presenceTask != nil && presenceRoomId == target.roomId {
+            return
+        }
+        stopPresencePolling()
+        presenceRoomId = target.roomId
+        let routeId = target.routeId
+        let roomId = target.roomId
+        presenceTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let presenter = self else { return }
+                await presenter.pollPresenceOnce(routeId: routeId, roomId: roomId)
+                let interval = presenter.presenceIntervalMillis
+                try? await Task.sleep(nanoseconds: UInt64(max(1.0, interval) * 1_000_000.0))
+            }
+        }
+    }
+
+    private func stopPresencePolling() {
+        presenceTask?.cancel()
+        presenceTask = nil
+        presenceRoomId = ""
+    }
+
+    private func pollPresenceOnce(routeId: Int, roomId: String) async {
+        guard let fetch = lobbyHooks?.fetchPresence else { return }
+        presenceFetches += 1
+        let count = await fetch(roomId, presenceClientId(routeId: routeId))
+        guard !Task.isCancelled, lobbyRouteId == routeId else { return }
+        presenceHasResult = true
+        presenceCount = count
+        refreshPresenceSnapshot()
+    }
+
+    /// The tenant a room lives in: the link's client id, else the app's.
+    private func presenceClientId(routeId: Int) -> String {
+        if let clientId = target(forRoute: routeId)?.clientId, !clientId.isEmpty {
+            return clientId
+        }
+        return lobbyHooks?.resolvedClientId?() ?? ""
+    }
+
+    /// S10 6 k: the preview runs while the camera intent is on, the permission is granted and the lobby is visible,
+    /// until the call owns the camera. Stopping on the way into the call is the hand-off's job, not a stop.
+    private func updatePreviewDemand() {
+        guard let hooks = lobbyHooks else { return }
+        var wanted = false
+        if let target = topLobbyTarget(), visibleLobbyRouteId == target.routeId {
+            wanted = LocalPreviewPolicy.isWanted(cameraIntentOn: inputs.cameraIntentOn, permission: device.cameraPermission,
+                                                 isLobbyVisible: true,
+                                                 isCallOwningCamera: root.root == .call || previewHandedOff)
+        }
+        if wanted && !previewRequested {
+            previewRequested = true
+            hooks.startPreview?(device.isFrontCamera ? LocalCameraFacing.front : LocalCameraFacing.back)
+        } else if !wanted && previewRequested {
+            previewRequested = false
+            if root.root != .call && !previewHandedOff {
+                hooks.stopPreview?()
+            }
+        }
+    }
+
+    private func handOffPreview() {
+        previewHandedOff = true
+        previewRequested = false
+        let running = device.previewState == .live || device.previewState == .starting
+            || device.previewState == .interrupted
+        if running {
+            lobbyHooks?.handOffPreview?()
+        }
+    }
+
+    /// C17: check the fresh code, regenerate while it is busy (at most 3 attempts), then join with the last code.
+    private func runCollisionCheck(routeId: Int) async {
+        var attempt = 1
+        while !Task.isCancelled {
+            guard let target = self.target(forRoute: routeId), let fetch = lobbyHooks?.fetchPresence else { break }
+            let count = await fetch(target.roomId, presenceClientId(routeId: routeId))
+            if Task.isCancelled { return }
+            guard LobbyCollisionPolicy.shouldRegenerate(count: count, attempt: attempt) else { break }
+            replaceTargetRoom(routeId: routeId, roomId: generateRoomCode())
+            attempt += 1
+        }
+        if Task.isCancelled { return }
+        collisionTask = nil
+        isStarting = false
+        guard let target = self.target(forRoute: routeId), topLobbyTarget()?.routeId == routeId else {
+            refreshLobby()
+            return
+        }
+        submitJoin(target)
+    }
+
+    /// The silent regeneration (R49): the route value keeps its first code (a NavigationStack or NavDisplay key never
+    /// changes under the lobby); the target, the title and the join use the new one.
+    private func replaceTargetRoom(routeId: Int, roomId: String) {
+        var next: [PremeetingRouteTarget] = []
+        for target in targets {
+            if target.routeId == routeId {
+                next.append(PremeetingRouteTarget(routeId: target.routeId, kind: target.kind, intent: target.intent,
+                                                  roomId: roomId, title: roomId, joinMode: target.joinMode,
+                                                  meetingInviteCode: target.meetingInviteCode,
+                                                  webinarInviteCode: target.webinarInviteCode,
+                                                  clientId: target.clientId,
+                                                  allowRoomCreation: target.allowRoomCreation))
+            } else {
+                next.append(target)
+            }
+        }
+        targets = next
+        refreshLobby()
+    }
+
+    private func submitJoin(_ target: PremeetingRouteTarget) {
+        let request = LobbyJoinCoordinator.makeRequest(
+            target: target,
+            isSignedIn: inputs.isSignedIn,
+            accountName: inputs.accountName,
+            guestName: guestNameDraft,
+            enteredInviteCode: inviteCodeDraft,
+            needsInviteCode: formIssue.needsInviteCode,
+            resolvedClientId: lobbyHooks?.resolvedClientId?() ?? MeetingLinkBuilder.defaultClientId,
+            facing: device.isFrontCamera ? LocalCameraFacing.front : LocalCameraFacing.back
+        )
+        guard let request else {
+            refreshLobby()
+            return
+        }
+        formIssue = LobbyFormIssue(issue: .none, needsInviteCode: formIssue.needsInviteCode, inviteCodeInvalid: false)
+        joinRequests += 1
+        lobbyHooks?.join?(request)
+        refreshLobby()
     }
 
     private func advanceFeedback(_ kind: FeedbackKind) {
@@ -756,8 +1308,13 @@ final class PremeetingPresenter {
 
     private func setPathValue(_ routes: [PremeetingRoute]) {
         guard routes != path else { return }
+        let hadAccount = PremeetingPresenter.containsAccount(path)
         path = routes
         publishCount += 1
+        if hadAccount && !PremeetingPresenter.containsAccount(routes) {
+            // ENT-7 (HD request B4-T3 R3): the Android Account page left the back stack.
+            account.didDismiss()
+        }
         var kept: [PremeetingRouteTarget] = []
         for target in targets {
             var inPath = false
@@ -770,6 +1327,13 @@ final class PremeetingPresenter {
             }
         }
         targets = kept
+    }
+
+    private static func containsAccount(_ routes: [PremeetingRoute]) -> Bool {
+        for route in routes where route.kind == .account {
+            return true
+        }
+        return false
     }
 
     private func publishRoot(_ value: PremeetingRootDecision) {
@@ -787,6 +1351,36 @@ final class PremeetingPresenter {
     private func publishLobbyStatus(_ value: LobbyStatusSnapshot?) {
         guard value != lobbyStatus else { return }
         lobbyStatus = value
+        publishCount += 1
+    }
+
+    private func setLobbyMedia(_ value: LobbyMediaSnapshot?) {
+        guard value != lobbyMedia else { return }
+        lobbyMedia = value
+        publishCount += 1
+    }
+
+    private func setLobbyPresence(_ value: LobbyPresenceSnapshot?) {
+        guard value != lobbyPresence else { return }
+        lobbyPresence = value
+        publishCount += 1
+    }
+
+    private func setLobbyIdentity(_ value: LobbyIdentitySnapshot?) {
+        guard value != lobbyIdentity else { return }
+        lobbyIdentity = value
+        publishCount += 1
+    }
+
+    private func setLobbyLink(_ value: LobbyLinkSnapshot?) {
+        guard value != lobbyLink else { return }
+        lobbyLink = value
+        publishCount += 1
+    }
+
+    private func setLobbyAudio(_ value: LobbyAudioSnapshot?) {
+        guard value != lobbyAudio else { return }
+        lobbyAudio = value
         publishCount += 1
     }
 

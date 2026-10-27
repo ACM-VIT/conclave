@@ -33,10 +33,17 @@ struct StageFixtureView: View {
         ZStack(alignment: .leading) {
             CallRoot(shell: session.shell, stage: session.stage,
                      renderers: StageRendererProvider.probes(ledger: session.renderers, pattern: session.pattern),
-                     forceScreenReader: session.forceScreenReader)
+                     forceScreenReader: session.forceScreenReader, activitySession: session.activity)
             // Readouts and scripts sit beside the stage, never inside its subtree (PS 7.6), so refreshing them never
             // re-evaluates a tile or a renderer.
             StageFixtureControls(session: session)
+        }
+        .task {
+            // S40 0.9 (HD request B4-T1 R2): `CONCLAVE_CHAT_FIXTURE=<state>` layers the chat fixture on this stage
+            // fixture and opens Chat. The driver stays alive through `ChatDiagnostics.driver`.
+            if let chatState = ChatFixtureLaunch.state() {
+                _ = ChatFixtureDriver.installOnStage(state: chatState, shell: session.shell)
+            }
         }
     }
 }
@@ -55,6 +62,11 @@ private struct StageFixtureControls: View {
                 fixtureButton("Speak Hidden", identifier: "stage.fixture.speakHidden") { session.speakHiddenParticipant(); refresh += 1 }
                 fixtureButton("Next Role", identifier: "stage.fixture.rolesNext") { session.nextRolesSweepStep(); refresh += 1 }
                 fixtureButton("Reactions", identifier: "stage.fixture.reactions") { session.replayReactions(); refresh += 1 }
+                fixtureButton("Join Burst", identifier: "stage.fixture.joinBurst") { session.postJoinBurst(); refresh += 1 }
+                fixtureButton("Dismiss Toast", identifier: "stage.fixture.dismissToast") { session.dismissCurrentToast(); refresh += 1 }
+                fixtureButton("Suspend Toasts", identifier: "stage.fixture.suspendToasts") { session.toggleToastSuspension(); refresh += 1 }
+                fixtureButton("Next Caption", identifier: "stage.fixture.nextCaption") { session.nextCaption(); refresh += 1 }
+                fixtureButton("Reconnect", identifier: "stage.fixture.reconnect") { session.toggleReconnecting(); refresh += 1 }
                 fixtureButton("Refresh", identifier: "stage.fixture.refresh") { refresh += 1 }
                 StageFixtureReadouts(session: session, refresh: refresh)
             }
@@ -88,6 +100,9 @@ private struct StageFixtureReadouts: View {
             readout(session.layoutReadout(), identifier: "stage.layout")
             readout(session.countersReadout(), identifier: "stage.counters")
             readout(session.announcementsReadout(), identifier: "stage.announcements")
+            readout(session.noticesReadout(), identifier: "stage.notices")
+            readout(session.captionsReadout(), identifier: "stage.captions.readout")
+            readout(session.activityReadout(), identifier: "game.emits")
             readout(session.panelReadout(), identifier: "panel.current")
             readout(session.chromeReadout(), identifier: "chrome.transient")
             readout(session.recomposeReadout(), identifier: "stage.recompose")

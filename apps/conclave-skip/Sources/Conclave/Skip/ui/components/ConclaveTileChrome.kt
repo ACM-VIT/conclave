@@ -31,6 +31,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,10 +63,18 @@ internal fun ConclaveTileChrome(
     variant: ConclaveTileVariant = ConclaveTileVariant.Grid, spotlight: Boolean = false,
     cornerRadius: Dp = DesignTokens.radiusTile.dp, actions: List<ConclaveTileAction> = emptyList(),
     onClick: (() -> Unit)? = null, onLongPress: (() -> Unit)? = null, haptics: ConclaveGestureHaptics = rememberConclaveHaptics(),
-    selfViewAccessory: @Composable () -> Unit = {}, renderer: @Composable () -> Unit,
+    selfViewAccessory: @Composable () -> Unit = {},
+    /** S20 3 d: the TalkBack long-click action (label "Show actions") that opens the caller's menu. */
+    accessibilityLongPressLabel: String? = null, onAccessibilityLongPress: (() -> Unit)? = null,
+    renderer: @Composable () -> Unit,
 ) {
     val shape = RoundedCornerShape(cornerRadius)
-    val name = if (model.isLocal) conclaveString("ds_you") else model.displayName
+    val name = when {
+        model.isLocal -> conclaveString("ds_you")
+        model.isVoiceAgent -> model.displayName + ", " + conclaveString("ds_tag_ai")
+        model.isHost -> model.displayName + ", " + conclaveString("ds_tag_host")
+        else -> model.displayName
+    }
     val states = conclaveTileStates(model)
     val custom = remember(actions) { actions.map { action -> CustomAccessibilityAction(action.label) { action.onAction(); true } } }
     BoxWithConstraints(modifier.clip(shape).testTag(identifier)) {
@@ -82,12 +91,23 @@ internal fun ConclaveTileChrome(
                 contentDescription = name
                 stateDescription = states
                 if (custom.isNotEmpty()) customActions = custom
+                if (onAccessibilityLongPress != null) {
+                    onLongClick(label = accessibilityLongPressLabel) { onAccessibilityLongPress(); true }
+                }
             },
         ) {
             if (model.isCameraOff) {
                 Box(Modifier.fillMaxSize().background(ext.tile), contentAlignment = Alignment.Center) {
                     val identity = remember(model.avatarSeed) { ConclaveAvatarIdentity.fromSeed(model.avatarSeed) }
-                    ConclaveAvatar(identity, TileChromePolicy.avatarSize(density).dp)
+                    if (model.isVoiceAgent) {
+                        Box(Modifier.size(TileChromePolicy.avatarSize(density).dp).clip(CircleShape).background(ext.labelScrim),
+                            contentAlignment = Alignment.Center) {
+                            Icon(ConclaveIcons.GraphicEqFill0, contentDescription = null,
+                                modifier = Modifier.size((TileChromePolicy.avatarSize(density) * 0.5).dp), tint = MaterialTheme.colorScheme.onSurface)
+                        }
+                    } else {
+                        ConclaveAvatar(identity, TileChromePolicy.avatarSize(density).dp)
+                    }
                 }
             }
             TileOverlays(model, variant, density, selfViewAccessory)
@@ -174,6 +194,10 @@ private fun TileNamePill(model: TileChromeModel, density: TileChromeDensity, mod
             ConclaveText(if (model.isLocal) conclaveString("ds_you") else model.displayName, line = "tile.${model.userId}.name",
                 style = if (density == TileChromeDensity.dense) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (model.isVoiceAgent) {
+                ConclaveText(conclaveString("ds_tag_ai"), line = "tile.${model.userId}.ai",
+                    style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
+            }
         }
     }
 }

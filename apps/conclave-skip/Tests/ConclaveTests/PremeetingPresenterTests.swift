@@ -406,6 +406,24 @@ struct PremeetingPresenterTests {
                 #expect(premeeting.outcome?.variant == .connectionLost)
             case .joinFailed:
                 #expect(premeeting.lobbyStatus?.mode == .failed)
+            // Batch 4 integrator (HD request B4-T2 R5): the ENT-3 lobby fixtures.
+            case .lobby:
+                #expect(premeeting.lobbyMedia?.preview == .blocked)
+                #expect(premeeting.lobbyIdentity?.guestName == PremeetingFixtureScript.lobbyGuestName)
+                #expect(premeeting.lobbyStatus?.isPrimaryEnabled == true)
+            case .lobbyNameMissing:
+                #expect(premeeting.lobbyStatus?.isPrimaryEnabled == false)
+                #expect(premeeting.lobbyStatus?.primaryReason == LobbyPrimaryReason.nameMissingJoin.rawValue)
+            case .lobbyNewMeeting:
+                #expect(premeeting.lobbyStatus?.intent == .newMeeting)
+                #expect(premeeting.lobbyLink?.roomLabel == PremeetingFixtureScript.newMeetingCode)
+                #expect(premeeting.lobbyLink?.canShare == false)
+            // Batch 4 integrator (HD request B4-T3 R10): the ENT-7 account fixtures.
+            case .accountSignedOut, .accountSignedIn, .accountSignInCancel, .accountSignInFailure, .accountExpired,
+                 .accountDeleteFailure, .accountGoogleOnly, .accountAppleOnly, .accountProvidersFailed:
+                // ENT-7: Home stays the root; T/ENT7AccountTests.swift checks the account side.
+                #expect(premeeting.root == PremeetingRootDecision.home, "\(state)")
+                #expect(AccountFixtureScript.state(named: state.rawValue) != nil, "\(state)")
             }
         }
     }

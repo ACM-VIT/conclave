@@ -458,6 +458,15 @@ final class MeetingViewModel {
             oldValue.onStageReactionsChanged = nil
             oldValue.onStageGameChanged = nil
             bindStageInputs()
+            oldValue.onControlsInputChanged = nil
+            bindControlsInputs()
+            oldValue.onPeopleInputChanged = nil
+            bindPeopleInputs()
+            oldValue.onActivityInputChanged = nil
+            oldValue.onActivityGameChanged = nil
+            bindActivityInputs()
+            oldValue.onChatInputChanged = nil
+            bindChatInputs()
         }
     }
 
@@ -469,6 +478,19 @@ final class MeetingViewModel {
     /// S20 0.5: the session-owned stage presenter, created with the shell and reset with each call session. Fed only
     /// through `requestStageRefresh()` and the hot hooks (SC1).
     let stage: StagePresenter
+    /// S30 0.5 (CTL-1): the session-owned controls presenter, created with the shell and the stage and fed only through
+    /// `requestControlsRefresh()` (CC1). The native call root's bar reads it through the environment / LocalCallControls.
+    let controls: CallControlsPresenter
+    /// S50 0.5: the session-owned People presenter, created with the shell and the stage and reset with each call
+    /// session (it resets itself when `PeopleInputs.callSession` changes). Fed only through `requestPeopleRefresh()`
+    /// (PH1); its speaking leaves read `stage.speaking`.
+    let people: PeoplePresenter
+    /// S60 0.5 (ACT-1, ACT-2): the session-owned Activities launcher and game shell, created with the shell and the
+    /// stage. Fed only through `requestActivityRefresh()` and `refreshActivityGame()`; the native call root reads it.
+    let activitySession: ActivitySession
+    /// S40 0.5: the session-owned chat presenter, held by the shell (created and reset with it). Fed only through
+    /// `requestChatRefresh(_:)`; its commands land in `performChatCommand(_:)`.
+    var chat: ChatPresenter { shell.chat }
     /// S70 0.5 system call presence: the one snapshot CallKit, the Android call notification and the Debug readout
     /// read, and the one entry for system commands.
     let callPresence = CallPresence()
@@ -480,9 +502,11 @@ final class MeetingViewModel {
     private var premeetingAccountName = ""
     private var premeetingAccountSeed = ""
     private var premeetingIsAppActive = true
+    /// ENT-7 (HD request B4-T3 R8): a provider sign-in is running in the Account screen (S10 invariant 9).
+    private var premeetingIsSigningIn = false
     /// S1C ID: bumps for a new meeting intent only (`MeetingCallSessionPolicy`), never for a recovery or admission.
     private(set) var callSessionSerial = 0 {
-        didSet { state.resetParticipantJoinSerials(); requestShellRefresh(); requestStageRefresh() }
+        didSet { state.resetParticipantJoinSerials(); requestShellRefresh(); requestStageRefresh(); requestPeopleRefresh() }
     }
     private var terminalOutcomeSerial = 0
     /// S70 5 c (O2): the camera is paused by a CallKit hold; never written to `isCameraOff` or the camera intent.
@@ -494,8 +518,29 @@ final class MeetingViewModel {
     /// Test seam and diagnostic: how many times stage inputs were built and applied.
     private(set) var stageRefreshCount = 0
     private var lastStageShellPhase: MeetingPhaseKind = .home
+    /// STG-5 (S20 SC5): the last host role the stage saw, for the becameHost and lostHost events (SC18).
+    private var stageLastIsAdmin = false
+    /// TRN-1 (SC13, C6-11): the transcript stream is open for this call (non-attendees only).
+    private var transcriptStreamOpen = false
+    private var transcriptLastPhase: MeetingPhaseKind = .home
+    /// S30 CC1: while above zero, controls hooks do not refresh; the batch end refreshes once.
+    private var controlsRefreshBatchDepth = 0
+    /// Test seam and diagnostic: how many times controls inputs were built and applied.
+    private(set) var controlsRefreshCount = 0
+    /// S50 PH1: while above zero, People hooks do not refresh; the batch end refreshes once.
+    private var peopleRefreshBatchDepth = 0
+    /// Test seam and diagnostic: how many times People inputs were built and applied.
+    private(set) var peopleRefreshCount = 0
+    /// PH1: the S1 phase and offline flag People last saw; connection fields reach People through the S1 publish.
+    private var lastPeopleConnectionKey = ""
     /// SC1 E4: the last game presence the stage saw.
     private var stageGamePresence = false
+    /// SC1 E4 (STG-9): the last game name the stage saw (the chip and the announcements name the game).
+    private var stageGameName = ""
+    /// S60 7 (ACT-1): the room size the launcher last saw, for the player range check.
+    private var activityPlayersHere = 0
+    /// S60 7 (ACT-1): the catalog has loaded at least once this call.
+    private var gameCatalogLoaded = false
     /// R70-11: set by the redirect path before the new call session starts, so the system call keeps its presence
     /// session (and CallKit UUID); cleared once the redirected join is admitted, ends or fails.
     private var redirectContinuationPending = false {
@@ -523,7 +568,9 @@ final class MeetingViewModel {
     private var didAttemptPersistedMeetingResume = false
     var shouldRejoinAfterReconnect = false
     var isIntentionalLeave = false
-    var isRejoinInFlight = false
+    var isRejoinInFlight = false {
+        didSet { if oldValue != isRejoinInFlight { requestStageRefresh() } }
+    }
     private var currentJoinInfo: SfuJoinInfo?
     private var currentRoomAliases: Set<String> = []
     private var activeJoinAttemptId: UUID? = nil {
@@ -535,7 +582,9 @@ final class MeetingViewModel {
     private var meetingLifecycleGeneration = 0 {
         didSet { requestShellRefresh() }
     }
-    private var reconnectAttempts = 0
+    private var reconnectAttempts = 0 {
+        didSet { requestStageRefresh() }
+    }
     private var reconnectRetryTask: Task<Void, Never>?
     private var foregroundResumePresentationTask: Task<Void, Never>?
     private var pendingIceRestartTasks: [String: Task<Void, Never>] = [:]
@@ -552,7 +601,7 @@ final class MeetingViewModel {
     }
     private var pendingProducerContexts: [String: SocketEventContext] = [:]
     private var producerInfosById: [String: ProducerInfo] = [:] {
-        didSet { requestStageRefresh() }
+        didSet { requestStageRefresh(); requestPeopleRefresh() }
     }
     private var consumingProducerIds: Set<String> = []
     private var deferredProducerConsumes: [String: PendingProducerRetryItem] = [:]
@@ -564,6 +613,23 @@ final class MeetingViewModel {
     // ack). Lets receiveChatMessage swap the optimistic row in place instead
     // of appending a transient duplicate.
     private var pendingOptimisticChatSends: [(id: String, signature: String)] = []
+    /// S40 CH11: optimistic ids `/clear` dropped; an acknowledgement that lands after the clear adds no row.
+    private var clearedOptimisticChatIds: Set<String> = []
+    /// S40 CH12: message ids from the join history replay (no unread, no announcement).
+    private var chatHistoryMessageIds: Set<String> = []
+    /// S40 CH12: assistant answers already counted as unread when their content first arrived.
+    private var countedAssistantAnswerIds: Set<String> = []
+    /// S40 CH13: while above zero, chat hooks do not refresh; the batch end refreshes once with the merged hint.
+    private var chatRefreshBatchDepth = 0
+    private var pendingChatRefreshChange: ChatInputChange? = nil
+    /// The derived chat roster last applied, so a mute, camera or hand update (participants didSet) refreshes no chat.
+    private var lastChatRoster: [ChatRosterEntry] = []
+    /// Test seam and diagnostic: how many times chat inputs were built and applied.
+    private(set) var chatRefreshCount = 0
+    /// S30 CC5: whether the native Chat panel is current; `isChatOpen` follows it on the native route.
+    private var nativeChatPanelIsCurrent = false
+    /// CH2: the wire text of each retained own send (with its private or voice prefix), for Try Again.
+    private var retainedChatWireTexts: [String: String] = [:]
     // Connection-recovery watchdog (see ConnectionRecoveryWatchdogPolicy):
     // observable timestamps + a periodic tick that un-strands a recovery whose
     // fire-and-forget tasks died holding the in-flight guards.
@@ -1061,13 +1127,24 @@ final class MeetingViewModel {
 
     init() {
         let shellPresenter = MeetingShellPresenter()
+        let stagePresenter = StagePresenter(shell: shellPresenter)
         shell = shellPresenter
-        stage = StagePresenter(shell: shellPresenter)
+        stage = stagePresenter
+        controls = CallControlsPresenter(shell: shellPresenter, stage: stagePresenter)
+        people = PeoplePresenter(shell: shellPresenter, stage: stagePresenter)
+        activitySession = ActivitySession(shell: shellPresenter, stage: stagePresenter)
         MeetingViewPreferences.apply(to: state)
         #if SKIP
         webRTCClient.prewarmMediaStack()
         #endif
         transcriptService = TranscriptService(state: transcriptState, socketManager: socketManager)
+        // TRN-1: the stage reads live notes and captions through its own refresh path and hot hook (S20 SC13).
+        transcriptState.onStageInputChanged = { [weak self] in
+            self?.requestStageRefresh()
+        }
+        transcriptState.onCaptionChanged = { [weak self] line in
+            self?.stage.captionChanged(line)
+        }
         setupNetworkBindings()
         setupSocketBindings()
         setupWebRTCBindings()
@@ -1086,18 +1163,47 @@ final class MeetingViewModel {
         stage.onCommand = { [weak self] command in
             self?.performStageCommand(command)
         }
+        stage.onNoticeCommand = { [weak self] command in
+            self?.performNoticeCommand(command)
+        }
         stage.onVisibilityChanged = { [weak self] report in
             guard let self else { return }
             self.setStageObscuredByOverlay(report.coverage == StageVisibilityPolicy.coverageFull)
             self.scheduleRemoteConsumerBandwidthPolicyUpdate()
         }
-        // CTL-1 (S30 CC18) adds `requestControlsRefresh()` to this same closure.
+        // S30 CC18: the stage folds a panel into its blocker; the controls derive Engaged on Chat, Participants and Q&A.
         shell.panels.onSnapshotChanged = { [weak self] in
             guard let self else { return }
             self.stage.panelSnapshotChanged()
+            // S50 1 c: People closes its presentation from the coordinator's dismissal, never a view's disappearance.
+            self.people.panelSnapshotChanged()
             self.requestStageRefresh()
+            self.requestControlsRefresh()
+            // S30 CC5: `isChatOpen` follows the native Chat panel (unread to zero and previews cleared on open).
+            self.syncChatPanelOpenState()
         }
         bindStageInputs()
+        bindPeopleInputs()
+        // S30 CC1 (CTL-1): the controls' own hook and commands. Blocked-tap toasts need no wiring: the presenter posts
+        // them to the stage itself (CC7, `StagePresenter.postLocal`).
+        controls.onCommand = { [weak self] command in
+            self?.performControlsCommand(command)
+        }
+        bindControlsInputs()
+        // S60 7, 8 (ACT-1, ACT-2): the activity presenters' commands and their own refresh path.
+        activitySession.bindStage()
+        activitySession.activities.onCommand = { [weak self] command in
+            self?.performActivitiesCommand(command)
+        }
+        activitySession.games.onCommand = { [weak self] command in
+            self?.performGameStageCommand(command)
+        }
+        bindActivityInputs()
+        // S40 0.5, CH13: the chat presenter's commands and its own refresh hook.
+        chat.onCommand = { [weak self] request in
+            self?.performChatCommand(request)
+        }
+        bindChatInputs()
     }
 
     // MARK: - Transcription
@@ -1459,6 +1565,11 @@ final class MeetingViewModel {
                     message: message,
                     level: AdminNoticeLevel.from(notification.level)
                 )
+                // STG-5 (S20 SC18): the host notice lane keeps its own copy, so masking pauses its 60 s clock.
+                let sender = self.state.canonicalStageUserId(notification.senderUserId) ?? ""
+                self.stage.post(StageEvent.make(kind: StageEventKind.hostNotice, userId: sender,
+                                                name: sender.isEmpty ? "" : self.displayNameForUser(sender),
+                                                serverText: message, detail: AdminNoticeLevel.from(notification.level).rawValue))
             }
         }
 
@@ -1467,7 +1578,12 @@ final class MeetingViewModel {
             let eventContext = self.currentSocketEventContext()
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
+                let wasLocalHandRaised = self.state.isHandRaised
                 self.clearRaisedHands()
+                if wasLocalHandRaised {
+                    // STG-5 (S20 SC18): a host lowering your hand posts once.
+                    self.stage.post(StageEvent.make(kind: StageEventKind.hostLoweredHand))
+                }
             }
         }
 
@@ -1618,15 +1734,46 @@ final class MeetingViewModel {
             let eventContext = self.currentSocketEventContext()
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: message.roomId) else { return }
+                let completesAssistantAnswer = self.isAssistantAnswerCompletion(message)
                 let appendedMessage = self.receiveChatMessage(message, shouldSpeakTts: true)
-                guard let appendedMessage else { return }
+                // S40 CH12: an assistant answer counts once, when its content first arrives (an empty start counts
+                // nothing); a hidden sender (CH21) counts nothing and posts no preview.
+                guard let appendedMessage else {
+                    if completesAssistantAnswer && !self.state.isChatOpen {
+                        self.countedAssistantAnswerIds.insert(message.id)
+                        self.state.unreadChatCount += 1
+                    }
+                    return
+                }
                 let isFromCurrentUser = self.state.isLocalIdentityUserId(appendedMessage.userId)
-                if !isFromCurrentUser && !self.state.isChatOpen {
+                let isHiddenSender = self.chat.isSenderHidden(appendedMessage.userId)
+                let isEmptyAssistantStart = appendedMessage.userId == ConclaveAssistantChatIdentity.userId
+                    && appendedMessage.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                if appendedMessage.userId == ConclaveAssistantChatIdentity.userId && !isEmptyAssistantStart {
+                    self.countedAssistantAnswerIds.insert(appendedMessage.id)
+                }
+                if !isFromCurrentUser && !isHiddenSender && !isEmptyAssistantStart && !self.state.isChatOpen {
                     self.state.unreadChatCount += 1
                 }
-                if !isFromCurrentUser {
+                if !isFromCurrentUser && !isHiddenSender && !isEmptyAssistantStart {
                     self.showChatOverlayMessage(appendedMessage)
+                    // STG-5 (HD request B4-T4 R2.8, S40 R40-4): the native stage's chat preview. The notice center
+                    // coalesces senders and drops previews while Chat is the current panel (MeetingNoticePolicy).
+                    let senderId = self.state.canonicalStageUserId(appendedMessage.userId) ?? ""
+                    self.stage.post(StageEvent.make(kind: StageEventKind.chatPreview, userId: senderId,
+                                                    name: appendedMessage.displayName, messageId: appendedMessage.id,
+                                                    detail: appendedMessage.content, isPrivate: appendedMessage.isDirect))
                 }
+            }
+        }
+
+        socketManager.onChatReactionChanged = { [weak self] notification in
+            guard let self = self else { return }
+            let eventContext = self.currentSocketEventContext()
+            Task { @MainActor in
+                guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
+                // S40 CH3: the server set replaces the message's reactions (never merged).
+                self.applyChatReactions(messageId: notification.messageId, reactions: notification.reactions)
             }
         }
 
@@ -2335,6 +2482,13 @@ final class MeetingViewModel {
     /// A stranded join attempt leaves `isRejoinInFlight`/retry guards set,
     /// blocking every recovery entry point. Break the guards, then run the
     /// normal fresh-token rejoin.
+    /// S20 SC16: the reconnecting banner's Retry Now. A double tap during an attempt starts one rejoin; otherwise it
+    /// skips the backoff and rejoins at once. The watchdog count semantics are unchanged.
+    func retryRecoveryNow() {
+        guard state.isRecoveringConnection, !isRejoinInFlight else { return }
+        breakStalledRecoveryAndRejoin()
+    }
+
     private func breakStalledRecoveryAndRejoin() {
         reconnectRetryTask?.cancel()
         reconnectRetryTask = nil
@@ -2669,6 +2823,7 @@ final class MeetingViewModel {
             redirectContinuationPending = false
             state.connectionState = ConnectionState.joined
             persistMeetingResumeSnapshot()
+            reconcilePendingEntryMediaIntent()
             if isRecoveryJoin, let displayNameSnapshot = response.displayNameSnapshot {
                 // The first application happens while `.joining`, where roster
                 // pruning is intentionally disabled. Re-apply the authoritative
@@ -2726,6 +2881,10 @@ final class MeetingViewModel {
     private func clearRoomConversationStateForFreshJoin() {
         state.chatMessages.removeAll()
         pendingOptimisticChatSends.removeAll()
+        chatHistoryMessageIds.removeAll()
+        countedAssistantAnswerIds.removeAll()
+        clearedOptimisticChatIds.removeAll()
+        retainedChatWireTexts.removeAll()
         state.systemMessages.removeAll()
         clearChatOverlayMessages()
         state.unreadChatCount = 0
@@ -3002,6 +3161,10 @@ final class MeetingViewModel {
         guard !shouldIgnoreDepartedParticipant(userId) else { return }
         guard ensureParticipantPresent(userId) else { return }
         state.participants[participantStateId(for: userId)]?.isHandRaised = notification.raised
+        // STG-5 (S20 SC18): remote hands only (the local branch returned above).
+        if notification.raised, let id = state.canonicalStageUserId(userId) {
+            stage.post(StageEvent.make(kind: StageEventKind.handRaised, userId: id, name: displayNameForUser(id)))
+        }
     }
 
     private func applyParticipantMutedNotification(
@@ -3449,6 +3612,10 @@ final class MeetingViewModel {
         markRemoteParticipantPresent(userId)
         clearParticipantConnectionStatus(userId)
         applyDisplayName(notification.displayName, for: userId)
+        // STG-5 (S20 SC18): suppression (initial snapshot, recovery grace, Q4, attendees) lives in the notice policy.
+        if let id = state.canonicalStageUserId(userId) {
+            stage.post(StageEvent.make(kind: StageEventKind.userJoined, userId: id, name: displayNameForUser(id)))
+        }
     }
 
     private func applyUserLeftNotification(
@@ -3460,6 +3627,10 @@ final class MeetingViewModel {
               state.isRemoteParticipantUserId(userId) else { return }
         let leavingAliasIds = participantLeaveAliasIds(for: userId)
         clearParticipantConnectionStatus(userId)
+        // STG-5 (S20 SC18): posted while the name is still known.
+        if let id = state.canonicalStageUserId(userId) {
+            stage.post(StageEvent.make(kind: StageEventKind.userLeft, userId: id, name: displayNameForUser(id)))
+        }
         markRemoteParticipantDeparted(userId)
         let leaveToken = UUID()
         setParticipantLeaveToken(leaveToken, forAliasIds: leavingAliasIds)
@@ -4391,6 +4562,9 @@ final class MeetingViewModel {
                     nextActiveScreenShareUserId = state.userId
                 }
             } else if isRemoteParticipant {
+                // S50 PH12 (INM D14): webinar attendees never enter `participants` (People rows, counts and tiles); one
+                // already there is removed by the sweep below because it is not represented in this snapshot.
+                if isWebinarAttendee { continue }
                 remoteUserIds.insert(userId)
                 for key in stableKeys {
                     remoteUserKeys.insert(key)
@@ -4839,6 +5013,7 @@ final class MeetingViewModel {
             state.gamePlayerView = nil
         }
         state.gameVote = snapshot.vote
+        state.gameSelfId = snapshot.selfId ?? state.gameSelfId
         state.isGameActionInFlight = false
         state.gameErrorMessage = nil
     }
@@ -4888,6 +5063,7 @@ final class MeetingViewModel {
         state.gamePublicState = nil
         state.gamePlayerView = nil
         state.gameVote = nil
+        state.gameSelfId = nil
         state.isGameActionInFlight = false
         state.gameErrorMessage = nil
         gameEndArmTask?.cancel()
@@ -5544,6 +5720,23 @@ final class MeetingViewModel {
 
         if didCloseMedia || !notification.closedProducers.isEmpty {
             state.errorMessage = adminMediaReason(notification.reason)
+            // STG-5 (S20 SC18): one stage event per kind of closed media (the legacy banner keeps `errorMessage`). The
+            // bulk event needs no post of its own: the SFU sends this per-person event to everyone it closed.
+            var postedKinds: [String] = []
+            for producer in notification.closedProducers {
+                var kind = ""
+                if producer.type == ProducerType.screen.rawValue {
+                    kind = StageEventKind.hostStoppedShare
+                } else if producer.kind == "audio" {
+                    kind = StageEventKind.hostMutedYou
+                } else if producer.kind == "video" {
+                    kind = StageEventKind.hostCameraOff
+                }
+                if !kind.isEmpty && !postedKinds.contains(kind) {
+                    postedKinds.append(kind)
+                    stage.post(StageEvent.make(kind: kind))
+                }
+            }
         }
     }
 
@@ -5869,6 +6062,7 @@ final class MeetingViewModel {
             clearRoomConversationStateForFreshJoin()
         }
         self.state.roomId = roomId
+        self.state.meetingClientId = clientId ?? SfuJoinService.resolveClientId()
         self.currentRoomAliases = roomAliasSet(requestedRoomId: roomId, resolvedRoomId: nil)
         self.state.displayName = displayName
         self.state.isAdmin = isHost
@@ -7078,19 +7272,43 @@ final class MeetingViewModel {
             lastStageShellPhase = shell.session.phase
             requestStageRefresh()
         }
+        // STG-5 (S20 SC5): the on hold and audio paused rows read the presence the shell just published (after the
+        // stage block, so the batch 3 shell, presence, premeeting order pin holds).
+        if stageRefreshBatchDepth == 0 {
+            stage.applyNotices(makeStageNoticeInputs())
+        }
+        // S50 PH1: People's blocked reason follows the S1 phase and the offline flag; refresh only when either changes.
+        let peopleKey = shell.session.phase.rawValue + (state.isNetworkOffline ? ":offline" : "")
+        if peopleKey != lastPeopleConnectionKey {
+            lastPeopleConnectionKey = peopleKey
+            requestPeopleRefresh()
+        }
+        // S30 CC1: every S1-hooked field reaches the controls once, after S1 published (equality guarded there).
+        requestControlsRefresh()
+        // TRN-1 (SC13, C6-11): the transcript stream follows the published phase and the attendee role.
+        syncTranscriptStream()
     }
 
     private func beginShellRefreshBatch() {
         shellRefreshBatchDepth += 1
         stageRefreshBatchDepth += 1
+        controlsRefreshBatchDepth += 1
+        peopleRefreshBatchDepth += 1
+        chatRefreshBatchDepth += 1
     }
 
     private func endShellRefreshBatch() {
         shellRefreshBatchDepth = max(0, shellRefreshBatchDepth - 1)
         stageRefreshBatchDepth = max(0, stageRefreshBatchDepth - 1)
+        controlsRefreshBatchDepth = max(0, controlsRefreshBatchDepth - 1)
+        peopleRefreshBatchDepth = max(0, peopleRefreshBatchDepth - 1)
+        chatRefreshBatchDepth = max(0, chatRefreshBatchDepth - 1)
         guard shellRefreshBatchDepth == 0 else { return }
         requestShellRefresh()
         requestStageRefresh()
+        requestControlsRefresh()
+        requestPeopleRefresh()
+        flushChatRefresh()
     }
 
     /// S1C 3.2 inputs table. Never errorMessage, the active speaker, connection quality, audio levels or chat arrays.
@@ -7120,7 +7338,8 @@ final class MeetingViewModel {
             isScreenShareSupported: screenShareSupported(),
             unreadChatCount: state.unreadChatCount,
             isChatOpen: state.isChatOpen,
-            pendingUsersCount: state.pendingUsersCount,
+            // S50 PH11: the waiting badges are host-only (INM D5 stale badge).
+            pendingUsersCount: state.isAdmin ? state.pendingUsersCount : 0,
             isReactionsDisabled: state.isReactionsDisabled,
             terminalOutcome: state.terminalOutcome,
             micToggleInFlight: isMuteToggleInFlight,
@@ -7155,6 +7374,7 @@ final class MeetingViewModel {
         }
         state.onStageGameChanged = { [weak self] in
             self?.refreshStageGamePresence()
+            self?.refreshActivityGame()
         }
         requestStageRefresh()
     }
@@ -7164,13 +7384,24 @@ final class MeetingViewModel {
         guard stageRefreshBatchDepth == 0 else { return }
         stageRefreshCount += 1
         stage.apply(makeStageInputs())
+        stage.applyNotices(makeStageNoticeInputs())
+        // SC18: a role change after the presence snapshot posts becameHost or lostHost once.
+        if stageLastIsAdmin != state.isAdmin {
+            if state.hasInitialPresenceSnapshot && presenceJoinedAtMillis > 0 {
+                stage.post(StageEvent.make(kind: state.isAdmin ? StageEventKind.becameHost : StageEventKind.lostHost))
+            }
+            stageLastIsAdmin = state.isAdmin
+        }
+        refreshActivityPlayersHere()
     }
 
-    /// SC1 E4: game pushes refresh the stage only when presence changes.
+    /// SC1 E4: game pushes refresh the stage only when presence or the game name changes.
     private func refreshStageGamePresence() {
         let present = state.gamePublicState != nil
-        guard present != stageGamePresence else { return }
+        let name = state.gamePublicState?.name ?? ""
+        guard present != stageGamePresence || name != stageGameName else { return }
         stageGamePresence = present
+        stageGameName = name
         requestStageRefresh()
     }
 
@@ -7201,6 +7432,9 @@ final class MeetingViewModel {
                 isHandRaised: participant.isHandRaised,
                 isScreenSharing: participant.isScreenSharing,
                 isReconnecting: participant.connectionStatus?.state == .reconnecting,
+                // The SFU's raw reason ("ping timeout", "transport close", ...); the tile maps it to copy
+                // (TileFeaturePolicy.reconnectReasonKind). Empty when not reconnecting.
+                reconnectReason: participant.connectionStatus?.state == .reconnecting ? (participant.connectionStatus?.reason ?? "") : "",
                 isHost: state.hostUserIds.contains(id),
                 joinSerial: state.participantJoinSerials[id] ?? 0,
                 videoKey: participant.isCameraOff ? "" : (webRTCClient.remoteVideoTrack(forUserId: id)?.id ?? ""),
@@ -7222,7 +7456,7 @@ final class MeetingViewModel {
             isInCall: inCall,
             localUserId: localId,
             roomLabel: shell.session.roomLabel,
-            meetingLink: state.roomId.isEmpty ? "" : MeetingState.meetingLink(for: state.roomId),
+            meetingLink: state.roomId.isEmpty ? "" : MeetingState.meetingLink(for: state.roomId, clientId: state.meetingClientId),
             participants: rows,
             viewMode: state.viewMode.rawValue,
             viewMaxTiles: state.viewMaxTiles,
@@ -7231,13 +7465,18 @@ final class MeetingViewModel {
             selfViewCorner: state.selfViewCorner.rawValue,
             pinnedUserId: state.canonicalStageUserId(state.pinnedUserId) ?? "",
             activeAppId: state.activeAppId ?? "",
+            // The app id: the chip and the announcements resolve the app's localized name from it (S60 C6-18).
+            activeAppName: state.activeAppId ?? "",
             isBrowserActive: state.isBrowserActive,
             isGameActive: stageGamePresence,
+            gameName: stageGameName,
             screenShareUserId: presenter,
             isLocalScreenSharing: state.isScreenSharing,
             isWebinarAttendee: state.isWebinarAttendee,
             webinarSpeakerUserId: state.canonicalStageUserId(state.webinarSpeakerUserId) ?? "",
             isRoomLocked: state.isRoomLocked,
+            captionsOn: CaptionsPreference.isOn(),
+            liveNotes: transcriptState.liveNotes,
             isAloneConfirmed: isAloneConfirmed,
             canFlipCamera: canSwitchLocalCamera(),
             isFrontCamera: localCameraFacing == .front,
@@ -7250,6 +7489,463 @@ final class MeetingViewModel {
             joinedAtMillis: presenceJoinedAtMillis,
             isEffectsOpen: shell.panels.snapshot.current?.panel == .effects
         )
+    }
+
+    // MARK: - Notices (S20 SC5, SC16, STG-5) and transcript (TRN-1)
+
+    /// S20 0.5 notice rows (SC5): state only, every id canonical. `errorMessage` never reaches the stage.
+    func makeStageNoticeInputs() -> StageNoticeInputs {
+        var pendingIds: [String] = []
+        for row in state.pendingUserRows {
+            pendingIds.append(row.id)
+        }
+        let presence = callPresence.snapshot
+        return StageNoticeInputs.make(
+            callSession: callSessionSerial,
+            isAttendee: state.isWebinarAttendee,
+            isHost: state.isAdmin,
+            localUserId: state.userId,
+            participantCount: state.participantCount,
+            hasInitialPresenceSnapshot: state.hasInitialPresenceSnapshot,
+            isOffline: state.isNetworkOffline,
+            isRecovering: state.isRecoveringConnection,
+            isResumingFromBackground: state.isResumingFromBackground,
+            reconnectAttempt: reconnectAttempts,
+            reconnectAttemptLimit: maxReconnectAttempts,
+            isRecoveryAttemptInFlight: isRejoinInFlight,
+            hasServerRestartNotice: state.serverRestartNotice != nil,
+            serverRestartText: state.serverRestartNotice ?? "",
+            isOnHold: presence.phase == .onHold || presence.interruption == .held,
+            isAudioPaused: presence.interruption == .otherAudio,
+            pendingUserIds: pendingIds,
+            pendingFirstName: state.pendingUserRows.first?.displayName ?? "",
+            isScreenSharing: state.isScreenSharing,
+            liveNotes: transcriptState.liveNotes,
+            catchUpMinutes: CatchUpPolicy.minutes(phase: transcriptState.phase,
+                                                  sessionStartedAtMillis: transcriptState.sessionStartedAtMillis,
+                                                  joinedAtMillis: presenceJoinedAtMillis,
+                                                  isAttendee: state.isWebinarAttendee),
+            isAudioOnly: state.isAudioOnlyMode,
+            connectionQuality: state.connectionQuality
+        )
+    }
+
+    /// STG-5: the notice actions the core performs (S20 10 j).
+    private func performNoticeCommand(_ command: NoticeCommand) {
+        switch command.actionId {
+        case NoticeAction.admit:
+            if !command.userId.isEmpty { admitUser(userId: command.userId) }
+        case NoticeAction.admitAll:
+            admitAllPending()
+        case NoticeAction.turnOffAudioOnly:
+            setAudioOnlyMode(false)
+        case NoticeAction.useAudioOnly:
+            setAudioOnlyMode(true)
+        case NoticeAction.retryRecovery:
+            retryRecoveryNow()
+        case NoticeAction.resume:
+            resumeFromHold()
+        case NoticeAction.shareAgain:
+            shell.toggleScreenShare()
+        case NoticeAction.allow:
+            #if SKIP
+            PermissionHelper.requestNotificationsPermissionIfNeeded()
+            #endif
+            break
+        case NoticeCommand.dismissHostNotice:
+            dismissAdminNotice()
+        default:
+            // endNow (S30 CC8, CTL-2) and Retry for the route and lock failures (CTL-3, PPL) land with their owners.
+            break
+        }
+    }
+
+    /// TRN-1: opens the transcript stream on join for non-attendees, closes it on leave or demotion to attendee, and
+    /// probes the relay once on join and again after a recovery rejoin (R52; web useMeetingTranscript).
+    private func syncTranscriptStream() {
+        let phase = shell.session.phase
+        let inCall = phase == .inCall || (phase == .recovering && shell.session.hasBeenAdmittedThisSession)
+        let wanted = TranscriptStreamPolicy.shouldBeOpen(isInCall: inCall, isAttendee: state.isWebinarAttendee)
+        let recovered = transcriptLastPhase == .recovering && phase == .inCall
+        transcriptLastPhase = phase
+        if wanted && !transcriptStreamOpen {
+            transcriptStreamOpen = true
+            openTranscriptStream()
+            Task { [weak self] in await self?.transcriptService?.probeRelayAvailability() }
+        } else if !wanted && transcriptStreamOpen {
+            transcriptStreamOpen = false
+            closeTranscriptStream()
+        } else if wanted && recovered {
+            Task { [weak self] in await self?.transcriptService?.probeRelayAvailability() }
+        }
+    }
+
+    /// TRN-2 hook: the Live Notes panel's Retry (S60 C6-11).
+    func retryTranscriptConnection() {
+        transcriptService?.retryConnection()
+    }
+
+    // MARK: - Controls (S30 CC1, CTL-1)
+
+    /// S30 CC1: the controls' own hook on the fields S1 does not hook, then one publish.
+    private func bindControlsInputs() {
+        state.onControlsInputChanged = { [weak self] in
+            self?.requestControlsRefresh()
+        }
+        requestControlsRefresh()
+    }
+
+    /// S30 CC1: fresh controls inputs, suppressed inside a refresh batch (the batch end flushes once).
+    private func requestControlsRefresh() {
+        guard controlsRefreshBatchDepth == 0 else { return }
+        controlsRefreshCount += 1
+        controls.apply(makeCallControlsInputs())
+    }
+
+    /// S30 0.5 `CallControlsInputs`: the S1 snapshots the shell just published plus the controls-only fields. Never the
+    /// active speaker, audio levels, reactions or chat arrays (S30 1 k).
+    func makeCallControlsInputs() -> CallControlsInputs {
+        let presenterId = state.activeScreenShareUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let presenterName = presenterId.isEmpty || state.isLocalIdentityUserId(presenterId) ? "" : state.displayName(for: presenterId)
+        return CallControlsInputs.fromShell(
+            shell,
+            presenterName: presenterName,
+            isRoomLocked: state.isRoomLocked,
+            isWebinarEnabled: state.isWebinarEnabled,
+            isBrowserActive: state.isBrowserActive,
+            activeAppId: state.activeAppId ?? "",
+            hasOpenVote: state.gameVote != nil,
+            layoutMode: state.viewMode.rawValue
+        )
+    }
+
+    /// The in-context permission request (S10 7). The shell rows read `.granted` until WP3's permission provider reports
+    /// a status (see `makeShellInputs()`), so no `permissionUndetermined` row exists yet and nothing reaches here; the
+    /// provider wires the system prompt when it lands.
+    private func performControlsCommand(_ command: CallControlsCommand) {
+        switch command {
+        case .requestMicrophonePermission, .requestCameraPermission:
+            break
+        }
+    }
+
+    // MARK: - People (S50 PH1, PPL-1)
+
+    /// S50 PH1: People's own hook on the current state (never S1's or the stage's), then one publish.
+    private func bindPeopleInputs() {
+        state.onPeopleInputChanged = { [weak self] in
+            self?.requestPeopleRefresh()
+        }
+        requestPeopleRefresh()
+    }
+
+    /// PH1: fresh People inputs, suppressed inside a refresh batch (the batch end flushes once).
+    private func requestPeopleRefresh() {
+        guard peopleRefreshBatchDepth == 0 else { return }
+        peopleRefreshCount += 1
+        people.apply(makePeopleInputs())
+    }
+
+    /// S50 0.5 `PeopleInputs`: roster ids through `canonicalStageUserId` (S20 E6), waiting ids exactly as the server
+    /// sent them, join order from `participantJoinSerials` (PH19), screen audio collapsed per user in one pass over the
+    /// producers (INM D1). Never the active speaker, audio levels, connection quality or chat arrays.
+    func makePeopleInputs() -> PeopleInputs {
+        let localId = state.userId
+        var screenAudioUsers: [String: Bool] = [:]
+        for producer in producerInfosById.values {
+            guard producer.kind == "audio", producer.type == ProducerType.screen.rawValue,
+                  let id = state.canonicalStageUserId(producer.producerUserId) else { continue }
+            screenAudioUsers[id] = true
+        }
+        var rows: [PeopleParticipantInput] = []
+        rows.append(PeopleParticipantInput.make(
+            userId: localId,
+            displayName: state.displayName.trimmingCharacters(in: .whitespacesAndNewlines),
+            isLocal: true,
+            isMuted: state.isMuted,
+            isCameraOff: state.isCameraOff,
+            isHandRaised: state.isHandRaised,
+            isScreenSharing: state.isScreenSharing
+        ))
+        for participant in state.mergedRemoteParticipants {
+            guard !participant.isLeaving, let id = state.canonicalStageUserId(participant.id), id != localId else { continue }
+            rows.append(PeopleParticipantInput.make(
+                userId: id,
+                // S50 2 j: the full name (B4-T1's `chatDisplayName(for:)` is the same rule, HD request B4-T7 R1e).
+                displayName: state.chatDisplayName(for: id),
+                isMuted: participant.isMuted,
+                isCameraOff: participant.isCameraOff,
+                isHandRaised: participant.isHandRaised,
+                isScreenSharing: participant.isScreenSharing,
+                hasScreenAudio: screenAudioUsers[id] == true,
+                isReconnecting: participant.connectionStatus?.state == .reconnecting,
+                isWebinarAttendee: participant.isWebinarAttendee,
+                joinSerial: state.participantJoinSerials[id] ?? 0
+            ))
+        }
+        var hostIds: [String] = []
+        for raw in state.hostUserIds {
+            let id = state.canonicalStageUserId(raw) ?? raw
+            if !hostIds.contains(id) { hostIds.append(id) }
+        }
+        let rawHost = state.hostUserId ?? ""
+        let hostId = rawHost.isEmpty ? "" : (state.canonicalStageUserId(rawHost) ?? rawHost)
+        var waiting: [PeopleWaitingInput] = []
+        for row in state.pendingUserRows {
+            waiting.append(PeopleWaitingInput(id: row.id, displayName: row.displayName))
+        }
+        return PeopleInputs.make(
+            callSession: callSessionSerial,
+            phase: shell.session.phase.rawValue,
+            isNetworkOffline: state.isNetworkOffline,
+            localUserId: localId,
+            participants: rows,
+            isRosterLoaded: state.hasInitialPresenceSnapshot,
+            isAdmin: state.isAdmin,
+            hostUserId: hostId,
+            hostUserIds: hostIds,
+            isWebinarAttendee: state.isWebinarAttendee,
+            waiting: waiting,
+            // ENT-8 (HD request B4-T2 R3): the same builder call `makeStageInputs()` uses.
+            meetingLink: state.roomId.isEmpty ? "" : MeetingState.meetingLink(for: state.roomId, clientId: state.meetingClientId),
+            roomLabel: shell.session.roomLabel,
+            isRoomLocked: state.isRoomLocked,
+            isNoGuests: state.isNoGuests,
+            isWebinarEnabled: state.isWebinarEnabled,
+            isWebinarPublic: state.isWebinarPublicAccess,
+            webinarLink: state.webinarLinkURL ?? "",
+            webinarAttendeeCount: state.webinarAttendeeCount
+        )
+    }
+
+    // MARK: - Activities and games (S60 7, 8; ACT-1, ACT-2)
+
+    /// The launcher's own hooks and the game shell's push hook, then one publish each.
+    private func bindActivityInputs() {
+        state.onActivityInputChanged = { [weak self] in
+            self?.requestActivityRefresh()
+        }
+        state.onActivityGameChanged = { [weak self] in
+            self?.refreshActivityGame()
+        }
+        requestActivityRefresh()
+        refreshActivityGame()
+    }
+
+    private func requestActivityRefresh() {
+        activitySession.applyActivities(makeActivitiesInputs())
+    }
+
+    /// One game push, parsed once by the shell (C6-15).
+    private func refreshActivityGame() {
+        activitySession.applyGame(makeGameStageInputs())
+    }
+
+    /// The player-range check reads the room size; refresh only when it changes.
+    private func refreshActivityPlayersHere() {
+        let count = state.participantCount
+        guard count != activityPlayersHere else { return }
+        activityPlayersHere = count
+        requestActivityRefresh()
+    }
+
+    private static func activityGameInput(_ entry: GameCatalogEntry) -> ActivityGameInput {
+        var options: [ActivityOptionInput] = []
+        for option in entry.options {
+            var choices: [GameChoiceModel] = []
+            for choice in option.choices ?? [] {
+                choices.append(GameChoiceModel(id: choice.value, label: choice.label))
+            }
+            options.append(ActivityOptionInput.make(
+                id: option.id, type: option.type, label: option.label, min: option.min, max: option.max,
+                defaultNumber: option.defaultNumber ?? option.min ?? 0, defaultString: option.defaultString ?? "",
+                presets: option.presets ?? [], suffix: option.suffix ?? "", choices: choices,
+                placeholder: option.placeholder ?? "", maxLength: option.maxLength ?? 0,
+                showWhenId: option.showWhen?.id ?? "", showWhenEquals: option.showWhen?.equals ?? []))
+        }
+        return ActivityGameInput(id: entry.id, name: entry.name, detail: entry.description, minPlayers: entry.minPlayers,
+                                 maxPlayers: entry.maxPlayers, options: options)
+    }
+
+    /// S60 7 j: the launcher's cold inputs (never the raw game state; the summary comes from the shell).
+    func makeActivitiesInputs() -> ActivitiesInputs {
+        var catalog: [ActivityGameInput] = []
+        for entry in state.gameCatalog {
+            catalog.append(Self.activityGameInput(entry))
+        }
+        var candidates: [ActivityGameInput] = []
+        var counts: [ActivityVoteCount] = []
+        var myVote = ""
+        var cast = 0
+        if let vote = state.gameVote {
+            for entry in vote.candidates {
+                candidates.append(Self.activityGameInput(entry))
+                counts.append(ActivityVoteCount(gameId: entry.id, count: vote.tally[entry.id] ?? 0))
+            }
+            myVote = state.localGameVoteId(in: vote) ?? ""
+            cast = vote.votes.count
+        }
+        let host = state.browserURL.flatMap { URLComponents(string: $0)?.host } ?? ""
+        return ActivitiesInputs.make(
+            callSession: callSessionSerial,
+            isHost: state.isAdmin,
+            isAttendee: state.isWebinarAttendee,
+            isRecovering: state.connectionState != .joined || state.isRecoveringConnection,
+            catalog: catalog,
+            catalogLoaded: gameCatalogLoaded,
+            isVoteOpen: state.gameVote != nil,
+            voteCandidates: candidates,
+            voteCounts: counts,
+            myVoteId: myVote,
+            voteCastCount: cast,
+            votePlayers: state.gameVote?.totalPlayers ?? 0,
+            playersHere: state.participantCount,
+            activeAppId: state.activeAppId ?? "",
+            isAppsLocked: state.isAppsLocked,
+            isAppsActionInFlight: state.isAppsActionInFlight,
+            appIds: ActivitiesCatalogPolicy.defaultAppIds,
+            // C6-20 (ACT-9) adds the capability probe; until then the launcher offers the browser as legacy did.
+            isBrowserAvailable: true,
+            isBrowserActive: state.isBrowserActive,
+            isBrowserLaunching: state.isBrowserLaunching,
+            isBrowserNavigating: state.isBrowserNavigating,
+            browserHostLabel: host,
+            browserProvider: state.browserProvider ?? "",
+            hasBrowserAudio: state.hasBrowserAudio,
+            isBrowserAudioMuted: state.isBrowserAudioMuted,
+            canControlBrowser: state.browserControllerUserId.map { state.isLocalIdentityUserId($0) } ?? false
+        )
+    }
+
+    /// S60 8 j: one game push for the shell. `selfId` wins over the local identity rule.
+    func makeGameStageInputs() -> GameStageInputs {
+        let recovering = state.connectionState != .joined || state.isRecoveringConnection
+        guard let publicState = state.gamePublicState else {
+            return GameStageInputs.make(callSession: callSessionSerial, isHost: state.isAdmin, isRecovering: recovering)
+        }
+        var players: [GamePlayerInput] = []
+        var localPlayer = ""
+        for player in publicState.players {
+            players.append(GamePlayerInput(id: player.id, name: player.name))
+            if localPlayer.isEmpty && state.isLocalIdentityUserId(player.id) { localPlayer = player.id }
+        }
+        var pending: [GamePlayerInput] = []
+        for player in publicState.pendingJoiners ?? [] {
+            pending.append(GamePlayerInput(id: player.id, name: player.name))
+            if localPlayer.isEmpty && state.isLocalIdentityUserId(player.id) { localPlayer = player.id }
+        }
+        var config: [ActivityOptionValue] = []
+        if let values = publicState.config {
+            for key in values.keys.sorted() {
+                guard let value = values[key] else { continue }
+                config.append(ActivityOptionValue(id: key, isNumber: value.numberValue != nil, number: value.numberValue ?? 0,
+                                                  text: value.stringValue ?? ""))
+            }
+        }
+        let entry = state.gameCatalog.first { $0.id == publicState.gameId }
+        let playerView = state.gamePlayerView?.gameId == publicState.gameId ? (state.gamePlayerView?.view?.rawJSON ?? "") : ""
+        return GameStageInputs.make(
+            callSession: callSessionSerial,
+            isActive: true,
+            gameId: publicState.gameId,
+            name: publicState.name,
+            phase: publicState.phase,
+            players: players,
+            pendingJoiners: pending,
+            isFinished: publicState.finished,
+            canJoinLate: publicState.canJoinLate ?? false,
+            config: config,
+            options: entry.map { Self.activityGameInput($0).options } ?? [],
+            minPlayers: entry?.minPlayers ?? 1,
+            publicViewJSON: publicState.view?.rawJSON ?? "",
+            playerViewJSON: playerView,
+            selfId: state.gameSelfId ?? "",
+            localPlayerId: localPlayer,
+            isHost: state.isAdmin,
+            isRecovering: recovering,
+            receivedAtMillis: Date().timeIntervalSince1970 * 1000
+        )
+    }
+
+    /// The launcher's actions over the existing paths; failures come back through `commandFailed`.
+    private func performActivitiesCommand(_ command: ActivitiesCommand) {
+        switch command.kind {
+        case .refresh:
+            refreshGameState()
+            refreshAppsState()
+            refreshBrowserState()
+        case .startGame:
+            let entry = state.gameCatalog.first(where: { $0.id == command.id })
+                ?? state.gameVote?.candidates.first(where: { $0.id == command.id })
+            guard let game = entry else {
+                activitySession.activities.commandFailed(.startGame, serverText: "")
+                return
+            }
+            var options: [String: GameConfigValue] = [:]
+            for value in command.options {
+                options[value.id] = value.isNumber ? GameConfigValue.number(value.number) : GameConfigValue.string(value.text)
+            }
+            startGame(game, options: options)
+        case .openVote:
+            openGameVote()
+        case .castVote:
+            castGameVote(gameId: command.id)
+        case .cancelVote:
+            cancelGameVote()
+        case .endGame:
+            endActiveGame()
+        case .openApp:
+            openMeetingApp(command.id)
+        case .closeApp:
+            closeActiveApp()
+        case .setAppsLocked:
+            if command.flag != state.isAppsLocked { toggleAppsLock() }
+        case .launchBrowser:
+            launchSharedBrowser(url: command.text)
+        case .navigateBrowser:
+            navigateSharedBrowser(url: command.text)
+        case .closeBrowser:
+            closeSharedBrowser()
+        case .toggleBrowserAudio:
+            toggleBrowserAudio()
+        }
+    }
+
+    /// The game shell's actions: a move travels with its client-local request id (C6-15).
+    private func performGameStageCommand(_ command: GameStageCommand) {
+        switch command.kind {
+        case .move:
+            sendGameMove(type: command.type, payloadJSON: command.payloadJSON, requestId: command.requestId)
+        case .join:
+            joinActiveGame()
+        case .rematch:
+            rematchActiveGame()
+        case .end:
+            endActiveGame()
+        }
+    }
+
+    /// C6-15: one move bound to its own ack. The shell clears that request id on this ack or after its 10 s timeout,
+    /// never on a push (the SFU broadcasts the new state before it acks). No shared in-flight flag: each move answers
+    /// for itself, so a push can never strand or release another move.
+    func sendGameMove(type: String, payloadJSON: String, requestId: String) {
+        let games = activitySession.games
+        guard let gameId = state.gamePublicState?.gameId, state.connectionState == .joined, !state.isWebinarAttendee else {
+            games.moveAcknowledged(requestId: requestId, success: false, serverText: "No active game")
+            return
+        }
+        let actionContext = currentCallActionContext()
+        let payload: GameJSONValue? = payloadJSON.isEmpty ? nil : GameJSONValue(rawJSON: payloadJSON)
+        Task {
+            do {
+                let response = try await socketManager.sendGameMove(gameId: gameId, type: type, payload: payload)
+                guard isCurrentJoinedCall(actionContext) else { return }
+                games.moveAcknowledged(requestId: requestId, success: response.success, serverText: response.error ?? "")
+            } catch {
+                guard isSameCallContext(actionContext) else { return }
+                games.moveAcknowledged(requestId: requestId, success: false, serverText: "")
+            }
+        }
     }
 
     /// Hot hook: the active reactions as stage inputs (the presenter maps source ids to stable bubble ids).
@@ -7452,7 +8148,13 @@ final class MeetingViewModel {
         let classified = MeetingErrorClassifier.classify(error, context: context, isNetworkOffline: state.isNetworkOffline)
         debugLog("[Meeting] Media failure \(classified.diagnosticCode): \(error.localizedDescription)")
         if let kind {
-            shell.reportFailure(kind, MeetingErrorClassifier.actionResult(classified))
+            let result = MeetingErrorClassifier.actionResult(classified)
+            shell.reportFailure(kind, result)
+            // STG-5 (HD request B4-T4 R2.7): the typed toast for a failure started on the stage or the bar.
+            if result.kind == .failed && !classified.isSilent {
+                stage.post(StageEvent.make(kind: StageEventKind.actionFailed, serverText: result.serverText ?? "",
+                                           detail: kind.rawValue))
+            }
         }
         let device: MeetingMediaDevice = kind == .microphone
             ? MeetingMediaDevice.microphone
@@ -7503,8 +8205,11 @@ final class MeetingViewModel {
             isSignedIn: premeetingIsSignedIn,
             accountName: premeetingAccountName,
             accountSeed: premeetingAccountSeed,
+            isSigningIn: premeetingIsSigningIn,
             isNetworkOffline: state.isNetworkOffline,
-            isAppActive: premeetingIsAppActive
+            isAppActive: premeetingIsAppActive,
+            micIntentOn: state.pendingEntryMediaIntent?.mic ?? !state.isMuted,
+            cameraIntentOn: state.pendingEntryMediaIntent?.camera ?? !state.isCameraOff
         ))
     }
 
@@ -7523,6 +8228,55 @@ final class MeetingViewModel {
         guard isActive != premeetingIsAppActive else { return }
         premeetingIsAppActive = isActive
         premeeting.apply(makePremeetingInputs())
+    }
+
+    /// ENT-7 (S10 invariant 9): the account presenter reports a provider sign-in starting or ending.
+    func setPremeetingSigningIn(_ isSigningIn: Bool) {
+        guard isSigningIn != premeetingIsSigningIn else { return }
+        premeetingIsSigningIn = isSigningIn
+        premeeting.apply(makePremeetingInputs())
+    }
+
+    /// S10 0.8 C1 (ENT-3, HD request B4-T2 R1): the lobby's only media intent path. At home, while waiting and while
+    /// reconnecting before the first admission it writes the flags the next join reads; while entering it stores a
+    /// pending intent for this attempt (the transport decision may already be made), which `.joined` reconciles once
+    /// through the toggles; in call the S1 toggles apply where the intent differs.
+    func setEntryMediaIntent(mic: Bool, camera: Bool) {
+        let route = EntryMediaIntentPolicy.route(phase: shell.session.phase,
+                                                 hasBeenAdmittedThisSession: shell.session.hasBeenAdmittedThisSession)
+        if route == "pending" {
+            state.pendingEntryMediaIntent = EntryMediaIntent(mic: mic, camera: camera, generation: meetingLifecycleGeneration)
+            premeeting.apply(makePremeetingInputs())
+        } else if route == "toggles" {
+            state.pendingEntryMediaIntent = nil
+            if mic == state.isMuted { toggleMute() }
+            if camera == state.isCameraOff { toggleCamera() }
+        } else {
+            state.pendingEntryMediaIntent = nil
+            if state.isMuted == mic { state.isMuted = !mic }
+            if state.isCameraOff == camera { state.isCameraOff = !camera }
+            premeeting.apply(makePremeetingInputs())
+        }
+    }
+
+    /// S10 0.8 C1: once on `.joined`, the pending lobby intent goes through the toggles where it differs (so send
+    /// transport creation and the producer generation guards apply); a stale attempt's intent is dropped.
+    private func reconcilePendingEntryMediaIntent() {
+        let pending = EntryMediaIntentPolicy.reconcilable(state.pendingEntryMediaIntent,
+                                                           currentGeneration: meetingLifecycleGeneration)
+        state.pendingEntryMediaIntent = nil
+        guard let pending else { return }
+        if pending.mic == state.isMuted { toggleMute() }
+        if pending.camera == state.isCameraOff { toggleCamera() }
+    }
+
+    /// S10 0.8 C2 (ENT-3, HD request B4-T2 R2): intent only. The single routing owner (SYS-2) applies it exactly once
+    /// when call audio starts; `setAudioInput` and `setAudioOutput` are never called from the lobby, so an empty
+    /// pre-join device list neither applies it early nor drops it.
+    func setPrejoinAudioRouteIntent(outputKind: String, inputId: String) {
+        state.prejoinAudioOutputKind = outputKind
+        state.prejoinAudioInputId = inputId
+        AudioRouteOwner.shared.setPrejoinIntent(outputKind: outputKind, inputId: inputId)
     }
 
     /// The premeeting presenter's core-only commands, forwarded to the S1 shell (no haptic, Q11).
@@ -7995,6 +8749,10 @@ final class MeetingViewModel {
         state.hasInitialPresenceSnapshot = false
         state.resetParticipantJoinSerials()
         stage.reset()
+        activitySession.reset()
+        gameCatalogLoaded = false
+        // S10 0.8 C1: a cancelled join or a finished call never carries a lobby intent into the next one.
+        state.pendingEntryMediaIntent = nil
         participantLeaveTokens.removeAll()
         departedParticipantUserIds.removeAll()
         clearAllParticipantConnectionStatusTimers()
@@ -8014,6 +8772,12 @@ final class MeetingViewModel {
         state.chatMessages.removeAll()
         state.isChatImageUploading = false
         pendingOptimisticChatSends.removeAll()
+        chatHistoryMessageIds.removeAll()
+        countedAssistantAnswerIds.removeAll()
+        clearedOptimisticChatIds.removeAll()
+        retainedChatWireTexts.removeAll()
+        // S40 1 f: leaving drops the presenter's rows, drafts, hidden senders and reply and private targets.
+        chat.reset()
         clearChatOverlayMessages()
         clearReactions()
         state.isHandRaised = false
@@ -8068,6 +8832,8 @@ final class MeetingViewModel {
         state.isChatOpen = false
         state.isTranscriptOpen = false
         closeTranscriptStream()
+        transcriptStreamOpen = false
+        transcriptLastPhase = .home
         transcriptState.resetAll()
         state.roomId = ""
         // Each room starts from the standard user preference; live bandwidth
@@ -8826,7 +9592,17 @@ final class MeetingViewModel {
                 ))
             } catch {
                 applyActionError(error, context: actionContext)
-                onResult?(MeetingActionFailurePolicy.result(for: error, direction: newState ? .raise : .lower))
+                let result = MeetingActionFailurePolicy.result(for: error, direction: newState ? .raise : .lower)
+                // STG-5 (HD request B4-T4 R2.6, R2.7): a server rate limit posts its own notice, any other failure the
+                // typed hand toast; never both.
+                let classified = MeetingErrorClassifier.classify(error, context: .media, isNetworkOffline: state.isNetworkOffline)
+                if classified.category == .rateLimited {
+                    stage.post(StageEvent.make(kind: StageEventKind.rateLimited, detail: "hand"))
+                } else if result.kind == .failed && !classified.isSilent {
+                    stage.post(StageEvent.make(kind: StageEventKind.actionFailed, serverText: result.serverText ?? "",
+                                               detail: MeetingActionKind.hand.rawValue))
+                }
+                onResult?(result)
             }
         }
     }
@@ -9187,15 +9963,19 @@ final class MeetingViewModel {
                 let arguments = parsedCommand.argumentText
                 switch parsedCommand.command {
                 case .help:
-                    addSystemMessage(.info(ChatCommand.helpText))
+                    addSystemMessage(.info(ChatCommand.helpText), notice: ChatNotice.help)
 
                 case .clear:
                     state.chatMessages.removeAll()
-        pendingOptimisticChatSends.removeAll()
+                    // CH11: acknowledgements that land after the clear add no row.
+                    for pending in pendingOptimisticChatSends {
+                        clearedOptimisticChatIds.insert(pending.id)
+                    }
+                    pendingOptimisticChatSends.removeAll()
                     state.systemMessages.removeAll()
                     state.unreadChatCount = 0
                     clearChatOverlayMessages()
-                    addSystemMessage(.info("Chat cleared"))
+                    addSystemMessage(.info("Chat cleared"), notice: ChatNotice.cleared)
 
                 case .dm:
                     guard state.isDmEnabled else {
@@ -9210,7 +9990,7 @@ final class MeetingViewModel {
                         return
                     }
                     guard !arguments.isEmpty else {
-                        addSystemMessage(.info("Usage: /tts <text>"))
+                        addSystemMessage(.info("Usage: /tts <text>"), notice: ChatNotice.ttsUsage)
                         return
                     }
                     try await sendChatContentOptimistically("/tts \(arguments)", context: commandContext)
@@ -9265,7 +10045,7 @@ final class MeetingViewModel {
                             addSystemMessage(.commandExecuted(command: .mute, userName: localDisplayNameForFeedback))
                         }
                     } else {
-                        addSystemMessage(.info("You're already muted."))
+                        addSystemMessage(.info("You're already muted."), notice: ChatNotice.alreadyMuted)
                     }
 
                 case .unmute:
@@ -9286,7 +10066,7 @@ final class MeetingViewModel {
                             addSystemMessage(.commandExecuted(command: .unmute, userName: localDisplayNameForFeedback))
                         }
                     } else {
-                        addSystemMessage(.info("You're already unmuted."))
+                        addSystemMessage(.info("You're already unmuted."), notice: ChatNotice.alreadyUnmuted)
                     }
 
                 case .camera:
@@ -9320,13 +10100,23 @@ final class MeetingViewModel {
         state.systemMessages.append(message)
     }
 
+    /// A command notice the native chat localizes (S40 3 g); the legacy chat keeps reading `displayText`.
+    private func addSystemMessage(_ type: SystemMessageType, notice: ChatNotice) {
+        state.systemMessages.append(SystemMessage(type: type, notice: notice.rawValue))
+    }
+
     func applyChatHistorySnapshot(_ snapshot: ChatHistorySnapshotNotification) {
         guard isCurrentRoomEvent(snapshot.roomId) else { return }
+        // CH13: one chat refresh for the whole replay, not one per message.
+        beginChatRefreshBatch()
+        defer { endChatRefreshBatch() }
         var existingIds = Set(state.chatMessages.map { $0.id })
         for message in snapshot.messages.map({ $0.chatMessage(taggedRoomId: snapshot.roomId) }) where !existingIds.contains(message.id) {
             let normalized = normalizedChatMessage(message)
             guard isVisibleChatMessage(normalized) else { continue }
             existingIds.insert(normalized.id)
+            // S40 CH12: replayed history never counts unread or announces.
+            chatHistoryMessageIds.insert(normalized.id)
             state.chatMessages.append(normalized)
         }
         state.chatMessages.sort { $0.timestamp < $1.timestamp }
@@ -9341,13 +10131,14 @@ final class MeetingViewModel {
         case "off":
             await setCameraCommandState(cameraOff: true, command: .camera)
         default:
-            addSystemMessage(.info("Usage: /camera on|off|toggle"))
+            addSystemMessage(.info("Usage: /camera on|off|toggle"), notice: ChatNotice.cameraUsage)
         }
     }
 
     private func setCameraCommandState(cameraOff: Bool, command: ChatCommand) async {
         if state.isCameraOff == cameraOff {
-            addSystemMessage(.info(cameraOff ? "Camera is already off." : "Camera is already on."))
+            addSystemMessage(.info(cameraOff ? "Camera is already off." : "Camera is already on."),
+                             notice: cameraOff ? ChatNotice.cameraAlreadyOff : ChatNotice.cameraAlreadyOn)
             return
         }
         if isCameraToggleInFlight, cameraOff, state.connectionState == .joined {
@@ -9584,8 +10375,11 @@ final class MeetingViewModel {
             let optimisticId = pendingOptimisticChatSends[pendingIndex].id
             pendingOptimisticChatSends.remove(at: pendingIndex)
             if let messageIndex = state.chatMessages.firstIndex(where: { $0.id == optimisticId }) {
-                state.chatMessages[messageIndex] = normalized
-                return normalized
+                // S40 CH1: the echo keeps the optimistic client id, so the chat row id never changes.
+                let acknowledged = rebuiltChatMessage(normalized, clientId: optimisticId, sendStatus: nil,
+                                                      reactions: normalized.reactions)
+                state.chatMessages[messageIndex] = acknowledged
+                return acknowledged
             }
         }
         state.chatMessages.append(normalized)
@@ -9623,7 +10417,10 @@ final class MeetingViewModel {
             dmTargetUserId: incoming.dmTargetUserId,
             dmTargetDisplayName: incoming.dmTargetDisplayName,
             roomId: incoming.roomId ?? existing.roomId,
-            replyTo: incoming.replyTo ?? existing.replyTo
+            replyTo: incoming.replyTo ?? existing.replyTo,
+            clientId: incoming.clientId ?? existing.clientId,
+            sendStatus: incoming.sendStatus ?? existing.sendStatus,
+            reactions: incoming.reactions.isEmpty ? existing.reactions : incoming.reactions
         )
     }
 
@@ -9632,19 +10429,28 @@ final class MeetingViewModel {
         content: String,
         gif: ChatGifAttachment? = nil,
         image: ChatImageAttachment? = nil,
-        replyTo: ChatReplyPreview? = nil
+        replyTo: ChatReplyPreview? = nil,
+        directTargetUserId: String = ""
     ) -> ChatMessage? {
         let normalizedSfuUserId = state.sfuUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let userId = normalizedSfuUserId.isEmpty ? state.userId : normalizedSfuUserId
+        let optimisticId = "optimistic-\(UUID().uuidString)"
+        // S40 CH1, CH2: the optimistic id is the client id for life and the row reads "sending"; a known private
+        // target styles the row private from the first frame (INM C10).
         let message = ChatMessage(
-            id: "optimistic-\(UUID().uuidString)",
+            id: optimisticId,
             userId: userId,
             displayName: localDisplayNameForFeedback,
             content: content,
             gif: gif,
             image: image,
+            isDirect: !directTargetUserId.isEmpty,
+            dmTargetUserId: directTargetUserId.isEmpty ? nil : directTargetUserId,
+            dmTargetDisplayName: directTargetUserId.isEmpty ? nil : state.chatDisplayName(for: directTargetUserId),
             roomId: state.roomId,
-            replyTo: replyTo
+            replyTo: replyTo,
+            clientId: optimisticId,
+            sendStatus: ChatSendStatus.sending
         )
         let appended = appendChatMessage(message)
         if let appended {
@@ -9678,6 +10484,11 @@ final class MeetingViewModel {
     ) -> ChatMessage? {
         pendingOptimisticChatSends.removeAll { $0.id == optimisticMessageId }
         guard isSameCallContext(context) else { return nil }
+        if clearedOptimisticChatIds.contains(optimisticMessageId) {
+            // CH11: `/clear` ran while this send was in flight; its acknowledgement adds no row.
+            clearedOptimisticChatIds.remove(optimisticMessageId)
+            return nil
+        }
         let normalized = normalizedChatMessage(message)
         guard isCurrentRoomEvent(normalized.roomId), isVisibleChatMessage(normalized) else {
             removeOptimisticChatMessage(id: optimisticMessageId)
@@ -9691,7 +10502,9 @@ final class MeetingViewModel {
         }
 
         if let index = state.chatMessages.firstIndex(where: { $0.id == optimisticMessageId }) {
-            state.chatMessages[index] = normalized
+            // S40 CH1: the acknowledged message keeps the optimistic client id.
+            state.chatMessages[index] = rebuiltChatMessage(normalized, clientId: optimisticMessageId, sendStatus: nil,
+                                                           reactions: normalized.reactions)
         } else {
             state.chatMessages.append(normalized)
         }
@@ -9736,7 +10549,10 @@ final class MeetingViewModel {
                 dmTargetUserId: message.dmTargetUserId,
                 dmTargetDisplayName: targetDisplayName,
                 roomId: message.roomId,
-                replyTo: replyTo
+                replyTo: replyTo,
+                clientId: message.clientId,
+                sendStatus: message.sendStatus,
+                reactions: message.reactions
             )
         }
         content = "TTS: \(text)"
@@ -9752,7 +10568,10 @@ final class MeetingViewModel {
             dmTargetUserId: message.dmTargetUserId,
             dmTargetDisplayName: targetDisplayName,
             roomId: message.roomId,
-            replyTo: replyTo
+            replyTo: replyTo,
+            clientId: message.clientId,
+            sendStatus: message.sendStatus,
+            reactions: message.reactions
         )
     }
 
@@ -9785,7 +10604,10 @@ final class MeetingViewModel {
             dmTargetUserId: message.dmTargetUserId,
             dmTargetDisplayName: targetDisplayName,
             roomId: message.roomId,
-            replyTo: replyTo
+            replyTo: replyTo,
+            clientId: message.clientId,
+            sendStatus: message.sendStatus,
+            reactions: message.reactions
         )
     }
 
@@ -10270,6 +11092,496 @@ final class MeetingViewModel {
         state.chatOverlayMessages.removeAll()
     }
 
+    // MARK: - Chat presenter (S40 CHT-1 to CHT-3)
+
+    /// S40 CH13: installs the one chat hook on the current state, then publishes once.
+    private func bindChatInputs() {
+        state.onChatInputChanged = { [weak self] change in
+            self?.requestChatRefresh(change)
+        }
+        lastChatRoster = []
+        requestChatRefresh(ChatInputChange.messages)
+    }
+
+    /// CH13: builds the chat inputs on their own path (never S1's or the stage's) and applies them. A roster hint
+    /// (participants, names, identity) applies only when the derived roster changed, so a mute, camera or hand update
+    /// refreshes no chat. Inside a batch the hints merge and the batch end refreshes once.
+    private func requestChatRefresh(_ change: ChatInputChange) {
+        if chatRefreshBatchDepth > 0 {
+            if let pending = pendingChatRefreshChange, pending != change {
+                pendingChatRefreshChange = ChatInputChange.messages
+            } else {
+                pendingChatRefreshChange = change
+            }
+            return
+        }
+        let roster = makeChatRoster()
+        if change == ChatInputChange.roster && roster == lastChatRoster { return }
+        lastChatRoster = roster
+        chatRefreshCount += 1
+        chat.apply(makeChatInputs(roster: roster), change: change)
+        // D22: a demotion to webinar attendee closes the native Chat panel; the draft stays in the presenter.
+        if change == ChatInputChange.gate && state.isWebinarAttendee && nativeChatPanelIsCurrent {
+            shell.panels.dismiss(cancelPending: true)
+        }
+    }
+
+    private func beginChatRefreshBatch() {
+        chatRefreshBatchDepth += 1
+    }
+
+    private func endChatRefreshBatch() {
+        chatRefreshBatchDepth = max(0, chatRefreshBatchDepth - 1)
+        flushChatRefresh()
+    }
+
+    private func flushChatRefresh() {
+        guard chatRefreshBatchDepth == 0, let change = pendingChatRefreshChange else { return }
+        pendingChatRefreshChange = nil
+        requestChatRefresh(change)
+    }
+
+    /// Your canonical chat id: the SFU id the server stamps on your messages, else the session user id.
+    private var chatLocalUserId: String {
+        let sfu = state.sfuUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return sfu.isEmpty ? state.userId : sfu
+    }
+
+    private var chatLocalName: String {
+        state.chatDisplayName(for: chatLocalUserId)
+    }
+
+    /// S40 0.5 `ChatInputs`: the derived roster, never the participants dictionary.
+    func makeChatInputs() -> ChatInputs {
+        makeChatInputs(roster: makeChatRoster())
+    }
+
+    private func makeChatInputs(roster: [ChatRosterEntry]) -> ChatInputs {
+        var messages: [ChatMessageInput] = []
+        for message in state.chatMessages {
+            messages.append(makeChatMessageInput(message))
+        }
+        var localRows: [ChatLocalRow] = []
+        for system in state.systemMessages {
+            localRows.append(ChatLocalRow(id: system.id, text: system.displayText,
+                                          notice: ChatNotice(rawValue: system.notice) ?? ChatNotice.none,
+                                          isError: system.isError,
+                                          timestampMillis: system.timestamp.timeIntervalSince1970 * 1000.0))
+        }
+        return ChatInputs.make(
+            callSession: sessionIdentity.callSession,
+            roomId: state.roomId,
+            localUserId: chatLocalUserId,
+            localName: chatLocalName,
+            messages: messages,
+            localRows: localRows,
+            isLocked: state.isChatLocked,
+            privateEnabled: state.isDmEnabled,
+            photosEnabled: state.isImageAttachmentsEnabled,
+            voiceEnabled: !state.isTtsDisabled,
+            reactionsEnabled: !state.isReactionsDisabled,
+            gate: chatSendGate(),
+            isHost: state.isAdmin,
+            roster: roster,
+            assistant: AssistantAvailability.available
+        )
+    }
+
+    /// One `ChatMessage` as the presenter reads it: full names (S40 3 f), your identity through the local aliases,
+    /// the reply ref, the delivery state (CH2) and the reactions with "mine" decided here (CH3).
+    func makeChatMessageInput(_ message: ChatMessage) -> ChatMessageInput {
+        let isOwn = state.isLocalIdentityUserId(message.userId)
+        let isAssistant = message.userId == ConclaveAssistantChatIdentity.userId
+        let fullName = state.chatDisplayName(for: message.userId)
+        let senderName = isAssistant ? ConclaveAssistantChatIdentity.displayName : (fullName.isEmpty ? message.displayName : fullName)
+        var reply: ChatReplyRef? = nil
+        if let replyTo = message.replyTo {
+            let authorName = state.chatDisplayName(for: replyTo.userId)
+            let media = replyTo.hasImage == true ? "photo" : (replyTo.hasGif ? "gif" : "")
+            reply = ChatReplyRef(messageId: replyTo.id, authorName: authorName.isEmpty ? replyTo.displayName : authorName,
+                                 isAuthorYou: state.isLocalIdentityUserId(replyTo.userId), preview: replyTo.content,
+                                 media: media, isPrivate: replyTo.isDirect ?? false)
+        }
+        var delivery = ChatDelivery.delivered
+        var failure = ChatFailure.none
+        var serverText = ""
+        var isRetryable = false
+        if let status = message.sendStatus {
+            switch status.delivery {
+            case .sending:
+                delivery = ChatDelivery.sending
+            case .failed:
+                delivery = ChatDelivery.failed
+                failure = ChatFailure(rawValue: status.failure) ?? ChatFailure.unknown
+                serverText = status.serverText
+                isRetryable = status.isRetryable
+            case .delivered:
+                break
+            }
+        }
+        var reactions: [ChatReactionInput] = []
+        for reaction in message.reactions {
+            var includesMe = false
+            for userId in reaction.userIds where state.isLocalIdentityUserId(userId) {
+                includesMe = true
+            }
+            reactions.append(ChatReactionInput(emoji: reaction.emoji, userIds: reaction.userIds, includesMe: includesMe))
+        }
+        let dmTarget = message.dmTargetUserId ?? ""
+        var dmTargetName = ""
+        if !dmTarget.isEmpty {
+            let full = state.chatDisplayName(for: dmTarget)
+            dmTargetName = full.isEmpty ? (message.dmTargetDisplayName ?? "") : full
+        }
+        return ChatMessageInput.make(
+            id: message.id,
+            clientId: message.clientId ?? "",
+            senderId: message.userId,
+            senderName: senderName,
+            isOwn: isOwn,
+            isAssistant: isAssistant,
+            content: message.content,
+            timestampMillis: message.timestamp.timeIntervalSince1970 * 1000.0,
+            isDirect: message.isDirect,
+            dmTargetUserId: dmTarget,
+            dmTargetName: dmTargetName,
+            reply: reply,
+            imageURL: message.image?.url ?? "",
+            imageFileName: message.image?.fileName ?? "",
+            gifURL: message.gif?.url ?? "",
+            gifPreviewURL: message.gif?.previewUrl ?? "",
+            gifVideoURL: message.gif?.videoUrl ?? "",
+            gifKind: message.gif?.kind ?? "",
+            gifWidth: message.gif?.width ?? 0,
+            gifHeight: message.gif?.height ?? 0,
+            gifTitle: message.gif?.title ?? "",
+            delivery: delivery,
+            failure: failure,
+            failureServerText: serverText,
+            isRetryable: isRetryable,
+            reactions: reactions,
+            isHistory: chatHistoryMessageIds.contains(message.id)
+        )
+    }
+
+    /// CH13: the derived roster (you, then present people by name, then people who left but are still named in
+    /// chat). Recomputed on roster hints and compared, so only id or name changes reach the presenter.
+    func makeChatRoster() -> [ChatRosterEntry] {
+        var entries: [ChatRosterEntry] = []
+        var seen: Set<String> = []
+        let localId = chatLocalUserId
+        if !localId.isEmpty {
+            entries.append(ChatRosterEntry(userId: localId, name: chatLocalName, isPresent: true))
+            seen.insert(localId)
+        }
+        var present: [ChatRosterEntry] = []
+        for participant in state.participants.values {
+            if seen.contains(participant.id) || state.isLocalIdentityUserId(participant.id) { continue }
+            seen.insert(participant.id)
+            present.append(ChatRosterEntry(userId: participant.id, name: state.chatDisplayName(for: participant.id),
+                                           isPresent: !participant.isLeaving && !participant.isWebinarAttendee))
+        }
+        present.sort { left, right in
+            let leftName = left.name.lowercased()
+            let rightName = right.name.lowercased()
+            if leftName != rightName { return leftName < rightName }
+            return left.userId < right.userId
+        }
+        entries.append(contentsOf: present)
+        var absent: [String] = []
+        for userId in state.displayNames.keys {
+            if seen.contains(userId) || state.isLocalIdentityUserId(userId) { continue }
+            absent.append(userId)
+        }
+        absent.sort()
+        for userId in absent {
+            entries.append(ChatRosterEntry(userId: userId, name: state.chatDisplayName(for: userId), isPresent: false))
+        }
+        return entries
+    }
+
+    /// The composer gate (S40 6 f): watch-only, locked for guests, offline, recovering, not joined, open.
+    func chatSendGate() -> ChatSendGate {
+        if state.isWebinarAttendee { return ChatSendGate.attendee }
+        if state.isChatLocked && !state.isAdmin { return ChatSendGate.locked }
+        if state.isNetworkOffline { return ChatSendGate.offline }
+        if state.isRecoveringConnection || state.connectionState == ConnectionState.reconnecting { return ChatSendGate.reconnecting }
+        if state.connectionState != ConnectionState.joined { return ChatSendGate.notJoined }
+        return ChatSendGate.open
+    }
+
+    /// The chat presenter's `onCommand` (S40 0.5 action mapping). Hide and show sender are presenter-local.
+    func performChatCommand(_ request: ChatCommandRequest) {
+        switch request.kind {
+        case .send:
+            let route = ChatRouteKind(rawValue: request.emoji) ?? ChatRouteKind.publicText
+            sendNativeChat(request.text, route: route, replyTo: chatReplyPreview(forMessageId: request.messageId),
+                           privateTargetId: request.userId)
+        case .retry:
+            retryChatSend(clientId: request.rowId)
+        case .discard:
+            discardChatSend(clientId: request.rowId)
+        case .react:
+            toggleChatReaction(messageId: request.messageId, emoji: request.emoji)
+        default:
+            break
+        }
+    }
+
+    /// D24 routes already decided by `ChatComposerPolicy.route`. Chat failures stay in the panel (D20): a failed row
+    /// or a system row, never `state.errorMessage`.
+    private func sendNativeChat(_ text: String, route: ChatRouteKind, replyTo: ChatReplyPreview?, privateTargetId: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, chatSendGate() == ChatSendGate.open else { return }
+        switch route {
+        case .command:
+            // CH11: the guarded directional branches of `executeChatCommand` (`setMuted`, `setCameraCommandState`,
+            // `setHandRaisedState`, `applyLocalMuteNow`, `applyLocalCameraOffNow`); never the S1 toggle intents.
+            if let parsed = ChatCommandParser.parse(trimmed) {
+                executeChatCommand(parsed)
+            }
+        case .assistant:
+            if let question = ChatCommandParser.parseConclaveMention(trimmed) {
+                sendConclaveQuestion(trimmed, question: question, replyTo: replyTo)
+            }
+        case .privateText:
+            let body = ChatCommandParser.parseDirectMessage(trimmed)?.body ?? trimmed
+            sendRetainedChat(wireText: trimmed, displayText: body, replyTo: replyTo, directTargetUserId: privateTargetId)
+        case .publicText:
+            // An implicit private draft ("@avery hi") that resolved shows private from the first frame; the SFU strips
+            // the prefix, so the row shows the body like the echo will.
+            var display = trimmed
+            if !privateTargetId.isEmpty, let parsed = ChatCommandParser.parseDirectMessage(trimmed) {
+                display = parsed.body
+            }
+            sendRetainedChat(wireText: trimmed, displayText: display, replyTo: replyTo, directTargetUserId: privateTargetId)
+        case .voice:
+            sendRetainedChat(wireText: trimmed, displayText: trimmed, replyTo: replyTo, directTargetUserId: "")
+        case .blocked:
+            break
+        }
+    }
+
+    /// CH1, CH2: the optimistic row appears at once with its client id and stays through the acknowledgement; a
+    /// failure keeps it with its text, Try Again and Delete.
+    private func sendRetainedChat(wireText: String, displayText: String, replyTo: ChatReplyPreview?, directTargetUserId: String) {
+        let context = currentCallActionContext()
+        guard let optimistic = appendOptimisticChatMessage(content: displayText, replyTo: replyTo,
+                                                           directTargetUserId: directTargetUserId) else { return }
+        let clientId = optimistic.id
+        retainedChatWireTexts[clientId] = wireText
+        Task {
+            await deliverRetainedChat(clientId: clientId, wireText: wireText, replyTo: replyTo, context: context)
+        }
+    }
+
+    private func deliverRetainedChat(clientId: String, wireText: String, replyTo: ChatReplyPreview?, context: CallActionContext) async {
+        guard isCurrentJoinedCall(context) else {
+            // A context change before the emit marks the row failed instead of letting it vanish (CH2).
+            if isCurrentRoomContext(context.roomId) {
+                markChatSendFailed(clientId: clientId, failure: ChatFailure.notConnected, serverText: "")
+            } else {
+                removeOptimisticChatMessage(id: clientId)
+            }
+            return
+        }
+        do {
+            let message = try await socketManager.sendChat(content: wireText, gif: nil, image: nil, replyTo: replyTo)
+            guard isCurrentRoomContext(context.roomId) else {
+                removeOptimisticChatMessage(id: clientId)
+                return
+            }
+            acknowledgeRetainedChat(clientId: clientId, with: message)
+        } catch {
+            guard isCurrentRoomContext(context.roomId) else {
+                removeOptimisticChatMessage(id: clientId)
+                return
+            }
+            // CH10: no raw transport text reaches the UI; the server text is kept for logging only.
+            let classified = MeetingErrorClassifier.classify(error, context: .chat, isNetworkOffline: state.isNetworkOffline)
+            let failure = ChatFailurePolicy.failure(category: classified.category, serverText: error.localizedDescription)
+            debugLog("[Meeting] Chat send failed \(classified.diagnosticCode)")
+            markChatSendFailed(clientId: clientId, failure: failure, serverText: classified.serverText)
+        }
+    }
+
+    /// The acknowledgement replaces the optimistic row in place and keeps its client id; an echo that landed first
+    /// as its own row is folded into it, so the row id never changes (CH1). A send `/clear` dropped adds nothing.
+    private func acknowledgeRetainedChat(clientId: String, with message: ChatMessage) {
+        pendingOptimisticChatSends.removeAll { $0.id == clientId }
+        retainedChatWireTexts.removeValue(forKey: clientId)
+        if clearedOptimisticChatIds.contains(clientId) {
+            clearedOptimisticChatIds.remove(clientId)
+            return
+        }
+        let normalized = normalizedChatMessage(message)
+        var messages = state.chatMessages
+        guard let index = messages.firstIndex(where: { $0.clientId == clientId }) else { return }
+        let wasPending = messages[index].id == clientId
+        let acknowledged = rebuiltChatMessage(normalized, clientId: clientId, sendStatus: nil, reactions: normalized.reactions)
+        messages[index] = acknowledged
+        if let echoIndex = messages.firstIndex(where: { $0.id == normalized.id && $0.clientId != clientId }) {
+            messages.remove(at: echoIndex)
+        }
+        state.chatMessages = messages
+        if wasPending {
+            playTtsIfNeeded(for: acknowledged, sourceContent: message.content, shouldSpeakTts: true)
+        }
+    }
+
+    private func markChatSendFailed(clientId: String, failure: ChatFailure, serverText: String) {
+        pendingOptimisticChatSends.removeAll { $0.id == clientId }
+        guard let index = state.chatMessages.firstIndex(where: { $0.clientId == clientId && $0.id == clientId }) else { return }
+        let message = state.chatMessages[index]
+        let status = ChatSendStatus(delivery: ChatMessageDelivery.failed, failure: failure.rawValue, serverText: serverText,
+                                    isRetryable: ChatFailurePolicy.isRetryable(failure))
+        state.chatMessages[index] = rebuiltChatMessage(message, clientId: clientId, sendStatus: status, reactions: message.reactions)
+    }
+
+    /// CH2: Try Again sends the same wire text again from the same row.
+    func retryChatSend(clientId: String) {
+        guard chatSendGate() == ChatSendGate.open,
+              let index = state.chatMessages.firstIndex(where: { $0.clientId == clientId }),
+              state.chatMessages[index].delivery == ChatMessageDelivery.failed else { return }
+        let message = state.chatMessages[index]
+        let wireText = retainedChatWireTexts[clientId] ?? message.content
+        state.chatMessages[index] = rebuiltChatMessage(message, clientId: clientId, sendStatus: ChatSendStatus.sending,
+                                                       reactions: message.reactions)
+        pendingOptimisticChatSends.append((
+            id: clientId,
+            signature: Self.chatEchoSignature(content: message.content, gif: message.gif, image: message.image,
+                                              replyTo: message.replyTo)
+        ))
+        let context = currentCallActionContext()
+        let replyTo = message.replyTo
+        Task {
+            await deliverRetainedChat(clientId: clientId, wireText: wireText, replyTo: replyTo, context: context)
+        }
+    }
+
+    /// CH2: Delete removes a failed row (never a delivered one).
+    func discardChatSend(clientId: String) {
+        pendingOptimisticChatSends.removeAll { $0.id == clientId }
+        retainedChatWireTexts.removeValue(forKey: clientId)
+        state.chatMessages.removeAll { $0.clientId == clientId && $0.delivery == ChatMessageDelivery.failed }
+    }
+
+    /// CH3: optimistic toggle (web `applyLocalReactionToggle`, cap 12), then `chat:react`; the acknowledgement's set
+    /// is authoritative; a failure rolls back (while the optimistic set is still shown) and adds the system row.
+    func toggleChatReaction(messageId: String, emoji: String) {
+        guard !messageId.isEmpty, chatSendGate() == ChatSendGate.open,
+              !state.isReactionsDisabled || state.isAdmin,
+              let index = state.chatMessages.firstIndex(where: { $0.id == messageId }) else { return }
+        let previous = state.chatMessages[index].reactions
+        // Toggle the alias the server already holds for you, if any (local identity aliases decide "mine").
+        var reactorId = chatLocalUserId
+        for reaction in previous where reaction.emoji == emoji {
+            for userId in reaction.userIds where state.isLocalIdentityUserId(userId) {
+                reactorId = userId
+            }
+        }
+        let optimistic = ChatReactionRules.toggled(previous, emoji: emoji, userId: reactorId)
+        guard optimistic != previous else { return }
+        applyChatReactions(messageId: messageId, reactions: optimistic)
+        let context = currentCallActionContext()
+        Task {
+            do {
+                let reactions = try await socketManager.toggleChatReaction(messageId: messageId, emoji: emoji)
+                guard isCurrentRoomContext(context.roomId) else { return }
+                applyChatReactions(messageId: messageId, reactions: reactions)
+            } catch {
+                guard isCurrentRoomContext(context.roomId) else { return }
+                if let current = state.chatMessages.first(where: { $0.id == messageId }), current.reactions == optimistic {
+                    applyChatReactions(messageId: messageId, reactions: previous)
+                }
+                addSystemMessage(.info("Your reaction couldn't be added."), notice: ChatNotice.reactionFailed)
+            }
+        }
+    }
+
+    /// CH3: replaces one message's reactions with the server's complete set.
+    private func applyChatReactions(messageId: String, reactions: [ChatMessageReaction]) {
+        guard let index = state.chatMessages.firstIndex(where: { $0.id == messageId }) else { return }
+        let message = state.chatMessages[index]
+        guard message.reactions != reactions else { return }
+        state.chatMessages[index] = rebuiltChatMessage(message, clientId: message.clientId, sendStatus: message.sendStatus,
+                                                       reactions: reactions)
+    }
+
+    /// The one helper that rebuilds a message with new identity, delivery or reaction fields. A reconstruction site
+    /// (apps/conclave-skip/AGENTS.md): every `ChatMessage` field is passed through.
+    private func rebuiltChatMessage(
+        _ message: ChatMessage,
+        clientId: String?,
+        sendStatus: ChatSendStatus?,
+        reactions: [ChatMessageReaction]
+    ) -> ChatMessage {
+        ChatMessage(
+            id: message.id,
+            userId: message.userId,
+            displayName: message.displayName,
+            content: message.content,
+            timestamp: message.timestamp,
+            gif: message.gif,
+            image: message.image,
+            isDirect: message.isDirect,
+            dmTargetUserId: message.dmTargetUserId,
+            dmTargetDisplayName: message.dmTargetDisplayName,
+            roomId: message.roomId,
+            replyTo: message.replyTo,
+            clientId: clientId,
+            sendStatus: sendStatus,
+            reactions: reactions
+        )
+    }
+
+    /// The SFU reply preview for a message (legacy `beginReply` rules; content cut to 280 like the SFU).
+    private func chatReplyPreview(forMessageId messageId: String) -> ChatReplyPreview? {
+        guard !messageId.isEmpty, let message = state.chatMessages.first(where: { $0.id == messageId }) else { return nil }
+        var content = message.content
+        if let gif = message.gif {
+            let title = gif.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            content = title.isEmpty ? "GIF" : title
+        } else if let image = message.image, message.content == image.fileName {
+            content = ""
+        } else if let action = ChatMessageContentPolicy.fullActionText(from: message.content) {
+            content = action
+        }
+        return ChatReplyPreview(
+            id: message.id,
+            userId: message.userId,
+            displayName: message.displayName,
+            content: ChatPresenter.previewText(content),
+            hasGif: message.gif != nil,
+            hasImage: message.image != nil,
+            isDirect: message.isDirect,
+            dmTargetUserId: message.dmTargetUserId
+        )
+    }
+
+    /// CH12: an assistant chunk that brings the first content to an answer whose start was empty.
+    private func isAssistantAnswerCompletion(_ message: ChatMessage) -> Bool {
+        guard message.userId == ConclaveAssistantChatIdentity.userId,
+              !countedAssistantAnswerIds.contains(message.id),
+              !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let existing = state.chatMessages.first(where: { $0.id == message.id }) else { return false }
+        return existing.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// S30 CC5: `isChatOpen` follows the native Chat panel, so the `toggleChat()` side effects (unread to zero,
+    /// previews cleared) run on native open; the legacy route never presents `.chat`, so this never fires there.
+    private func syncChatPanelOpenState() {
+        let snapshot = shell.panels.snapshot
+        let isCurrent = snapshot.current?.panel == MeetingPanel.chat && !snapshot.isDismissing
+        guard isCurrent != nativeChatPanelIsCurrent else { return }
+        nativeChatPanelIsCurrent = isCurrent
+        state.isChatOpen = isCurrent
+        if isCurrent {
+            state.unreadChatCount = 0
+            clearChatOverlayMessages()
+        }
+    }
+
     // MARK: - Reactions
 
     func sendReaction(emoji: String) {
@@ -10308,6 +11620,10 @@ final class MeetingViewModel {
             } catch {
                 guard isSameCallContext(actionContext) else { return }
                 debugLog("[Meeting] Reaction error: \(error.localizedDescription)")
+                // STG-5 (HD request B4-T4 R2.6): a server rate limit on a reaction posts one stage notice.
+                if MeetingErrorClassifier.classify(error, context: .media, isNetworkOffline: state.isNetworkOffline).category == .rateLimited {
+                    stage.post(StageEvent.make(kind: StageEventKind.rateLimited, detail: "reaction"))
+                }
             }
         }
     }
@@ -10793,6 +12109,7 @@ final class MeetingViewModel {
                 let snapshot = try await socketManager.getGameState()
                 guard isCurrentJoinedCall(actionContext) else { return }
                 state.gameCatalog = catalog
+                gameCatalogLoaded = true
                 applyGameSnapshot(snapshot)
             } catch {
                 guard isCurrentJoinedCall(actionContext) else { return }
@@ -10803,7 +12120,7 @@ final class MeetingViewModel {
     }
 
     func startGame(_ game: GameCatalogEntry, options: [String: GameConfigValue] = [:]) {
-        performGameAction(requiresAdmin: true) {
+        performGameAction(requiresAdmin: true, failureKind: .startGame) {
             try await self.socketManager.startGame(
                 gameId: game.id,
                 options: options.isEmpty ? nil : options
@@ -10812,7 +12129,7 @@ final class MeetingViewModel {
     }
 
     func endActiveGame() {
-        performGameAction(requiresAdmin: true) {
+        performGameAction(requiresAdmin: true, failureKind: .endGame) {
             try await self.socketManager.endGame()
         }
     }
@@ -10854,25 +12171,25 @@ final class MeetingViewModel {
         guard let publicState = state.gamePublicState, publicState.finished else { return }
         let gameId = publicState.gameId
         let options = publicState.config
-        performGameAction(requiresAdmin: true) {
+        performGameAction(requiresAdmin: true, failureKind: .startGame, isRematch: true) {
             try await self.socketManager.startGame(gameId: gameId, options: options)
         }
     }
 
     func openGameVote(candidateIds: [String]? = nil) {
-        performGameAction(requiresAdmin: true) {
+        performGameAction(requiresAdmin: true, failureKind: .openVote) {
             try await self.socketManager.openGameVote(candidateIds: candidateIds)
         }
     }
 
     func castGameVote(gameId: String) {
-        performGameAction(requiresAdmin: false) {
+        performGameAction(requiresAdmin: false, failureKind: .castVote) {
             try await self.socketManager.castGameVote(gameId: gameId)
         }
     }
 
     func cancelGameVote() {
-        performGameAction(requiresAdmin: true) {
+        performGameAction(requiresAdmin: true, failureKind: .cancelVote) {
             try await self.socketManager.cancelGameVote()
         }
     }
@@ -10884,6 +12201,8 @@ final class MeetingViewModel {
 
     private func performGameAction(
         requiresAdmin: Bool,
+        failureKind: ActivitiesCommandKind? = nil,
+        isRematch: Bool = false,
         operation: @escaping () async throws -> GameActionResponse
     ) {
         guard state.connectionState == .joined,
@@ -10917,6 +12236,13 @@ final class MeetingViewModel {
                 guard isSameCallContext(actionContext) else { return }
                 debugLog("[Game] action failed: \(error)")
                 state.gameErrorMessage = gameActionErrorMessage(error)
+                // S60 7, 8 (HD request B4-T8 R2g): typed failures back to the launcher and the shell (never the toast lane).
+                if let failureKind {
+                    let text = gameActionErrorMessage(error)
+                    activitySession.activities.commandFailed(failureKind, serverText: text)
+                    if failureKind == .endGame { activitySession.games.endFailed(serverText: text) }
+                }
+                if isRematch { activitySession.games.rematchFailed() }
             }
         }
     }
@@ -11056,6 +12382,7 @@ final class MeetingViewModel {
                 guard isCurrentJoinedCall(actionContext) else { return }
                 guard response.success != false else {
                     state.errorMessage = response.error ?? "Could not launch the shared browser."
+                    activitySession.activities.commandFailed(.launchBrowser, serverText: response.error ?? "")
                     return
                 }
                 state.isBrowserActive = response.success ?? true
@@ -11068,6 +12395,7 @@ final class MeetingViewModel {
                 }
             } catch {
                 applyActionError(error, context: actionContext)
+                activitySession.activities.commandFailed(.launchBrowser, serverText: "")
             }
         }
         return true
@@ -11088,6 +12416,7 @@ final class MeetingViewModel {
                 clearBrowserState()
             } catch {
                 applyActionError(error, context: actionContext)
+                activitySession.activities.commandFailed(.closeBrowser, serverText: "")
             }
         }
     }
@@ -11118,6 +12447,7 @@ final class MeetingViewModel {
                 guard isCurrentJoinedCall(actionContext) else { return }
                 guard response.success != false else {
                     state.errorMessage = response.error ?? "Could not navigate the shared browser."
+                    activitySession.activities.commandFailed(.navigateBrowser, serverText: response.error ?? "")
                     return
                 }
                 state.browserURL = normalizedURL
@@ -11126,6 +12456,7 @@ final class MeetingViewModel {
                 }
             } catch {
                 applyActionError(error, context: actionContext)
+                activitySession.activities.commandFailed(.navigateBrowser, serverText: "")
             }
         }
         return true
@@ -11271,11 +12602,13 @@ final class MeetingViewModel {
                 guard isCurrentJoinedCall(actionContext) else { return }
                 guard response.success != false else {
                     state.errorMessage = response.error ?? "Could not close the app."
+                    activitySession.activities.commandFailed(.closeApp, serverText: response.error ?? "")
                     return
                 }
                 clearAppsState()
             } catch {
                 applyActionError(error, context: actionContext)
+                activitySession.activities.commandFailed(.closeApp, serverText: "")
             }
         }
     }
@@ -11301,16 +12634,18 @@ final class MeetingViewModel {
                 guard isCurrentJoinedCall(actionContext) else { return }
                 guard response.success != false else {
                     state.errorMessage = response.error ?? "Could not update app lock."
+                    activitySession.activities.commandFailed(.setAppsLocked, serverText: response.error ?? "")
                     return
                 }
                 state.isAppsLocked = response.locked ?? locked
             } catch {
                 applyActionError(error, context: actionContext)
+                activitySession.activities.commandFailed(.setAppsLocked, serverText: "")
             }
         }
     }
 
-    private func openMeetingApp(_ appId: String) {
+    func openMeetingApp(_ appId: String) {
         guard state.isAdmin, !state.isWebinarAttendee else { return }
         let trimmedAppId = appId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedAppId.isEmpty else { return }
@@ -11332,6 +12667,7 @@ final class MeetingViewModel {
                 guard isCurrentJoinedCall(actionContext) else { return }
                 guard response.success != false else {
                     state.errorMessage = response.error ?? "Could not open the app."
+                    activitySession.activities.commandFailed(.openApp, serverText: response.error ?? "")
                     return
                 }
                 let activeAppId = response.activeAppId?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -11342,6 +12678,7 @@ final class MeetingViewModel {
                 ))
             } catch {
                 applyActionError(error, context: actionContext)
+                activitySession.activities.commandFailed(.openApp, serverText: "")
             }
         }
     }
@@ -11808,8 +13145,8 @@ final class MeetingViewModel {
         guard state.viewMode != mode else { return }
         state.viewMode = mode
         if mode == .tiled {
+            // S20 SC2: a layout change ends the pin; the persisted self view preference stays the user's own.
             state.pinnedUserId = nil
-            state.selfViewMode = .tile
         }
         MeetingViewPreferences.save(from: state)
         scheduleRemoteConsumerBandwidthPolicyUpdate()
@@ -11845,24 +13182,20 @@ final class MeetingViewModel {
         MeetingViewPreferences.save(from: state)
     }
 
+    /// S20 SC2: the pin is transient and local. It never writes the persisted `viewMode` (the pin-persists-spotlight
+    /// defect: a later `MeetingViewPreferences.save` stored `.spotlight`); the resolved stage kind reads the pin directly
+    /// (`StageLayoutPolicy.kind`, and `MeetingState.resolvedViewMode` for the legacy root).
     func togglePin(_ userId: String) {
         if state.isPinnedParticipant(userId) {
             state.pinnedUserId = nil
-            if state.viewMode == .spotlight {
-                state.viewMode = .auto
-            }
         } else {
             state.pinnedUserId = userId
-            state.viewMode = .spotlight
         }
         scheduleRemoteConsumerBandwidthPolicyUpdate()
     }
 
     func clearPin() {
         state.pinnedUserId = nil
-        if state.viewMode == .spotlight {
-            state.viewMode = .auto
-        }
         scheduleRemoteConsumerBandwidthPolicyUpdate()
     }
 }

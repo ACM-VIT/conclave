@@ -964,7 +964,9 @@ struct DesignContractsTests {
         let flat = panelNormalized(panelCode(shell))
         #expect(shell.hasPrefix("#if os(iOS) && !SKIP\n"))
         // A17 and Q12: Close at .topBarTrailing with hardware Escape, never a confirmation action.
-        #expect(flat.contains("ToolbarItem(placement: .topBarTrailing) { PanelCloseButton(title: title, action: onClose) }"))
+        #expect(flat.contains("ToolbarItem(placement: PanelShellToolbar.closePlacement) { PanelCloseButton(title: title, action: onClose) }"))
+        // S50 1 c: pinned trailing on iOS 27 so search never moves Close into the overflow; trailing before it.
+        #expect(flat.contains("if #available(iOS 27.0, *) { return .topBarPinnedTrailing } return .topBarTrailing"))
         #expect(!panelCode(shell).contains(".confirmationAction"))
         #expect(flat.components(separatedBy: ".keyboardShortcut(.cancelAction)").count - 1 == 2)
         #expect(flat.components(separatedBy: ".accessibilityIdentifier(\"panel.close\")").count - 1 == 2)

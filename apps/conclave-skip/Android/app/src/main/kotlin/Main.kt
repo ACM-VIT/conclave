@@ -102,6 +102,18 @@ open class MainActivity: AppCompatActivity {
             val stageForceScreenReader = remember {
                 stageFixture != null && intent?.getBooleanExtra("conclave.stageForceScreenReader", false) == true
             }
+            // S40 0.9 (HD request B4-T1 R3): the chat fixture layers on the stage fixture and opens Chat.
+            val chatFixture = remember { if (stageFixture != null) intent?.getStringExtra("conclave.chatFixture") else null }
+            // S50 PL12 (HD request B4-T7 R5): Debug-only People fixture over the stage fixture (standalone presenters;
+            // never WebRTC, audio, capture or network). The stage fixture's pattern and screen-reader extras apply.
+            val peopleFixture = remember {
+                val debuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                if (BuildConfig.DEBUG && debuggable) intent?.getStringExtra("conclave.peopleFixture") else null
+            }
+            val peopleFixturePattern = remember { if (peopleFixture != null) intent?.getStringExtra("conclave.stageFixturePattern") else null }
+            val peopleForceScreenReader = remember {
+                peopleFixture != null && intent?.getBooleanExtra("conclave.stageForceScreenReader", false) == true
+            }
             val saveableStateHolder = rememberSaveableStateHolder()
             val legacyRoot: @Composable () -> Unit = {
                 saveableStateHolder.SaveableStateProvider(FULL_ROOT_SAVEABLE_KEY) {
@@ -119,10 +131,10 @@ open class MainActivity: AppCompatActivity {
             }
             // WP2-S2b (S70 12 d): the single production feedback root, outside the PiP swap and the route switch,
             // so neither remounts it (a rotation recreates it with a baselined cursor). Never for a fixture.
-            if (systemFixture == null && stageFixture == null && premeetingFixture.isEmpty()) {
+            if (systemFixture == null && stageFixture == null && peopleFixture == null && premeetingFixture.isEmpty()) {
                 ConclaveRootFeedback()
             }
-            if (nativePremeeting && systemFixture == null && stageFixture == null) {
+            if (nativePremeeting && systemFixture == null && stageFixture == null && peopleFixture == null) {
                 // ENT-1: the premeeting stream, the second production delivery (launch-time route, never remounted).
                 NativePremeetingRootFeedback()
             }
@@ -130,8 +142,15 @@ open class MainActivity: AppCompatActivity {
                 PipContent()
             } else if (systemFixture != null && !PipController.isInCall) {
                 SystemFixtureRoot(systemFixture)
+            } else if (peopleFixture != null && !PipController.isInCall) {
+                PeopleFixtureRoot(peopleFixture, peopleFixturePattern, peopleForceScreenReader)
             } else if (stageFixture != null && !PipController.isInCall) {
-                StageFixtureRoot(stageFixture, stageFixturePattern, stageForceScreenReader)
+                // S30 CL13 (HD request B4-T6 R10): `controls-<state>` values mount the controls fixture.
+                if (isControlsFixtureState(stageFixture)) {
+                    ControlsFixtureRoot(stageFixture)
+                } else {
+                    StageFixtureRoot(stageFixture, stageFixturePattern, stageForceScreenReader, chatFixture)
+                }
             } else if (premeetingFixture.isNotEmpty() && !PipController.isInCall) {
                 // S10 L9: standalone presenters; never the view model, a call, media or the network.
                 PremeetingFixtureHost(premeetingFixture)

@@ -108,18 +108,38 @@ final class MeetingState {
     /// S20 SC1 E1: the stage's own refresh hooks, separate from S1, so an S1-only change never builds stage inputs
     /// and a stage-only change is never missed. The view model installs one closure each (`bindStageInputs()`).
     @ObservationIgnored var onStageInputChanged: (() -> Void)? = nil
+    /// S30 CC1 (CTL-1): the controls refresh path's own hook, called only from fields S1 does not hook (S1-hooked fields
+    /// reach the controls through the shell refresh). The view model binds it to `requestControlsRefresh()`.
+    @ObservationIgnored var onControlsInputChanged: (() -> Void)? = nil
+    /// S50 PH1: People's own refresh hook, separate from S1, the stage and the controls, so a People-only change never
+    /// builds stage inputs and a speaker change, an audio level or a reaction never builds People inputs. The view
+    /// model installs one closure (`bindPeopleInputs()`). Connection fields refresh People through the S1 publish.
+    @ObservationIgnored var onPeopleInputChanged: (() -> Void)? = nil
     /// SC1 E5: the active or TTS speaker changed (hot; writes only the speaking store and the order policy).
     @ObservationIgnored var onStageSpeakerChanged: (() -> Void)? = nil
     /// Hot: the active reactions changed (writes only the reaction layer).
     @ObservationIgnored var onStageReactionsChanged: (() -> Void)? = nil
     /// SC1 E4: a game push; the view model refreshes the stage only when presence changes.
     @ObservationIgnored var onStageGameChanged: (() -> Void)? = nil
+    /// S60 7 (ACT-1): the launcher's own refresh hook (catalog, vote, apps, browser, role, connection), separate from
+    /// S1, the stage and chat. The view model installs one closure (`bindActivityInputs()`).
+    @ObservationIgnored var onActivityInputChanged: (() -> Void)? = nil
+    /// S60 8 (ACT-2): a game push or identity change for the game shell (parsed once per push).
+    @ObservationIgnored var onActivityGameChanged: (() -> Void)? = nil
+    /// S40 CH13: the chat presenter's own refresh hook, separate from S1 and the stage, with a change hint so changes
+    /// that touch no messages skip the message diff. The view model installs one closure (`bindChatInputs()`).
+    @ObservationIgnored var onChatInputChanged: ((ChatInputChange) -> Void)? = nil
+    /// S40 0.5: bumped by every `chatMessages` and `systemMessages` write (diagnostics; never observed).
+    @ObservationIgnored private(set) var chatRevision = 0
 
     // Connection State
     var connectionState: ConnectionState = .disconnected {
         didSet {
             PerformanceDiagnostics.state("connectionState", old: "\(oldValue)", new: "\(connectionState)")
             onShellInputChanged?()
+            onChatInputChanged?(ChatInputChange.gate)
+            onActivityInputChanged?()
+            onActivityGameChanged?()
         }
     }
     /// True from the first established-call interruption until replacement
@@ -136,6 +156,9 @@ final class MeetingState {
             )
             onShellInputChanged?()
             onStageInputChanged?()
+            onChatInputChanged?(ChatInputChange.gate)
+            onActivityInputChanged?()
+            onActivityGameChanged?()
         }
     }
     /// True while a connected call is moving through an expected app
@@ -161,7 +184,7 @@ final class MeetingState {
         didSet { onStageInputChanged?() }
     }
     var isNetworkOffline: Bool = false {
-        didSet { onShellInputChanged?(); onStageInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.gate) }
     }
     var waitingMessage: String? = nil {
         didSet { onShellInputChanged?() }
@@ -190,20 +213,30 @@ final class MeetingState {
 
     // Room State
     var roomId: String = "" {
-        didSet { onShellInputChanged?(); onStageInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onPeopleInputChanged?() }
     }
     var isRoomLocked: Bool = false {
-        didSet { onStageInputChanged?() }
+        didSet { onStageInputChanged?(); onControlsInputChanged?(); onPeopleInputChanged?() }
     }
-    var isChatLocked: Bool = false
-    var isNoGuests: Bool = false
-    var isDmEnabled: Bool = true
-    var isImageAttachmentsEnabled: Bool = true
+    var isChatLocked: Bool = false {
+        didSet { onChatInputChanged?(ChatInputChange.policy) }
+    }
+    var isNoGuests: Bool = false {
+        didSet { onPeopleInputChanged?() }
+    }
+    var isDmEnabled: Bool = true {
+        didSet { onChatInputChanged?(ChatInputChange.policy) }
+    }
+    var isImageAttachmentsEnabled: Bool = true {
+        didSet { onChatInputChanged?(ChatInputChange.policy) }
+    }
     // True while a picked chat image is uploading to the asset store.
     var isChatImageUploading: Bool = false
-    var isTtsDisabled: Bool = false
+    var isTtsDisabled: Bool = false {
+        didSet { onChatInputChanged?(ChatInputChange.policy) }
+    }
     var isReactionsDisabled: Bool = false {
-        didSet { onShellInputChanged?() }
+        didSet { onShellInputChanged?(); onChatInputChanged?(ChatInputChange.policy) }
     }
     var meetingRequiresInviteCode: Bool = false {
         didSet { onStageInputChanged?() }
@@ -215,23 +248,23 @@ final class MeetingState {
 
     // Webinar State
     var webinarRole: String? = nil {
-        didSet { onShellInputChanged?(); onStageInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.gate); onPeopleInputChanged?() }
     }
     var isWebinarEnabled: Bool = false {
-        didSet { onStageInputChanged?() }
+        didSet { onStageInputChanged?(); onControlsInputChanged?(); onPeopleInputChanged?() }
     }
     var isWebinarPublicAccess: Bool = false {
-        didSet { onStageInputChanged?() }
+        didSet { onStageInputChanged?(); onPeopleInputChanged?() }
     }
     var isWebinarLocked: Bool = false
     var webinarRequiresInviteCode: Bool = false
     var webinarAttendeeCount: Int = 0 {
-        didSet { onStageInputChanged?() }
+        didSet { onStageInputChanged?(); onPeopleInputChanged?() }
     }
     var webinarMaxAttendees: Int = 500
     var webinarLinkSlug: String?
     var webinarLinkURL: String? {
-        didSet { onStageInputChanged?() }
+        didSet { onStageInputChanged?(); onPeopleInputChanged?() }
     }
     var webinarFeedMode: String = "active-speaker" {
         didSet { onStageInputChanged?() }
@@ -242,21 +275,38 @@ final class MeetingState {
 
     // User State
     var userId: String {
-        didSet { onStageInputChanged?() }
+        didSet { onStageInputChanged?(); onChatInputChanged?(ChatInputChange.roster); onPeopleInputChanged?() }
     }
     var sfuUserId: String? {
-        didSet { onStageInputChanged?() }
+        didSet { onStageInputChanged?(); onChatInputChanged?(ChatInputChange.roster); onPeopleInputChanged?() }
     }
     var sessionId: String
     var displayName: String = "" {
-        didSet { onShellInputChanged?(); onStageInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.roster); onPeopleInputChanged?() }
     }
     var isAdmin: Bool = false {
-        didSet { onShellInputChanged?(); onStageInputChanged?() }
+        didSet {
+            onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.gate); onPeopleInputChanged?()
+            // S60 7, 8 (ACT-1, ACT-2): the launcher's and the game shell's host flag.
+            onActivityInputChanged?(); onActivityGameChanged?()
+            // S50 PH11 (INM D5): waiting requests and access lists go with the host role, so no stale waiting badge
+            // (Participants control, More row) and no stale list remains after losing host. The hand queue (PH8)
+            // joins this when PPL-5 adds it.
+            if oldValue && !isAdmin { clearHostOnlyState() }
+        }
     }
-    var hostUserId: String?
+
+    private func clearHostOnlyState() {
+        if !pendingUsers.isEmpty { pendingUsers = [:] }
+        if !adminAllowedUserKeys.isEmpty { adminAllowedUserKeys = [] }
+        if !adminLockedAllowedUserKeys.isEmpty { adminLockedAllowedUserKeys = [] }
+        if !adminBlockedUserKeys.isEmpty { adminBlockedUserKeys = [] }
+    }
+    var hostUserId: String? {
+        didSet { onPeopleInputChanged?() }
+    }
     var hostUserIds: [String] = [] {
-        didSet { onStageInputChanged?() }
+        didSet { onStageInputChanged?(); onPeopleInputChanged?() }
     }
 
     // Participants
@@ -267,6 +317,10 @@ final class MeetingState {
             }
             onShellInputChanged?()
             onStageInputChanged?()
+            // The view model rebuilds the derived chat roster and applies only when ids or names changed (CH13), so a
+            // mute, camera or hand update refreshes no chat.
+            onChatInputChanged?(ChatInputChange.roster)
+            onPeopleInputChanged?()
         }
     }
     /// S50 PH19 (RECONCILE R20): join order keyed by canonical id, assigned at first presence, kept across recovery
@@ -287,35 +341,38 @@ final class MeetingState {
         nextParticipantJoinSerial = 0
     }
     var displayNames: [String: String] = [:] {
-        didSet { onStageInputChanged?() }
+        didSet { onStageInputChanged?(); onChatInputChanged?(ChatInputChange.roster); onPeopleInputChanged?() }
     }
     var pendingUsers: [String: String] = [:] {
         didSet {
             pendingUserRows = PendingUserRowsPolicy.sortedRows(from: pendingUsers)
             onShellInputChanged?()
             onStageInputChanged?()
+            onPeopleInputChanged?()
         }
     }
     private(set) var pendingUserRows: [PendingUserRow] = []
     var hasInitialPresenceSnapshot: Bool = false {
-        didSet { onStageInputChanged?() }
+        didSet { onStageInputChanged?(); onPeopleInputChanged?() }
     }
 
     // Media State
     var isMuted: Bool = true {
-        didSet { onShellInputChanged?(); onStageInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onPeopleInputChanged?() }
     }
     var isCameraOff: Bool = true {
-        didSet { onShellInputChanged?(); onStageInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onPeopleInputChanged?() }
     }
+    /// S10 0.8 C1 (ENT-3): the lobby's media intent while the join is in flight; `.joined` reconciles it once.
+    var pendingEntryMediaIntent: EntryMediaIntent? = nil
     var isAudioOnlyMode: Bool = false {
         didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
     var isScreenSharing: Bool = false {
-        didSet { onShellInputChanged?(); onStageInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onPeopleInputChanged?() }
     }
     var isHandRaised: Bool = false {
-        didSet { onShellInputChanged?(); onStageInputChanged?() }
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onPeopleInputChanged?() }
     }
     var videoQuality: VideoQuality = .standard
     var connectionQuality: ConnectionQuality = .unknown {
@@ -325,38 +382,70 @@ final class MeetingState {
     // platform default. Mirrors the web client's device pickers.
     var selectedAudioInputId: String?
     var selectedAudioOutputId: String?
+    /// S10 0.8 C2 (ENT-3): the lobby's route intent (an AudioRouteKind raw value and an input id), kept for display;
+    /// the routing owner applies it once when call audio starts.
+    var prejoinAudioOutputKind = ""
+    var prejoinAudioInputId = ""
 
     // Shared Browser
     var isBrowserActive: Bool = false {
-        didSet { onStageInputChanged?() }
+        didSet { onStageInputChanged?(); onControlsInputChanged?(); onActivityInputChanged?() }
     }
-    var isBrowserLaunching: Bool = false
-    var hasBrowserAudio: Bool = false
-    var isBrowserAudioMuted: Bool = false
-    var browserURL: String?
+    var isBrowserLaunching: Bool = false {
+        didSet { onActivityInputChanged?() }
+    }
+    var hasBrowserAudio: Bool = false {
+        didSet { onActivityInputChanged?() }
+    }
+    var isBrowserAudioMuted: Bool = false {
+        didSet { onActivityInputChanged?() }
+    }
+    var browserURL: String? {
+        didSet { onActivityInputChanged?() }
+    }
     var browserNoVncURL: String?
-    var browserControllerUserId: String?
-    var isBrowserNavigating: Bool = false
-    var browserProvider: String?
+    var browserControllerUserId: String? {
+        didSet { onActivityInputChanged?() }
+    }
+    var isBrowserNavigating: Bool = false {
+        didSet { onActivityInputChanged?() }
+    }
+    var browserProvider: String? {
+        didSet { onActivityInputChanged?() }
+    }
 
     // Apps Runtime
     var activeAppId: String? {
-        didSet { onStageInputChanged?() }
+        didSet { onStageInputChanged?(); onControlsInputChanged?(); onActivityInputChanged?() }
     }
-    var isAppsLocked: Bool = false
-    var isAppsActionInFlight: Bool = false
+    var isAppsLocked: Bool = false {
+        didSet { onActivityInputChanged?() }
+    }
+    var isAppsActionInFlight: Bool = false {
+        didSet { onActivityInputChanged?() }
+    }
     var latestAppYjsUpdate: ActiveAppBinaryMessage?
     var latestAppAwarenessUpdate: ActiveAppBinaryMessage?
     var appYjsUpdateSequence: Int = 0
     var appAwarenessUpdateSequence: Int = 0
 
     // Games
-    var gameCatalog: [GameCatalogEntry] = []
+    var gameCatalog: [GameCatalogEntry] = [] {
+        didSet { onActivityInputChanged?() }
+    }
     var gamePublicState: GamePublicState? {
         didSet { onStageGameChanged?() }
     }
-    var gamePlayerView: GamePlayerViewNotification?
-    var gameVote: GameVoteState?
+    var gamePlayerView: GamePlayerViewNotification? {
+        didSet { onActivityGameChanged?() }
+    }
+    var gameVote: GameVoteState? {
+        didSet { onControlsInputChanged?(); onActivityInputChanged?() }
+    }
+    /// The server's canonical id for you from `game:snapshot` / `game:getState` (`selfId`, C6-15); nil until sent.
+    var gameSelfId: String? = nil {
+        didSet { onActivityGameChanged?() }
+    }
     var isGameActionInFlight: Bool = false
     var gameErrorMessage: String?
     // End-game arming lives in meeting state, not view @State: the stage
@@ -383,7 +472,7 @@ final class MeetingState {
         didSet { onStageInputChanged?() }
     }
     var viewMode: MeetingViewMode = .auto {
-        didSet { onStageInputChanged?() }
+        didSet { onStageInputChanged?(); onControlsInputChanged?() }
     }
     var viewMaxTiles: Int = MeetingViewConstants.defaultMaxTiles {
         didSet { onStageInputChanged?() }
@@ -404,6 +493,8 @@ final class MeetingState {
             if oldValue.count != chatMessages.count {
                 PerformanceDiagnostics.state("chatMessages.count", old: "\(oldValue.count)", new: "\(chatMessages.count)")
             }
+            chatRevision += 1
+            onChatInputChanged?(ChatInputChange.messages)
         }
     }
     var chatOverlayMessages: [ChatMessage] = [] {
@@ -418,6 +509,8 @@ final class MeetingState {
             if oldValue.count != systemMessages.count {
                 PerformanceDiagnostics.state("systemMessages.count", old: "\(oldValue.count)", new: "\(systemMessages.count)")
             }
+            chatRevision += 1
+            onChatInputChanged?(ChatInputChange.messages)
         }
     }
     var unreadChatCount: Int = 0 {
@@ -855,6 +948,10 @@ final class MeetingState {
         if isWebinarAttendee {
             return renderableStageUserId(webinarSpeakerUserId) == nil ? .tiled : .spotlight
         }
+        // S20 SC2: the pin is transient and no longer writes `viewMode`, so a renderable pin wins in every mode.
+        if hasRenderablePinnedUser {
+            return .spotlight
+        }
 
         switch viewMode {
         case .auto:
@@ -1060,24 +1157,36 @@ final class MeetingState {
         return Self.userIdsMatch(pinnedUserId, normalized)
     }
 
+    /// The join's SFU client id (VM `joinRoom`); "" or the default tenant writes no `?clientId=` (ENT-8, RECONCILE R50).
+    var meetingClientId = ""
+
     var meetingLink: String {
-        Self.meetingLink(for: roomId)
+        Self.meetingLink(for: roomId, clientId: meetingClientId)
     }
 
     static func meetingLink(for roomId: String) -> String {
-        let trimmed = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: meetingLinkPathAllowed) ?? trimmed
-        return "https://conclave.acmvit.in/\(encoded)"
+        MeetingLinkBuilder.url(roomCode: roomId, clientId: nil)
     }
 
-    private nonisolated static let meetingLinkPathAllowed: CharacterSet = {
-        var allowed = CharacterSet.urlPathAllowed
-        allowed.remove(charactersIn: "/?#")
-        return allowed
-    }()
+    static func meetingLink(for roomId: String, clientId: String?) -> String {
+        MeetingLinkBuilder.url(roomCode: roomId, clientId: clientId)
+    }
 
     func displayName(for id: String) -> String {
         MeetingDisplayNamePresentation.formatted(rawDisplayName(for: id))
+    }
+
+    /// S40 3 f: the full name for chat headers, labels and reactors (never cut to two words; the header truncates
+    /// at one line with the full name in the accessibility label).
+    func chatDisplayName(for id: String) -> String {
+        rawDisplayName(for: id).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// S50 2 j: remote participants with duplicate sessions merged (muted only if every session is, hand if any, the
+    /// `mergedRemoteParticipant` rules), for `makePeopleInputs()`. People's full names use `chatDisplayName(for:)`
+    /// (the same full-name rule, HD request B4-T7 R1e).
+    var mergedRemoteParticipants: [Participant] {
+        uniqueRemoteParticipants
     }
 
     private func rawDisplayName(for id: String) -> String {

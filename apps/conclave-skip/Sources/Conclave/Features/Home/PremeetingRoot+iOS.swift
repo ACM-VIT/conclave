@@ -19,10 +19,13 @@ struct NativePremeetingProductionRoot: View {
 
     var body: some View {
         NativeAppRoot(shell: viewModel.shell, premeeting: viewModel.premeeting,
-                      usesNativeCallRoot: NativeRouteFlags.shared.isEnabled(.call), stage: viewModel.stage) {
+                      usesNativeCallRoot: NativeRouteFlags.shared.isEnabled(.call), stage: viewModel.stage,
+                      people: viewModel.people, activitySession: viewModel.activitySession) {
             // Interim call content (S10 8 m): the legacy call root, which draws only call states on this route.
             ContentView(appState: appState)
         }
+        // CTL-1 (HD request B4-T6 R9): the native call root's control bar reads the controls presenter from here.
+        .environment(viewModel.controls)
         .conclavePremeetingFeedback(premeeting: viewModel.premeeting)
     }
 }
@@ -36,14 +39,22 @@ struct NativeAppRoot<InterimCall: View>: View {
     /// STG-1 (HD request B3-T2 R5): the session's stage presenter for the native call root; nil (the L9 fixture)
     /// always shows the interim call content.
     let stage: StagePresenter?
+    /// PPL-1 (HD request B4-T7 R6): the session's People presenter for the native Participants panel; nil (the L9
+    /// fixture) keeps the empty native shell.
+    let people: PeoplePresenter?
+    /// ACT-1, ACT-2, STG-9 (HD request B4-T8 R5c): the session's activity presenters; nil in the L9 fixture.
+    let activitySession: ActivitySession?
     let interimCall: () -> InterimCall
 
     init(shell: MeetingShellPresenter, premeeting: PremeetingPresenter, usesNativeCallRoot: Bool,
-         stage: StagePresenter? = nil, @ViewBuilder interimCall: @escaping () -> InterimCall) {
+         stage: StagePresenter? = nil, people: PeoplePresenter? = nil, activitySession: ActivitySession? = nil,
+         @ViewBuilder interimCall: @escaping () -> InterimCall) {
         self.shell = shell
         self.premeeting = premeeting
         self.usesNativeCallRoot = usesNativeCallRoot
         self.stage = stage
+        self.people = people
+        self.activitySession = activitySession
         self.interimCall = interimCall
     }
 
@@ -51,7 +62,7 @@ struct NativeAppRoot<InterimCall: View>: View {
         ZStack {
             PremeetingRoot(shell: shell, premeeting: premeeting)
             NativeCallBranch(shell: shell, premeeting: premeeting, usesNativeCallRoot: usesNativeCallRoot,
-                             stage: stage, interimCall: interimCall)
+                             stage: stage, people: people, activitySession: activitySession, interimCall: interimCall)
         }
     }
 }
@@ -66,13 +77,15 @@ struct NativeCallBranch<InterimCall: View>: View {
     let premeeting: PremeetingPresenter
     let usesNativeCallRoot: Bool
     let stage: StagePresenter?
+    let people: PeoplePresenter?
+    let activitySession: ActivitySession?
     let interimCall: () -> InterimCall
 
     var body: some View {
         if premeeting.root.root == .call, usesNativeCallRoot, let stage {
-            // STG-1 (HD request B3-T2 R5): the native call root. The control bar slot stays empty until CTL-1, so this
-            // Debug route previews the stage only.
-            CallRoot(shell: shell, stage: stage, renderers: .live)
+            // STG-1 (HD request B3-T2 R5): the native call root. The control bar reads the controls presenter from the
+            // environment (CTL-1, HD request B4-T6 R9); People (PPL-1) and the activity session (ACT-1) are threaded.
+            CallRoot(shell: shell, stage: stage, people: people, renderers: .live, activitySession: activitySession)
                 .modifier(PremeetingSwitchAlert(premeeting: premeeting, isActive: true))
                 .transition(.opacity)
         } else if premeeting.root.root == .call {
@@ -112,7 +125,7 @@ struct PremeetingRoot: View {
             JoinCodeSheet(premeeting: premeeting)
         }
         .sheet(isPresented: accountSheetBinding, onDismiss: { premeeting.accountSheetDidDismiss() }) {
-            PremeetingAccountStandIn(premeeting: premeeting, isSheet: true)
+            AccountView(premeeting: premeeting, account: premeeting.account)
         }
         .modifier(PremeetingUpdatePrompt(premeeting: premeeting))
         // While the call branch shows, its own copy of the alert presents instead (dark, S10 4 c).
@@ -133,8 +146,8 @@ private struct PremeetingRootContent: View {
     }
 }
 
-/// One destination per route kind. New kinds (ENT-3 lobby, ENT-7 account and privacy, ENT-9 webinar landing)
-/// replace their stand-in here.
+/// One destination per route kind. New kinds (ENT-7 account and privacy, ENT-9 webinar landing) replace their
+/// stand-in here; the lobby is ENT-3's `LobbyView` (S/Features/Lobby).
 private struct PremeetingDestination: View {
     let route: PremeetingRoute
     let premeeting: PremeetingPresenter
@@ -142,99 +155,19 @@ private struct PremeetingDestination: View {
     var body: some View {
         switch route.kind {
         case .lobby:
-            PremeetingLobbyStandIn(route: route, premeeting: premeeting)
+            LobbyView(route: route, premeeting: premeeting)
         case .webinarLanding:
             PremeetingWebinarStandIn(route: route)
-        case .account, .privacyPolicy:
-            PremeetingAccountStandIn(premeeting: premeeting, isSheet: false)
+        case .account:
+            // iOS presents Account as a sheet; a pushed account route (never pushed on iOS) shows the same list.
+            AccountList(account: premeeting.account, usesRouteLinks: false)
+        case .privacyPolicy:
+            PrivacyPolicyScreen()
         }
     }
 }
 
 // MARK: - Stand-ins until their slices land
-
-/// The lobby stand-in (ENT-1): the room, the 0.4 mode and Cancel while connecting or waiting. It has no Start or
-/// Join, so New Meeting in the fixture never reaches `joinRoom` (the real lobby and its join coordinator are ENT-3).
-private struct PremeetingLobbyStandIn: View {
-    let route: PremeetingRoute
-    let premeeting: PremeetingPresenter
-
-    private var status: LobbyStatusSnapshot? {
-        guard let status = premeeting.lobbyStatus, status.routeId == route.id else { return nil }
-        return status
-    }
-
-    private var isBusy: Bool {
-        guard let status else { return false }
-        return status.mode == .connecting || status.mode == .waiting
-    }
-
-    var body: some View {
-        List {
-            Section {
-                Text(route.roomId)
-                    .font(.body.monospaced())
-                    .textSelection(.enabled)
-                    .accessibilityIdentifier("lobby.room")
-            }
-            if let status, status.mode != .editing {
-                Section {
-                    PremeetingLobbyStatusRow(status: status)
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle(route.roomId)
-        .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(isBusy)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                if isBusy {
-                    Button(ConclaveStrings.text("Cancel"), role: .cancel) { premeeting.cancelJoin() }
-                        .accessibilityIdentifier("lobby.cancel")
-                }
-            }
-        }
-    }
-}
-
-private struct PremeetingLobbyStatusRow: View {
-    let status: LobbyStatusSnapshot
-
-    var body: some View {
-        switch status.mode {
-        case .connecting:
-            HStack(spacing: 12) {
-                ProgressView()
-                Text(status.waitingKind == .reconnecting ? ConclaveStrings.text("Reconnecting") : ConclaveStrings.text("Joining"))
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("lobby.status")
-        case .waiting:
-            HStack(spacing: 12) {
-                ProgressView()
-                Text(status.waitingKind == .reconnecting ? ConclaveStrings.text("Reconnecting") : ConclaveStrings.text("Asking to Join"))
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("lobby.status")
-        case .failed:
-            VStack(alignment: .leading, spacing: 4) {
-                Label(status.intent == .newMeeting ? ConclaveStrings.text("Couldn\u{2019}t Start") : ConclaveStrings.text("Couldn\u{2019}t Join"),
-                      systemImage: PremeetingSymbols.error)
-                    .foregroundStyle(Color(uiColor: .systemRed))
-                if !status.issueServerText.isEmpty {
-                    Text(status.issueServerText)
-                        .font(.subheadline)
-                        .foregroundStyle(HostingTheme.secondaryText)
-                }
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("lobby.status")
-        case .editing:
-            EmptyView()
-        }
-    }
-}
 
 /// The webinar landing stand-in (ENT-9 builds the landing).
 private struct PremeetingWebinarStandIn: View {
@@ -250,39 +183,6 @@ private struct PremeetingWebinarStandIn: View {
         .listStyle(.insetGrouped)
         .navigationTitle(route.roomId)
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-/// The account stand-in (ENT-7 builds Account, sign-in and privacy). The sheet form closes at `.topBarTrailing`.
-private struct PremeetingAccountStandIn: View {
-    let premeeting: PremeetingPresenter
-    let isSheet: Bool
-
-    var body: some View {
-        let home = premeeting.home
-        NavigationStack {
-            List {
-                if home.isSignedIn {
-                    Section {
-                        HStack(spacing: 12) {
-                            ConclaveAvatar(name: home.accountName, id: home.accountSeed, size: .row)
-                            Text(home.accountName)
-                        }
-                        .accessibilityElement(children: .combine)
-                    }
-                }
-            }
-            .listStyle(.insetGrouped)
-            .navigationTitle(ConclaveStrings.text("Account"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if isSheet {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        ConclaveCloseButton(title: nil, identifier: "account.close") { premeeting.dismissAccountSheet() }
-                    }
-                }
-            }
-        }
     }
 }
 

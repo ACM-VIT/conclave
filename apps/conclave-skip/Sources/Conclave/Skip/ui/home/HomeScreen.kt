@@ -266,7 +266,12 @@ private fun RejoinCardItem(card: RejoinCard, onRejoin: () -> Unit) {
 private fun RecentRowItem(row: HomeRecentUi, onOpen: () -> Unit, onRemove: () -> Unit, modifier: Modifier = Modifier) {
     val haptics = rememberConclaveHaptics()
     var menuOpen by remember { mutableStateOf(false) }
-    val link = EntryPolicies.recentLink(roomId = row.roomId, isWebinar = row.isWebinar)
+    // ENT-8 (RECONCILE R50): meeting rows use the shared MeetingLinkBuilder (recents keep no client id, Q4); webinar
+    // rows keep the landing link.
+    val link = if (row.isWebinar) EntryPolicies.recentLink(roomId = row.roomId, isWebinar = true)
+    else MeetingLinkBuilder.url(roomCode = row.roomId, clientId = null)
+    val shareSubject = conclaveString("ds_share_subject")
+    val shareText = conclaveString("ds_share_text", link)
     val moreLabel = conclaveString("pm_more_options_for", row.title)
     val joinTitle = conclaveString("pm_join")
     val copyTitle = conclaveString("pm_copy_link")
@@ -282,7 +287,8 @@ private fun RecentRowItem(row: HomeRecentUi, onOpen: () -> Unit, onRemove: () ->
         haptics.gesture(FeedbackKind.linkCopied)
         Unit
     }
-    val share = { NativeMeetingShare.shareMeetingLink(link, row.roomId); Unit }
+    // S10 11 d (SC21, RECONCILE R14): the F00 payload, EXTRA_TITLE = the room label, no chooser title.
+    val share = { NativeMeetingShare.shareMeetingLink(link = link, subject = shareSubject, text = shareText, title = row.title); Unit }
     val sections = remember(joinTitle, copyTitle, shareTitle, removeTitle) {
         listOf(
             MenuSectionModel(id = "open", items = skip.lib.Array(listOf(

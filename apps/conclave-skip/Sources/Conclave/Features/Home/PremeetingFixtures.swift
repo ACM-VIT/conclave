@@ -34,6 +34,24 @@ enum PremeetingFixtureState: String, CaseIterable, Equatable {
     case outcomeConnectionLost = "outcome-connection-lost"
     /// An initial join failure: the lobby inline failed block (S10 0.4).
     case joinFailed = "join-failed"
+    /// ENT-3 S10 6 l1: a joined-by-link lobby with an injected snapshot: camera blocked by a revoked permission,
+    /// microphone allowed, guest name "Avery", two people here, no network or media.
+    case lobby
+    /// S10 6 l10: the same lobby with no name, so the primary is disabled with its reason.
+    case lobbyNameMissing = "lobby-name-missing"
+    /// S10 6 f `newMeeting`: the generated code as the title, Start Meeting, no link and no Share (Q1), no camera.
+    case lobbyNewMeeting = "lobby-new-meeting"
+    /// ENT-7 (S10 5 l): Account states. `AccountFixtureScript` (S/Features/Account/AccountFixtures.swift) scripts the
+    /// identity and the answers; Home stays the root content.
+    case accountSignedOut = "account-signed-out"
+    case accountSignedIn = "account-signed-in"
+    case accountSignInCancel = "account-sign-in-cancel"
+    case accountSignInFailure = "account-sign-in-failure"
+    case accountExpired = "account-expired"
+    case accountDeleteFailure = "account-delete-failure"
+    case accountGoogleOnly = "account-google-only"
+    case accountAppleOnly = "account-apple-only"
+    case accountProvidersFailed = "account-providers-failed"
 }
 
 /// One scripted step: shell inputs and the premeeting-only inputs, applied after `delayMillis` from the previous step.
@@ -55,10 +73,11 @@ enum PremeetingFixtureScript {
 
     static let identity = MeetingSessionIdentity(callSession: 1, attempt: 1, attemptToken: "fixture-1")
 
-    static func base(updateRequired: Bool = false, resumeInFlight: Bool = false) -> PremeetingInputs {
+    static func base(updateRequired: Bool = false, resumeInFlight: Bool = false, guestName: String = "") -> PremeetingInputs {
         PremeetingInputs.make(
             currentRoomId: roomLabel,
             currentJoinMode: .meeting,
+            accountName: guestName,
             isAppActive: true,
             resumeInFlight: resumeInFlight,
             resumeRoomId: resumeInFlight ? roomLabel : "",
@@ -91,7 +110,9 @@ enum PremeetingFixtureScript {
     static func steps(for state: PremeetingFixtureState) -> [PremeetingFixtureStep] {
         let plain = base()
         switch state {
-        case .home, .empty, .noticeInvalidLink, .noticeMovedToAudience:
+        case .home, .empty, .noticeInvalidLink, .noticeMovedToAudience,
+             .accountSignedOut, .accountSignedIn, .accountSignInCancel, .accountSignInFailure, .accountExpired,
+             .accountDeleteFailure, .accountGoogleOnly, .accountAppleOnly, .accountProvidersFailed:
             return [PremeetingFixtureStep(delayMillis: 0, shell: home(), base: plain)]
         case .noticeEndedByHost:
             let notice = MeetingShellInputs.make(meetingEndedNoticeMessage: "The host ended the meeting.")
@@ -135,8 +156,49 @@ enum PremeetingFixtureScript {
                 PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: plain),
                 PremeetingFixtureStep(delayMillis: 0, shell: ended(.joinFailed, connectionState: .error), base: plain)
             ]
+        case .lobby, .lobbyNewMeeting:
+            return [PremeetingFixtureStep(delayMillis: 0, shell: home(), base: base(guestName: lobbyGuestName))]
+        case .lobbyNameMissing:
+            return [PremeetingFixtureStep(delayMillis: 0, shell: home(), base: plain)]
         }
     }
+
+    // MARK: Lobby fixtures (ENT-3, S10 6 l)
+
+    static let lobbyGuestName = "Avery"
+    /// The C17 code the `lobby-new-meeting` fixture generates (fixed, so screenshots are stable).
+    static let newMeetingCode = "lily-zoro-iris"
+    /// The scripted presence answer: "2 people here".
+    static let presenceCount = 2
+
+    /// The link a lobby fixture opens through the production intake ("" for none).
+    static func lobbyLink(for state: PremeetingFixtureState) -> String {
+        state == .lobby || state == .lobbyNameMissing ? "https://conclave.acmvit.in/" + roomLabel : ""
+    }
+
+    static func opensNewMeeting(for state: PremeetingFixtureState) -> Bool {
+        state == .lobbyNewMeeting
+    }
+
+    static func isLobbyFixture(_ state: PremeetingFixtureState) -> Bool {
+        state == .lobby || state == .lobbyNameMissing || state == .lobbyNewMeeting
+    }
+
+    /// Camera blocked by a revoked permission in the join lobbies (6 l1); no camera hardware in the new meeting lobby
+    /// (the silent simulator and AVD have none).
+    static func cameraPermission(for state: PremeetingFixtureState) -> MediaPermissionState {
+        state == .lobbyNewMeeting ? MediaPermissionState.unavailable : MediaPermissionState.denied
+    }
+
+    static func micPermission(for state: PremeetingFixtureState) -> MediaPermissionState {
+        MediaPermissionState.granted
+    }
+
+    /// Two routes, so the Android route dialog has a choice (nothing is ever routed).
+    static let lobbyRoutes: [AudioRouteOption] = [
+        AudioRouteOption(id: "fixture-speaker", kind: .speaker, name: "", isConnecting: false),
+        AudioRouteOption(id: "fixture-receiver", kind: .receiver, name: "", isConnecting: false)
+    ]
 
     /// Stored recents for a state (in memory only): a card candidate and two older rows.
     static func recents(for state: PremeetingFixtureState, nowMillis: Double) -> [RecentMeetingRecord] {
@@ -187,6 +249,7 @@ final class PremeetingFixtureSession {
     @ObservationIgnored private var baselineShellPublishes = 0
     @ObservationIgnored private var baselineInputs = PremeetingInputs.make()
     @ObservationIgnored private var lastBase = PremeetingInputs.make()
+    @ObservationIgnored private var lastShell = MeetingShellInputs.make()
     @ObservationIgnored private var failed = false
     @ObservationIgnored private var started = false
 
@@ -209,6 +272,8 @@ final class PremeetingFixtureSession {
         if notice != .none {
             premeeting.showHomeNotice(notice)
         }
+        // ENT-3: scripted lobby hooks (no media, no network, no call): the C1 intent and a join answered by the script.
+        premeeting.lobbyHooks = makeLobbyHooks()
         let steps = PremeetingFixtureScript.steps(for: state)
         var remaining: [PremeetingFixtureStep] = []
         var scheduling = false
@@ -219,6 +284,9 @@ final class PremeetingFixtureSession {
                 scheduling = true
                 remaining.append(step)
             }
+        }
+        if PremeetingFixtureScript.isLobbyFixture(state) {
+            openLobby()
         }
         timeline?.cancel()
         timeline = Task { @MainActor [weak self] in
@@ -232,6 +300,9 @@ final class PremeetingFixtureSession {
             guard !Task.isCancelled, let self else { return }
             self.verifyStep()
         }
+        // ENT-7 (HD request B4-T3 R9): the scripted account responder for every state, so the account button never
+        // reaches the network; account states also open Account. It leaves the inputs the self-check compares alone.
+        AccountFixtureScript.install(fixtureState: state.rawValue, account: premeeting.account, premeeting: premeeting)
     }
 
     func stop() {
@@ -246,10 +317,59 @@ final class PremeetingFixtureSession {
 
     private func apply(_ step: PremeetingFixtureStep) {
         lastBase = step.base
+        lastShell = step.shell
         shell.apply(step.shell)
         premeeting.apply(PremeetingInputs.from(session: shell.session, base: step.base))
         appliedSteps += 1
         recordBaseline()
+    }
+
+    /// The lobby fixtures: the injected device snapshot (6 l1), then the lobby through the production intake.
+    private func openLobby() {
+        premeeting.generateRoomCode = { PremeetingFixtureScript.newMeetingCode }
+        premeeting.applyPermissions(microphone: PremeetingFixtureScript.micPermission(for: state),
+                                    camera: PremeetingFixtureScript.cameraPermission(for: state),
+                                    canAskAgainMicrophone: false, canAskAgainCamera: false)
+        premeeting.applyAudioRoutes(outputs: PremeetingFixtureScript.lobbyRoutes, currentOutputId: "fixture-speaker",
+                                    inputOptions: [], currentInputId: "")
+        let link = PremeetingFixtureScript.lobbyLink(for: state)
+        if !link.isEmpty {
+            premeeting.handleIncomingURL(link)
+        }
+        if PremeetingFixtureScript.opensNewMeeting(for: state) {
+            premeeting.newMeeting()
+        }
+    }
+
+    /// Scripted answers in place of the view model: the media intent becomes the next inputs and a join shows
+    /// Connecting (Cancel then goes Home); presence answers two people. Nothing reaches media or the network.
+    private func makeLobbyHooks() -> LobbyCoreHooks {
+        let hooks = LobbyCoreHooks()
+        hooks.setEntryMediaIntent = { [weak self] mic, camera in
+            self?.applyMediaIntent(mic: mic, camera: camera)
+        }
+        hooks.join = { [weak self] _ in
+            self?.scriptJoin()
+        }
+        hooks.fetchPresence = { _, _ in
+            PremeetingFixtureScript.presenceCount
+        }
+        hooks.resolvedClientId = {
+            MeetingLinkBuilder.defaultClientId
+        }
+        return hooks
+    }
+
+    private func applyMediaIntent(mic: Bool, camera: Bool) {
+        apply(PremeetingFixtureStep(delayMillis: 0, shell: lastShell,
+                                    base: lastBase.withMediaIntent(micIntentOn: mic, cameraIntentOn: camera)))
+    }
+
+    private func scriptJoin() {
+        apply(PremeetingFixtureStep(delayMillis: 0,
+                                    shell: PremeetingFixtureScript.connecting(isMuted: !lastBase.micIntentOn,
+                                                                              isCameraOff: !lastBase.cameraIntentOn),
+                                    base: lastBase))
     }
 
     private func answer(_ command: PremeetingCommand) {
