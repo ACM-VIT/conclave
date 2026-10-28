@@ -203,10 +203,13 @@ private fun StageSurface(
     }
 }
 
-/** RECONCILE R3: an Android full overlay suspends the toast lane; the side pane (no coverage) keeps it. */
+/**
+ * RECONCILE R3: an Android full overlay suspends the toast lane, and so does the WP1-3c Layout and Effects sheet
+ * (partial coverage, its dialog window above the stage; SET-5); the side pane (no coverage) keeps it.
+ */
 @Composable
 private fun NoticeLaneSuspension(stage: StagePresenter, coverage: PanelStageCoverage) {
-    val suspended = coverage == PanelStageCoverage.full
+    val suspended = coverage == PanelStageCoverage.full || coverage == PanelStageCoverage.partial
     LaunchedEffect(suspended) { stage.setToastLaneSuspended(suspended) }
 }
 
@@ -279,8 +282,8 @@ private fun StageVisibilityReporter(stage: StagePresenter, coverage: PanelStageC
 
 /**
  * Panel content inside the native call root. Content panels register here through requests as they land (CHT-1,
- * PPL-1, SET-1, ...); until then every panel opens its InCallPage with an empty body, which the fixture uses for the
- * open and close cells (S20 1 l5).
+ * PPL-1, SET-1, ...; SET-5 Layout and SET-6 Effects in batch 7); until then every panel opens its InCallPage with an
+ * empty body, which the fixture uses for the open and close cells (S20 1 l5).
  */
 @Composable
 private fun CallPanelContent(
@@ -391,6 +394,51 @@ private fun CallPanelContent(
         )
         return
     }
+    if (request.panel == MeetingPanel.layout) {
+        // SET-5 (S60 3 d): Layout in the in-call theme, the WP1-3c bottom sheet in compact and medium windows (the
+        // stage reflows live above it) and an InCallPage in the side pane, reading the stage's Layout presenter.
+        LayoutPage(
+            layout = stage.layoutPanel,
+            variant = variant,
+            appearance = if (decision.inCallAppearance) PanelAppearance.inCall else PanelAppearance.system,
+            miniTile = if (decision.showsMiniTile) stageMiniTileModel(stage) else null,
+            onClose = { shell.panels.dismiss(cancelPending = true) },
+            onMounted = onMounted,
+            onDisposed = onDisposed,
+            miniTileVideo = miniTileVideo,
+        )
+        return
+    }
+    if (request.panel == MeetingPanel.effects && EffectsAvailabilityPolicy.showsPanelEntry(stage.effects.snapshot.availability)) {
+        // SET-6 (S60 4 d): Effects only once an engine publishes the panel (OQ6 default A), with its in-sheet preview.
+        EffectsPage(
+            effects = stage.effects,
+            variant = variant,
+            appearance = if (decision.inCallAppearance) PanelAppearance.inCall else PanelAppearance.system,
+            miniTile = if (decision.showsMiniTile) stageMiniTileModel(stage) else null,
+            onClose = { shell.panels.dismiss(cancelPending = true) },
+            onMounted = onMounted,
+            onDisposed = onDisposed,
+            miniTileVideo = miniTileVideo,
+            preview = { snapshot -> EffectsPreviewContent(stage, renderers, session, request, snapshot) },
+        )
+        return
+    }
+    if (request.panel == MeetingPanel.transcript) {
+        // TRN-2 (S60 6 d): the Transcript page, InCallPage in lazyList mode with the static composer slot.
+        TranscriptPage(
+            presenter = shell.transcript,
+            panels = shell.panels,
+            request = request,
+            variant = variant,
+            appearance = if (decision.inCallAppearance) PanelAppearance.inCall else PanelAppearance.system,
+            miniTile = if (decision.showsMiniTile) stageMiniTileModel(stage) else null,
+            miniTileVideo = miniTileVideo,
+            onMounted = onMounted,
+            onDisposed = onDisposed,
+        )
+        return
+    }
     val activitySession = LocalActivitySession.current
     if (request.panel == MeetingPanel.activities && activitySession != null) {
         // ACT-1 (S60 7): the Activities launcher page.
@@ -413,6 +461,30 @@ private fun CallPanelContent(
         miniTileVideo = miniTileVideo,
     ) { _ ->
         Column(Modifier.testTag("call.panel.${request.panel.rawValue}")) {}
+    }
+}
+
+/**
+ * SET-6 (S60 4 d, k): the Effects sheet's one preview renderer, per presentation: the fixture's counting probe, your
+ * local track while the camera is on (a second sink on the same track, never the stage renderer moved), or the WP3
+ * local-only preview surface after "Preview my camera" (C6-8; nothing is published).
+ */
+@Composable
+private fun EffectsPreviewContent(
+    stage: StagePresenter, renderers: StageRenderers, session: Int, request: PanelRequest, snapshot: EffectsSnapshot,
+) {
+    if (renderers.usesProbes) {
+        RendererProbe(key = "effects:$session:${request.presentationID}", slot = RendererSlot.miniTile,
+            modifier = Modifier.fillMaxSize(), pattern = renderers.pattern)
+        return
+    }
+    if (snapshot.camera == EffectsCameraState.on) {
+        val local = stage.inputs.localUserId
+        val videoKey = stage.inputs.participant(local)?.videoKey ?: ""
+        StageLiveVideo(slotId = "effects:${request.presentationID}", userId = local, isLocal = true, isShare = false,
+            videoKey = videoKey, fit = StageVideoFit.fill, mirror = stage.chrome.isFrontCamera)
+    } else {
+        LocalPreviewSurface(LocalPreviewController.shared.sessionId)
     }
 }
 

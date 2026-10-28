@@ -62,6 +62,10 @@ struct LobbyMediaSnapshot: Equatable {
     let avatarName: String
     let avatarSeed: String
     let interruption: PreviewInterruption
+    /// ENT-4 (S10 7 d, j): whether each device's system prompt can still show (Android rationale handling; on iOS only
+    /// while undetermined). `canAskAgainAndroid` above is both together, kept for the existing readers.
+    let canAskAgainMicrophone: Bool
+    let canAskAgainCamera: Bool
 }
 
 /// The subtitle under the title (S10 6 f "Presence"); hidden for `newMeeting`, `promotion` and failed requests.
@@ -294,6 +298,9 @@ final class LobbyCoreHooks {
     var resolvedClientId: (() -> String)? = nil
     /// RECONCILE R31: presents the S60 Effects content over the lobby once an engine publishes `.panel`.
     var openEffects: (() -> Void)? = nil
+    /// ENT-4 (S10 7 j): the lobby left for anything but the hand-off into the meeting
+    /// (`LobbyPermissionCleanupPolicy`): pending answers become stale and queued Android prompts are dropped.
+    var cancelPermissionRequests: (() -> Void)? = nil
 
     init() {
     }

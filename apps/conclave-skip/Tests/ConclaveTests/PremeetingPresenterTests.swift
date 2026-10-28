@@ -418,6 +418,12 @@ struct PremeetingPresenterTests {
                 #expect(premeeting.lobbyStatus?.intent == .newMeeting)
                 #expect(premeeting.lobbyLink?.roomLabel == PremeetingFixtureScript.newMeetingCode)
                 #expect(premeeting.lobbyLink?.canShare == false)
+            // Batch 7 integrator (HD request B7-T8 R3): the ENT-4 permission priming fixtures (T/ENT4PermissionPrimingTests.swift
+            // checks each one's permissions).
+            case .lobbyPermissionsUndetermined, .lobbyMicRationale, .lobbyCameraRationale, .lobbyPermissionsDenied,
+                 .lobbyPermissionsRestricted:
+                #expect(premeeting.lobbyStatus?.mode == .editing, "\(state)")
+                #expect(PermissionPrimingFixture.permissions(forState: state.rawValue) != nil, "\(state)")
             // Batch 4 integrator (HD request B4-T3 R10): the ENT-7 account fixtures.
             case .accountSignedOut, .accountSignedIn, .accountSignInCancel, .accountSignInFailure, .accountExpired,
                  .accountDeleteFailure, .accountGoogleOnly, .accountAppleOnly, .accountProvidersFailed:

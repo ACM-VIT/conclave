@@ -101,8 +101,8 @@ struct CallRoot: View {
 }
 
 /// Panel content inside the native call root. Content panels register here through requests as they land (CHT-1,
-/// PPL-1, SET-1, ...); until then every panel opens its native shell with an empty body, which the fixture uses for
-/// the open and close cells (S20 1 l5).
+/// PPL-1, SET-1, ...; SET-5 Layout and SET-6 Effects in batch 7); until then every panel opens its native shell with an
+/// empty body, which the fixture uses for the open and close cells (S20 1 l5).
 struct CallPanelContent: View {
     let shell: MeetingShellPresenter
     let people: PeoplePresenter?
@@ -143,6 +143,19 @@ struct CallPanelContent: View {
         } else if presentation.request.panel == .activities, let activitySession {
             // ACT-1 (S60 7): the Activities launcher with its own PanelShell and page path.
             ActivitiesPanel(session: activitySession, adapter: adapter, presentation: presentation, resolved: resolved)
+        } else if presentation.request.panel == .layout, let stage {
+            // SET-5 (S60 3 c): Layout, always dark, medium then large (large at accessibility sizes, R9), reading the
+            // stage's Layout presenter; the stage reflows live above the sheet.
+            LayoutPanel(layout: stage.layoutPanel, shell: shell, adapter: adapter, presentation: presentation, resolved: resolved)
+        } else if presentation.request.panel == .effects, let stage,
+                  EffectsAvailabilityPolicy.showsPanelEntry(stage.effects.snapshot.availability) {
+            // SET-6 (S60 4 c): Effects, always dark, short then large, only once an engine publishes `.panel` (OQ6
+            // default A); the stage lifts the floating self view above the sheet while it shows (R6-6).
+            EffectsPanel(effects: stage.effects, shell: shell, adapter: adapter, presentation: presentation, resolved: resolved)
+        } else if presentation.request.panel == .transcript {
+            // TRN-2 (S60 6 c): the Transcript panel with its own PanelShell (large only, system appearance).
+            TranscriptPanel(transcript: shell.transcript, panels: shell.panels, presentation: presentation, resolved: resolved,
+                            onPromoteToLarge: { adapter.promoteToLarge() })
         } else {
             PanelShell(title: CallPanelTitles.title(presentation.request.panel), presentation: resolved, hostStyle: resolved.style,
                        systemScheme: systemScheme,

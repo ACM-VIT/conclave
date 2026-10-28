@@ -376,6 +376,8 @@ enum ComponentGalleryCatalog {
         pair("contrast.routeRadio", "Android route radio on the in-call sheet", DesignTokens.androidInCallPrimary, DesignTokens.androidInCallSurfaceContainerLow, .nonText, 7.398),
         pair("contrast.lobbyCaption.ios", "iOS lobby toggle caption on the card strip", DesignTokens.iosInCallTextSecondary, DesignTokens.iosInCallSurface, .text, 9.738),
         pair("contrast.lobbyCaption.android", "Android lobby toggle caption on the card strip", DesignTokens.androidInCallOnSurfaceVariant, DesignTokens.androidInCallSurfaceContainer, .text, 6.913),
+        // ENT-4 (S10 7 i): the iOS lobby card's camera permission overlay title (paper on the tile).
+        pair("contrast.inCallText.tile", "In-call text on tile (lobby permission overlay)", DesignTokens.iosInCallText, DesignTokens.iosInCallTile, .text, 17.767),
         // FND-3 pairs (F00 C19 e, C23, C24, C25 e; S40 3 e, 6 e; S60 R6-7 with 11 e and 12 e). The iOS own bubble is the
         // existing onCoral pairs (6.374, 6.764 increased contrast); iOS neutral bubbles, chips and tips sit on system
         // fills and stay live-only.

@@ -161,10 +161,12 @@ enum MoreMenuPolicy {
     /// The panels with a native body on the native call root this push (PLAN-screens 2 "Route switches": under the call
     /// flag, More rows whose native panel has not landed are hidden). Chat (CHT-1), Participants and Host Controls
     /// (PPL-1, PPL-4), Activities (ACT-1), Meeting Details (STG-6), Settings (SET-1) and Webinar Q&A (PPL-6). Transcript
-    /// lands with TRN-2, Layout and Effects with SET-5 and SET-6 (batch 7): each adds its panel here.
+    /// (TRN-2), Layout (SET-5) and Effects (SET-6) landed in batch 7; the Effects row still needs `effectsPanelAvailable`
+    /// (OQ6 default A keeps it false).
     static let landedPanels: [MeetingPanel] = [MeetingPanel.chat, MeetingPanel.participants, MeetingPanel.activities,
                                                MeetingPanel.settings, MeetingPanel.webinarQA, MeetingPanel.meetingInfo,
-                                               MeetingPanel.hostControls]
+                                               MeetingPanel.hostControls, MeetingPanel.transcript, MeetingPanel.layout,
+                                               MeetingPanel.effects]
 
     /// The Android tile order (S30 5 d): Share screen, Captions, Participants; Activities, Transcript, Layout; Effects,
     /// Invite, Copy link; Meeting details, Q&A, Settings. A moved Chat leads (it was the bar's own control). Gaps close

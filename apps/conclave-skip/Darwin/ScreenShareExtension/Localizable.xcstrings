@@ -1,0 +1,42 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Couldn’t start screen sharing. Try again." : {
+      "comment" : "System alert when a screen share broadcast never connected to Conclave (S70 10 g)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t start screen sharing. Try again."
+          }
+        }
+      }
+    },
+    "Screen sharing stopped because Conclave lost the connection." : {
+      "comment" : "System alert when the broadcast lost its connection to Conclave while sharing (S70 10 g)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Screen sharing stopped because Conclave lost the connection."
+          }
+        }
+      }
+    },
+    "Screen sharing stopped." : {
+      "comment" : "System alert after the person stopped screen sharing from Conclave (S70 10 g)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Screen sharing stopped."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

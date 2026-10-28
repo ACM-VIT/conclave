@@ -130,6 +130,8 @@ private fun GameShellScene(games: GameStagePresenter, storeURL: String, onShowVi
         // ACT-3 (S60 9): the prompt game scenes, playing and results (K/ui/games/scenes).
         GameSceneKind.trivia, GameSceneKind.bluff, GameSceneKind.wouldYouRather, GameSceneKind.mostLikelyTo,
         GameSceneKind.reaction, GameSceneKind.imposter -> PromptGameSceneBody(games)
+        // ACT-4 (S60 10): Wordle, every phase (K/ui/games/boards/WordleBoard.kt).
+        GameSceneKind.wordle -> WordleSceneBody(games)
         GameSceneKind.unsupported -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             GameKitNotice(
                 GameKitNoticeKind.unsupported, "",
@@ -238,6 +240,8 @@ private fun GameShellBottomBar(games: GameStagePresenter) {
         } else if (chrome.phase == GameChromePhase.playing) {
             // ACT-3 (S60 9 c): the prompt game host bar (seated host only).
             PromptGameHostBar(games)
+            // ACT-4 (S60 10 f): Next round at a Wordle round's results (seated host only).
+            WordleHostBar(games)
         }
     }
     if (prompt) GameShellEndDialog(games, chrome.name, onDismiss = { prompt = false })

@@ -97,7 +97,7 @@ struct SettingsTranscriptPoliciesTests {
         #expect(SettingsRoutePolicy.pathAfterHostLoss([.microphone]) == [.microphone])
         #expect(!SettingsRoutePolicy.isAvailable(.voiceRecord, canUsePersonalVoice: false))
         #expect(SettingsRoutePolicy.isAvailable(.voiceRecord, canUsePersonalVoice: true))
-        #expect(!SettingsRoutePolicy.isAvailable(.cameraQuality, canUsePersonalVoice: true))
+        #expect(SettingsRoutePolicy.isAvailable(.cameraQuality, canUsePersonalVoice: true))
         // L6-11: the 18 cases, raw values stable (Android saves the stack by raw value).
         #expect(SettingsRoute.allCases.count == 18)
         #expect(SettingsRoute.hostCustomLink.rawValue == "hostCustomLink")
@@ -314,7 +314,7 @@ struct SettingsTranscriptPoliciesTests {
 
     @Test func accountOffersAppScopeSettings() throws {
         let ios = try Self.source("Sources/Conclave/Features/Account/AccountView+iOS.swift")
-        #expect(ios.contains("case privacy, settings, settingsVoice"))
+        #expect(ios.contains("case privacy, settings, settingsVoice, settingsCameraQuality, settingsCameraAdvanced"))
         #expect(ios.contains("SettingsAppScopeList(settings: appSettings"))
         #expect(ios.contains("SettingsPresenter(scope: SettingsScope.app)"))
         #expect(!ios.contains("SETTINGS ROW SLOT"))

@@ -34,6 +34,10 @@ internal class NetworkReachabilityMonitor {
     internal var onThermalLevelChanged: ((SystemThermalLevel) -> Unit)? = null
     /** S70 6 d (O10): battery saver on or off. */
     internal var onLowPowerModeChanged: ((Boolean) -> Unit)? = null
+    /** SET-3 (S60 C6-5): Android Data Saver restricts this app on the active metered network. */
+    internal var onSystemDataSaverChanged: ((Boolean) -> Unit)? = null
+    private var lastSystemDataSaver: Boolean? = null
+    private var dataSaverReceiver: BroadcastReceiver? = null
 
     private val appContext: Context = ProcessInfo.processInfo.androidContext.applicationContext
     private val connectivityManager =
@@ -101,12 +105,14 @@ internal class NetworkReachabilityMonitor {
         val qualityHint = currentQualityHint()
         val isOffline = !hasValidatedNetwork()
         val isCaptivePortal = currentCaptivePortal()
+        val systemDataSaver = currentSystemDataSaver()
         mainHandler.post {
             if (callback !== activeCallback) return@post
             logQualityHintIfNeeded(qualityHint, isOffline)
             onStatusChanged?.invoke(isOffline)
             onQualityHintChanged?.invoke(qualityHint.quality)
             publishCaptivePortal(isCaptivePortal)
+            publishSystemDataSaver(systemDataSaver)
         }
     }
 
@@ -114,11 +120,13 @@ internal class NetworkReachabilityMonitor {
         val qualityHint = currentQualityHint()
         val isOffline = !hasValidatedNetwork()
         val isCaptivePortal = currentCaptivePortal()
+        val systemDataSaver = currentSystemDataSaver()
         mainHandler.post {
             logQualityHintIfNeeded(qualityHint, isOffline)
             onStatusChanged?.invoke(isOffline)
             onQualityHintChanged?.invoke(qualityHint.quality)
             publishCaptivePortal(isCaptivePortal)
+            publishSystemDataSaver(systemDataSaver)
         }
     }
 
@@ -146,6 +154,26 @@ internal class NetworkReachabilityMonitor {
         lastCaptivePortal = isCaptivePortal
         NativePerformanceDiagnostics.event("network_captive_portal", details = "captive=$isCaptivePortal")
         onCaptivePortalChanged?.invoke(isCaptivePortal)
+    }
+
+    /**
+     * SET-3 (S60 C6-5): Data Saver is on for this app (RESTRICT_BACKGROUND_STATUS_ENABLED) and the active network is
+     * metered (Data Saver restricts metered networks only, as iOS Low Data Mode is per network).
+     */
+    private fun currentSystemDataSaver(): Boolean {
+        return try {
+            connectivityManager.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED &&
+                connectivityManager.isActiveNetworkMetered
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun publishSystemDataSaver(isOn: Boolean) {
+        if (lastSystemDataSaver == isOn) return
+        lastSystemDataSaver = isOn
+        NativePerformanceDiagnostics.event("system_data_saver", details = "on=$isOn")
+        onSystemDataSaverChanged?.invoke(isOn)
     }
 
     @SuppressLint("MissingPermission")
@@ -215,6 +243,25 @@ internal class NetworkReachabilityMonitor {
                 debugLog("[Network] Failed to register the battery saver receiver: ${error}")
             }
         }
+        if (dataSaverReceiver == null) {
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    val systemDataSaver = currentSystemDataSaver()
+                    mainHandler.post { publishSystemDataSaver(systemDataSaver) }
+                }
+            }
+            try {
+                ContextCompat.registerReceiver(
+                    appContext,
+                    receiver,
+                    IntentFilter(ConnectivityManager.ACTION_RESTRICT_BACKGROUND_CHANGED),
+                    ContextCompat.RECEIVER_NOT_EXPORTED,
+                )
+                dataSaverReceiver = receiver
+            } catch (error: Throwable) {
+                debugLog("[Network] Failed to register the data saver receiver: ${error}")
+            }
+        }
         publishLowPowerMode(power.isPowerSaveMode)
     }
 
@@ -241,6 +288,9 @@ internal class NetworkReachabilityMonitor {
         thermalListener = null
         powerSaveReceiver?.let { receiver -> runCatching { appContext.unregisterReceiver(receiver) } }
         powerSaveReceiver = null
+        dataSaverReceiver?.let { receiver -> runCatching { appContext.unregisterReceiver(receiver) } }
+        dataSaverReceiver = null
+        lastSystemDataSaver = null
         lastThermalLevel = null
         lastLowPowerMode = null
     }

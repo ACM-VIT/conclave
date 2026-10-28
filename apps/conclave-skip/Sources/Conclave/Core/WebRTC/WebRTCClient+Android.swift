@@ -63,7 +63,8 @@ final class WebRTCClient {
         visibleUserIds: Set<String>,
         connectionQuality: ConnectionQuality,
         videoQuality: VideoQuality,
-        receiveVideo: Bool
+        receiveVideo: Bool,
+        dataSaver: Bool = false
     ) async { fatalError() }
     func updateVideoQuality(_ quality: VideoQuality) { fatalError() }
     func updateMediaPublishConfiguration(
@@ -137,5 +138,10 @@ final class WebRTCClient {
     func applyNoiseSuppression(_ enabled: Bool) async -> Bool { fatalError() }
     func sampleLocalMicrophoneLevel() -> Double { fatalError() }
     func playTestTone() { fatalError() }
+
+    // S60 C6-3, C6-9, D11 (SET-3): implemented in K/WebRTCClient+Android.kt.
+    var mirrorsLocalVideo: Bool { fatalError() }
+    func cameraCaptureCapability() -> CameraCaptureCapability { fatalError() }
+    func sampleConnectionStatsCounters() -> ConnectionStatsCounters? { fatalError() }
 }
 #endif

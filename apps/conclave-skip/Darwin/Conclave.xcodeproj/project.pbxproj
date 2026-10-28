@@ -21,6 +21,7 @@
 		DFE47E95E36C8EE1B5CCE9EC /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 66D43BF7D33BFBAD3F7B4B90 /* Foundation.framework */; };
 		E6C0BBDB133797BCEB6F5341 /* ReplayKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F8C4FBE6A31E1433318CB3E2 /* ReplayKit.framework */; };
 		FA0957C178416245BF758A86 /* ScreenShareSocketConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C7DBA37CDA1456AE24E503 /* ScreenShareSocketConnection.swift */; };
+		5C10A7E12EB0B6A100D1A010 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 5C10A7E12EB0B6A100D1A011 /* Localizable.xcstrings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -80,6 +81,7 @@
 		B2C7DBA37CDA1456AE24E503 /* ScreenShareSocketConnection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScreenShareSocketConnection.swift; sourceTree = "<group>"; };
 		B4453F91272390D27F4F652A /* ScreenShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ScreenShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		D9C74C4304A8EA72CC8134FE /* SampleHandler.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
+		5C10A7E12EB0B6A100D1A011 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		F8C4FBE6A31E1433318CB3E2 /* ReplayKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ReplayKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/ReplayKit.framework; sourceTree = DEVELOPER_DIR; };
 /* End PBXFileReference section */
 
@@ -109,6 +111,7 @@
 			children = (
 				D9C74C4304A8EA72CC8134FE /* SampleHandler.swift */,
 				B2C7DBA37CDA1456AE24E503 /* ScreenShareSocketConnection.swift */,
+				5C10A7E12EB0B6A100D1A011 /* Localizable.xcstrings */,
 				36B0F80D3E4E571FE785B302 /* Info.plist */,
 				7A6D6B2B2E4E4702A581F7A1 /* PrivacyInfo.xcprivacy */,
 				B1ABD79B5D294DEA239C6EE1 /* ScreenShareExtension.entitlements */,
@@ -273,6 +276,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				7A6D6B2C2E4E4702A581F7A1 /* PrivacyInfo.xcprivacy in Resources */,
+				5C10A7E12EB0B6A100D1A010 /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

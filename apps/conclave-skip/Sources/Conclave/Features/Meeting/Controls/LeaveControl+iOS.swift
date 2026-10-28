@@ -70,6 +70,7 @@ struct LeaveControl: View {
                 get: {
                     confirmationId != closedConfirmationId
                         && LeaveControlPolicy.presentsDialog(leave, includesMoreInvoker: false)
+                        && !leave.offersRecap
                 },
                 set: { shown in
                     if shown || confirmationId == 0 { return }
@@ -86,6 +87,29 @@ struct LeaveControl: View {
             ),
             identifier: LeaveControlPolicy.dialogIdentifier,
             onConfirm: { _ = controls.confirmEndForEveryone(id: confirmationId, postRecap: false) },
+            onCancel: { controls.cancelEnd(id: confirmationId) }
+        )
+        // TRN-2 (S30 4 g recap variant, CC8): the same confirmation shows the recap dialog while the recap is on offer.
+        .recapEndDialog(
+            controls: controls,
+            confirmationId: confirmationId,
+            isPresented: Binding(
+                get: {
+                    confirmationId != closedConfirmationId
+                        && LeaveControlPolicy.presentsDialog(leave, includesMoreInvoker: false)
+                        && leave.offersRecap
+                },
+                set: { shown in
+                    if shown || confirmationId == 0 { return }
+                    closedConfirmationId = confirmationId
+                    Task { @MainActor in
+                        if controls.leaveState.confirmationId == confirmationId {
+                            controls.cancelEnd(id: confirmationId)
+                        }
+                    }
+                }
+            ),
+            identifier: LeaveControlPolicy.dialogIdentifier + ".recap",
             onCancel: { controls.cancelEnd(id: confirmationId) }
         )
         .onChange(of: confirmationId) { _, _ in

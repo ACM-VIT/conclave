@@ -104,6 +104,8 @@ open class MainActivity: AppCompatActivity {
             }
             // S40 0.9 (HD request B4-T1 R3): the chat fixture layers on the stage fixture and opens Chat.
             val chatFixture = remember { if (stageFixture != null) intent?.getStringExtra("conclave.chatFixture") else null }
+            // S60 L6-12 (HD request B7-T5 R5): the Transcript fixture layers on the stage fixture and opens Transcript.
+            val transcriptFixture = remember { if (stageFixture != null) intent?.getStringExtra("conclave.transcriptFixture") else null }
             // S50 PL12 (HD request B4-T7 R5): Debug-only People fixture over the stage fixture (standalone presenters;
             // never WebRTC, audio, capture or network). The stage fixture's pattern and screen-reader extras apply.
             val peopleFixture = remember {
@@ -151,7 +153,7 @@ open class MainActivity: AppCompatActivity {
                 if (isControlsFixtureState(stageFixture)) {
                     ControlsFixtureRoot(stageFixture)
                 } else {
-                    StageFixtureRoot(stageFixture, stageFixturePattern, stageForceScreenReader, chatFixture)
+                    StageFixtureRoot(stageFixture, stageFixturePattern, stageForceScreenReader, chatFixture, transcriptFixture)
                 }
             } else if (premeetingFixture.isNotEmpty() && !PipController.isInCall) {
                 // S10 L9: standalone presenters; never the view model, a call, media or the network.

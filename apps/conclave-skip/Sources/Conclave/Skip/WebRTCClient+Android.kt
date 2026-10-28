@@ -278,6 +278,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var remoteConsumerPreferenceRetryJob: Job? = null
     private var remoteConsumerPreferencePolicyRevision: Long = 0
     private var remoteVideoReceiveEnabled = true
+    /** SET-3 (S60 C6-5): the effective Data Saver of the last receive policy pass (kept for its retries). */
+    private var remoteReceiveDataSaver = false
     private data class PlannedConsumerResetCandidate(
         val predecessor: ConsumerGenerationIdentity,
         val producerId: String,
@@ -545,6 +547,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 connectionQuality = connectionQuality,
                 videoQuality = videoQuality,
                 receiveVideo = remoteVideoReceiveEnabled,
+                dataSaver = remoteReceiveDataSaver,
             )
         }
     }
@@ -1391,18 +1394,24 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         firstDecodedVideoFrameSignals.remove(identity)?.cancel()
     }
 
+    /**
+     * SET-3 (S60 C6-5): dataSaver is the effective Data Saver (the switch OR the system signal); it lowers what this
+     * client receives through DataSaverPolicy.reducesReceive, like the legacy low quality flag.
+     */
     internal suspend fun applyRemoteConsumerBandwidthPolicy(
         focusedUserIds: skip.lib.Set<String>,
         visibleUserIds: skip.lib.Set<String>,
         connectionQuality: ConnectionQuality,
         videoQuality: VideoQuality,
         receiveVideo: Boolean = true,
+        dataSaver: Boolean = false,
     ) = withContext(Dispatchers.Main.immediate) {
         remoteConsumerPreferenceRetryJob?.cancel()
         remoteConsumerPreferenceRetryJob = null
         remoteConsumerPreferencePolicyRevision += 1
         val policyRevision = remoteConsumerPreferencePolicyRevision
         remoteVideoReceiveEnabled = receiveVideo
+        remoteReceiveDataSaver = dataSaver
         wakePlannedConsumerResetCoordinator()
         val socket = socketManager ?: return@withContext
 
@@ -1645,7 +1654,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val emergencyKeepVideo = isEmergency && emergencyKeepWebcamUserId == info.userId
         val isPoor = isEmergency || connectionQuality == ConnectionQuality.poor
         val isFair = connectionQuality == ConnectionQuality.fair
-        val isConstrained = isPoor || isFair || videoQuality == VideoQuality.low
+        // SET-3 (C6-5): Data Saver reduces what you receive like the legacy low quality flag.
+        val isReducedReceive = DataSaverPolicy.reducesReceive(
+            isLowQuality = videoQuality == VideoQuality.low,
+            dataSaverOn = remoteReceiveDataSaver,
+        )
+        val isConstrained = isPoor || isFair || isReducedReceive
 
         if (isEmergency && !emergencyKeepVideo) {
             return RemoteConsumerPreference(
@@ -1656,7 +1670,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             )
         }
 
-        if (!isVisible && (isPoor || videoQuality == VideoQuality.low)) {
+        if (!isVisible && (isPoor || isReducedReceive)) {
             return RemoteConsumerPreference(
                 spatialLayer = 0,
                 temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer,
@@ -6393,6 +6407,135 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
      */
     internal val supportsLiveNoiseSuppressionChange: Boolean
         get() = true
+
+    // Settings video and connection (S60 C6-3, C6-9, D11; SET-3)
+
+    /**
+     * C6-3: whether your own local renderers mirror now: the front camera with Mirror my video on. The sent stream is
+     * never mirrored (LocalVideoMirrorPolicy.mirrorsSentStream): the Camera2 capturer delivers unmirrored frames and
+     * nothing here flips them.
+     */
+    internal val mirrorsLocalVideo: Boolean
+        get() = LocalVideoMirrorPolicy.mirrors(
+            isFront = activeCameraFacing == LocalCameraFacing.front,
+            preference = LocalVideoMirrorPreference.shared.isOn,
+        )
+
+    /** D11: the current camera's largest capture height and frame rate, so Advanced lists only what it supports. */
+    internal fun cameraCaptureCapability(): CameraCaptureCapability {
+        return try {
+            val enumerator = createCameraEnumerator(ProcessInfo.processInfo.androidContext)
+            val name = cameraNameForFacing(enumerator, activeCameraFacing) ?: return CameraCaptureCapability.unknown
+            var maxHeight = 0
+            var maxFrameRate = 0
+            for (format in enumerator.getSupportedFormats(name) ?: emptyList()) {
+                maxHeight = kotlin.math.max(maxHeight, kotlin.math.min(format.width, format.height))
+                // Camera2 and Camera1 report frame rate ranges in thousandths of a frame per second.
+                val raw = format.framerate.max
+                val fps = if (raw >= 1_000) raw / 1_000 else raw
+                maxFrameRate = kotlin.math.max(maxFrameRate, fps)
+            }
+            CameraCaptureCapability(maxHeight = maxHeight, maxFrameRate = maxFrameRate)
+        } catch (_: Throwable) {
+            CameraCaptureCapability.unknown
+        }
+    }
+
+    /**
+     * C6-9: one raw reading of the transports' stats for the Connection page (cumulative counters only; the shared
+     * ConnectionStatsPolicy windows them, so the quality sampler's own windows are untouched). Null without stats.
+     */
+    internal fun sampleConnectionStatsCounters(): ConnectionStatsCounters? {
+        val sendJson = sendTransport?.takeIf { !it.isClosed }?.let { transport ->
+            try { transport.getStats() } catch (_: Throwable) { null }
+        }
+        val receiveJson = receiveTransport?.takeIf { !it.isClosed }?.let { transport ->
+            try { transport.getStats() } catch (_: Throwable) { null }
+        }
+        val send = statsObjects(sendJson)
+        val receive = statsObjects(receiveJson)
+        if (send.isEmpty() && receive.isEmpty()) return null
+
+        var pairRtt: Double? = null
+        var remoteRtt: Double? = null
+        var jitter: Double? = null
+        var packetsLost = 0.0
+        var packetsReceived = 0.0
+        var remoteLoss: Double? = null
+        var videoBytes: Double? = null
+        var audioBytes: Double? = null
+        var bytesSent: Double? = null
+        var bytesReceived: Double? = null
+        var videoCodecId = ""
+        val codecs = HashMap<String, String>()
+
+        for (obj in send) {
+            when (obj.optString("type")) {
+                "codec" -> {
+                    val id = obj.optString("id")
+                    val mime = obj.optString("mimeType")
+                    if (id.isNotEmpty() && mime.isNotEmpty()) codecs[id] = mime
+                }
+                "candidate-pair" -> if (isNominatedPair(obj)) {
+                    jsonNumber(obj, "currentRoundTripTime")?.let { pairRtt = maxNullable(pairRtt, it * 1000.0) }
+                    jsonNumber(obj, "bytesSent")?.let { bytesSent = addNullable(bytesSent, it) }
+                }
+                "remote-inbound-rtp" -> {
+                    jsonNumber(obj, "roundTripTime")?.let { remoteRtt = maxNullable(remoteRtt, it * 1000.0) }
+                    jsonNumber(obj, "jitter")?.let { jitter = maxNullable(jitter, it * 1000.0) }
+                    normalizeFractionLost(jsonNumber(obj, "fractionLost"))?.let { remoteLoss = maxNullable(remoteLoss, it) }
+                }
+                "outbound-rtp" -> when (statsMediaKind(obj)) {
+                    "video" -> {
+                        jsonNumber(obj, "bytesSent")?.let { videoBytes = addNullable(videoBytes, it) }
+                        val codecId = obj.optString("codecId")
+                        if (videoCodecId.isEmpty() && codecId.isNotEmpty()) videoCodecId = codecId
+                    }
+                    "audio" -> jsonNumber(obj, "bytesSent")?.let { audioBytes = addNullable(audioBytes, it) }
+                }
+            }
+        }
+        for (obj in receive) {
+            when (obj.optString("type")) {
+                "candidate-pair" -> if (isNominatedPair(obj)) {
+                    jsonNumber(obj, "bytesReceived")?.let { bytesReceived = addNullable(bytesReceived, it) }
+                    if (pairRtt == null) jsonNumber(obj, "currentRoundTripTime")?.let { pairRtt = it * 1000.0 }
+                }
+                "inbound-rtp" -> if (isMediaRtpStats(obj)) {
+                    jsonNumber(obj, "jitter")?.let { jitter = maxNullable(jitter, it * 1000.0) }
+                    jsonNumber(obj, "packetsLost")?.let { packetsLost += kotlin.math.max(0.0, it) }
+                    jsonNumber(obj, "packetsReceived")?.let { packetsReceived += kotlin.math.max(0.0, it) }
+                }
+            }
+        }
+        val codec = if (videoCodecId.isEmpty()) "" else ConnectionStatsPolicy.codecName(mimeType = codecs[videoCodecId] ?: "")
+        return ConnectionStatsCounters(
+            timestampMillis = System.currentTimeMillis().toDouble(),
+            rttMillis = pairRtt ?: remoteRtt,
+            jitterMillis = jitter,
+            packetsLost = packetsLost,
+            packetsReceived = packetsReceived,
+            remoteLossFraction = remoteLoss,
+            videoBytesSent = videoBytes,
+            audioBytesSent = audioBytes,
+            bytesSent = bytesSent,
+            bytesReceived = bytesReceived,
+            videoCodec = codec,
+        )
+    }
+
+    private fun statsObjects(statsJson: String?): List<JSONObject> {
+        if (statsJson.isNullOrEmpty()) return emptyList()
+        val array = try { JSONArray(statsJson) } catch (_: Throwable) { return emptyList() }
+        val result = ArrayList<JSONObject>(array.length())
+        for (index in 0 until array.length()) {
+            array.optJSONObject(index)?.let { result.add(it) }
+        }
+        return result
+    }
+
+    private fun isNominatedPair(obj: JSONObject): Boolean =
+        obj.optBoolean("nominated", false) || obj.optString("state") == "succeeded"
 
     /**
      * C6-1: builds a new source with [enabled] as its googNoiseSuppression value, creates its track disabled and

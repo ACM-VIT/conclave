@@ -33,6 +33,8 @@ final class ActivityFixtureOwner {
     private(set) var gameEmits: [String] = []
     /// When false, moves stay unanswered so the 10 s timeout cell can run (S60 8 l 8).
     var acknowledgesMoves = true
+    /// ACT-7 (HD request B7-T1 R5): the app host fixture's recording owner (Close, Lock Editing, relayed bytes).
+    let appHost = AppHostFixtureOwner()
     var failsEnd = false
 
     func record(_ command: ActivitiesCommand) {
@@ -154,8 +156,14 @@ enum ActivityFixtureScript {
 
     /// What the activity layer adds to the stage fixture inputs (presence and names only, S20 11 j).
     static func stageInputs(named raw: String, base: StageInputs) -> StageInputs {
-        // ACT-3 prompt game states (HD request B6-T7 R4); `base` for any other name.
-        guard let state = state(named: raw) else { return PromptGameFixtures.stageInputs(named: raw, base: base) }
+        // ACT-7 app host states (HD request B7-T1 R5) show the Whiteboard card like `app-opening`.
+        if AppHostFixtures.isFixture(raw) { return stageInputs(named: ActivityFixtureState.appOpening.rawValue, base: base) }
+        // ACT-3 prompt game states (HD request B6-T7 R4) and ACT-4 Wordle states (HD request B7-T7 R4); `base` for any
+        // other name.
+        guard let state = state(named: raw) else {
+            if WordleFixtures.state(named: raw) != nil { return WordleFixtures.stageInputs(named: raw, base: base) }
+            return PromptGameFixtures.stageInputs(named: raw, base: base)
+        }
         var appId = ""
         var gameActive = false
         var gameName = ""
@@ -299,9 +307,17 @@ enum ActivityFixtureScript {
     @discardableResult
     @MainActor
     static func apply(named raw: String, session: ActivitySession, owner: ActivityFixtureOwner) -> ActivityFixtureState? {
+        if AppHostFixtures.isFixture(raw) {
+            // ACT-7 app host states (HD request B7-T1 R5): the `app-opening` layer, then the scripted host.
+            apply(named: ActivityFixtureState.appOpening.rawValue, session: session, owner: owner)
+            AppHostFixtures.apply(named: raw, presenter: session.appHost, owner: owner.appHost)
+            return nil
+        }
         guard let state = state(named: raw) else {
-            // ACT-3 prompt game states (HD request B6-T7 R4); nothing for any other name.
+            // ACT-3 prompt game states (HD request B6-T7 R4) and ACT-4 Wordle states (HD request B7-T7 R4); nothing for
+            // any other name (each returns nil for a name it does not own).
             PromptGameFixtures.apply(named: raw, session: session, owner: owner)
+            WordleFixtures.apply(named: raw, session: session, owner: owner)
             return nil
         }
         session.activities.onCommand = { [weak owner] command in

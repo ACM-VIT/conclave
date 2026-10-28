@@ -13,37 +13,19 @@ import UIKit
 
 @MainActor
 enum MediaPermissionStatusProvider {
-    /// Synchronous and cheap (S10 7 k): re-read on lobby appearance, on foreground and after a request.
+    /// Synchronous and cheap (S10 7 k): re-read on lobby appearance, on foreground and after a request. Both platforms
+    /// map their answer through the one `EntryPolicies` mapping (ENT-4, S10 7 j).
     static func status(_ kind: LobbyMediaKind) -> MediaPermissionState {
         #if os(iOS) && !SKIP
         switch kind {
         case .camera:
-            guard AVCaptureDevice.default(for: .video) != nil else { return .unavailable }
-            switch AVCaptureDevice.authorizationStatus(for: .video) {
-            case .authorized:
-                return .granted
-            case .notDetermined:
-                return .notDetermined
-            case .restricted:
-                return .restricted
-            case .denied:
-                return .denied
-            @unknown default:
-                return .denied
-            }
+            return EntryPolicies.mediaPermissionState(authorization: cameraAuthorization(),
+                                                      hasDevice: AVCaptureDevice.default(for: .video) != nil)
         case .microphone:
-            switch AVAudioApplication.shared.recordPermission {
-            case .granted:
-                return .granted
-            case .undetermined:
-                return .notDetermined
-            case .denied:
-                return .denied
-            @unknown default:
-                return .denied
-            }
+            return EntryPolicies.mediaPermissionState(authorization: microphoneAuthorization(), hasDevice: true)
         }
         #elseif SKIP
+        // PermissionHelper reads the Android facts and maps them through EntryPolicies.androidMediaPermissionState.
         let raw = PermissionHelper.mediaPermissionState(kind: kind.rawValue)
         return MediaPermissionState(rawValue: raw) ?? MediaPermissionState.notDetermined
         #else
@@ -51,14 +33,45 @@ enum MediaPermissionStatusProvider {
         #endif
     }
 
-    /// iOS asks once; Android may ask again while the system wants a rationale (S10 7 d).
+    /// iOS asks once (`EntryPolicies.iosCanAskAgain`); Android may ask again while the system allows it
+    /// (`EntryPolicies.androidCanAskAgain` with the rationale and the recorded permanent denial, S10 7 d).
     static func canAskAgain(_ kind: LobbyMediaKind) -> Bool {
         #if SKIP
         return PermissionHelper.canAskMediaPermissionAgain(kind: kind.rawValue)
         #else
-        return status(kind) == .notDetermined
+        return EntryPolicies.iosCanAskAgain(status(kind))
         #endif
     }
+
+    #if os(iOS) && !SKIP
+    private static func cameraAuthorization() -> PlatformCaptureAuthorization {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            return .authorized
+        case .notDetermined:
+            return .notDetermined
+        case .restricted:
+            return .restricted
+        case .denied:
+            return .denied
+        @unknown default:
+            return .denied
+        }
+    }
+
+    private static func microphoneAuthorization() -> PlatformCaptureAuthorization {
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted:
+            return .authorized
+        case .undetermined:
+            return .notDetermined
+        case .denied:
+            return .denied
+        @unknown default:
+            return .denied
+        }
+    }
+    #endif
 
     /// The system prompt (iOS) or the serialized Android queue (`PermissionHelper`, one prompt at a time, invariant
     /// 18). The completion runs on the main actor with the result.
@@ -75,7 +88,8 @@ enum MediaPermissionStatusProvider {
             }
         }
         #elseif SKIP
-        PermissionHelper.markMediaPermissionRequested(kind: kind.rawValue)
+        // PermissionHelper remembers the launch and the rationale around it (ENT-4, S10 7 d), so a refusal reads
+        // denied, once or for good, on the next status read.
         if kind == LobbyMediaKind.camera {
             PermissionHelper.requestCameraPermission { granted in
                 completion(granted)
@@ -188,6 +202,8 @@ enum LobbyAudioRoutesReader {
 @MainActor
 enum LobbyProductionHooks {
     private static var installed = false
+    /// ENT-4: one generation per device for the lobby's permission requests (S10 7 j).
+    static var permissionGenerations = LobbyPermissionGenerations.initial
 
     static func install(presenter: PremeetingPresenter, viewModel: MeetingViewModel, appState: AppState) {
         guard !installed else { return }
@@ -225,11 +241,10 @@ enum LobbyProductionHooks {
             preview.resetLatch()
         }
         hooks.requestPermission = { [weak presenter] rawKind in
-            let kind = LobbyMediaKind(rawValue: rawKind) ?? LobbyMediaKind.camera
-            MediaPermissionStatusProvider.request(kind) { granted in
-                presenter?.permissionRequestFinished(kind: rawKind, granted: granted)
-                LobbyProductionHooks.pushPermissions(presenter)
-            }
+            LobbyProductionHooks.request(rawKind, presenter: presenter)
+        }
+        hooks.cancelPermissionRequests = {
+            LobbyProductionHooks.cancelPermissionRequests()
         }
         hooks.openSystemSettings = {
             MediaPermissionStatusProvider.openSystemSettings()
@@ -247,6 +262,38 @@ enum LobbyProductionHooks {
             SfuJoinService.resolveClientId()
         }
         presenter.lobbyHooks = hooks
+        // RECONCILE R31, OQ6 default A: the lobby Effects control follows the one gate (false until an engine ships).
+        presenter.applyEffects(available: EffectsAvailabilityPolicy.showsPanelEntry(
+            EffectsAvailabilityPolicy.production(canShowSystemVideoEffects: false)), active: false)
+    }
+
+    /// ENT-4 (S10 7 c, j): one request. The presenter shows the intended state right after this hook returns, so the
+    /// request starts on the next main-actor turn and even a synchronous answer (Android without an activity) lands
+    /// after the intent. The answer applies only while its generation is current (invariant 7); the status is re-read
+    /// either way, because the device answer is true whoever asked.
+    static func request(_ rawKind: String, presenter: PremeetingPresenter?) {
+        let kind = LobbyMediaKind(rawValue: rawKind) ?? LobbyMediaKind.camera
+        permissionGenerations = permissionGenerations.begun(kind)
+        let generation = permissionGenerations.current(kind)
+        Task { @MainActor in
+            guard LobbyProductionHooks.permissionGenerations.accepts(generation, kind: kind) else { return }
+            MediaPermissionStatusProvider.request(kind) { granted in
+                if LobbyProductionHooks.permissionGenerations.accepts(generation, kind: kind) {
+                    presenter?.permissionRequestFinished(kind: rawKind, granted: granted)
+                }
+                LobbyProductionHooks.pushPermissions(presenter)
+            }
+        }
+    }
+
+    /// ENT-4 (S10 7 j, `LobbyPermissionCleanupPolicy`): pending answers become stale; on Android the queued (not yet
+    /// shown) camera and microphone prompts are dropped, so none surfaces on Home (7 l3). iOS cannot withdraw a system
+    /// alert, and the alert is modal, so the lobby never leaves under one.
+    static func cancelPermissionRequests() {
+        permissionGenerations = permissionGenerations.cancelled()
+        #if SKIP
+        PermissionHelper.cancelPendingCallPermissionRequests()
+        #endif
     }
 
     static func pushPermissions(_ presenter: PremeetingPresenter?) {

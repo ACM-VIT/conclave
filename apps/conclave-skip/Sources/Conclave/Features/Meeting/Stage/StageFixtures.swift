@@ -116,6 +116,25 @@ enum StageFixtureState: String, CaseIterable, Equatable {
     case gameImposterSpectator = "game-imposter-spectator"
     case gameImposterVote = "game-imposter-vote"
     case gameImposterResult = "game-imposter-result"
+    // ACT-4 (S60 10 l): raw values equal `WordleFixtureState` raw values (end of Activities/GameStagePresenter.swift).
+    case gameWordleGuess = "game-wordle-guess"
+    case gameWordleSolved = "game-wordle-solved"
+    case gameWordleOutOfTries = "game-wordle-out-of-tries"
+    case gameWordleSetWord = "game-wordle-set-word"
+    case gameWordleWaitingWord = "game-wordle-waiting-word"
+    case gameWordleSetterWatching = "game-wordle-setter-watching"
+    case gameWordleRoundResults = "game-wordle-round-results"
+    case gameWordleTimeout = "game-wordle-timeout"
+    case gameWordleFinal = "game-wordle-final"
+    case gameWordleSpectator = "game-wordle-spectator"
+    case gameWordleReconnecting = "game-wordle-reconnecting"
+    // ACT-7 (S60 13 l): raw values equal `AppHostFixtureState` raw values (Activities/AppHostPresenter.swift).
+    case appWhiteboardReady = "app-whiteboard-ready"
+    case appWhiteboardViewOnly = "app-whiteboard-view-only"
+    case appWhiteboardLockedHost = "app-whiteboard-locked-host"
+    case appWhiteboardReconnecting = "app-whiteboard-reconnecting"
+    case appVersionMismatch = "app-version-mismatch"
+    case appRendererGone = "app-renderer-gone"
     // STG-6 Meeting Details (S20 15 l): each opens the panel from the capsule on start.
     case meetingInfoHost = "meetingInfo-host"
     case meetingInfoGuest = "meetingInfo-guest"
@@ -141,6 +160,23 @@ enum StageFixtureState: String, CaseIterable, Equatable {
     case chatPreviewsPhoto = "chat-previews-photo"
     case chatPreviewsOff = "chat-previews-off"
     case chatPreviewsAttendee = "chat-previews-attendee"
+    // SET-5 (S60 3 l, L6-12 `layout-*`): the Layout panel opens over the stage; the scripted core applies each change.
+    case layoutGrid6 = "layout-grid-6"
+    case layoutFloating = "layout-floating"
+    case layoutAudioOnly = "layout-audio-only"
+    // SET-6 (S60 4 l, L6-12 `effects-*`): the Effects panel over the stage on the fake WP10 engine; `effects-hidden`
+    // installs no engine, so nothing publishes the panel (4 l1).
+    case effectsCameraOn = "effects-camera-on"
+    case effectsCameraOff = "effects-camera-off"
+    case effectsAudioOnly = "effects-audio-only"
+    case effectsHostDisabled = "effects-host-disabled"
+    case effectsBlocked = "effects-blocked"
+    case effectsInterrupted = "effects-interrupted"
+    case effectsPortrait = "effects-portrait"
+    case effectsCenterStage = "effects-center-stage"
+    case effectsStudioLight = "effects-studio-light"
+    case effectsPreparing = "effects-preparing"
+    case effectsHidden = "effects-hidden"
 }
 
 /// Pure scripts per state, shared by the fixture roots and both test hosts.
@@ -290,7 +326,12 @@ enum StageFixtureScript {
              .activitiesVote, .activitiesVoteZero, .activitiesGameLive, .activitiesRecovering,
              .gameTriviaAnswered, .gameTriviaReveal, .gameBluffWrite, .gameBluffChoose, .gameBluffReveal, .gameWyrChoose,
              .gameWyrReveal, .gameMltVote, .gameMltRevealTie, .gameReactionArming, .gameReactionGo, .gameReactionReveal,
-             .gameImposterCrew, .gameImposterImposter, .gameImposterSpectator, .gameImposterVote, .gameImposterResult:
+             .gameImposterCrew, .gameImposterImposter, .gameImposterSpectator, .gameImposterVote, .gameImposterResult,
+             .gameWordleGuess, .gameWordleSolved, .gameWordleOutOfTries, .gameWordleSetWord, .gameWordleWaitingWord,
+             .gameWordleSetterWatching, .gameWordleRoundResults, .gameWordleTimeout, .gameWordleFinal, .gameWordleSpectator,
+             .gameWordleReconnecting,
+             .appWhiteboardReady, .appWhiteboardViewOnly, .appWhiteboardLockedHost, .appWhiteboardReconnecting,
+             .appVersionMismatch, .appRendererGone:
             return ActivityFixtureScript.stageInputs(named: state.rawValue, base: base(count: 6))
         case .meetingInfoHost:
             return copy(base(count: 4), participants: hostRoster(count: 4), isRoomLocked: true, captionsOn: true,
@@ -326,6 +367,49 @@ enum StageFixtureScript {
             return base(count: 4)
         case .chatPreviewsAttendee:
             return copy(base(count: 4), isWebinarAttendee: true)
+        case .layoutGrid6, .layoutAudioOnly:
+            return base(count: 6)
+        case .layoutFloating:
+            return copy(base(count: 4, localCameraOn: true), selfViewMode: "floating")
+        case .effectsCameraOff, .effectsAudioOnly, .effectsHostDisabled, .effectsBlocked, .effectsHidden:
+            // 1:1 with your camera off: the floating self view (Auto) is the one the iOS sheet lifts (R6-6).
+            return base(count: 2)
+        case .effectsInterrupted:
+            return copy(base(count: 2, localCameraOn: true), isCameraPaused: true)
+        case .effectsCameraOn, .effectsPortrait, .effectsCenterStage, .effectsStudioLight, .effectsPreparing:
+            return base(count: 2, localCameraOn: true)
+        }
+    }
+
+    // MARK: Layout and Effects panels (SET-5, SET-6; L6-12)
+
+    /// The panel a Layout or Effects state opens once the stage is up (invoker call); nil for every other state.
+    static func opensPanel(_ state: StageFixtureState) -> MeetingPanel? {
+        switch state {
+        case .layoutGrid6, .layoutFloating, .layoutAudioOnly:
+            return MeetingPanel.layout
+        case .effectsCameraOn, .effectsCameraOff, .effectsAudioOnly, .effectsHostDisabled, .effectsBlocked, .effectsInterrupted,
+             .effectsPortrait, .effectsCenterStage, .effectsStudioLight, .effectsPreparing:
+            return MeetingPanel.effects
+        default:
+            return nil
+        }
+    }
+
+    /// The fake engine's scripted inputs per Effects state; nil leaves the engine uninstalled (the panel stays hidden).
+    static func effectsState(_ state: StageFixtureState) -> EffectsFixtureState? {
+        switch state {
+        case .effectsCameraOn: return EffectsFixtureState.cameraOn
+        case .effectsCameraOff: return EffectsFixtureState.cameraOff
+        case .effectsAudioOnly: return EffectsFixtureState.audioOnly
+        case .effectsHostDisabled: return EffectsFixtureState.hostDisabled
+        case .effectsBlocked: return EffectsFixtureState.blocked
+        case .effectsInterrupted: return EffectsFixtureState.interrupted
+        case .effectsPortrait: return EffectsFixtureState.portrait
+        case .effectsCenterStage: return EffectsFixtureState.centerStage
+        case .effectsStudioLight: return EffectsFixtureState.studioLight
+        case .effectsPreparing: return EffectsFixtureState.preparing
+        default: return nil
         }
     }
 
@@ -465,6 +549,9 @@ enum StageFixtureScript {
             return noticeBase()
         case .chatPreviewsAttendee:
             return noticeBase(isAttendee: true)
+        case .layoutAudioOnly, .effectsAudioOnly:
+            // SET-5, SET-6: Audio Only is on (S20 banner present; Layout's switch on; Effects tiles disabled).
+            return noticeBase(isAudioOnly: true)
         default:
             return nil
         }
@@ -477,7 +564,8 @@ enum StageFixtureScript {
                            liveNotes: LiveNotesState = LiveNotesState.off, catchUpMinutes: Int = 0,
                            connectionQuality: ConnectionQuality = ConnectionQuality.good,
                            microphonePermissionRevoked: Bool = false, showsNotificationsPrime: Bool = false,
-                           isScreenSharing: Bool = false, isAttendee: Bool = false) -> StageNoticeInputs {
+                           isScreenSharing: Bool = false, isAttendee: Bool = false,
+                           isAudioOnly: Bool = false) -> StageNoticeInputs {
         StageNoticeInputs.make(callSession: 1, isAttendee: isAttendee, isHost: !isAttendee, localUserId: localUserId,
                                participantCount: 4, hasInitialPresenceSnapshot: true, isOffline: isOffline,
                                isCaptivePortal: isCaptivePortal,
@@ -487,7 +575,7 @@ enum StageFixtureScript {
                                pendingUserIds: pendingUserIds, pendingFirstName: pendingFirstName,
                                isScreenSharing: isScreenSharing, shareIssue: shareIssue,
                                shareIssueSerial: shareIssue.isEmpty ? 0 : 1, liveNotes: liveNotes,
-                               catchUpMinutes: catchUpMinutes, connectionQuality: connectionQuality,
+                               catchUpMinutes: catchUpMinutes, isAudioOnly: isAudioOnly, connectionQuality: connectionQuality,
                                microphonePermissionRevoked: microphonePermissionRevoked,
                                showsNotificationsPrime: showsNotificationsPrime)
     }
@@ -701,12 +789,13 @@ enum StageFixtureScript {
                      isRecovering: Bool? = nil, isFrontCamera: Bool? = nil, isWebinarAttendee: Bool? = nil,
                      meetingLink: String? = nil, webinarSpeakerUserId: String? = nil, selfViewCorner: String? = nil,
                      isLocalScreenSharing: Bool? = nil, isFlipInFlight: Bool? = nil,
-                     isCameraPaused: Bool? = nil) -> StageInputs {
+                     isCameraPaused: Bool? = nil, viewMaxTiles: Int? = nil) -> StageInputs {
         StageInputs.make(
             callSession: source.callSession, isInCall: source.isInCall, localUserId: source.localUserId,
             roomLabel: source.roomLabel, meetingLink: meetingLink ?? source.meetingLink,
             participants: participants ?? source.participants, viewMode: viewMode ?? source.viewMode,
-            viewMaxTiles: source.viewMaxTiles, hideTilesWithoutVideo: hideTilesWithoutVideo ?? source.hideTilesWithoutVideo,
+            viewMaxTiles: viewMaxTiles ?? source.viewMaxTiles,
+            hideTilesWithoutVideo: hideTilesWithoutVideo ?? source.hideTilesWithoutVideo,
             selfViewMode: selfViewMode ?? source.selfViewMode, selfViewCorner: selfViewCorner ?? source.selfViewCorner,
             pinnedUserId: pinnedUserId ?? source.pinnedUserId, activeAppId: source.activeAppId,
             activeAppName: source.activeAppName, isBrowserActive: source.isBrowserActive,
@@ -794,6 +883,9 @@ final class StageFixtureSession {
     /// SET-1 (L6-12, HD request B6-T2 R7): the Settings panel's fake media owner (`wp3.calls`), installed on the shell's
     /// Settings presenter with the host state.
     let settingsCore = SettingsRecordingCore()
+    /// SET-6 (L6-12 `FakeEffectsEngine`): installed on the stage's Effects presenter for the `effects-*` states only, so
+    /// every other state (and `effects-hidden`) keeps the panel and its entries hidden (OQ6 default A).
+    let effectsEngine = FakeEffectsEngine()
     let renderers = RendererIdentityLedger()
     let counters = StageFixtureCounters()
     private(set) var inputs: StageInputs
@@ -805,6 +897,8 @@ final class StageFixtureSession {
     private var captionStep = 0
     private var isMuted = true
     private var isCameraOff = true
+    /// SET-5: the scripted Audio Only switch (S60 3 l5), applied through the notice inputs like the core does.
+    private(set) var isAudioOnly = false
 
     /// `initialInputs` replaces the state's scripted stage inputs (fixtures layered on the stage, such as People, pass
     /// their own roster); the notice, event and caption scripts still follow `state`.
@@ -882,6 +976,65 @@ final class StageFixtureSession {
         }
         if StageFixtureScript.opensMeetingInfo(state) {
             stage.openMeetingInfo()
+        }
+        // SET-5 (S60 3 l): the Layout panel's scripted core commits each change into the stage inputs, so selecting
+        // Spotlight changes the fixture stage kind while the renderers stay (3 l2).
+        isAudioOnly = StageFixtureScript.noticeInputs(state)?.isAudioOnly ?? false
+        stage.layoutPanel.onCommand = { [weak self] command in
+            self?.handleLayout(command)
+        }
+        // SET-6 (S60 4 l): the fake engine publishes the panel for the Effects states; Turn On for Everyone is one S1
+        // camera intent through the shell (4 l4).
+        if let effects = StageFixtureScript.effectsState(state) {
+            effectsEngine.onTurnCameraOn = { [weak self] in
+                _ = self?.shell.toggleCamera()
+            }
+            effectsEngine.install(on: stage.effects, isPreparing: effects.isPreparing)
+            stage.effects.apply(effects.inputs())
+        }
+        if let panel = StageFixtureScript.opensPanel(state) {
+            shell.panels.present(panel, from: PanelInvoker.call)
+        }
+    }
+
+    // MARK: Layout and Effects scripts (SET-5, SET-6)
+
+    /// `layout.calls`: the Layout presenter's dispatched intents, in order.
+    func layoutCallsReadout() -> String { stage.layoutPanel.callsReadout() }
+
+    /// `wp10.calls` and `wp3.calls` of the fake engine (L6-12).
+    func effectsCallsReadout() -> String {
+        "wp10=" + effectsEngine.callsReadout() + " wp3=" + effectsEngine.mediaCallsReadout()
+    }
+
+    /// The Layout panel's scripted core: each intent edits the stage inputs (or the notice inputs for Audio Only).
+    private func handleLayout(_ command: LayoutPanelCommand) {
+        counters.recordCommand("layout:" + command.kind.rawValue)
+        switch command.kind {
+        case .setViewMode:
+            inputs = StageFixtureScript.copy(inputs, viewMode: command.value)
+            stage.apply(inputs)
+        case .setViewMaxTiles:
+            inputs = StageFixtureScript.copy(inputs, viewMaxTiles: command.number)
+            stage.apply(inputs)
+        case .setHideTilesWithoutVideo:
+            inputs = StageFixtureScript.copy(inputs, hideTilesWithoutVideo: command.flag)
+            stage.apply(inputs)
+        case .setSelfViewMode:
+            inputs = StageFixtureScript.copy(inputs, selfViewMode: command.value)
+            stage.apply(inputs)
+        case .setSelfViewCorner:
+            inputs = StageFixtureScript.copy(inputs, selfViewCorner: command.value)
+            stage.apply(inputs)
+        case .setAudioOnly:
+            // Turning Audio Only off never turns the camera back on (S60 3 l5); turning it on turns it off.
+            isAudioOnly = command.flag
+            if command.flag && !isCameraOff {
+                isCameraOff = true
+                replaceLocal()
+            }
+            stage.applyNotices(StageFixtureScript.noticeBase(isAudioOnly: isAudioOnly))
+            stage.effects.apply(stage.effects.inputs.withAudioOnly(isAudioOnly))
         }
     }
 
@@ -990,6 +1143,16 @@ final class StageFixtureSession {
     /// `wp3.calls`: the fake media owner's recorded commands, in order ("none" before the first).
     func settingsCallsReadout() -> String {
         settingsCore.calls.isEmpty ? "none" : settingsCore.calls.joined(separator: ",")
+    }
+
+    /// `stats.polls` (SET-3, S60 2 l3; HD request B7-T3 R7): the Connection details' polls while the page is visible.
+    func statsPollsReadout() -> String { String(shell.settings.stats.pollCount) }
+
+    /// `wp3.ceiling` (SET-3, S60 2 l4; HD request B7-T3 R7): the last publish ceiling the fake media owner received.
+    func publishCeilingReadout() -> String {
+        guard let ceiling = settingsCore.lastPublishCeiling else { return "none" }
+        return String(ceiling.width) + "x" + String(ceiling.height) + "@" + String(ceiling.frameRate) + "/"
+            + String(ceiling.maxBitrateBps)
     }
 
     /// `speakerTest.count`: test tones the Settings presenter asked for.

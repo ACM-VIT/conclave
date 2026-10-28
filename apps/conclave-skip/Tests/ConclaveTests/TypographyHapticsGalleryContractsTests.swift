@@ -314,8 +314,9 @@ struct TypographyHapticsGalleryContractsTests {
     @Test func galleryCatalogPairsMeetDeclaredClass() {
         let pairs = ComponentGalleryCatalog.contrastPairs
         // WP1-2b adds the five F00 C12 i banner pairs (56 to 61); FND-1 and FND-2 add 19 (62 to 80); FND-3 adds 14
-        // (81 to 94: Android bubbles, chips, tips and Send, and the S60 R6-7 board tokens).
-        #expect(pairs.count == 94)
+        // (81 to 94: Android bubbles, chips, tips and Send, and the S60 R6-7 board tokens); ENT-4 adds 1 (the lobby
+        // permission overlay, 95).
+        #expect(pairs.count == 95)
         for pair in pairs {
             let ratio = pair.ratio
             #expect(abs(ratio - pair.expectedRatio) < 0.001, "\(pair.id): \(ratio) against \(pair.expectedRatio)")
@@ -365,7 +366,7 @@ struct TypographyHapticsGalleryContractsTests {
         for kind in FeedbackKind.allCases { specimens.append(ComponentGalleryCatalog.hapticSpecimenID(kind)) }
         // WP1-2b: every component specimen in its columns, spinner specimens included.
         specimens += ComponentGalleryCatalog.componentSpecimenIDs(showLoading: true)
-        #expect(specimens.count == 94 + 5 + 1 + 44 + 66 + 46)
+        #expect(specimens.count == 95 + 5 + 1 + 44 + 66 + 46)
         #expect(Set(specimens).count == specimens.count)
         for id in specimens {
             #expect(id.unicodeScalars.allSatisfy { ($0.value >= 0x30 && $0.value <= 0x39) || ($0.value >= 0x41 && $0.value <= 0x5A) || ($0.value >= 0x61 && $0.value <= 0x7A) || $0 == "." }, "\(id) is not a plain ASCII key")
@@ -716,12 +717,14 @@ struct TypographyHapticsGalleryContractsTests {
         // sources name (batch 4, HD request B4-T8 R10). PPL-4 owns the hst_ Host Controls names (S50 6 copy tables);
         // T/PPL4HostControlsTests.swift and T/Skip/PPL2PPL4BridgeTests.kt use them (batch 5 integrator). PPL-6 owns the qa_
         // Webinar Q&A names (S50 11 copy tables); T/PPL6QaPolicyTests.swift and T/Skip/PPL6QaBridgeTests.kt use them
-        // (batch 6 integrator).
+        // (batch 6 integrator). SET-5 owns the lay_ Layout names, SET-6 the fx_ Effects names and TRN-2 the trn_
+        // Transcript names; T/SET5LayoutPanelTests.swift, T/SET6EffectsTests.swift and T/TRN2TranscriptPanelTests.swift
+        // check them against the catalogs (batch 7 integrator).
         let galleryNames = Set(resources.keys.filter {
             !$0.hasPrefix("sys_") && !$0.hasPrefix("ctl_") && !$0.hasPrefix("pm_") && !$0.hasPrefix("stg_")
                 && !$0.hasPrefix("ppl_") && !$0.hasPrefix("chat_") && !$0.hasPrefix("act_") && !$0.hasPrefix("gm_")
                 && !$0.hasPrefix("br_") && !$0.hasPrefix("app_") && !$0.hasPrefix("set_") && !$0.hasPrefix("hst_")
-                && !$0.hasPrefix("qa_")
+                && !$0.hasPrefix("qa_") && !$0.hasPrefix("lay_") && !$0.hasPrefix("fx_") && !$0.hasPrefix("trn_")
         })
         #expect(used == galleryNames, "unused or missing resources: \(used.symmetricDifference(galleryNames).sorted())")
         for (name, value) in resources {
@@ -729,7 +732,8 @@ struct TypographyHapticsGalleryContractsTests {
                     || name.hasPrefix("ds_") || name.hasPrefix("sys_") || name.hasPrefix("ctl_") || name.hasPrefix("pm_")
                     || name.hasPrefix("stg_") || name.hasPrefix("ppl_") || name.hasPrefix("chat_") || name.hasPrefix("act_")
                     || name.hasPrefix("gm_") || name.hasPrefix("br_") || name.hasPrefix("app_") || name.hasPrefix("set_")
-                    || name.hasPrefix("hst_") || name.hasPrefix("qa_"), "\(name)")
+                    || name.hasPrefix("hst_") || name.hasPrefix("qa_") || name.hasPrefix("lay_") || name.hasPrefix("fx_")
+                    || name.hasPrefix("trn_"), "\(name)")
             #expect(!containsDash(value), "\(name)")
             #expect(!value.contains("'"), "\(name) needs an escaped apostrophe")
             // Positional format arguments only, so translations can reorder them.
@@ -1258,7 +1262,9 @@ private let properNouns: Set<String> = ["Android", "iOS", "PiP", "TalkBack", "JS
                                         // Batch 5 (CHT-4, CHT-5 copy): product and format names.
                                         "Klipy", "YouTube", "GIFs", "WebP",
                                         // Batch 6 (CHT-7 steps, SET-1 account row): company and product names.
-                                        "GitHub", "Apple", "Google"]
+                                        "GitHub", "Apple", "Google",
+                                        // Batch 7 (TRN-2 key and coverage copy): provider names and the possessive.
+                                        "OpenAI", "Sarvam", "Conclave\u{2019}s"]
 
 /// Material sentence case: each sentence starts with a capital, a digit or a format argument, and later words
 /// are lowercase unless they are proper nouns or acronyms. A fragment that is substituted into a sentence may

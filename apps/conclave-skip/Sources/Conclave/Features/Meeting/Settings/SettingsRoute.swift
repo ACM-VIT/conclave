@@ -64,9 +64,9 @@ enum SettingsRoutePolicy {
         return hostRoute(page)
     }
 
-    /// The pages this slice draws. Camera, share, effects and connection pages are SET-3's and SET-6's; until they
-    /// land their rows stay hidden (D11), so these routes are never pushed. `voiceRecord` needs the personal voice
-    /// capability (W10-4 is out of this push, so it stays unreachable).
+    /// The pages Settings draws. SET-3 lands Camera Quality, Share Quality, their Advanced pages and Connection (their
+    /// rows show only where their capability holds, D11). `voiceRecord` needs the personal voice capability (W10-4 is
+    /// out of this push, so it stays unreachable).
     static func isAvailable(_ route: SettingsRoute, canUsePersonalVoice: Bool) -> Bool {
         switch route {
         case .root, .output, .microphone, .voice, .privacy:
@@ -74,9 +74,18 @@ enum SettingsRoutePolicy {
         case .voiceRecord:
             return canUsePersonalVoice
         case .cameraQuality, .cameraAdvanced, .screenShareQuality, .screenShareAdvanced, .connection:
-            return false
+            return true
         case .hostControls, .hostInviteCode, .hostAccessList, .hostNotice, .hostWebinar, .hostAttendeeCode, .hostCustomLink:
             return true
+        }
+    }
+
+    /// SET-3: the Advanced page a quality page pushes (camera or share), or nil for any other page.
+    static func advancedRoute(for route: SettingsRoute) -> SettingsRoute? {
+        switch route {
+        case .cameraQuality: return SettingsRoute.cameraAdvanced
+        case .screenShareQuality: return SettingsRoute.screenShareAdvanced
+        default: return nil
         }
     }
 

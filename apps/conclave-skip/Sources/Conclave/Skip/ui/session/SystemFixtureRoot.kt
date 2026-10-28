@@ -32,7 +32,9 @@ fun SystemFixtureRoot(stateName: String) {
     val state = SystemFixtureScript.state(named = stateName) ?: SystemFixtureState.presenceLive
     val session = remember(state) {
         SystemFixtureSession(state = state, providerMode = SystemFixtureProviderMode.fake).also {
-            it.presence.adapters = CallScreenAwake.withScreenAwake(CallNotificationBridge.fixtureAdapters(it.presence))
+            it.presence.adapters = CallDiagnostics.shared.withPresenceAdapter(
+                CallScreenAwake.withScreenAwake(CallNotificationBridge.fixtureAdapters(it.presence))
+            )
         }
     }
     LaunchedEffect(session) { session.start() }
@@ -77,6 +79,8 @@ fun SystemFixtureRoot(stateName: String) {
                 PipFixtureReadouts()
                 // SYS-5 (S70 4 l2): sys.awake and sys.proximity, and the route switch that releases proximity.
                 ScreenAwakeFixtureReadouts()
+                // SYS-15 (AC-SI18-1, AC-SI18-2): sys.diagListeners, sys.diagBuffer, a test error and a 6 s test hang.
+                DiagnosticsFixtureReadouts()
                 FixtureCommand(conclaveString("ctl_route_phone")) { session.setAudioRoute(AudioRouteKind.receiver) }
                 FixtureCommand(conclaveString("ctl_route_speaker")) { session.setAudioRoute(AudioRouteKind.speaker) }
                 FixtureCommand(conclaveString("chat_link_open")) { NativeExternalHandoff.openWebLink("https://conclave.acmvit.in") }

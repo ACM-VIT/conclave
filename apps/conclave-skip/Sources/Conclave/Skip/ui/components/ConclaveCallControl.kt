@@ -199,14 +199,17 @@ internal fun ConclaveLabelledCallToggle(
     label: String, stateText: String, icon: ImageVector, visual: ConclaveCallControlVisual, checked: Boolean,
     identifier: String, onToggle: (Boolean) -> Unit, modifier: Modifier = Modifier,
     context: ConclaveSurfaceContext = ConclaveSurfaceContext.onSurface, width: Dp = 48.dp, enabled: Boolean = true,
-    feedback: FeedbackKind? = null, haptics: ConclaveGestureHaptics = rememberConclaveHaptics(),
+    feedback: FeedbackKind? = null, stateReason: String = "", haptics: ConclaveGestureHaptics = rememberConclaveHaptics(),
     onGesture: (FeedbackKind, GestureHapticDecision) -> Unit = { _, _ -> },
 ) {
     val scheme = MaterialTheme.colorScheme
     val ext = LocalConclaveExtendedColors.current
     val overVideo = context == ConclaveSurfaceContext.overVideo
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        ConclaveCallToggle(label = label, stateText = stateText, icon = icon, visual = visual, checked = checked,
+        // ENT-4 (S10 7 i, HD request B7-T8 R2): the state description adds why a toggle reads Off; the caption below
+        // keeps the plain state.
+        ConclaveCallToggle(label = label, stateText = if (stateReason.isEmpty()) stateText else "$stateText, $stateReason",
+            icon = icon, visual = visual, checked = checked,
             identifier = identifier, onToggle = onToggle, width = width, enabled = enabled, feedback = feedback,
             haptics = haptics, onGesture = onGesture)
         val caption = Modifier.clearAndSetSemantics { }.alpha(if (enabled) 1f else CONCLAVE_CALL_DISABLED_ALPHA)

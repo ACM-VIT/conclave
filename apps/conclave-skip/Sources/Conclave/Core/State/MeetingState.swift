@@ -41,14 +41,6 @@ enum MeetingEntryOverlayPolicy {
     }
 }
 
-struct ActiveAppBinaryMessage: Identifiable {
-    let id = UUID()
-    let appId: String
-    let data: Data
-    let clientId: Int?
-    let sequence: Int
-}
-
 struct MeetingGridSnapshot {
     let userIds: [String]
     let hiddenParticipantCount: Int
@@ -558,10 +550,10 @@ final class MeetingState {
     var isAppsActionInFlight: Bool = false {
         didSet { onActivityInputChanged?() }
     }
-    var latestAppYjsUpdate: ActiveAppBinaryMessage?
-    var latestAppAwarenessUpdate: ActiveAppBinaryMessage?
-    var appYjsUpdateSequence: Int = 0
-    var appAwarenessUpdateSequence: Int = 0
+    /// S60 0.8 C6-18 (ACT-7): Yjs and awareness bytes live in the non-observable `ActiveAppSession`, never here (a
+    /// cursor flood publishes nothing). This coarse flag flips at most once per app session, when room data first
+    /// arrives, for the legacy placeholder's "Synced with room" line (HD request B7-T1 R3).
+    var activeAppHasRoomData: Bool = false
 
     // Games
     var gameCatalog: [GameCatalogEntry] = [] {

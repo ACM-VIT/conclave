@@ -15,7 +15,10 @@ import Observation
 /// `attendee`, both fed by `applyDetails(_:)` beside `apply(_:)` (the models and their pure policies sit at the end of
 /// this file; the one connection label is `ConnectionQualityLabelPolicy`). CHT-8 (S40 8) added the chat preview rules:
 /// `chatPreviewsEnabled` (S60 C6-22), `clearChatPreviews()`, `dropChatPreviews(fromUserId:)` and the in-place
-/// coalescing in `MeetingNoticeCenter` (`ChatPreviewPolicy` holds the unread and body rules the core calls).
+/// coalescing in `MeetingNoticeCenter` (`ChatPreviewPolicy` holds the unread and body rules the core calls). SET-5
+/// (S60 3) added `layoutPanel`, the Layout panel's presenter, fed after every rebuild and notice change from the facts
+/// the stage already holds; SET-6 (S60 4, R6-6) added `effects`, the session's Effects picker, and the iOS rule that
+/// lifts the floating self view above the Effects sheet (`EffectsSelfViewPolicy`).
 @MainActor
 @Observable
 final class StagePresenter {
@@ -62,6 +65,14 @@ final class StagePresenter {
     @ObservationIgnored let sounds = NoticeSoundPlayer()
     /// TRN-1 (S60 5): the captions strip's leaf; fed by `captionChanged(_:)`.
     @ObservationIgnored let captions = CaptionLineFeed()
+    /// SET-5 (S60 3): the Layout panel's presenter. The stage feeds it (`layoutPanelInputs()`); the core performs its
+    /// intents through `layoutPanel.onCommand` (HD request B7-T2 R2).
+    @ObservationIgnored let layoutPanel = LayoutPanelPresenter()
+    /// SET-6 (S60 4): the session's Effects picker (`MeetingPanel.effects`). The core feeds its inputs and performs its
+    /// intents (HD request B7-T2 R3); fixtures install `FakeEffectsEngine`. Hidden while no engine publishes `.panel`.
+    @ObservationIgnored let effects = EffectsPresenter(scope: EffectsScope.call)
+    /// SET-6 (R6-6): which platform rule lifts the self view above the Effects sheet; tests inject Android.
+    @ObservationIgnored var effectsPlatform: EffectsPlatform = EffectsPlatform.current
 
     /// Core only: the view model performs pin, self view and camera actions (the S1 `onCommand` pattern).
     @ObservationIgnored var onCommand: ((StageCommand) -> Void)? = nil
@@ -135,6 +146,8 @@ final class StagePresenter {
     @ObservationIgnored private var lastAttendeeState = ""
     @ObservationIgnored private var announcedWebinarLiveSession = -1
     @ObservationIgnored private var meetingInfoOpening = false
+    /// SET-6 (R6-6): Effects is the shown panel (current and not closing), from the panel snapshot.
+    @ObservationIgnored private(set) var isEffectsPanelShown = false
 
     static let recentEventLimit = 20
 
@@ -270,6 +283,13 @@ final class StagePresenter {
         publishNotices()
         // STG-6 (S20 15 k): Meeting Details opened from More builds its snapshot here; closing it clears the snapshot.
         refreshMeetingInfo()
+        // SET-6 (S60 R6-6, RECONCILE R28): while Effects shows, the iOS floating self view moves above its sheet.
+        let snapshot = shell.panels.snapshot
+        let effectsShown = snapshot.current?.panel == MeetingPanel.effects && !snapshot.isDismissing
+        if effectsShown != isEffectsPanelShown {
+            isEffectsPanelShown = effectsShown
+            rebuild()
+        }
     }
 
     // MARK: Canvas
@@ -478,6 +498,7 @@ final class StagePresenter {
         lastAttendeeState = ""
         announcedWebinarLiveSession = -1
         meetingInfoOpening = false
+        isEffectsPanelShown = false
         if meetingInfo != nil { meetingInfo = nil }
         if attendee != nil { attendee = nil }
         cancelNoticeExpiry()
@@ -544,7 +565,11 @@ final class StagePresenter {
             webinarSpeakerUserId: inputs.webinarSpeakerUserId,
             fitOverrides: fitOverrides
         ))
-        let corner = inputs.isEffectsOpen ? "top-right" : inputs.selfViewCorner
+        // SET-6 (S60 R6-6): iOS lifts the floating self view to the top trailing corner while Effects is open, from the
+        // core's input or the panel snapshot; a self tile in a grid never reads the corner, so it stays put.
+        let corner = EffectsSelfViewPolicy.corner(selfViewCorner: inputs.selfViewCorner,
+                                                  lifted: EffectsSelfViewPolicy.liftsSelfView(platform: effectsPlatform,
+                                                                                              isEffectsOpen: inputs.isEffectsOpen || isEffectsPanelShown))
         // STG-8: one feed slot plus at most one speaker inset; slot ids stay "p:" and "share:" so a share starting
         // moves the speaker's renderer into the inset instead of recreating it (S20 12 k, l).
         let attendeeSlots = AttendeeViewerPolicy.slots(attendeeFeed, fitOverrides: fitOverrides)
@@ -606,6 +631,25 @@ final class StagePresenter {
         publishActivityChanges(activityResolution)
         refreshAttendee()
         refreshMeetingInfo()
+        // SET-5 (S60 3 j): the Layout panel reads the same facts (equality guarded in its presenter).
+        layoutPanel.apply(layoutPanelInputs())
+    }
+
+    /// SET-5 (S60 3 j): the Layout panel's inputs from the stage's own state: the S20 view preferences (the stored
+    /// corner, never the Effects lift), Audio Only from the notice inputs, the phone cap from the viewport (phones in
+    /// either orientation; an unmeasured viewport reads as a phone), the pin and whether you float right now.
+    func layoutPanelInputs() -> LayoutPanelInputs {
+        var selfFloating = false
+        for slot in layout.slots where slot.userId == inputs.localUserId {
+            if slot.role == StageSlotRole.selfFloating || slot.role == StageSlotRole.selfMinimized { selfFloating = true }
+        }
+        let phone = viewport.isEmpty || StageLayoutPolicy.isCompactPortrait(viewport) || StageLayoutPolicy.isCompactHeight(viewport)
+        let pinned = !inputs.pinnedUserId.isEmpty && inputs.participant(inputs.pinnedUserId) != nil
+        return LayoutPanelInputs.make(callSession: inputs.callSession, viewMode: inputs.viewMode, viewMaxTiles: inputs.viewMaxTiles,
+                                      hideTilesWithoutVideo: inputs.hideTilesWithoutVideo, selfViewMode: inputs.selfViewMode,
+                                      selfViewCorner: inputs.selfViewCorner, isAudioOnly: notices.inputs.isAudioOnly,
+                                      isPhone: phone, isPinActive: pinned, isSelfFloating: selfFloating,
+                                      isAttendee: inputs.isWebinarAttendee)
     }
 
     /// The status chips row under the top chrome (hand, Now Playing, Share Invite; S20 7): the banner sits below it.
@@ -825,6 +869,8 @@ final class StagePresenter {
         }
         let chimes = notices.applyState(next, nowMillis: now())
         requestChimes(chimes)
+        // SET-5: Audio Only reaches the Layout panel through the notice inputs (S60 3 j, MS:208).
+        layoutPanel.apply(layoutPanelInputs())
         // S70 R70-1: one-shot announcements when recovery starts (not within the foreground grace) and ends.
         if !previous.isRecovering && next.isRecovering && !next.isResumingFromBackground {
             announce(kind: StageNoticeAnnouncementKind.reconnecting, name: "")

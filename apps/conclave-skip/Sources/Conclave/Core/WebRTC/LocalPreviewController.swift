@@ -23,6 +23,16 @@ import AVFoundation
 // WebRTC client's camera events); `onCallCameraChange` tells the core, which mirrors both into `MeetingState` once so
 // the stage's mirror, its flip value, the "Camera paused" caption and the Settings facing control change in one publish.
 // None of this starts, stops or restarts a capture while the latch is closed.
+//
+// SET-3 (S60 0.8 C6-8, L6-3, 1 f, 1 k, 1 l11, 1 l12; RECONCILE R22): the Settings LivePreviewCard's scoped preview. In a
+// call the latch is closed (the call owns the camera), yet the person may preview their camera while the meeting camera
+// is off. `startScopedPreview(facing:)` reopens the latch for that preview only, `stopScopedPreview()` (Stop Preview,
+// panel close, scene background, 30 s off screen; the Settings presenter decides) stops it and closes the latch again,
+// and the call's camera start ends it first (`releaseScopedPreviewForCallCamera()`, called by the iOS WebRTC client
+// before its capturer starts; Android's client releases the CameraX preview, the same latch). The preview never reaches a
+// producer: this controller has no track, capturer or producer API. `onScopedPreviewChange` tells the Settings
+// presenter (a separate slot, so the lobby's `onChange` wiring stays untouched). `mirrorsSelfView` carries the C6-3
+// Mirror My Video preference to the surfaces that apply it.
 
 @MainActor
 final class LocalPreviewController {
@@ -34,6 +44,17 @@ final class LocalPreviewController {
     /// STG-3: called on the main actor after the facing or the call camera's pause changes (the core mirrors both into
     /// `MeetingState`, S20 SC8, S60 C6-2).
     var onCallCameraChange: (() -> Void)? = nil
+    /// SET-3: called on the main actor after every publish, for the Settings presenter's preview card.
+    var onScopedPreviewChange: (() -> Void)? = nil
+
+    /// SET-3: the Settings preview owns the running capture (the latch was reopened for it, or it started outside one).
+    private(set) var isScopedPreviewActive = false
+    /// SET-3 Debug counters (S60 L6-12 `previewStart`, `previewStop`).
+    private(set) var scopedStartCount = 0
+    private(set) var scopedStopCount = 0
+    /// C6-3: Mirror My Video (default on); surfaces mirror only with the front camera and only while it is on.
+    private(set) var mirrorsSelfView = true
+    private var scopedReopenedLatch = false
 
     private(set) var machine = LocalPreviewMachine.initial
     private(set) var facing: LocalCameraFacing = .front
@@ -145,8 +166,62 @@ final class LocalPreviewController {
         noteCallCameraInterruption(.none)
     }
 
+    // MARK: - The Settings preview (SET-3: S60 C6-8, L6-3)
+
+    /// Start Preview in Settings while the meeting camera is off. In a call the latch is closed, so it reopens for this
+    /// preview only; the state machine and the capture are the lobby's (one capture owner, R22).
+    func startScopedPreview(facing requested: LocalCameraFacing) {
+        if isScopedPreviewActive && LocalPreviewPolicy.mayCapture(machine) {
+            if requested != facing {
+                start(facing: requested)
+            }
+            return
+        }
+        if machine.isLatched {
+            scopedReopenedLatch = true
+            machine = LocalPreviewPolicy.next(machine, event: .resetLatch)
+        } else {
+            scopedReopenedLatch = false
+        }
+        isScopedPreviewActive = true
+        scopedStartCount += 1
+        start(facing: requested)
+        publish()
+    }
+
+    /// Stop Preview, the panel closed, the scene went to the background or the card stayed off screen for 30 s. The
+    /// capture stops and a latch reopened for the preview closes again (the call keeps the camera).
+    func stopScopedPreview() {
+        guard isScopedPreviewActive else { return }
+        isScopedPreviewActive = false
+        scopedStopCount += 1
+        stop()
+        if scopedReopenedLatch {
+            scopedReopenedLatch = false
+            machine = LocalPreviewPolicy.next(machine, event: .handOff)
+        }
+        publish()
+    }
+
+    /// The call's camera is about to start (the iOS client calls this before its capturer starts): a running Settings
+    /// preview hands the camera over first, so two captures never compete. A no-op without a Settings preview.
+    func releaseScopedPreviewForCallCamera() {
+        guard isScopedPreviewActive else { return }
+        handOffToCall()
+        publish()
+    }
+
+    /// C6-3: the Mirror My Video preference, pushed by the Settings presenter.
+    func setMirrorPreference(_ on: Bool) {
+        guard on != mirrorsSelfView else { return }
+        mirrorsSelfView = on
+        publish()
+    }
+
     /// The publish latch closes: the call owns the camera. The capture stops; the layer keeps its last frame.
     func handOffToCall() {
+        isScopedPreviewActive = false
+        scopedReopenedLatch = false
         let wasCapturing = LocalPreviewPolicy.mayCapture(machine)
         let next = LocalPreviewPolicy.next(machine, event: .handOff)
         guard next != machine || wasCapturing else { return }
@@ -181,6 +256,7 @@ final class LocalPreviewController {
 
     private func publish() {
         onChange?()
+        onScopedPreviewChange?()
     }
 
     private func restartCapture() {

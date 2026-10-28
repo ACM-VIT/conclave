@@ -8,6 +8,7 @@ import SwiftUI
 // bottom block `lobbyStatus`, the subtitle `lobbyPresence`, the identity rows `lobbyIdentity`, the link row
 // `lobbyLink`, the audio rows `lobbyAudio` (S10 0.5, 6 k). No glass besides what the system draws for the navigation
 // bar and the bottom bar container (S10 6 c "Glass", R9). Intent goes to the core through the presenter (D14).
+// ENT-4 (S10 7): the permission priming rows under the card come from `PermissionPrimingSection`.
 
 struct LobbyView: View {
     let route: PremeetingRoute
@@ -53,7 +54,7 @@ struct LobbyView: View {
     }
 }
 
-/// The rows under the card, in focus order: issue, microphone permission, audio, name, invite code, link.
+/// The rows under the card, in focus order: issue, permission priming (ENT-4), audio, name, invite code, link.
 private struct LobbyControlsColumn: View {
     let premeeting: PremeetingPresenter
 
@@ -62,7 +63,7 @@ private struct LobbyControlsColumn: View {
         let isPromotion = premeeting.lobbyStatus?.intent == LobbyIntent.promotion
         VStack(alignment: .leading, spacing: 16) {
             LobbyIssueSection(premeeting: premeeting)
-            LobbyMicrophonePermissionSection(premeeting: premeeting)
+            PermissionPrimingSection(premeeting: premeeting)
             LobbyAudioSection(premeeting: premeeting)
             if !isPromotion {
                 LobbyIdentitySection(premeeting: premeeting)
@@ -136,44 +137,6 @@ enum LobbyIssueCopy {
         case .none, .nameMissing, .inviteCodeRequired, .inviteCodeInvalid, .failedNetwork, .failedMedia,
              .failedServerBusy, .failedUnknown:
             return nil
-        }
-    }
-}
-
-/// S10 7 c: the microphone permission row under the card (denied with Open Settings, restricted without).
-private struct LobbyMicrophonePermissionSection: View {
-    let premeeting: PremeetingPresenter
-
-    var body: some View {
-        if let media = premeeting.lobbyMedia, media.micPermission == .denied || media.micPermission == .restricted {
-            LobbyGroupedSection {
-                LobbyGroupedRow {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Label {
-                            Text(ConclaveStrings.text("Microphone Access Is Off"))
-                                .font(.subheadline.weight(.semibold))
-                        } icon: {
-                            Image(systemName: ConclaveSymbols.micSlash)
-                                .foregroundStyle(HostingTheme.statusWarning)
-                                .accessibilityHidden(true)
-                        }
-                        Text(media.micPermission == .restricted
-                             ? ConclaveStrings.text("Microphone access is restricted on this device.")
-                             : ConclaveStrings.text("Allow microphone access in Settings so people can hear you."))
-                            .font(.footnote)
-                            .foregroundStyle(HostingTheme.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if media.micPermission == .denied {
-                            Button(ConclaveStrings.text("Open Settings")) { premeeting.openSystemSettings() }
-                                .buttonStyle(.borderless)
-                                .tint(HostingTheme.coralText)
-                                .accessibilityIdentifier("lobby.microphone.openSettings")
-                        }
-                    }
-                }
-            }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("lobby.microphone.denied")
         }
     }
 }

@@ -638,6 +638,8 @@ final class WebRTCClient: NSObject, ObservableObject {
     private var remoteConsumerPreferenceRetryTask: Task<Void, Never>?
     private var remoteConsumerPreferencePolicyRevision = 0
     private var remoteVideoReceiveEnabled = true
+    /// SET-3 (S60 C6-5): the effective Data Saver of the last receive policy pass (kept for its retries).
+    private var remoteReceiveDataSaver = false
     private struct PlannedConsumerResetCandidate {
         let predecessor: ConsumerGenerationIdentity
         let producerId: String
@@ -1769,23 +1771,28 @@ final class WebRTCClient: NSObject, ObservableObject {
                 visibleUserIds: visibleUserIds,
                 connectionQuality: connectionQuality,
                 videoQuality: videoQuality,
-                receiveVideo: self.remoteVideoReceiveEnabled
+                receiveVideo: self.remoteVideoReceiveEnabled,
+                dataSaver: self.remoteReceiveDataSaver
             )
         }
     }
 
+    /// SET-3 (S60 C6-5): `dataSaver` is the effective Data Saver (the switch OR the system signal); it lowers what this
+    /// client receives through `DataSaverPolicy.reducesReceive`, like the legacy low quality flag.
     func applyRemoteConsumerBandwidthPolicy(
         focusedUserIds: Set<String>,
         visibleUserIds: Set<String>,
         connectionQuality: ConnectionQuality,
         videoQuality: VideoQuality,
-        receiveVideo: Bool = true
+        receiveVideo: Bool = true,
+        dataSaver: Bool = false
     ) async {
         remoteConsumerPreferenceRetryTask?.cancel()
         remoteConsumerPreferenceRetryTask = nil
         remoteConsumerPreferencePolicyRevision += 1
         let policyRevision = remoteConsumerPreferencePolicyRevision
         remoteVideoReceiveEnabled = receiveVideo
+        remoteReceiveDataSaver = dataSaver
         // Policy generations are part of reset ownership. Cancel a sleeping or
         // in-flight reset immediately so stale top-layer evidence cannot cross
         // a receive-disable or adaptive downgrade boundary.
@@ -2032,7 +2039,10 @@ final class WebRTCClient: NSObject, ObservableObject {
         let emergencyKeepVideo = isEmergency && emergencyKeepWebcamUserId == info.userId
         let isPoor = isEmergency || connectionQuality == .poor
         let isFair = connectionQuality == .fair
-        let isConstrained = isPoor || isFair || videoQuality == .low
+        // SET-3 (C6-5): Data Saver reduces what you receive like the legacy low quality flag.
+        let isReducedReceive = DataSaverPolicy.reducesReceive(isLowQuality: videoQuality == .low,
+                                                              dataSaverOn: remoteReceiveDataSaver)
+        let isConstrained = isPoor || isFair || isReducedReceive
 
         if isEmergency && !emergencyKeepVideo {
             return RemoteConsumerPreference(
@@ -2043,7 +2053,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             )
         }
 
-        if !isVisible && (isPoor || videoQuality == .low) {
+        if !isVisible && (isPoor || isReducedReceive) {
             return RemoteConsumerPreference(
                 spatialLayer: 0,
                 temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer,
@@ -2805,6 +2815,9 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     func startCameraCapture() throws {
         guard let capturer = videoCapturer else { return }
+        // SET-3 (S60 C6-8, RECONCILE R22): a running Settings preview hands the camera over before this capturer starts,
+        // so two captures never compete and the preview never reaches the producer.
+        LocalPreviewController.shared.releaseScopedPreviewForCallCamera()
 
         guard let camera = getCameraDevice(position: currentCameraPosition) else {
             throw WebRTCError.noCameraAvailable
@@ -6656,6 +6669,118 @@ extension WebRTCClient {
     /// The legacy Settings "Test speaker" now plays the one shared test tone (S60 C6-7).
     func testSpeaker() {
         playTestTone()
+    }
+
+    // MARK: - Settings video and connection (S60 C6-3, C6-9, D11; SET-3)
+
+    /// C6-3: whether your own local renderers mirror now: the front camera with Mirror My Video on. The sent stream is
+    /// never mirrored (`LocalVideoMirrorPolicy.mirrorsSentStream`): `RTCCameraVideoCapturer` delivers unmirrored frames
+    /// and nothing here flips them.
+    var mirrorsLocalVideo: Bool {
+        LocalVideoMirrorPolicy.mirrors(isFront: currentCameraFacing == .front, preference: LocalVideoMirrorPreference.shared.isOn)
+    }
+
+    /// D11: the current camera's largest capture height and frame rate, so Advanced lists only what it supports.
+    func cameraCaptureCapability() -> CameraCaptureCapability {
+        guard let device = getCameraDevice(position: currentCameraPosition) else { return CameraCaptureCapability.unknown }
+        var maxHeight: Int32 = 0
+        var maxFrameRate = 0.0
+        for format in RTCCameraVideoCapturer.supportedFormats(for: device) {
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            maxHeight = max(maxHeight, min(dimensions.width, dimensions.height))
+            for range in format.videoSupportedFrameRateRanges {
+                maxFrameRate = max(maxFrameRate, range.maxFrameRate)
+            }
+        }
+        return CameraCaptureCapability(maxHeight: Int(maxHeight), maxFrameRate: Int(maxFrameRate))
+    }
+
+    /// C6-9: one raw reading of the transports' stats for the Connection page (cumulative counters only; the shared
+    /// `ConnectionStatsPolicy` windows them, so the quality sampler's own windows are untouched). Nil without stats.
+    func sampleConnectionStatsCounters() -> ConnectionStatsCounters? {
+        var send: [[String: Any]] = []
+        var receive: [[String: Any]] = []
+        if let sendTransport, !sendTransport.closed {
+            send = Self.statsObjects(sendTransport.stats)
+        }
+        if let receiveTransport, !receiveTransport.closed {
+            receive = Self.statsObjects(receiveTransport.stats)
+        }
+        if send.isEmpty && receive.isEmpty { return nil }
+
+        var pairRtt: Double?
+        var remoteRtt: Double?
+        var jitter: Double?
+        var packetsLost = 0.0
+        var packetsReceived = 0.0
+        var remoteLoss: Double?
+        var videoBytes: Double?
+        var audioBytes: Double?
+        var bytesSent: Double?
+        var bytesReceived: Double?
+        var videoCodecId = ""
+        var codecs: [String: String] = [:]
+
+        for obj in send {
+            let type = obj["type"] as? String
+            if type == "codec", let id = obj["id"] as? String, let mime = obj["mimeType"] as? String {
+                codecs[id] = mime
+            } else if type == "candidate-pair", Self.isNominatedPair(obj) {
+                if let rtt = Self.statsNumber(obj, "currentRoundTripTime") { pairRtt = max(pairRtt ?? 0, rtt * 1000) }
+                if let bytes = Self.statsNumber(obj, "bytesSent") { bytesSent = Self.addNullable(bytesSent, bytes) }
+            } else if type == "remote-inbound-rtp" {
+                if let rtt = Self.statsNumber(obj, "roundTripTime") { remoteRtt = max(remoteRtt ?? 0, rtt * 1000) }
+                if let value = Self.statsNumber(obj, "jitter") { jitter = max(jitter ?? 0, value * 1000) }
+                if let fraction = Self.normalizeFractionLost(Self.statsNumber(obj, "fractionLost")) {
+                    remoteLoss = max(remoteLoss ?? 0, fraction)
+                }
+            } else if type == "outbound-rtp" {
+                let kind = Self.statsMediaKind(obj)
+                if kind == "video" {
+                    if let bytes = Self.statsNumber(obj, "bytesSent") { videoBytes = Self.addNullable(videoBytes, bytes) }
+                    if videoCodecId.isEmpty, let codecId = obj["codecId"] as? String { videoCodecId = codecId }
+                } else if kind == "audio" {
+                    if let bytes = Self.statsNumber(obj, "bytesSent") { audioBytes = Self.addNullable(audioBytes, bytes) }
+                }
+            }
+        }
+        for obj in receive {
+            let type = obj["type"] as? String
+            if type == "candidate-pair", Self.isNominatedPair(obj) {
+                if let bytes = Self.statsNumber(obj, "bytesReceived") { bytesReceived = Self.addNullable(bytesReceived, bytes) }
+                if pairRtt == nil, let rtt = Self.statsNumber(obj, "currentRoundTripTime") { pairRtt = rtt * 1000 }
+            } else if type == "inbound-rtp", Self.isMediaRtpStats(obj) {
+                if let value = Self.statsNumber(obj, "jitter") { jitter = max(jitter ?? 0, value * 1000) }
+                if let lost = Self.statsNumber(obj, "packetsLost") { packetsLost += max(0, lost) }
+                if let received = Self.statsNumber(obj, "packetsReceived") { packetsReceived += max(0, received) }
+            }
+        }
+        let codec = videoCodecId.isEmpty ? "" : ConnectionStatsPolicy.codecName(mimeType: codecs[videoCodecId] ?? "")
+        return ConnectionStatsCounters(
+            timestampMillis: Date().timeIntervalSince1970 * 1000,
+            rttMillis: pairRtt ?? remoteRtt,
+            jitterMillis: jitter,
+            packetsLost: packetsLost,
+            packetsReceived: packetsReceived,
+            remoteLossFraction: remoteLoss,
+            videoBytesSent: videoBytes,
+            audioBytesSent: audioBytes,
+            bytesSent: bytesSent,
+            bytesReceived: bytesReceived,
+            videoCodec: codec
+        )
+    }
+
+    private static func statsObjects(_ statsJson: String) -> [[String: Any]] {
+        guard let data = statsJson.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return []
+        }
+        return array
+    }
+
+    private static func isNominatedPair(_ obj: [String: Any]) -> Bool {
+        (obj["nominated"] as? Bool) == true || (obj["state"] as? String) == "succeeded"
     }
 
     // MARK: - Settings audio (S60 C6-1, C6-6, C6-7; SET-2)

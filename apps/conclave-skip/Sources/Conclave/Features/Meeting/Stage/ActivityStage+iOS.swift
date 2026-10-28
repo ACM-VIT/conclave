@@ -162,7 +162,10 @@ struct ActivityStageIdentity: View {
             return Parts(name: ActivityStageCopy.displayName(kind: raw, name: chrome.name), status: GameCopy.headerStatus(chrome), appId: "")
         }
         if let item = session.activities.snapshot.nowPlayingItem(kind: kind) {
-            return Parts(name: ActivitiesCopy.nowPlayingTitle(item), status: ActivitiesCopy.nowPlayingStatus(item), appId: item.appId)
+            // ACT-7 (HD request B7-T1 R2): an app's status comes from its host ("%lld editing", "Editing locked").
+            let hostStatus = kind == .app ? AppHostHeader.status(session.appHost) : ""
+            return Parts(name: ActivitiesCopy.nowPlayingTitle(item),
+                         status: hostStatus.isEmpty ? ActivitiesCopy.nowPlayingStatus(item) : hostStatus, appId: item.appId)
         }
         return Parts(name: ActivityStageCopy.displayName(kind: raw, name: ""), status: "", appId: "")
     }
@@ -201,6 +204,9 @@ struct ActivityStageTrailing: View {
         if let session = session {
             if ActivityStageCopy.kind(kind) == .game {
                 GameShellHeaderActions(games: session.games)
+            } else if ActivityStageCopy.kind(kind) == .app {
+                // ACT-7 (HD request B7-T1 R2): Lock Editing and Close in the host menu (S60 13 c).
+                NativeAppHostMenu(host: session.appHost)
             } else {
                 ActivityCloseButton(kind: ActivityStageCopy.kind(kind), activities: session.activities)
             }
@@ -250,6 +256,9 @@ struct ActivityStageBody: View {
             if ActivityStageCopy.kind(kind) == .game {
                 GameShellBody(games: session.games, storeURL: session.storeURL,
                               onShowVideo: { stage.setShowsVideoOverActivity(true) })
+            } else if ActivityStageCopy.kind(kind) == .app {
+                // ACT-7 (HD request B7-T1 R2): the one retained web view per app session, its states and the tools.
+                NativeAppHostBody(host: session.appHost, onShowVideo: { stage.setShowsVideoOverActivity(true) })
             } else {
                 ActivityWebBody(kind: kind, stage: stage, session: session)
             }

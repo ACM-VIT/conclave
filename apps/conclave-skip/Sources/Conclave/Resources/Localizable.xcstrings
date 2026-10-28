@@ -9,6 +9,10 @@
       "comment" : "Chat panel: your own row in the mention suggestions; the argument is your name",
       "extractionState" : "manual"
     },
+    "%@ API Key" : {
+      "comment" : "Transcript panel (S60 6). Secure field label; the argument is the provider name (OpenAI or Sarvam).",
+      "extractionState" : "manual"
+    },
     "%@ Is Running" : {
       "comment" : "Status chip: an activity keeps running while the video is shown; the argument is the activity name, for example Trivia",
       "extractionState" : "manual",
@@ -122,6 +126,14 @@
     },
     "%@ ended" : {
       "comment" : "Activity card on the stage (S20 11): accessibility announcement when a game, app or the shared browser ends; %@ is its name",
+      "extractionState" : "manual"
+    },
+    "%@ got it" : {
+      "comment" : "Wordle in the activity card (S60 10): the round's winner line, for example Avery got it",
+      "extractionState" : "manual"
+    },
+    "%@ is choosing a word." : {
+      "comment" : "Wordle in the activity card (S60 10): shown to everyone else while a player picks the secret word; the argument is that player's name",
       "extractionState" : "manual"
     },
     "%@ is no longer watching." : {
@@ -262,6 +274,18 @@
       "comment" : "Game shell in the activity card (S60 8): results headline; winner name and formatted score",
       "extractionState" : "manual"
     },
+    "%@, correct position" : {
+      "comment" : "Wordle in the activity card (S60 10): accessibility name of a letter in the right spot, for example C, correct position (also the key name)",
+      "extractionState" : "manual"
+    },
+    "%@, in the word" : {
+      "comment" : "Wordle in the activity card (S60 10): accessibility name of a letter that is in the word but in another spot, for example E, in the word (also the key name)",
+      "extractionState" : "manual"
+    },
+    "%@, not in the word" : {
+      "comment" : "Wordle in the activity card (S60 10): accessibility name of a letter that is not in the word, for example A, not in the word (also the key name)",
+      "extractionState" : "manual"
+    },
     "%lld More Participants" : {
       "comment" : "Overflow tile (iOS): accessibility label of the tile that opens People; the count is the hidden participants",
       "extractionState" : "manual",
@@ -386,6 +410,18 @@
           }
         }
       }
+    },
+    "%lld fps" : {
+      "comment" : "Settings (S60 2, SET-3): frame rate value, frames per second",
+      "extractionState" : "manual"
+    },
+    "%lld kbps" : {
+      "comment" : "Settings (S60 2, SET-3): bitrate value, kilobits per second",
+      "extractionState" : "manual"
+    },
+    "%lld letters · %lld tries" : {
+      "comment" : "Wordle in the activity card (S60 10): the rules under the heading, for example 5 letters · 6 tries (both numbers are always above one)",
+      "extractionState" : "manual"
     },
     "%lld ms" : {
       "comment" : "Prompt games in the activity card (S60 9), Reaction: a reaction time in milliseconds, for example 312 ms",
@@ -546,6 +582,30 @@
       "comment" : "Activities panel (S60 7): player range of a game in the catalog",
       "extractionState" : "manual"
     },
+    "%lld tries" : {
+      "comment" : "Wordle in the activity card (S60 10): a number of guesses, in the standings and inside Solved in",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld try"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld tries"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "%lld truncated, %lld of %lld specimens measured" : {
       "comment" : "Debug component gallery: truncation readout: truncated specimens, measured specimens, all specimens. Scripts read it, so the numbers stay ASCII digits in every language",
       "extractionState" : "manual"
@@ -566,8 +626,52 @@
       "comment" : "Game shell in the activity card (S60 8): header status part, people queued for the next round",
       "extractionState" : "manual"
     },
+    "1080p Full HD" : {
+      "comment" : "Settings (S60 2, SET-3): video resolution option",
+      "extractionState" : "manual"
+    },
+    "1080p at 30 fps" : {
+      "comment" : "Settings (S60 2, SET-3): detail line under the HD camera preset",
+      "extractionState" : "manual"
+    },
+    "1080p at up to 60 fps" : {
+      "comment" : "Settings (S60 2, SET-3): detail line under the Studio camera preset",
+      "extractionState" : "manual"
+    },
+    "1440p QHD" : {
+      "comment" : "Settings (S60 2, SET-3): video resolution option",
+      "extractionState" : "manual"
+    },
+    "2160p 4K" : {
+      "comment" : "Settings (S60 2, SET-3): video resolution option",
+      "extractionState" : "manual"
+    },
+    "360p" : {
+      "comment" : "Settings (S60 2, SET-3): video resolution option",
+      "extractionState" : "manual"
+    },
+    "360p at 20 fps" : {
+      "comment" : "Settings (S60 2, SET-3): detail of the Data Saver ceiling",
+      "extractionState" : "manual"
+    },
     "5 s left" : {
       "comment" : "Game shell in the activity card (S60 8): countdown warning twin shown at 5 seconds or less",
+      "extractionState" : "manual"
+    },
+    "720p HD" : {
+      "comment" : "Settings (S60 2, SET-3): video resolution option",
+      "extractionState" : "manual"
+    },
+    "720p at 30 fps" : {
+      "comment" : "Settings (S60 2, SET-3): detail line under the Auto camera preset",
+      "extractionState" : "manual"
+    },
+    "A Blank Board" : {
+      "comment" : "SDK app card on the stage (S60 13): title of the empty whiteboard hint over the canvas",
+      "extractionState" : "manual"
+    },
+    "A background is on in Video Effects." : {
+      "comment" : "Effects panel (S60 4): iOS reason the image tiles are disabled while a system background is on",
       "extractionState" : "manual"
     },
     "A blocked guest can still join from another device." : {
@@ -628,6 +732,10 @@
     },
     "Account, %@" : {
       "comment" : "Premeeting Home: accessibility label of the account button when signed in; the argument is the account name",
+      "extractionState" : "manual"
+    },
+    "Action Items" : {
+      "comment" : "Transcript panel (S60 6). Minutes section title; also an export heading.",
       "extractionState" : "manual"
     },
     "Actions" : {
@@ -700,6 +808,10 @@
     },
     "Add Attachment" : {
       "comment" : "Chat composer: accessibility label of the attach button that opens the attachment menu",
+      "extractionState" : "manual"
+    },
+    "Add Photo" : {
+      "comment" : "Effects panel (S60 4): tile that opens the photo picker to add a background image",
       "extractionState" : "manual"
     },
     "Add Reaction" : {
@@ -782,6 +894,10 @@
       "comment" : "Settings (S60 1): switch that keeps call controls on screen",
       "extractionState" : "manual"
     },
+    "Another app is using the camera." : {
+      "comment" : "Settings (S60 2, SET-3): why the preview paused",
+      "extractionState" : "manual"
+    },
     "Answer Live" : {
       "comment" : "Webinar Q&A (S50 11 g): host action that marks the question as being answered now",
       "extractionState" : "manual"
@@ -798,6 +914,10 @@
     },
     "Answer locked in" : {
       "comment" : "Prompt games in the activity card (S60 9), Trivia: after you answer; joined with the answered count by a middle dot",
+      "extractionState" : "manual"
+    },
+    "Answer ready" : {
+      "comment" : "Transcript panel (S60 6). Announcement when an answer finishes.",
       "extractionState" : "manual"
     },
     "Answered" : {
@@ -820,6 +940,30 @@
       "comment" : "Debug component gallery: header for specimens in the system appearance",
       "extractionState" : "manual"
     },
+    "App Editors %lld" : {
+      "comment" : "SDK app card on the stage (S60 13): status line under the app name: how many people are on the whiteboard; %lld is the count",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld editing"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld editing"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Appearance" : {
       "comment" : "Debug component gallery: readout name for light or dark appearance",
       "extractionState" : "manual"
@@ -836,8 +980,16 @@
       "comment" : "In-call control bar: added to the microphone or camera state while the call reconnects; your choice takes effect after reconnecting",
       "extractionState" : "manual"
     },
+    "Applying" : {
+      "comment" : "Effects panel (S60 4): accessibility value of a tile while its effect is being applied",
+      "extractionState" : "manual"
+    },
     "Apps" : {
       "comment" : "Activities panel (S60 7): section header",
+      "extractionState" : "manual"
+    },
+    "As people speak, their words appear here live, captioned for everyone." : {
+      "comment" : "Transcript panel (S60 6). Empty transcript message.",
       "extractionState" : "manual"
     },
     "Ask" : {
@@ -854,6 +1006,14 @@
     },
     "Ask a longer question." : {
       "comment" : "Webinar Q&A (S50 11 g): under the composer for a one-character question",
+      "extractionState" : "manual"
+    },
+    "Ask about the meeting" : {
+      "comment" : "Transcript panel (S60 6). Ask composer placeholder and accessibility label.",
+      "extractionState" : "manual"
+    },
+    "Ask the Meeting" : {
+      "comment" : "Transcript panel (S60 6). Empty Ask title.",
       "extractionState" : "manual"
     },
     "Ask the first one." : {
@@ -874,6 +1034,10 @@
     },
     "Asking to Join" : {
       "comment" : "Lobby status while waiting for someone in the meeting to let the person in",
+      "extractionState" : "manual"
+    },
+    "Assistant" : {
+      "comment" : "Transcript panel (S60 6). Picker label: the AI model for Ask and Minutes.",
       "extractionState" : "manual"
     },
     "Assumed white system label on the accent: %@" : {
@@ -920,8 +1084,20 @@
       "comment" : "Webinar People (S50 10 g): footer under the Attendees section",
       "extractionState" : "manual"
     },
+    "Attendees watch the webinar layout." : {
+      "comment" : "Layout panel (S60 3): reason line under a disabled layout mode for a webinar attendee",
+      "extractionState" : "manual"
+    },
     "Audio" : {
       "comment" : "Pre-join lobby: label of the row that shows and chooses the audio output",
+      "extractionState" : "manual"
+    },
+    "Audio Bitrate" : {
+      "comment" : "Settings (S60 2, SET-3): Connection detail: the audio you send",
+      "extractionState" : "manual"
+    },
+    "Audio Only" : {
+      "comment" : "Layout panel (S60 3): switch that turns off sending and receiving video for this call",
       "extractionState" : "manual"
     },
     "Audio switched to %@" : {
@@ -980,6 +1156,18 @@
       "comment" : "Outcome screen button that returns to Home",
       "extractionState" : "manual"
     },
+    "Backgrounds" : {
+      "comment" : "Effects panel (S60 4): tab and section of background effects",
+      "extractionState" : "manual"
+    },
+    "Balance Both" : {
+      "comment" : "Settings (S60 2, SET-3): Under Pressure option",
+      "extractionState" : "manual"
+    },
+    "Balanced" : {
+      "comment" : "Settings (S60 2, SET-3): detail line under the Auto share preset",
+      "extractionState" : "manual"
+    },
     "Banners" : {
       "comment" : "Debug component gallery: section title",
       "extractionState" : "manual"
@@ -1002,6 +1190,10 @@
     },
     "Best bluffer" : {
       "comment" : "Prompt games in the activity card (S60 9), Bluff: kicker above the winner line on the final results",
+      "extractionState" : "manual"
+    },
+    "Beta" : {
+      "comment" : "Transcript panel (S60 6). Tag next to the Live Notes kicker.",
       "extractionState" : "manual"
     },
     "Blend in. You don’t know the word. Category: %@" : {
@@ -1030,6 +1222,10 @@
       "comment" : "Prompt games in the activity card (S60 9), Bluff: who wrote a fake answer, shown at the reveal; %@ is a name; joined with the vote count by a middle dot",
       "extractionState" : "manual"
     },
+    "Blur" : {
+      "comment" : "Effects panel (S60 4): background tile and section: a strong blur behind you",
+      "extractionState" : "manual"
+    },
     "Bold Text" : {
       "comment" : "Debug component gallery: readout name for the Bold Text setting",
       "extractionState" : "manual"
@@ -1040,6 +1236,14 @@
     },
     "Bordered Prominent, On Coral" : {
       "comment" : "Debug component gallery: inert specimen button in the bordered prominent style with the coral fill and its label color",
+      "extractionState" : "manual"
+    },
+    "Bottom Left" : {
+      "comment" : "Layout panel (S60 3): self view corner",
+      "extractionState" : "manual"
+    },
+    "Bottom Right" : {
+      "comment" : "Layout panel (S60 3): self view corner",
       "extractionState" : "manual"
     },
     "Bring %@ on Stage" : {
@@ -1116,8 +1320,20 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "Camera Preview" : {
+      "comment" : "Settings (S60 2, SET-3): accessibility label of the camera preview card",
+      "extractionState" : "manual"
+    },
     "Camera Quality" : {
       "comment" : "Settings (S60 1): row that opens the camera quality page (shown once SET-3 lands)",
+      "extractionState" : "manual"
+    },
+    "Camera access is off" : {
+      "comment" : "Settings (S60 2, SET-3): preview card text when the camera permission is denied",
+      "extractionState" : "manual"
+    },
+    "Camera access is off in Settings." : {
+      "comment" : "Pre-join lobby (iOS): accessibility hint of the camera toggle while camera access is denied in Settings, so the toggle reads Off",
       "extractionState" : "manual"
     },
     "Camera access is off. Turn it on in Settings." : {
@@ -1136,6 +1352,10 @@
       "comment" : "Chat panel: system row after /camera on while the camera is on",
       "extractionState" : "manual"
     },
+    "Camera is off for the meeting." : {
+      "comment" : "Effects panel (S60 4): line above the preview buttons while your camera is off",
+      "extractionState" : "manual"
+    },
     "Camera isn’t available. You can join with it off." : {
       "comment" : "Pre-join lobby: caption in the preview card when the device has no camera or it could not start",
       "extractionState" : "manual"
@@ -1152,6 +1372,14 @@
     },
     "Camera permission is off" : {
       "comment" : "Pre-join lobby: state of the Effects control while camera access is off in Settings",
+      "extractionState" : "manual"
+    },
+    "Camera unavailable" : {
+      "comment" : "Settings (S60 2, SET-3): preview card caption when the camera could not start",
+      "extractionState" : "manual"
+    },
+    "Camper vacation" : {
+      "comment" : "Effects panel (S60 4): background image name, kept as in the web catalog",
       "extractionState" : "manual"
     },
     "Cancel" : {
@@ -1222,12 +1450,28 @@
       "comment" : "Prompt games in the activity card (S60 9), Imposter: second line of the held secret card for the crew; %@ is the category",
       "extractionState" : "manual"
     },
+    "Center Stage" : {
+      "comment" : "Effects panel (S60 4): iOS switch for the system Center Stage camera feature (Apple feature name)",
+      "extractionState" : "manual"
+    },
+    "Change Image" : {
+      "comment" : "Effects panel (S60 4): menu action that replaces one of your background images",
+      "extractionState" : "manual"
+    },
     "Change Name…" : {
       "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): your own row, opens the rename dialog",
       "extractionState" : "manual"
     },
+    "Change Studio Light in Video Effects." : {
+      "comment" : "Effects panel (S60 4): iOS footer: Studio Light is changed in the system Video Effects module",
+      "extractionState" : "manual"
+    },
     "Change Your Name" : {
       "comment" : "Change Name dialog (S50 3 c, 3 d, 3 g): dialog title",
+      "extractionState" : "manual"
+    },
+    "Changes apply to an active share right away." : {
+      "comment" : "Settings (S60 2, SET-3): Share Quality footer",
       "extractionState" : "manual"
     },
     "Character Counter %lld %lld" : {
@@ -1318,8 +1562,20 @@
       "comment" : "Outcome screen body after the connection to the meeting was lost",
       "extractionState" : "manual"
     },
+    "Checking key coverage" : {
+      "comment" : "Transcript panel (S60 6). Key coverage line while unknown (spinner).",
+      "extractionState" : "manual"
+    },
     "Checking who’s here" : {
       "comment" : "Pre-join lobby (iOS): navigation subtitle while the room’s occupancy is being checked",
+      "extractionState" : "manual"
+    },
+    "Choose a less detailed image." : {
+      "comment" : "Effects panel (S60 4): error when a picked image stays too large after compression",
+      "extractionState" : "manual"
+    },
+    "Choose an image under 12 MB." : {
+      "comment" : "Effects panel (S60 4): error when a picked image is too large",
       "extractionState" : "manual"
     },
     "Chromium" : {
@@ -1404,6 +1660,10 @@
       "comment" : "Invite Code page (S50 7 g): confirmation after saving",
       "extractionState" : "manual"
     },
+    "Coffee shop" : {
+      "comment" : "Effects panel (S60 4): background image name, kept as in the web catalog",
+      "extractionState" : "manual"
+    },
     "Collaborative whiteboard" : {
       "comment" : "Activities panel (S60 7): description of the Whiteboard app",
       "extractionState" : "manual"
@@ -1448,12 +1708,36 @@
       "comment" : "CallKit caller name on the lock screen and in the call pill when the meeting has no label yet (S70 1 g)",
       "extractionState" : "manual"
     },
+    "Conclave Transcript" : {
+      "comment" : "Transcript panel (S60 6). Share sheet title and subject.",
+      "extractionState" : "manual"
+    },
+    "Conclave answered" : {
+      "comment" : "Transcript panel (S60 6). Accessibility prefix of an answer bubble.",
+      "extractionState" : "manual"
+    },
     "Conclave answered: %@" : {
       "comment" : "Chat panel: accessibility announcement when an assistant answer completes; the argument is its first sentence",
       "extractionState" : "manual"
     },
+    "Conclave can go below this when your connection or device is under pressure." : {
+      "comment" : "Settings (S60 2, SET-3): Camera Quality footer",
+      "extractionState" : "manual"
+    },
+    "Conclave can post a recap of the meeting to chat before the call ends." : {
+      "comment" : "End call dialog with recap (S30 4 g).",
+      "extractionState" : "manual"
+    },
     "Conclave couldn't answer right now." : {
       "comment" : "Chat panel, Conclave AI row: error row when the answer failed",
+      "extractionState" : "manual"
+    },
+    "Conclave couldn’t answer right now." : {
+      "comment" : "Transcript panel (S60 6). Answer failure.",
+      "extractionState" : "manual"
+    },
+    "Conclave diagnostics" : {
+      "comment" : "Settings > About (S70 15 g): title of the system share sheet that sends the diagnostics file (one JSON file). Conclave is the app name.",
       "extractionState" : "manual"
     },
     "Conclave is being asked too quickly. Try again in a moment." : {
@@ -1462,6 +1746,10 @@
     },
     "Conclave is writing the recap in chat. The call ends for everyone once it lands." : {
       "comment" : "In-call banner (priority 5) for the host who ended the call: the assistant is posting the recap first",
+      "extractionState" : "manual"
+    },
+    "Conclave writes a short recap in the room chat for everyone." : {
+      "comment" : "Transcript panel (S60 6). Detail under Post Recap to Chat.",
       "extractionState" : "manual"
     },
     "Conclave's authorization expired. Try again." : {
@@ -1478,6 +1766,14 @@
     },
     "Connection Lost" : {
       "comment" : "Outcome screen title after the connection to the meeting was lost",
+      "extractionState" : "manual"
+    },
+    "Connection Quality" : {
+      "comment" : "Settings (S60 2, SET-3): Connection page row title (Android uses the quality value as the headline)",
+      "extractionState" : "manual"
+    },
+    "Connection details aren’t available right now." : {
+      "comment" : "Settings (S60 2, SET-3): Connection summary after stats stopped",
       "extractionState" : "manual"
     },
     "Connection interrupted" : {
@@ -1512,6 +1808,10 @@
       "comment" : "Debug session readout row: the state of each call control (microphone, camera, hand and so on)",
       "extractionState" : "manual"
     },
+    "Cooking Up Minutes" : {
+      "comment" : "Transcript panel (S60 6). Minutes title while notes run with nothing summarized yet.",
+      "extractionState" : "manual"
+    },
     "Copied" : {
       "comment" : "Call stage (iOS): the Copy Link button reads this for 2 seconds after the link was copied; also the Meeting Details copy rows for 2 seconds after a copy (STG-6)",
       "extractionState" : "manual"
@@ -1520,12 +1820,20 @@
       "comment" : "Chat panel: message action that copies the message text",
       "extractionState" : "manual"
     },
+    "Copy Answer" : {
+      "comment" : "Transcript panel (S60 6). Action on an answer.",
+      "extractionState" : "manual"
+    },
     "Copy Code" : {
       "comment" : "Meeting Details panel (S20 15): button that copies the room code (iOS row; Android copy icon description)",
       "extractionState" : "manual"
     },
     "Copy Link" : {
       "comment" : "Copies the meeting link: premeeting Home recent row menu item (ENT-1) and the call stage solo card button (STG-1); also the sample title of the text button in the Debug component gallery; also the Meeting Details and webinar link copy rows (STG-6)",
+      "extractionState" : "manual"
+    },
+    "Copy Transcript" : {
+      "comment" : "Transcript panel (S60 6). Menu item: copy the transcript text.",
       "extractionState" : "manual"
     },
     "Coral text on the call stage" : {
@@ -1609,6 +1917,10 @@
       "comment" : "Change Name dialog (S50 3 c, 3 d, 3 g): generic rename failure",
       "extractionState" : "manual"
     },
+    "Couldn’t create the diagnostics file." : {
+      "comment" : "Settings > About (S70 15 g, D20): shown when the diagnostics export fails; iOS shows it under the row with Try Again, Android in a snackbar with Retry.",
+      "extractionState" : "manual"
+    },
     "Couldn’t create your voice. Try again." : {
       "comment" : "Settings, Voice messages (S60 2): failure after creating a personal voice",
       "extractionState" : "manual"
@@ -1627,6 +1939,10 @@
     },
     "Couldn’t end the game. Try again." : {
       "comment" : "Game shell in the activity card (S60 8): failure notice in the game card",
+      "extractionState" : "manual"
+    },
+    "Couldn’t export the board. Try again." : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): inline failure under the toolbar when Export got no image",
       "extractionState" : "manual"
     },
     "Couldn’t invite %@ on stage." : {
@@ -1666,8 +1982,16 @@
       "comment" : "Activities panel (S60 7): shared browser navigation failed",
       "extractionState" : "manual"
     },
+    "Couldn’t post the recap." : {
+      "comment" : "Transcript panel (S60 6). Recap failure line or snackbar, with Try Again.",
+      "extractionState" : "manual"
+    },
     "Couldn’t raise your hand. Try again." : {
       "comment" : "In-call toast: raising your hand failed",
+      "extractionState" : "manual"
+    },
+    "Couldn’t reach live notes." : {
+      "comment" : "Transcript panel (S60 6). Error message, with Try Again.",
       "extractionState" : "manual"
     },
     "Couldn’t remove %@." : {
@@ -1690,8 +2014,16 @@
       "comment" : "Webinar Q&A (S50 11 g): failure under the composer with Retry",
       "extractionState" : "manual"
     },
+    "Couldn’t start screen sharing. Try again." : {
+      "comment" : "In-call toast when a screen share could not start: the broadcast never connected, the system refused the screen capture service, or the share could not be published (S70 10 g)",
+      "extractionState" : "manual"
+    },
     "Couldn’t stop %@’s screen share." : {
       "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry): the person's name",
+      "extractionState" : "manual"
+    },
+    "Couldn’t stop live notes. Try again." : {
+      "comment" : "Transcript panel (S60 6). Banner when Stop failed, with Try Again.",
       "extractionState" : "manual"
     },
     "Couldn’t stop screen shares." : {
@@ -1730,12 +2062,20 @@
       "comment" : "Webinar Settings (S50 9 g): failure for the cap, attendee code or custom link",
       "extractionState" : "manual"
     },
+    "Covered by Conclave. No key needed." : {
+      "comment" : "Transcript panel (S60 6). Key coverage line.",
+      "extractionState" : "manual"
+    },
     "Create My Voice" : {
       "comment" : "Settings, Record voice (S60 2, L6-13): creates the personal voice from the sample",
       "extractionState" : "manual"
     },
     "Create Your Voice" : {
       "comment" : "Settings, Voice messages (S60 2): opens the personal voice recorder",
+      "extractionState" : "manual"
+    },
+    "Creates a file without names, messages or meeting codes that you can send to support." : {
+      "comment" : "Settings > About (S70 15 g): description under the Export Diagnostics row; also its accessibility hint. The file holds only error codes and timings.",
       "extractionState" : "manual"
     },
     "Creating" : {
@@ -1746,12 +2086,20 @@
       "comment" : "Prompt games in the activity card (S60 9), Imposter: result when the crew voted out the imposter",
       "extractionState" : "manual"
     },
+    "Crisp text" : {
+      "comment" : "Settings (S60 2, SET-3): detail line under the Presentation share preset",
+      "extractionState" : "manual"
+    },
     "Crop to Fill" : {
       "comment" : "Call stage: video tile menu item that crops the video to fill its tile again",
       "extractionState" : "manual"
     },
     "Crying" : {
       "comment" : "In-call reaction palette and tray: reaction name read after React with (iOS: React with %@)",
+      "extractionState" : "manual"
+    },
+    "Custom" : {
+      "comment" : "Settings (S60 2, SET-3): camera or screen share quality preset that uses the person's Advanced limits",
       "extractionState" : "manual"
     },
     "Custom Link" : {
@@ -1765,6 +2113,14 @@
     },
     "Data Saver" : {
       "comment" : "Settings (S60 1): switch that lowers the video you send and receive (shown once SET-3 lands)",
+      "extractionState" : "manual"
+    },
+    "Data Saver is on, so video is sent at up to 360p." : {
+      "comment" : "Settings (S60 2, SET-3): Camera Quality footer while Data Saver is on",
+      "extractionState" : "manual"
+    },
+    "Decisions" : {
+      "comment" : "Transcript panel (S60 6). Minutes section title; also an export heading.",
       "extractionState" : "manual"
     },
     "Decorative" : {
@@ -1785,6 +2141,22 @@
     },
     "Delete My Voice…" : {
       "comment" : "Settings, Voice messages (S60 2): deletes your personal voice after a confirmation (iOS ends with an ellipsis)",
+      "extractionState" : "manual"
+    },
+    "Delete Page %@?" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): confirmation title before deleting a whiteboard page for everyone; %@ is the page name (user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete %@?"
+          }
+        }
+      }
+    },
+    "Delete Page…" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): Page menu item that opens the delete confirmation",
       "extractionState" : "manual"
     },
     "Delete Your Account?" : {
@@ -1839,6 +2211,18 @@
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): short visible label of the Meeting Details action in the three-item row of the menu; the spoken label is Meeting Details",
       "extractionState" : "manual"
     },
+    "Diagnostics" : {
+      "comment" : "Debug system fixture (developers only, S70 SX1): section title for the diagnostics readouts and test commands.",
+      "extractionState" : "manual"
+    },
+    "Diagnostics Buffer" : {
+      "comment" : "Debug system fixture (developers only, S70 SX1): label of the readout that counts events in the diagnostics buffer (sys.diagBuffer; at most 200). Android shows the value without a label.",
+      "extractionState" : "manual"
+    },
+    "Diagnostics Listeners" : {
+      "comment" : "Debug system fixture (developers only, S70 SX1): label of the readout that counts installed diagnostics listener sets (sys.diagListeners; expected 1). Android shows the value without a label.",
+      "extractionState" : "manual"
+    },
     "Disabled by the host" : {
       "comment" : "In-call control bar: why the microphone (and, on iOS, the camera) is unavailable after the host turned it off for participants",
       "extractionState" : "manual"
@@ -1869,6 +2253,18 @@
     },
     "Done" : {
       "comment" : "Debug component gallery: inert toolbar button on the confirmation action specimen page",
+      "extractionState" : "manual"
+    },
+    "Download" : {
+      "comment" : "Settings (S60 2, SET-3): Connection detail: total receive rate",
+      "extractionState" : "manual"
+    },
+    "Drawing works with touch or Apple Pencil. Use the toolbar to change tools." : {
+      "comment" : "SDK app card on the stage (S60 13): VoiceOver hint of the whiteboard canvas",
+      "extractionState" : "manual"
+    },
+    "Due: %@" : {
+      "comment" : "Transcript panel (S60 6). Minutes entry due date; the argument is free text such as \"Friday\".",
       "extractionState" : "manual"
     },
     "Earlier raised hands appear when the queue next updates." : {
@@ -1928,8 +2324,16 @@
       "comment" : "Prompt games in the activity card (S60 9), Imposter: host bar button that closes the vote and counts it",
       "extractionState" : "manual"
     },
+    "End Without Recap" : {
+      "comment" : "End call dialog button: end for everyone without a recap.",
+      "extractionState" : "manual"
+    },
     "End the current game to start another." : {
       "comment" : "Activities panel (S60 7): why catalog rows are disabled while a game runs",
+      "extractionState" : "manual"
+    },
+    "Ended" : {
+      "comment" : "Transcript panel (S60 6). Status: live notes stopped; the transcript stays readable.",
       "extractionState" : "manual"
     },
     "Ending the call for everyone…" : {
@@ -1938,6 +2342,10 @@
     },
     "Ending…" : {
       "comment" : "In-call host Leave menu: second line of the disabled End item while the call is being ended for everyone",
+      "extractionState" : "manual"
+    },
+    "Enter Guess" : {
+      "comment" : "Wordle in the activity card (S60 10): button under the text field that sends the guess",
       "extractionState" : "manual"
     },
     "Enter a URL to continue." : {
@@ -1980,6 +2388,10 @@
       "comment" : "Chat panel: empty state line about who sees messages",
       "extractionState" : "manual"
     },
+    "Everyone loses this page." : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): message of the delete page confirmation",
+      "extractionState" : "manual"
+    },
     "Everyone returns to the meeting." : {
       "comment" : "Activities panel (S60 7): confirmation message before closing an app or the shared browser",
       "extractionState" : "manual"
@@ -1998,6 +2410,10 @@
     },
     "Export Diagnostics" : {
       "comment" : "Settings (S60 1) (S70 15): row that exports diagnostics (shown once SYS-15 lands)",
+      "extractionState" : "manual"
+    },
+    "Export Transcript" : {
+      "comment" : "Transcript panel (S60 6). Menu item: share the transcript as a file.",
       "extractionState" : "manual"
     },
     "Fails" : {
@@ -2020,6 +2436,18 @@
       "comment" : "Webinar Q&A (S50 11 g): host filter menu title (iOS)",
       "extractionState" : "manual"
     },
+    "Filters" : {
+      "comment" : "Effects panel (S60 4): tab of filter and style effects",
+      "extractionState" : "manual"
+    },
+    "Final Results" : {
+      "comment" : "Wordle in the activity card (S60 10): heading of the last round's results",
+      "extractionState" : "manual"
+    },
+    "Fine Detail" : {
+      "comment" : "Settings (S60 2, SET-3): Optimize For option for the camera or a share",
+      "extractionState" : "manual"
+    },
     "Finished the GitHub issue request" : {
       "comment" : "Chat panel, Conclave AI row: a finished step; GitHub is a product name",
       "extractionState" : "manual"
@@ -2028,8 +2456,32 @@
       "comment" : "Call stage (iOS): accessibility label of the flip camera button on your own floating video (Android uses ds_flip_camera)",
       "extractionState" : "manual"
     },
+    "Floating" : {
+      "comment" : "Layout panel (S60 3): self view option: your video floats in a corner",
+      "extractionState" : "manual"
+    },
+    "Follow the live transcript and minutes once someone with controls turns them on." : {
+      "comment" : "Transcript panel (S60 6). Start card blurb for view-only people.",
+      "extractionState" : "manual"
+    },
+    "Follow-Ups" : {
+      "comment" : "Transcript panel (S60 6). Minutes section title; also an export heading.",
+      "extractionState" : "manual"
+    },
+    "Following live" : {
+      "comment" : "Transcript panel (S60 6). Status detail when the controller is unknown.",
+      "extractionState" : "manual"
+    },
     "Force Opaque Controls" : {
       "comment" : "Debug component gallery: switch that forces the opaque call control surface instead of Liquid Glass; off at every launch",
+      "extractionState" : "manual"
+    },
+    "Frame Rate" : {
+      "comment" : "Settings (S60 2, SET-3): Advanced setting title",
+      "extractionState" : "manual"
+    },
+    "Framing" : {
+      "comment" : "Effects panel (S60 4): switch that keeps you centered in the frame",
       "extractionState" : "manual"
     },
     "From %@:" : {
@@ -2046,6 +2498,10 @@
     },
     "Full Width Bar" : {
       "comment" : "Debug component gallery: row and page title of the full width call control bar probe",
+      "extractionState" : "manual"
+    },
+    "Full-Quality Bitrate" : {
+      "comment" : "Settings (S60 2, SET-3): Advanced setting title: the bitrate used at full quality",
       "extractionState" : "manual"
     },
     "GIF" : {
@@ -2108,6 +2564,10 @@
       "comment" : "Debug component gallery: header above haptic kinds played by the touched control",
       "extractionState" : "manual"
     },
+    "Get a private answer drawn from everything that’s been said. Only you see it." : {
+      "comment" : "Transcript panel (S60 6). Empty Ask message.",
+      "extractionState" : "manual"
+    },
     "Get notified about private messages and mentions while you’re in another app." : {
       "comment" : "Settings (S60 1): explanation under Message notifications",
       "extractionState" : "manual"
@@ -2148,8 +2608,16 @@
       "comment" : "Layout panel option: every tile in an equal grid",
       "extractionState" : "manual"
     },
+    "Guess the Word" : {
+      "comment" : "Wordle in the activity card (S60 10): heading while everyone guesses in a one-round game",
+      "extractionState" : "manual"
+    },
     "Guest" : {
       "comment" : "Account (signed out, iOS): header of the guest name section",
+      "extractionState" : "manual"
+    },
+    "HD" : {
+      "comment" : "Settings (S60 2, SET-3): Camera Quality preset option (1080p at 30 fps)",
       "extractionState" : "manual"
     },
     "Hand Raised" : {
@@ -2186,6 +2654,10 @@
       "comment" : "Chat panel: message action that hides a person's messages on this device; the argument is their name",
       "extractionState" : "manual"
     },
+    "Hide Tiles Without Video" : {
+      "comment" : "Layout panel (S60 3): switch that hides tiles of people whose camera is off (their audio still plays)",
+      "extractionState" : "manual"
+    },
     "Hold" : {
       "comment" : "Debug system fixture: button that sends a system hold command (as CallKit does for Hold and Accept)",
       "extractionState" : "manual"
@@ -2206,6 +2678,14 @@
       "comment" : "Participants (S50 1 g): footer under In This Meeting for hosts while the call reconnects",
       "extractionState" : "manual"
     },
+    "Hosted by %@" : {
+      "comment" : "Transcript panel (S60 6). Status detail; the argument is a person’s name.",
+      "extractionState" : "manual"
+    },
+    "Hosted by you" : {
+      "comment" : "Transcript panel (S60 6). Status detail: you control live notes.",
+      "extractionState" : "manual"
+    },
     "Hosts" : {
       "comment" : "Meeting Details panel (S20 15): row listing the names of the meeting's hosts",
       "extractionState" : "manual"
@@ -2216,6 +2696,10 @@
     },
     "Identity" : {
       "comment" : "Debug session readout row: the call session, attempt and revision numbers",
+      "extractionState" : "manual"
+    },
+    "Image effects aren’t available right now." : {
+      "comment" : "Effects panel (S60 4): error when the image cannot be stored",
       "extractionState" : "manual"
     },
     "In Call" : {
@@ -2234,6 +2718,10 @@
       "comment" : "Settings (S60 1): value of Open Conclave links when links open in the browser",
       "extractionState" : "manual"
     },
+    "In a Tile" : {
+      "comment" : "Layout panel (S60 3): self view option: your video is one of the tiles",
+      "extractionState" : "manual"
+    },
     "In the App" : {
       "comment" : "Settings (S60 1): value of Open Conclave links when links open in the app",
       "extractionState" : "manual"
@@ -2249,6 +2737,246 @@
     "Info" : {
       "comment" : "Notice composer (S50 8 g): notice level",
       "extractionState" : "manual"
+    },
+    "Ink Amber" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Amber"
+          }
+        }
+      }
+    },
+    "Ink Blue" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blue"
+          }
+        }
+      }
+    },
+    "Ink Charcoal" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charcoal"
+          }
+        }
+      }
+    },
+    "Ink Dark Teal" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dark Teal"
+          }
+        }
+      }
+    },
+    "Ink Gray" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gray"
+          }
+        }
+      }
+    },
+    "Ink Green" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Green"
+          }
+        }
+      }
+    },
+    "Ink Lavender" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lavender"
+          }
+        }
+      }
+    },
+    "Ink Light Blue" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Light Blue"
+          }
+        }
+      }
+    },
+    "Ink Light Green" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Light Green"
+          }
+        }
+      }
+    },
+    "Ink Light Orange" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Light Orange"
+          }
+        }
+      }
+    },
+    "Ink Light Red" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Light Red"
+          }
+        }
+      }
+    },
+    "Ink Mist" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mist"
+          }
+        }
+      }
+    },
+    "Ink Orange" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Orange"
+          }
+        }
+      }
+    },
+    "Ink Pink" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pink"
+          }
+        }
+      }
+    },
+    "Ink Purple" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Purple"
+          }
+        }
+      }
+    },
+    "Ink Red" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Red"
+          }
+        }
+      }
+    },
+    "Ink Rose" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rose"
+          }
+        }
+      }
+    },
+    "Ink Teal" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teal"
+          }
+        }
+      }
+    },
+    "Ink White" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "White"
+          }
+        }
+      }
+    },
+    "Ink Yellow" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): an ink color in the Color menu (the color itself is user content)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Yellow"
+          }
+        }
+      }
     },
     "Invite" : {
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): short visible label of the share invite action in the three-item row of the menu; the spoken label is Share Invite",
@@ -2272,6 +3000,10 @@
     },
     "Inviting…" : {
       "comment" : "Webinar People (S50 10 g): Bring on Stage while the invitation is sent",
+      "extractionState" : "manual"
+    },
+    "Jitter" : {
+      "comment" : "Settings (S60 2, SET-3): Connection detail",
       "extractionState" : "manual"
     },
     "Join" : {
@@ -2345,6 +3077,18 @@
       "comment" : "Debug system fixture (iOS, developers only): label of the readout that shows whether the call keeps the screen from sleeping (S70 SX1 sys.awake). Android shows the value without a label.",
       "extractionState" : "manual"
     },
+    "Keep Image Sharp" : {
+      "comment" : "Settings (S60 2, SET-3): Under Pressure option for the camera",
+      "extractionState" : "manual"
+    },
+    "Keep Motion Smooth" : {
+      "comment" : "Settings (S60 2, SET-3): Under Pressure option",
+      "extractionState" : "manual"
+    },
+    "Keep Text Sharp" : {
+      "comment" : "Settings (S60 2, SET-3): Under Pressure option for a screen share",
+      "extractionState" : "manual"
+    },
     "Keep speaking, %lld s left" : {
       "comment" : "Settings, Record voice (S60 2, L6-13): seconds left until the minimum sample length; s is seconds",
       "extractionState" : "manual"
@@ -2353,12 +3097,24 @@
       "comment" : "Settings (S60 1): explanation of Always show controls",
       "extractionState" : "manual"
     },
+    "Keeps you in the center of the frame" : {
+      "comment" : "Effects panel (S60 4): detail under Framing and the iOS Center Stage switch",
+      "extractionState" : "manual"
+    },
+    "Keys are used only for this session and are never stored." : {
+      "comment" : "Transcript panel (S60 6). Key coverage line when a key is needed.",
+      "extractionState" : "manual"
+    },
     "Large text, needs 3" : {
       "comment" : "Debug component gallery: contrast class for large text",
       "extractionState" : "manual"
     },
     "Last Tap" : {
       "comment" : "Debug component gallery: readout name for the most recent haptic tap",
+      "extractionState" : "manual"
+    },
+    "Latency" : {
+      "comment" : "Settings (S60 2, SET-3): Connection detail: round-trip time",
       "extractionState" : "manual"
     },
     "Laugh" : {
@@ -2457,12 +3213,24 @@
       "comment" : "Settings, Record voice (S60 2, L6-13): plays the recorded sample",
       "extractionState" : "manual"
     },
+    "Listening for the Room" : {
+      "comment" : "Transcript panel (S60 6). Empty transcript title.",
+      "extractionState" : "manual"
+    },
     "Live" : {
       "comment" : "Activities panel (S60 7): status of a running app, browser or game; also the second line of the webinar attendee capsule (STG-8)",
       "extractionState" : "manual"
     },
     "Live Notes" : {
       "comment" : "Meeting Details panel (S20 15): status row for the meeting's live transcript; value Off, Starting, On, Paused or Needs Attention",
+      "extractionState" : "manual"
+    },
+    "Live Notes Are Unavailable" : {
+      "comment" : "Transcript panel (S60 6). Error title after repeated connection failures.",
+      "extractionState" : "manual"
+    },
+    "Live Notes Aren’t Available" : {
+      "comment" : "Transcript panel (S60 6). Empty state when this meeting cannot run live notes.",
       "extractionState" : "manual"
     },
     "Live Video from %@" : {
@@ -2475,6 +3243,30 @@
     },
     "Live notes are on for this meeting." : {
       "comment" : "In-call banner (priority 12): live notes (transcription) started",
+      "extractionState" : "manual"
+    },
+    "Live notes aren’t available in this meeting." : {
+      "comment" : "Transcript panel (S60 6). Empty state message when this meeting cannot run live notes.",
+      "extractionState" : "manual"
+    },
+    "Live notes controls are reconnecting. Try again in a moment." : {
+      "comment" : "Transcript panel (S60 6). Issue banner.",
+      "extractionState" : "manual"
+    },
+    "Live notes couldn’t hear the room. Try again." : {
+      "comment" : "Transcript panel (S60 6). Issue banner when the audio relay failed, with Try Again.",
+      "extractionState" : "manual"
+    },
+    "Live notes paused" : {
+      "comment" : "Transcript panel (S60 6). Announcement once per transition.",
+      "extractionState" : "manual"
+    },
+    "Live notes started" : {
+      "comment" : "Transcript panel (S60 6). Announcement once per transition.",
+      "extractionState" : "manual"
+    },
+    "Live notes stopped" : {
+      "comment" : "Transcript panel (S60 6). Announcement once per transition.",
       "extractionState" : "manual"
     },
     "Live, App" : {
@@ -2491,6 +3283,10 @@
     },
     "Loading Games" : {
       "comment" : "Activities panel (S60 7): catalog loading row",
+      "extractionState" : "manual"
+    },
+    "Loading Live Notes" : {
+      "comment" : "Transcript panel (S60 6). Loading state.",
       "extractionState" : "manual"
     },
     "Loading Participants" : {
@@ -2525,6 +3321,10 @@
       "comment" : "Host Controls (S50 6 g): webinar switch name used in announcements and failures (PPL-5 page)",
       "extractionState" : "manual"
     },
+    "Lock Editing" : {
+      "comment" : "SDK app card on the stage (S60 13): host menu toggle that makes the app view only for everyone else",
+      "extractionState" : "manual"
+    },
     "Lock Meeting" : {
       "comment" : "Host Controls (S50 6 g): switch; also the setting name in announcements and failures",
       "extractionState" : "manual"
@@ -2537,12 +3337,20 @@
       "comment" : "Prompt games in the activity card (S60 9), Reaction: the pad after your tap was sent",
       "extractionState" : "manual"
     },
+    "Locked for Others" : {
+      "comment" : "SDK app card on the stage (S60 13): tag the host sees while editing is locked for everyone else",
+      "extractionState" : "manual"
+    },
     "Locking…" : {
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): title of the Lock Meeting row while the request to lock the meeting is pending (host only)",
       "extractionState" : "manual"
     },
     "Long Text" : {
       "comment" : "Debug component gallery: switch that doubles every specimen string to check clipping",
+      "extractionState" : "manual"
+    },
+    "Low bandwidth. Audio is being prioritized." : {
+      "comment" : "Settings (S60 2, SET-3): Connection page notice",
       "extractionState" : "manual"
     },
     "Lower" : {
@@ -2605,6 +3413,10 @@
       "comment" : "Prompt games in the activity card (S60 9), Bluff: placeholder of the bluff text field",
       "extractionState" : "manual"
     },
+    "Makes it easier to see you against a bright background" : {
+      "comment" : "Effects panel (S60 4): detail under Studio Lighting",
+      "extractionState" : "manual"
+    },
     "Mapper %@, contract %@" : {
       "comment" : "Debug component gallery: haptic row detail: the mapper token, then the contract token",
       "extractionState" : "manual"
@@ -2615,6 +3427,18 @@
     },
     "Max Attendees" : {
       "comment" : "Webinar Settings (S50 9 g): row, field label and dialog title for the attendee cap",
+      "extractionState" : "manual"
+    },
+    "Maximum Size" : {
+      "comment" : "Settings (S60 2, SET-3): Advanced screen share setting title (largest shared resolution)",
+      "extractionState" : "manual"
+    },
+    "Maximum Tiles" : {
+      "comment" : "Layout panel (S60 3): the most video tiles the stage shows at once; followed by the number",
+      "extractionState" : "manual"
+    },
+    "Measuring your connection" : {
+      "comment" : "Settings (S60 2, SET-3): Connection summary before the first sample",
       "extractionState" : "manual"
     },
     "Measuring…" : {
@@ -2643,6 +3467,10 @@
     },
     "Meeting Locked" : {
       "comment" : "Meeting Details panel (S20 15): status row; the value is On or Off",
+      "extractionState" : "manual"
+    },
+    "Meeting Transcript - %@" : {
+      "comment" : "Transcript panel (S60 6). Exported file heading; the argument is the room code.",
       "extractionState" : "manual"
     },
     "Meetings" : {
@@ -2706,6 +3534,10 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "Microphone access is off in Settings." : {
+      "comment" : "Pre-join lobby (iOS): accessibility hint of the microphone toggle while microphone access is denied in Settings, so the toggle reads Off",
+      "extractionState" : "manual"
+    },
     "Microphone access is off." : {
       "comment" : "Settings pages (S60 2): shown when the app has no microphone permission",
       "extractionState" : "manual",
@@ -2731,12 +3563,36 @@
       "comment" : "Call stage: menu item and action on your own floating video that shrinks it to a small chip",
       "extractionState" : "manual"
     },
+    "Minimized" : {
+      "comment" : "Layout panel (S60 3): self view option: your video is reduced to a small chip",
+      "extractionState" : "manual"
+    },
+    "Minutes" : {
+      "comment" : "Transcript panel (S60 6). Tab: meeting minutes that build themselves.",
+      "extractionState" : "manual"
+    },
+    "Minutes Build as You Talk" : {
+      "comment" : "Transcript panel (S60 6). Empty Minutes title while live notes are off.",
+      "extractionState" : "manual"
+    },
+    "Minutes build automatically" : {
+      "comment" : "Transcript panel (S60 6). Minutes status before the first update.",
+      "extractionState" : "manual"
+    },
     "Mirror My Video" : {
       "comment" : "Settings (S60 1): switch that mirrors only your own view of your camera (shown once SET-3 lands)",
       "extractionState" : "manual"
     },
+    "Mirroring changes only your view. Data Saver lowers the video you send and receive." : {
+      "comment" : "Settings (S60 2, SET-3): Video section footer",
+      "extractionState" : "manual"
+    },
     "More" : {
       "comment" : "Call controls: accessibility label of the control that opens more call options (Android uses ds_more_options); also the action that expands a host notice in the call (STG-5)",
+      "extractionState" : "manual"
+    },
+    "More %@ Actions" : {
+      "comment" : "SDK app card on the stage (S60 13): VoiceOver label of the host menu button; %@ is the app name",
       "extractionState" : "manual"
     },
     "More Reactions" : {
@@ -2749,6 +3605,10 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "More Transcript Actions" : {
+      "comment" : "Transcript panel (S60 6). Accessibility label of the overflow menu.",
+      "extractionState" : "manual"
+    },
     "More than one person matches that name. Choose them from the list." : {
       "comment" : "Chat panel: reason under a failed private message",
       "extractionState" : "manual"
@@ -2759,6 +3619,10 @@
     },
     "Most votes: %@" : {
       "comment" : "Prompt games in the activity card (S60 9), Most Likely To: accessibility announcement at the reveal; %@ is a name",
+      "extractionState" : "manual"
+    },
+    "Motion" : {
+      "comment" : "Settings (S60 2, SET-3): Share Quality preset for video and motion",
       "extractionState" : "manual"
     },
     "Move %@ to the Audience?" : {
@@ -2842,6 +3706,10 @@
       "comment" : "Change Name dialog (S50 3 c, 3 d, 3 g): refusal shown after Save, also the disabled reason for Change Name for the rest of the session (Q14)",
       "extractionState" : "manual"
     },
+    "Natural Motion" : {
+      "comment" : "Settings (S60 2, SET-3): Optimize For option for the camera",
+      "extractionState" : "manual"
+    },
     "Navigating" : {
       "comment" : "Activities panel (S60 7): pending label while the shared browser opens a page",
       "extractionState" : "manual"
@@ -2872,6 +3740,10 @@
       "comment" : "Chat panel: divider above the first unread message",
       "extractionState" : "manual"
     },
+    "New Page" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): Page menu item that adds a page",
+      "extractionState" : "manual"
+    },
     "New activity" : {
       "comment" : "In-call control bar: value of the More button when something new waits behind it (a vote, questions, live notes)",
       "extractionState" : "manual"
@@ -2884,12 +3756,20 @@
       "comment" : "Prompt games in the activity card (S60 9): host bar button that moves from the reveal to the next round",
       "extractionState" : "manual"
     },
+    "Next Round" : {
+      "comment" : "Wordle in the activity card (S60 10): host bar button that starts the next round after a round's results",
+      "extractionState" : "manual"
+    },
     "Nice picks. Run it back any time." : {
       "comment" : "Prompt games in the activity card (S60 9), Would You Rather: final results message",
       "extractionState" : "manual"
     },
     "No Clips Found" : {
       "comment" : "GIF picker: empty state when a clip search has no results",
+      "extractionState" : "manual"
+    },
+    "No Filter" : {
+      "comment" : "Effects panel (S60 4): filter tile that removes the filter",
       "extractionState" : "manual"
     },
     "No GIFs Found" : {
@@ -2916,8 +3796,16 @@
       "comment" : "GIF picker: empty state when a sticker search has no results",
       "extractionState" : "manual"
     },
+    "No answer yet." : {
+      "comment" : "Transcript panel (S60 6). Answer state after 30 seconds without a reply.",
+      "extractionState" : "manual"
+    },
     "No answered questions." : {
       "comment" : "Webinar Q&A (S50 11 g): empty Answered filter",
+      "extractionState" : "manual"
+    },
+    "No data yet" : {
+      "comment" : "Settings (S60 2, SET-3): Connection detail value before data arrives",
       "extractionState" : "manual"
     },
     "No dismissed questions." : {
@@ -2966,6 +3854,10 @@
     },
     "Nobody picked this" : {
       "comment" : "Prompt games in the activity card (S60 9), Would You Rather: under a side nobody picked, at the reveal",
+      "extractionState" : "manual"
+    },
+    "Nobody solved it" : {
+      "comment" : "Wordle in the activity card (S60 10): the round's winner line when nobody guessed the word",
       "extractionState" : "manual"
     },
     "Noise Suppression" : {
@@ -3090,6 +3982,18 @@
       "comment" : "Activities panel (S60 7): shared browser URL validation, other scheme",
       "extractionState" : "manual"
     },
+    "Only visible to you" : {
+      "comment" : "Settings (S60 2, SET-3): status on the preview card while the meeting camera is off",
+      "extractionState" : "manual"
+    },
+    "Only you see this layout." : {
+      "comment" : "Layout panel (S60 3): footer under the layout modes",
+      "extractionState" : "manual"
+    },
+    "Only you see your questions and answers." : {
+      "comment" : "Transcript panel (S60 6). Footnote above the Ask composer.",
+      "extractionState" : "manual"
+    },
     "Only you will hear it" : {
       "comment" : "Chat panel, voice messages: accessibility hint (iOS) or state description (Android) of Play voice message: the replay is local",
       "extractionState" : "manual"
@@ -3118,8 +4022,16 @@
       "comment" : "Chat panel: accessibility action on a photo message that opens the photo viewer",
       "extractionState" : "manual"
     },
+    "Open Questions" : {
+      "comment" : "Transcript panel (S60 6). Minutes section title; also an export heading.",
+      "extractionState" : "manual"
+    },
     "Open Settings" : {
       "comment" : "Pre-join lobby: button that opens this app’s page in the system Settings; Banner action: opens the app page in system Settings (camera or microphone access); Alert button in a call: opens the system settings page of the app",
+      "extractionState" : "manual"
+    },
+    "Open This Link in Safari?" : {
+      "comment" : "SDK app card on the stage (S60 13): confirmation before opening a link from inside the app in the in-app Safari view",
       "extractionState" : "manual"
     },
     "Open Transcript" : {
@@ -3134,12 +4046,20 @@
       "comment" : "Participants (S50 1 g): Host Controls row value when guests can join; sentence case value",
       "extractionState" : "manual"
     },
+    "OpenAI Key for Ask and Minutes" : {
+      "comment" : "Transcript panel (S60 6). Secure field label for the assistant key.",
+      "extractionState" : "manual"
+    },
     "Opening %@" : {
       "comment" : "Activity card on the stage (S20 11): an app or the shared browser is loading in the card; %@ is its name",
       "extractionState" : "manual"
     },
     "Opens chat" : {
       "comment" : "Stage chat preview (S40 8 g): what tapping the preview does (iOS accessibility hint; Android click label)",
+      "extractionState" : "manual"
+    },
+    "Optimize For" : {
+      "comment" : "Settings (S60 2, SET-3): Advanced setting title: what the encoder favors",
       "extractionState" : "manual"
     },
     "Option Summary %@ %@" : {
@@ -3154,8 +4074,16 @@
         }
       }
     },
+    "Options" : {
+      "comment" : "Transcript panel (S60 6). Disclosure title for the provider and key options (iOS).",
+      "extractionState" : "manual"
+    },
     "Original message isn't available" : {
       "comment" : "Chat panel: shown in a reply quote whose original message is gone",
+      "extractionState" : "manual"
+    },
+    "Out of tries" : {
+      "comment" : "Wordle in the activity card (S60 10): your result, or a player's status in the standings, after six wrong guesses",
       "extractionState" : "manual"
     },
     "Outcome" : {
@@ -3185,6 +4113,18 @@
           }
         }
       }
+    },
+    "Owner: %@" : {
+      "comment" : "Transcript panel (S60 6). Minutes entry owner; the argument is a name.",
+      "extractionState" : "manual"
+    },
+    "Packet Loss" : {
+      "comment" : "Settings (S60 2, SET-3): Connection detail",
+      "extractionState" : "manual"
+    },
+    "Page Name" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): text field placeholder in the rename page alert",
+      "extractionState" : "manual"
     },
     "Panelists" : {
       "comment" : "Participants section header (S50 1 g): speakers of a webinar, seen by webinar hosts",
@@ -3234,6 +4174,10 @@
       "comment" : "Debug component gallery: contrast verdict when the ratio meets its class",
       "extractionState" : "manual"
     },
+    "Pause" : {
+      "comment" : "Transcript panel (S60 6). Button: pause live notes.",
+      "extractionState" : "manual"
+    },
     "Paused" : {
       "comment" : "In-call control bar: microphone state while another call or app holds the audio; also the live notes status value in Meeting Details (STG-6)",
       "extractionState" : "manual"
@@ -3270,6 +4214,14 @@
       "comment" : "Invite Code page (S50 7 g): footer under the field",
       "extractionState" : "manual"
     },
+    "People who are speaking or pinned always show." : {
+      "comment" : "Layout panel (S60 3): footer: speaking and pinned people are never hidden by the tile limit",
+      "extractionState" : "manual"
+    },
+    "Personal" : {
+      "comment" : "Effects panel (S60 4): section of your own uploaded background images",
+      "extractionState" : "manual"
+    },
     "Personal voices aren’t available in the app yet. Messages use the system voice." : {
       "comment" : "Settings, Voice messages (S60 2): shown in place of the personal voice rows",
       "extractionState" : "manual"
@@ -3281,6 +4233,30 @@
     "Phone" : {
       "comment" : "In-call reaction palette and tray: reaction name read after React with (iOS: React with %@)",
       "extractionState" : "manual"
+    },
+    "Phones show up to %lld tiles. People who are speaking or pinned always show." : {
+      "comment" : "Layout panel (S60 3): footer under the tile settings on phones; number of tiles a phone shows at most",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Phones show up to %lld tile. People who are speaking or pinned always show."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Phones show up to %lld tiles. People who are speaking or pinned always show."
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "Photo" : {
       "comment" : "Chat panel: media kind in a reply quote and the spoken row summary; also the stage chat preview body for a photo without a caption (CHT-8)",
@@ -3316,6 +4292,10 @@
     },
     "Photos in Chat" : {
       "comment" : "Host Controls (S50 6 g): switch",
+      "extractionState" : "manual"
+    },
+    "Pick Up the Live Notes" : {
+      "comment" : "Transcript panel (S60 6). Start card title when the last host stepped away.",
       "extractionState" : "manual"
     },
     "Pick a game, or let the room vote." : {
@@ -3390,8 +4370,36 @@
       "comment" : "Connection quality value (shared by Meeting Details and Settings, RECONCILE R21): poor connection",
       "extractionState" : "manual"
     },
+    "Portrait is on in Video Effects." : {
+      "comment" : "Effects panel (S60 4): iOS reason the blur tiles are disabled while the system Portrait effect is on",
+      "extractionState" : "manual"
+    },
+    "Position" : {
+      "comment" : "Layout panel (S60 3): which corner the floating self view sits in",
+      "extractionState" : "manual"
+    },
     "Post Answer" : {
       "comment" : "Webinar Q&A (S50 11 g): posts the written answer",
+      "extractionState" : "manual"
+    },
+    "Post Recap and End" : {
+      "comment" : "End call dialog button: post a recap, then end for everyone.",
+      "extractionState" : "manual"
+    },
+    "Post Recap to Chat" : {
+      "comment" : "Transcript panel (S60 6). Menu item and Minutes row: Conclave posts a short recap in the room chat.",
+      "extractionState" : "manual"
+    },
+    "Posted" : {
+      "comment" : "Transcript panel (S60 6). Recap row value after the recap landed in chat.",
+      "extractionState" : "manual"
+    },
+    "Posting" : {
+      "comment" : "Transcript panel (S60 6). Recap row value while Conclave writes the recap.",
+      "extractionState" : "manual"
+    },
+    "Posting recap" : {
+      "comment" : "Transcript panel (S60 6). Announcement when the recap starts posting.",
       "extractionState" : "manual"
     },
     "Powered by Klipy" : {
@@ -3402,12 +4410,20 @@
       "comment" : "Chat panel, Conclave AI row: a running step; GitHub is a product name",
       "extractionState" : "manual"
     },
+    "Preparing effects" : {
+      "comment" : "Effects panel (S60 4): shown with a spinner while effects load the first time",
+      "extractionState" : "manual"
+    },
     "Preparing…" : {
       "comment" : "Chat composer: status line of an attached photo while it is prepared for upload",
       "extractionState" : "manual"
     },
     "Presence" : {
       "comment" : "Debug system fixture: label of the call presence readout (phase, surface, status, session)",
+      "extractionState" : "manual"
+    },
+    "Presentation" : {
+      "comment" : "Settings (S60 2, SET-3): Share Quality preset for slides and text",
       "extractionState" : "manual"
     },
     "Presenting" : {
@@ -3458,6 +4474,10 @@
       "comment" : "Chat panel: label above a private message you sent and the recipient chip; the argument is the recipient's name",
       "extractionState" : "manual"
     },
+    "Provider" : {
+      "comment" : "Transcript panel (S60 6). Picker label: the transcription provider (OpenAI or Sarvam).",
+      "extractionState" : "manual"
+    },
     "Proximity" : {
       "comment" : "Debug system fixture (iOS, developers only): label of the readout that shows the proximity sensor state, off, armed or near (S70 SX1 sys.proximity). Android shows the value without a label.",
       "extractionState" : "manual"
@@ -3497,6 +4517,10 @@
           }
         }
       }
+    },
+    "Question couldn’t be sent." : {
+      "comment" : "Transcript panel (S60 6). Answer failure when the question never left the device.",
+      "extractionState" : "manual"
     },
     "Questions Unavailable" : {
       "comment" : "Webinar Q&A (S50 11 g): shown to a host promoted mid-webinar",
@@ -3608,8 +4632,16 @@
       "comment" : "Chat composer: status line of an attached photo once it has uploaded",
       "extractionState" : "manual"
     },
+    "Recap posted to chat" : {
+      "comment" : "Transcript panel (S60 6). Announcement (iOS) and snackbar (Android) after the recap posted.",
+      "extractionState" : "manual"
+    },
     "Recent" : {
       "comment" : "Premeeting Home: section header above the recent meetings list",
+      "extractionState" : "manual"
+    },
+    "Recenter" : {
+      "comment" : "Effects panel (S60 4): button that recenters the app framing on you",
       "extractionState" : "manual"
     },
     "Reconnect before updating your name." : {
@@ -3652,6 +4684,10 @@
       "comment" : "Settings, Record voice (S60 2, L6-13): starts recording the voice sample",
       "extractionState" : "manual"
     },
+    "Record Test Error" : {
+      "comment" : "Debug system fixture (developers only, S70 SX1): button that records a sample classified error code in the diagnostics buffer.",
+      "extractionState" : "manual"
+    },
     "Record Voice" : {
       "comment" : "Settings, Record voice (S60 2, L6-13): page title for recording your personal voice sample",
       "extractionState" : "manual"
@@ -3688,6 +4724,10 @@
       "comment" : "Access List page (S50 7 g) (iOS): toolbar refresh button",
       "extractionState" : "manual"
     },
+    "Refresh Minutes" : {
+      "comment" : "Transcript panel (S60 6). Button: update the minutes now.",
+      "extractionState" : "manual"
+    },
     "Refresh Readouts" : {
       "comment" : "Debug hosting preview: button that reads the renderer and panel diagnostics again",
       "extractionState" : "manual"
@@ -3704,8 +4744,16 @@
       "comment" : "Premeeting Home (iOS): trailing swipe action that removes a recent meeting",
       "extractionState" : "manual"
     },
+    "Remove %@" : {
+      "comment" : "Effects panel (S60 4): accessibility label of the Remove button next to one applied effect; the effect name",
+      "extractionState" : "manual"
+    },
     "Remove %@?" : {
       "comment" : "People confirmation dialog (S50 3 g): Remove title; the person's name",
+      "extractionState" : "manual"
+    },
+    "Remove All Effects" : {
+      "comment" : "Effects panel (S60 4): button that removes every applied effect",
       "extractionState" : "manual"
     },
     "Remove Attendee Code?" : {
@@ -3731,6 +4779,10 @@
       "comment" : "Premeeting Home: destructive recent row menu item that removes the meeting from the local list",
       "extractionState" : "manual"
     },
+    "Remove Image" : {
+      "comment" : "Effects panel (S60 4): menu action that deletes one of your background images",
+      "extractionState" : "manual"
+    },
     "Remove Invite Code?" : {
       "comment" : "Invite Code page (S50 7 g): confirmation title",
       "extractionState" : "manual"
@@ -3754,6 +4806,18 @@
     },
     "Removed From Meeting" : {
       "comment" : "Outcome screen title after a host removed the person",
+      "extractionState" : "manual"
+    },
+    "Rename" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): confirm button of the rename page alert",
+      "extractionState" : "manual"
+    },
+    "Rename Page" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): title of the rename page alert",
+      "extractionState" : "manual"
+    },
+    "Rename Page…" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): Page menu item that opens the rename alert",
       "extractionState" : "manual"
     },
     "Reopen" : {
@@ -3800,12 +4864,28 @@
       "comment" : "Call stage: chip and accessibility action on a zoomed shared screen that returns it to its normal size",
       "extractionState" : "manual"
     },
+    "Resolution" : {
+      "comment" : "Settings (S60 2, SET-3): Advanced camera setting title",
+      "extractionState" : "manual"
+    },
+    "Restore Recommended Settings" : {
+      "comment" : "Settings (S60 2, SET-3): button that resets camera or share quality to Auto",
+      "extractionState" : "manual"
+    },
     "Results" : {
       "comment" : "Game shell in the activity card (S60 8): results kicker and header phase",
       "extractionState" : "manual"
     },
     "Resume" : {
       "comment" : "In-call banner action while the call is on hold (STG-5); also the Debug system fixture button that sends a system resume command after a hold",
+      "extractionState" : "manual"
+    },
+    "Resume Notes" : {
+      "comment" : "Transcript panel (S60 6). Primary button that takes over live notes.",
+      "extractionState" : "manual"
+    },
+    "Resumed at %@" : {
+      "comment" : "Transcript panel (S60 6). Pause marker after a long lull; the argument is a time.",
       "extractionState" : "manual"
     },
     "Retry" : {
@@ -3862,8 +4942,28 @@
       "comment" : "Host Controls (S50 6 g): confirmation title (S50 9, PPL-5 page)",
       "extractionState" : "manual"
     },
+    "Round %lld Results" : {
+      "comment" : "Wordle in the activity card (S60 10): heading of one round's results, for example Round 2 Results",
+      "extractionState" : "manual"
+    },
     "Round %lld of %lld" : {
       "comment" : "Game round progress",
+      "extractionState" : "manual"
+    },
+    "Round %lld of %lld · Guess the Word" : {
+      "comment" : "Wordle in the activity card (S60 10): heading while everyone guesses, for example Round 1 of 3 · Guess the Word",
+      "extractionState" : "manual"
+    },
+    "Round %lld of %lld · Set the Word" : {
+      "comment" : "Wordle in the activity card (S60 10): heading while a player picks the secret word, for example Round 1 of 3 · Set the Word",
+      "extractionState" : "manual"
+    },
+    "Row %lld, empty" : {
+      "comment" : "Wordle in the activity card (S60 10): accessibility summary of a board row with no letters yet",
+      "extractionState" : "manual"
+    },
+    "Row %lld: %@" : {
+      "comment" : "Wordle in the activity card (S60 10): accessibility summary of one board row; the argument is each letter with its result, for example C, correct position, R, in the word",
       "extractionState" : "manual"
     },
     "Rows" : {
@@ -3884,6 +4984,10 @@
     },
     "Sample text in this style" : {
       "comment" : "Debug component gallery: sample line drawn in each text style",
+      "extractionState" : "manual"
+    },
+    "Sarvam is covered. Add an OpenAI key for Ask and Minutes." : {
+      "comment" : "Transcript panel (S60 6). Key coverage line.",
       "extractionState" : "manual"
     },
     "Save" : {
@@ -3912,6 +5016,10 @@
     },
     "Screen Share Quality" : {
       "comment" : "Settings (S60 1): row that opens the screen share quality page (shown once SET-3 lands)",
+      "extractionState" : "manual"
+    },
+    "Screen sharing isn’t allowed on this device." : {
+      "comment" : "In-call toast when Screen Time, a device policy or a device administrator blocks screen sharing (S70 10 g, 7 g)",
       "extractionState" : "manual"
     },
     "Search" : {
@@ -3978,6 +5086,18 @@
         }
       }
     },
+    "Secret Word" : {
+      "comment" : "Wordle in the activity card (S60 10): label of the hidden field where the setter types the secret word",
+      "extractionState" : "manual"
+    },
+    "Selected" : {
+      "comment" : "Effects panel (S60 4): accessibility value of the chosen tile",
+      "extractionState" : "manual"
+    },
+    "Self View" : {
+      "comment" : "Layout panel (S60 3): section header for where your own video appears",
+      "extractionState" : "manual"
+    },
     "Send" : {
       "comment" : "Composer: accessibility label of the send glyph",
       "extractionState" : "manual"
@@ -4038,6 +5158,14 @@
       "comment" : "Debug hosting preview: section title of the meeting session readout (WP2-S2b); developer only, the values are machine-readable codes",
       "extractionState" : "manual"
     },
+    "Set Word" : {
+      "comment" : "Wordle in the activity card (S60 10): button that sends the secret word",
+      "extractionState" : "manual"
+    },
+    "Set the Word" : {
+      "comment" : "Wordle in the activity card (S60 10): heading while a player picks the secret word in a one-round game",
+      "extractionState" : "manual"
+    },
     "Settings" : {
       "comment" : "Meeting settings entry point title; also the Webinar Details row and page title (STG-8)",
       "extractionState" : "manual"
@@ -4048,6 +5176,10 @@
     },
     "Share Again" : {
       "comment" : "Screen share banner action: starts sharing again",
+      "extractionState" : "manual"
+    },
+    "Share Device Audio" : {
+      "comment" : "Settings (S60 2, SET-3): switch that shares app sound with a screen share",
       "extractionState" : "manual"
     },
     "Share Invite" : {
@@ -4086,8 +5218,16 @@
       "comment" : "Call stage and webinar attendee viewer: accessibility label of a shared screen; the argument is the presenter's name",
       "extractionState" : "manual"
     },
+    "Shares sound from apps that allow it. Your call audio is never included." : {
+      "comment" : "Settings (S60 2, SET-3): footer under Share Device Audio",
+      "extractionState" : "manual"
+    },
     "Sharing" : {
       "comment" : "Call controls: state of the screen sharing toggle while a share runs",
+      "extractionState" : "manual"
+    },
+    "Sharpens your features when needed so people can see you better" : {
+      "comment" : "Effects panel (S60 4): detail under Studio Look",
       "extractionState" : "manual"
     },
     "Sharpest reflexes" : {
@@ -4221,8 +5361,16 @@
       "comment" : "Debug component gallery: haptic row detail for kinds that play nothing on iPhone",
       "extractionState" : "manual"
     },
+    "Simulate Hang" : {
+      "comment" : "Debug system fixture (developers only, S70 SX1): button that freezes the app for a few seconds on purpose so the system records a hang report.",
+      "extractionState" : "manual"
+    },
     "Six Seven" : {
       "comment" : "In-call reaction palette and tray: reaction name read after React with (iOS: React with %@)",
+      "extractionState" : "manual"
+    },
+    "Sketch, drop sticky notes, or point things out with the laser. Everyone in the call sees it live." : {
+      "comment" : "SDK app card on the stage (S60 13): body of the empty whiteboard hint over the canvas",
       "extractionState" : "manual"
     },
     "Skip Question" : {
@@ -4233,12 +5381,24 @@
       "comment" : "Prompt games in the activity card (S60 9), Bluff: host bar button that ends the writing phase early",
       "extractionState" : "manual"
     },
+    "Slight Blur" : {
+      "comment" : "Effects panel (S60 4): background tile: a light blur behind you",
+      "extractionState" : "manual"
+    },
     "Slow down a little." : {
       "comment" : "Game shell in the activity card (S60 8): a move was rate limited",
       "extractionState" : "manual"
     },
     "Smart Invert" : {
       "comment" : "Debug component gallery: readout name for the Smart Invert setting",
+      "extractionState" : "manual"
+    },
+    "Smooth video" : {
+      "comment" : "Settings (S60 2, SET-3): detail line under the Motion share preset",
+      "extractionState" : "manual"
+    },
+    "Solved in %@" : {
+      "comment" : "Wordle in the activity card (S60 10): a player's status in the standings; the argument is a number of tries such as 1 try or 3 tries",
       "extractionState" : "manual"
     },
     "Someone" : {
@@ -4269,6 +5429,10 @@
       "comment" : "Settings (S60 1): footer under the two host sound switches",
       "extractionState" : "manual"
     },
+    "Sparkles" : {
+      "comment" : "Effects panel (S60 4): filter name, kept as in the web catalog",
+      "extractionState" : "manual"
+    },
     "Speak to Test" : {
       "comment" : "Settings pages (S60 2): row with the microphone level meter",
       "extractionState" : "manual"
@@ -4289,6 +5453,10 @@
       "comment" : "Layout panel option: one large tile for the active speaker",
       "extractionState" : "manual"
     },
+    "Spotlight while someone is pinned" : {
+      "comment" : "Layout panel (S60 3): detail under the Auto mode while a participant is pinned",
+      "extractionState" : "manual"
+    },
     "Stage Readouts" : {
       "comment" : "Debug hosting preview: section title for the renderer and panel diagnostics",
       "extractionState" : "manual"
@@ -4301,6 +5469,10 @@
       "comment" : "Settings, Voice messages (S60 2): picker for the voice you hear for speakers without a personal voice",
       "extractionState" : "manual"
     },
+    "Standings" : {
+      "comment" : "Wordle in the activity card (S60 10): heading of the list of players with their status",
+      "extractionState" : "manual"
+    },
     "Start %@" : {
       "comment" : "Activities panel (S60 7): primary button that starts a game; %@ is the game name",
       "extractionState" : "manual"
@@ -4311,6 +5483,14 @@
     },
     "Start Meeting" : {
       "comment" : "Pre-join lobby: primary button that starts a new meeting",
+      "extractionState" : "manual"
+    },
+    "Start Notes" : {
+      "comment" : "Transcript panel (S60 6). Primary button that starts live notes.",
+      "extractionState" : "manual"
+    },
+    "Start Preview" : {
+      "comment" : "Settings (S60 2, SET-3): button that starts a local camera preview only you see",
       "extractionState" : "manual"
     },
     "Start a meeting, or join one with a code or link." : {
@@ -4379,6 +5559,10 @@
       "comment" : "Pre-join lobby: footnote under the pending button after 8 seconds of connecting (S10 8 g)",
       "extractionState" : "manual"
     },
+    "Still speaking" : {
+      "comment" : "Transcript panel (S60 6). Accessibility value of a line still being transcribed.",
+      "extractionState" : "manual"
+    },
     "Still starting. AI content can take a moment." : {
       "comment" : "Activities panel (S60 7): shown when a start takes longer than 5 seconds",
       "extractionState" : "manual"
@@ -4399,6 +5583,18 @@
     },
     "Stop All Shares" : {
       "comment" : "Host Controls (S50 6 g): bulk confirmation button",
+      "extractionState" : "manual"
+    },
+    "Stop Live Notes" : {
+      "comment" : "Transcript panel (S60 6). Destructive confirm in the stop confirmation; also the Stop button accessibility label.",
+      "extractionState" : "manual"
+    },
+    "Stop Live Notes for Everyone?" : {
+      "comment" : "Transcript panel (S60 6). Stop confirmation title.",
+      "extractionState" : "manual"
+    },
+    "Stop Live Notes…" : {
+      "comment" : "Transcript panel (S60 6). Menu item that opens the stop confirmation.",
       "extractionState" : "manual"
     },
     "Stop Playback" : {
@@ -4425,8 +5621,44 @@
       "comment" : "Chat panel, voice messages: button and accessibility action that stops the voice message playing on this device",
       "extractionState" : "manual"
     },
+    "Stopping" : {
+      "comment" : "Transcript panel (S60 6). Status: live notes are stopping.",
+      "extractionState" : "manual"
+    },
     "Stopping Shares…" : {
       "comment" : "Host Controls (S50 6 g): pending label",
+      "extractionState" : "manual"
+    },
+    "Stop…" : {
+      "comment" : "Transcript panel (S60 6). Button that opens the stop confirmation.",
+      "extractionState" : "manual"
+    },
+    "Stroke Width %lld" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): a stroke width choice in the Stroke Width menu; %lld is the width in points",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pt"
+          }
+        }
+      }
+    },
+    "Studio" : {
+      "comment" : "Settings (S60 2, SET-3): Camera Quality preset option (1080p at up to 60 fps)",
+      "extractionState" : "manual"
+    },
+    "Studio Light" : {
+      "comment" : "Effects panel (S60 4): iOS row showing whether the system Studio Light effect is on (Apple feature name)",
+      "extractionState" : "manual"
+    },
+    "Studio Lighting" : {
+      "comment" : "Effects panel (S60 4): switch that brightens your face against a bright background",
+      "extractionState" : "manual"
+    },
+    "Studio Look" : {
+      "comment" : "Effects panel (S60 4): switch that sharpens your features",
       "extractionState" : "manual"
     },
     "Submit Bluff" : {
@@ -4435,6 +5667,14 @@
     },
     "Submitted: %@" : {
       "comment" : "Prompt games in the activity card (S60 9), Bluff: after you submit; %@ is your fake answer",
+      "extractionState" : "manual"
+    },
+    "Summarize the discussion" : {
+      "comment" : "Transcript panel (S60 6). Ask suggestion (fills the field).",
+      "extractionState" : "manual"
+    },
+    "Summary" : {
+      "comment" : "Transcript panel (S60 6). Minutes section title; also an export heading.",
       "extractionState" : "manual"
     },
     "Surprised" : {
@@ -4499,6 +5739,10 @@
       "comment" : "Debug component gallery: readout name for the Dynamic Type size",
       "extractionState" : "manual"
     },
+    "Text and Slides" : {
+      "comment" : "Settings (S60 2, SET-3): Optimize For option for a screen share",
+      "extractionState" : "manual"
+    },
     "Text, needs 4.5" : {
       "comment" : "Debug component gallery: contrast class for normal text",
       "extractionState" : "manual"
@@ -4555,6 +5799,14 @@
       "comment" : "Activities panel (S60 7): close confirmation message for the Whiteboard",
       "extractionState" : "manual"
     },
+    "The camera isn’t available in the background." : {
+      "comment" : "Settings (S60 2, SET-3): why the preview paused",
+      "extractionState" : "manual"
+    },
+    "The camera isn’t available while multitasking." : {
+      "comment" : "Settings (S60 2, SET-3): why the preview paused (Split View or Slide Over)",
+      "extractionState" : "manual"
+    },
     "The game has moved on." : {
       "comment" : "Game shell in the activity card (S60 8): a move arrived after the round ended",
       "extractionState" : "manual"
@@ -4591,12 +5843,24 @@
       "comment" : "In-call toast: after tapping the camera while the host keeps cameras off",
       "extractionState" : "manual"
     },
+    "The host turned off cameras for this meeting." : {
+      "comment" : "Effects panel (S60 4): reason the tiles are disabled when the host disabled cameras",
+      "extractionState" : "manual"
+    },
     "The host turned off microphones for participants." : {
       "comment" : "In-call toast: after tapping the microphone while the host keeps microphones off",
       "extractionState" : "manual"
     },
     "The imposter was %@" : {
       "comment" : "Prompt games in the activity card (S60 9), Imposter: on the result; %@ is a name",
+      "extractionState" : "manual"
+    },
+    "The last host stepped away. Bring your key to keep the room transcribed." : {
+      "comment" : "Transcript panel (S60 6). Take over blurb when a key is needed.",
+      "extractionState" : "manual"
+    },
+    "The last host stepped away. Resume it with Conclave’s shared key." : {
+      "comment" : "Transcript panel (S60 6). Take over blurb when Conclave covers the key.",
       "extractionState" : "manual"
     },
     "The media connection didn’t go through. Try again." : {
@@ -4635,12 +5899,24 @@
       "comment" : "Activities panel (S60 7): shared browser command timed out",
       "extractionState" : "manual"
     },
+    "The transcript and minutes so far stay available to export." : {
+      "comment" : "Transcript panel (S60 6). Stop confirmation message.",
+      "extractionState" : "manual"
+    },
     "The truth" : {
       "comment" : "Prompt games in the activity card (S60 9), Bluff: marks the real answer at the reveal",
       "extractionState" : "manual"
     },
     "The webinar is live." : {
       "comment" : "Webinar attendee viewer (S20 12): spoken announcement when the webinar's program feed starts",
+      "extractionState" : "manual"
+    },
+    "The word was %@" : {
+      "comment" : "Wordle in the activity card (S60 10): shown and announced at the results; the argument is the secret word in capitals",
+      "extractionState" : "manual"
+    },
+    "These details describe your connection only." : {
+      "comment" : "Settings (S60 2, SET-3): Connection page footer",
       "extractionState" : "manual"
     },
     "They can’t join this meeting. If they’re here, they’re removed now." : {
@@ -4667,6 +5943,14 @@
     },
     "This game is full." : {
       "comment" : "Game shell in the activity card (S60 8): no seat is left",
+      "extractionState" : "manual"
+    },
+    "This image couldn’t be opened." : {
+      "comment" : "Effects panel (S60 4): error when a picked image fails to load",
+      "extractionState" : "manual"
+    },
+    "This image format isn’t supported." : {
+      "comment" : "Effects panel (S60 4): error when a picked image cannot be decoded",
       "extractionState" : "manual"
     },
     "This is how voice messages sound with this voice." : {
@@ -4749,6 +6033,18 @@
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): layout mode in the Layout submenu, everyone in equal tiles",
       "extractionState" : "manual"
     },
+    "Tiles" : {
+      "comment" : "Layout panel (S60 3): section header for the tile count and the hide switch",
+      "extractionState" : "manual"
+    },
+    "Time ran out" : {
+      "comment" : "Wordle in the activity card (S60 10): your result when the round's timer ended before you guessed the word",
+      "extractionState" : "manual"
+    },
+    "Timed out" : {
+      "comment" : "Wordle in the activity card (S60 10): a player's status in the standings when the timer ended before they guessed the word",
+      "extractionState" : "manual"
+    },
     "Time’s up" : {
       "comment" : "Prompt games in the activity card (S60 9), Trivia: your result at the reveal when you did not answer in time",
       "extractionState" : "manual"
@@ -4782,8 +6078,32 @@
       "comment" : "Webinar Q&A (S50 11 g): sort by votes",
       "extractionState" : "manual"
     },
+    "Top Left" : {
+      "comment" : "Layout panel (S60 3): self view corner",
+      "extractionState" : "manual"
+    },
+    "Top Right" : {
+      "comment" : "Layout panel (S60 3): self view corner",
+      "extractionState" : "manual"
+    },
+    "Topics" : {
+      "comment" : "Transcript panel (S60 6). Minutes section title; also an export heading.",
+      "extractionState" : "manual"
+    },
+    "Topics, decisions, action items, and open questions fill in on their own." : {
+      "comment" : "Transcript panel (S60 6). Empty Minutes message.",
+      "extractionState" : "manual"
+    },
+    "Transcribe the room, ask it questions, and get minutes as the meeting happens." : {
+      "comment" : "Transcript panel (S60 6). Start card blurb.",
+      "extractionState" : "manual"
+    },
     "Transcript" : {
       "comment" : "In-call panel title: live captions and meeting notes",
+      "extractionState" : "manual"
+    },
+    "Transcript View" : {
+      "comment" : "Transcript panel (S60 6). Accessibility label of the segmented control that switches Transcript, Ask and Minutes.",
       "extractionState" : "manual"
     },
     "Truncated Text" : {
@@ -4820,8 +6140,20 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "Turn On Live Notes" : {
+      "comment" : "Transcript panel (S60 6). Start card title when nobody runs live notes.",
+      "extractionState" : "manual"
+    },
+    "Turn On for Everyone" : {
+      "comment" : "Effects panel (S60 4): button that turns your camera on for the meeting",
+      "extractionState" : "manual"
+    },
     "Turn off Audio Only in Layout to use the camera." : {
       "comment" : "Settings (S60 1): reason under the Camera row while Audio Only is on; Layout is the name of the layout panel",
+      "extractionState" : "manual"
+    },
+    "Turn off Audio Only to use effects." : {
+      "comment" : "Effects panel (S60 4): reason the tiles are disabled in audio-only mode",
       "extractionState" : "manual"
     },
     "Turn your camera on or off" : {
@@ -4840,6 +6172,10 @@
       "comment" : "Host Controls (S50 6 g): Participant Media footer",
       "extractionState" : "manual"
     },
+    "Turns off the video you send and receive in this call. Your camera stays off until you turn it on." : {
+      "comment" : "Layout panel (S60 3): explanation under the Audio Only switch",
+      "extractionState" : "manual"
+    },
     "Two Facts %@ %@" : {
       "comment" : "Two facts on one status line joined by a middle dot (for example 6 players · Lobby); keep the spaces",
       "extractionState" : "manual",
@@ -4854,6 +6190,10 @@
     },
     "Type @ to mention someone or / for commands." : {
       "comment" : "Chat panel: VoiceOver hint of the composer field",
+      "extractionState" : "manual"
+    },
+    "Type Your Guess" : {
+      "comment" : "Wordle in the activity card (S60 10): button that switches from the on-screen letter keys to the system keyboard",
       "extractionState" : "manual"
     },
     "Type a message" : {
@@ -4882,6 +6222,10 @@
     },
     "Unblock" : {
       "comment" : "Access List page (S50 7 g) (iOS): swipe and context action that unblocks a key",
+      "extractionState" : "manual"
+    },
+    "Under Pressure" : {
+      "comment" : "Settings (S60 2, SET-3): Advanced setting title: what to keep when the connection or device struggles",
       "extractionState" : "manual"
     },
     "Unlocking…" : {
@@ -4928,8 +6272,24 @@
       "comment" : "Premeeting: title of the explanation shown when this app version can no longer join meetings",
       "extractionState" : "manual"
     },
+    "Update Conclave to use %@." : {
+      "comment" : "SDK app card on the stage (S60 13): line under Couldn't Open when this app version cannot run the app; %@ is the app name",
+      "extractionState" : "manual"
+    },
+    "Updated %@" : {
+      "comment" : "Transcript panel (S60 6). Minutes status; the argument is a relative time such as \"2 min ago\".",
+      "extractionState" : "manual"
+    },
     "Updating" : {
       "comment" : "Host Controls (S50 6 g): value of a switch while its change is pending",
+      "extractionState" : "manual"
+    },
+    "Updating Minutes" : {
+      "comment" : "Transcript panel (S60 6). Minutes status while they update (spinner).",
+      "extractionState" : "manual"
+    },
+    "Upload" : {
+      "comment" : "Settings (S60 2, SET-3): Connection detail: total send rate",
       "extractionState" : "manual"
     },
     "Uploading %lld%%" : {
@@ -4976,6 +6336,10 @@
       "comment" : "In-call banner action on a very poor connection (STG-5); also the sample action on the warning banner in the Debug component gallery",
       "extractionState" : "manual"
     },
+    "Use Letter Keys" : {
+      "comment" : "Wordle in the activity card (S60 10): button that switches from the system keyboard back to the on-screen letter keys",
+      "extractionState" : "manual"
+    },
     "Used the shared browser" : {
       "comment" : "Chat panel, Conclave AI row: a finished step",
       "extractionState" : "manual"
@@ -5008,8 +6372,20 @@
       "comment" : "Pre-join lobby (iOS): Voice Control name of the camera toggle; In-call control bar (iOS): extra Voice Control name of the Camera toggle",
       "extractionState" : "manual"
     },
+    "Video Bitrate" : {
+      "comment" : "Settings (S60 2, SET-3): Connection detail: the video you send",
+      "extractionState" : "manual"
+    },
+    "Video Codec" : {
+      "comment" : "Settings (S60 2, SET-3): Connection detail: the codec of the video you send",
+      "extractionState" : "manual"
+    },
     "Video Effects…" : {
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): item that opens the system video effects module while the camera is on (the ellipsis means a chooser follows)",
+      "extractionState" : "manual"
+    },
+    "Video and Motion" : {
+      "comment" : "Settings (S60 2, SET-3): Optimize For option for a screen share",
       "extractionState" : "manual"
     },
     "Video of %@" : {
@@ -5024,12 +6400,20 @@
       "comment" : "Banner or toast action: opens the related panel (People, Chat)",
       "extractionState" : "manual"
     },
+    "View Only" : {
+      "comment" : "SDK app card on the stage (S60 13): tag a participant sees while the host locked editing; Transcript panel (S60 6). Tag: this person can follow but not control live notes.",
+      "extractionState" : "manual"
+    },
     "View Reactions" : {
       "comment" : "Chat panel: message action that opens the list of people who reacted",
       "extractionState" : "manual"
     },
     "View on the Web" : {
       "comment" : "Privacy policy page: link that opens the hosted policy in the browser",
+      "extractionState" : "manual"
+    },
+    "Visible to everyone" : {
+      "comment" : "Settings (S60 2, SET-3): status on the preview card while the meeting camera is on",
       "extractionState" : "manual"
     },
     "Voice" : {
@@ -5138,6 +6522,10 @@
       "comment" : "Game shell in the activity card (S60 8): what participants see on the results",
       "extractionState" : "manual"
     },
+    "Waiting for the host to start the next round" : {
+      "comment" : "Wordle in the activity card (S60 10): shown to participants at a round's results",
+      "extractionState" : "manual"
+    },
     "Waiting for the question." : {
       "comment" : "Prompt games in the activity card (S60 9), Trivia: shown until the server sends the question",
       "extractionState" : "manual"
@@ -5146,8 +6534,16 @@
       "comment" : "Game shell in the activity card (S60 8): notice body while your private view is on its way",
       "extractionState" : "manual"
     },
+    "Waiting for the word." : {
+      "comment" : "Wordle in the activity card (S60 10): shown while the secret word is being picked and the picker's name is not known",
+      "extractionState" : "manual"
+    },
     "Waiting to Start" : {
       "comment" : "Game shell in the activity card (S60 8): lobby title",
+      "extractionState" : "manual"
+    },
+    "Warm glow" : {
+      "comment" : "Effects panel (S60 4): style name, kept as in the web catalog",
       "extractionState" : "manual"
     },
     "Warning" : {
@@ -5246,12 +6642,28 @@
       "comment" : "Activities panel (S60 7): label of the shared browser address field",
       "extractionState" : "manual"
     },
+    "We’ll lay out topics, decisions, and action items once there’s enough of the conversation to summarize." : {
+      "comment" : "Transcript panel (S60 6). Minutes message while notes run with nothing summarized yet.",
+      "extractionState" : "manual"
+    },
+    "What are the action items?" : {
+      "comment" : "Transcript panel (S60 6). Ask suggestion (fills the field).",
+      "extractionState" : "manual"
+    },
+    "What decisions have we made?" : {
+      "comment" : "Transcript panel (S60 6). Ask suggestion (fills the field).",
+      "extractionState" : "manual"
+    },
     "When the meeting is locked, new people wait until a host admits them. Guests are people who aren’t signed in." : {
       "comment" : "Host Controls (S50 6 g): Meeting Access footer",
       "extractionState" : "manual"
     },
     "Which One Is the Truth?" : {
       "comment" : "Prompt games in the activity card (S60 9), Bluff: kicker of the choosing phase",
+      "extractionState" : "manual"
+    },
+    "While effects are on, video is sent at up to 720p and 30 fps." : {
+      "comment" : "Effects panel (S60 4): footer about the video quality limit while effects run",
       "extractionState" : "manual"
     },
     "White glyph on the Leave red" : {
@@ -5265,6 +6677,254 @@
     "Whiteboard" : {
       "comment" : "Name of the Whiteboard app",
       "extractionState" : "manual"
+    },
+    "Whiteboard Canvas" : {
+      "comment" : "SDK app card on the stage (S60 13): VoiceOver label of the drawing area",
+      "extractionState" : "manual"
+    },
+    "Whiteboard Export" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): button that exports the board as an image to the share sheet",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Export"
+          }
+        }
+      }
+    },
+    "Whiteboard Shape Filled" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): Shape menu choice: shapes are filled",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Filled"
+          }
+        }
+      }
+    },
+    "Whiteboard Shape Outline" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): Shape menu choice: shapes are outlines",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outline"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Arrow" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): Shape menu tool: draw an arrow",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arrow"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Color" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): menu of ink colors",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Color"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Ellipse" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): Shape menu tool: draw an ellipse",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ellipse"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Eraser" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): tool button: erase strokes",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eraser"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Highlighter" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): tool button: translucent highlighter",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Highlighter"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Laser Pointer" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): tool button: a fading pointer trail others see",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Laser Pointer"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Line" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): Shape menu tool: draw a straight line",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Line"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Page" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): menu of whiteboard pages",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Page"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Pan" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): tool button: move around the board",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pan"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Pen" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): tool button: freehand pen",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pen"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Rectangle" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): Shape menu tool: draw a rectangle",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rectangle"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Select" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): tool button: select and move items",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Shape" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): menu of shape tools and the fill choice",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shape"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Sticky Note" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): tool button: add a sticky note",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sticky Note"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Stroke Width" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): menu of stroke widths",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stroke Width"
+          }
+        }
+      }
+    },
+    "Whiteboard Tool Text" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): tool button: add text",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Text"
+          }
+        }
+      }
+    },
+    "Whiteboard Tools" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): VoiceOver label of the toolbar and title of the Pencil tool palette",
+      "extractionState" : "manual"
+    },
+    "Whiteboard Undo" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): button that undoes your last change",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Undo"
+          }
+        }
+      }
     },
     "Whiteboard open" : {
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): status under Activities while the whiteboard app is open",
@@ -5281,6 +6941,54 @@
     "Will be sent privately to %@" : {
       "comment" : "Chat panel: status line when the draft starts with @name or /dm name; the argument is the person's name",
       "extractionState" : "manual"
+    },
+    "Wordle Delete Key" : {
+      "comment" : "Wordle in the activity card (S60 10): accessibility name of the key on the on-screen letter keyboard that removes the last letter",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete"
+          }
+        }
+      }
+    },
+    "Wordle Enter Key" : {
+      "comment" : "Wordle in the activity card (S60 10): the key on the on-screen letter keyboard that sends the guess",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter"
+          }
+        }
+      }
+    },
+    "Wordle Status Playing" : {
+      "comment" : "Wordle in the activity card (S60 10): a player's status in the standings before their first guess",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Playing"
+          }
+        }
+      }
+    },
+    "Wordle Time Left %@" : {
+      "comment" : "Wordle in the activity card (S60 10): the round timer's remaining time, for example 2 minutes, 41 seconds left (shown as 0:09 left in the last ten seconds)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ left"
+          }
+        }
+      }
     },
     "Working" : {
       "comment" : "Chat panel, Conclave AI row: header of the steps list while a step is running",
@@ -5318,8 +7026,16 @@
       "comment" : "Outcome screen title after the meeting server ended the connection",
       "extractionState" : "manual"
     },
+    "You asked" : {
+      "comment" : "Transcript panel (S60 6). Accessibility prefix of your question bubble.",
+      "extractionState" : "manual"
+    },
     "You can invite people after you start." : {
       "comment" : "Pre-join lobby: shown instead of the link before a new meeting has started (the link is not shareable yet)",
+      "extractionState" : "manual"
+    },
+    "You can keep up to 8 personal images. Remove one to add another." : {
+      "comment" : "Effects panel (S60 4): reason Add Photo is disabled at the limit of personal images",
       "extractionState" : "manual"
     },
     "You can't send a private message to yourself." : {
@@ -5330,6 +7046,10 @@
       "comment" : "Prompt games in the activity card (S60 9), Imposter: on the result when you cast no vote",
       "extractionState" : "manual"
     },
+    "You don’t have permission to control live notes." : {
+      "comment" : "Transcript panel (S60 6). Issue banner.",
+      "extractionState" : "manual"
+    },
     "You haven’t asked anything yet." : {
       "comment" : "Webinar Q&A (S50 11 g): empty Mine sort",
       "extractionState" : "manual"
@@ -5338,8 +7058,20 @@
       "comment" : "Settings, Voice messages (S60 2): footer under Voices you hear",
       "extractionState" : "manual"
     },
+    "You pick the %lld-letter word." : {
+      "comment" : "Wordle in the activity card (S60 10): shown to the player who sets the secret word; the number is the word length",
+      "extractionState" : "manual"
+    },
     "You picked this" : {
       "comment" : "Prompt games in the activity card (S60 9), Bluff: marks the option you picked, at the reveal",
+      "extractionState" : "manual"
+    },
+    "You set the word. Watch everyone guess." : {
+      "comment" : "Wordle in the activity card (S60 10): shown to the player who picked the secret word while the others guess",
+      "extractionState" : "manual"
+    },
+    "You solved it" : {
+      "comment" : "Wordle in the activity card (S60 10): your result when you guessed the word",
       "extractionState" : "manual"
     },
     "You're already muted." : {
@@ -5372,6 +7104,14 @@
       "comment" : "Meeting Details panel (S20 15): row showing the quality of your own network connection",
       "extractionState" : "manual"
     },
+    "Your Guess" : {
+      "comment" : "Wordle in the activity card (S60 10): label of the text field for typing a guess with the system keyboard",
+      "extractionState" : "manual"
+    },
+    "Your Image %lld" : {
+      "comment" : "Effects panel (S60 4): name of one of your uploaded background images; its number",
+      "extractionState" : "manual"
+    },
     "Your Messages" : {
       "comment" : "Settings, Voice messages (S60 2): section header for the voice your voice messages use",
       "extractionState" : "manual"
@@ -5391,6 +7131,10 @@
     },
     "Your account was deleted." : {
       "comment" : "Account (iOS): footer of the signed-out content after the account was deleted",
+      "extractionState" : "manual"
+    },
+    "Your advanced limits" : {
+      "comment" : "Settings (S60 2, SET-3): detail line under the Custom preset",
       "extractionState" : "manual"
     },
     "Your answer" : {
@@ -5427,8 +7171,20 @@
       "comment" : "Chat panel: added to the link confirmation while the camera stops in the background",
       "extractionState" : "manual"
     },
+    "Your connection is a little unstable." : {
+      "comment" : "Settings (S60 2, SET-3): Connection summary",
+      "extractionState" : "manual"
+    },
+    "Your connection is struggling. Quality is reduced automatically." : {
+      "comment" : "Settings (S60 2, SET-3): Connection summary",
+      "extractionState" : "manual"
+    },
     "Your connection is very poor. Audio may cut out." : {
       "comment" : "In-call banner (priority 15): measured connection quality is very poor",
+      "extractionState" : "manual"
+    },
+    "Your connection looks good." : {
+      "comment" : "Settings (S60 2, SET-3): Connection summary",
       "extractionState" : "manual"
     },
     "Your microphone is paused in the meeting while you record." : {
@@ -5580,6 +7336,10 @@
     },
     "Zoom %@x" : {
       "comment" : "Call stage: accessibility value of a zoomed shared screen; the argument is the zoom factor, such as 2 or 2.5",
+      "extractionState" : "manual"
+    },
+    "Zoom to Fit" : {
+      "comment" : "Whiteboard toolbar in the SDK app card (S60 13): button that fits the whole board in view",
       "extractionState" : "manual"
     },
     "and %lld others" : {
