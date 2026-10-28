@@ -1,3 +1,4 @@
+import { RoomAiCredentials } from "../../server/roomAiCredentials.js";
 import type {
   AudioLevelObserver,
   PlainTransport,
@@ -208,6 +209,7 @@ export class Room {
   public displayNamesByKey: Map<string, string> = new Map();
   public handRaisedByUserId: Set<string> = new Set();
   private recentChatMessages: ChatMessage[] = [];
+  readonly aiCredentials = new RoomAiCredentials();
   private chatImageAssets: Map<string, RoomChatImageAsset> = new Map();
   private chatImageExpiryTimers: Map<string, NodeJS.Timeout> = new Map();
   private chatImageBytes = 0;
@@ -237,6 +239,7 @@ export class Room {
   // relay above). At most one game runs per room. The tick timer is owned here
   // so it is torn down with the room; the handler layer drives broadcasts.
   public gameSession: GameSession | null = null;
+  public gameGeneration: { controller: AbortController; requestedBy: string } | null = null;
   public gameTickTimer: NodeJS.Timeout | null = null;
   // Pre-game vote: the host can let the room vote on which game to play.
   public gameVote: { candidates: string[]; votes: Record<string, string> } | null = null;
@@ -729,6 +732,10 @@ export class Room {
       this.pendingDisconnects.delete(clientId);
     }
     if (client) {
+      if (this.gameGeneration?.requestedBy === clientId) {
+        this.gameGeneration.controller.abort();
+        this.gameGeneration = null;
+      }
       this.updateClientModeCounts(client, -1);
       this.clearWebinarAudioProducersForUser(clientId);
       this.removeClientProducerIndexes(clientId);
@@ -2312,6 +2319,8 @@ export class Room {
   }
 
   clearGame(): void {
+    this.gameGeneration?.controller.abort();
+    this.gameGeneration = null;
     if (this.gameTickTimer) {
       clearInterval(this.gameTickTimer);
       this.gameTickTimer = null;
@@ -2321,6 +2330,7 @@ export class Room {
   }
 
   close(): void {
+    this.aiCredentials.clear();
     this.stopCleanupTimer();
     this.cancelWebcamCodecPolicyUpgrade();
     this.webcamReceiverCapacityProofCoordinator.close();

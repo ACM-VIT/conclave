@@ -217,6 +217,8 @@ export const triviaModule: GameModule<TriviaState> = {
     const topic = gameContentTopic(ctx.config) || "fresh general knowledge trivia";
     const questionCount = numberOption(ctx.config, "questions", QUESTIONS_PER_GAME);
     return generateStructuredGameContent({
+      signal: ctx.signal,
+      aiEnvironment: ctx.aiEnvironment,
       gameName: "Trivia",
       topic,
       instructions: [
@@ -257,7 +259,7 @@ export const triviaModule: GameModule<TriviaState> = {
         },
         required: ["questions"],
       },
-      maxOutputTokens: 400 + questionCount * 150,
+      maxOutputTokens: 400 + questionCount * 220,
       parse: (payload) => parseGeneratedQuestions(payload, questionCount),
     });
   },

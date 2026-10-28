@@ -1,5 +1,7 @@
 "use client";
 
+import type { RoomAiController } from "./useRoomAi";
+import { resolveAiFeatureSettings } from "@conclave/ai/room-settings";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { clampMeetVolume, DEFAULT_MEET_VOLUME } from "../lib/meet-volume";
 
@@ -30,7 +32,6 @@ const MAX_QUEUED_TTS = 6;
 /** Gap between queued messages so back-to-back TTS doesn't run together. */
 const QUEUE_ADVANCE_DELAY_MS = 250;
 /** Give up on cloned-speech generation after this and use the system voice. */
-const CLONED_GENERATION_TIMEOUT_MS = 15000;
 /** Post-playback grace before the stuck-playback failsafe fires. */
 const FAILSAFE_GRACE_MS = 8000;
 
@@ -136,11 +137,13 @@ function pickBestVoice(
 }
 
 interface UseMeetTtsOptions {
+  getRoomAi?: () => RoomAiController | null;
   meetVolume?: number;
   audioOutputDeviceId?: string;
 }
 
 export function useMeetTts({
+  getRoomAi,
   meetVolume = DEFAULT_MEET_VOLUME,
   audioOutputDeviceId,
 }: UseMeetTtsOptions = {}) {
@@ -343,15 +346,19 @@ export function useMeetTts({
     // Generation gets its own clock: a slow provider falls back to the system
     // voice instead of eating into (or being killed by) the playback failsafe.
     let generationTimedOut = false;
+    const roomAi = getRoomAi?.();
+    const speechSettings = resolveAiFeatureSettings({}, "speech", roomAi?.state.features ?? {});
     const generationTimeout = window.setTimeout(() => {
       generationTimedOut = true;
       controller.abort();
-    }, CLONED_GENERATION_TIMEOUT_MS);
+    }, speechSettings.timeoutMs);
     try {
+      const roomAiToken = roomAi?.connected ? await roomAi.requestAccessToken?.("speech") : undefined;
+      if (!speechSettings.enabled) throw new Error("Cloned speech is disabled.");
       const response = await fetch("/api/tts/speech", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: voiceToken, text: payload.text.trim() }),
+        body: JSON.stringify({ token: voiceToken, text: payload.text.trim(), roomAiToken }),
         signal: controller.signal,
       });
       if (!response.ok) throw new Error("Cloned speech was unavailable.");
@@ -395,7 +402,7 @@ export function useMeetTts({
       stopClonedSpeech();
       speakWithSystemVoice(payload, token);
     }
-  }, [
+  }, [getRoomAi,
     armFailsafe,
     audioOutputDeviceId,
     finishPlayback,
@@ -421,12 +428,12 @@ export function useMeetTts({
     // The cloned path arms its playback failsafe once audio actually starts
     // (generation has its own timeout); until then, guard the fetch window.
     if (payload.ttsVoiceToken) {
-      armFailsafe(token, CLONED_GENERATION_TIMEOUT_MS + estimateSpeechMs(text));
+      armFailsafe(token, resolveAiFeatureSettings({}, "speech", getRoomAi?.()?.state.features ?? {}).timeoutMs + estimateSpeechMs(text));
       void speakWithClonedVoice(payload, token);
     } else {
       speakWithSystemVoice(payload, token);
     }
-  }, [armFailsafe, speakWithClonedVoice, speakWithSystemVoice, stopClonedSpeech]);
+  }, [getRoomAi, armFailsafe, speakWithClonedVoice, speakWithSystemVoice, stopClonedSpeech]);
 
   useEffect(() => {
     speakPayloadRef.current = speakPayload;

@@ -113,15 +113,15 @@ names or user content are ever sent; the free-text topic reduces to a
 
 ## OpenAI content
 
-The primitive uses the official OpenAI TypeScript SDK and Responses API with
-strict JSON-schema Structured Outputs. This is intentionally a runtime
-capability, not a patch inside one game:
+The primitive uses the shared AI provider boundary with OpenAI or Anthropic
+and strict JSON-schema output:
 
 - modules opt in with `generateContent`
 - socket handlers stay generic
 - JSON schema constrains the model response
 - each module still validates and sanitizes the object
-- local banks remain as fallbacks
+- local banks are available with an empty topic when no text key is configured
+- generation errors keep setup open with an actionable error
 
 Config:
 
@@ -133,9 +133,20 @@ SFU_GAME_AI_WEB_SEARCH_ENABLED=1
 SFU_GAME_AI_WEB_SEARCH_CONTEXT_SIZE=low
 ```
 
-The model is centrally fixed to `gpt-5.6-luna` in the SFU configuration. The
-same server-side `OPENAI_API_KEY` is shared with other OpenAI-backed SFU
-capabilities and is never sent to clients.
+The default model is `gpt-6-luna`. Set `SFU_GAME_AI_MODEL` to a registered
+Claude model and provide `ANTHROPIC_API_KEY` to use Anthropic instead. Provider
+clients and model defaults live in [`@conclave/ai`](../../../ai/README.md). The
+room's selected model and shared key take part in the same resolution. Keys
+shared from Chat, Notes, or Room AI settings are available to games; public
+room state contains availability and contributor metadata only.
+
+Game output defaults to 32,768 tokens and Claude research defaults to 16,384.
+Room AI settings controls the model, output/research budgets, timeout, search,
+reasoning and custom instructions independently for each feature. Provider model
+limits still apply. A truncated research scratchpad can feed the final pass;
+final output must complete and pass the game's parser. Both passes share the
+configured deadline (10 minutes by default, up to 30 minutes). The client game
+acknowledgement allows that maximum plus a short transport grace period.
 
 Web search is enabled by default through the Responses API `web_search` tool.
 The default context size is `low` to keep game startup responsive. Responses

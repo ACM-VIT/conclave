@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export type SfuAvailability = "healthy" | "draining" | "unknown";
+export type SfuAvailability = "healthy" | "draining" | "unhealthy" | "unknown";
 export type SfuRoomPlacementCapability = "supported" | "legacy" | "unknown";
 
 export type SfuRoutingCandidate = {

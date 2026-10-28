@@ -12,11 +12,14 @@ import {
   Users,
   Video,
   VideoOff,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
 import type { Socket } from "socket.io-client";
 import { Avatar } from "@conclave/ui-tokens/web";
+import { useMeetVolume } from "../hooks/useMeetVolume";
 import type {
   Participant,
   WebinarHandQueueEntry,
@@ -96,6 +99,7 @@ function ParticipantsPanel({
   socket: Socket | null;
   isAdmin?: boolean | null;
 }) {
+  const { getParticipantVolume, setParticipantVolume } = useMeetVolume();
   const participantsList = Array.from(participants.values()).filter(
     (participant) =>
       participant.userId !== currentUserId &&
@@ -701,9 +705,9 @@ function ParticipantsPanel({
             Boolean(participant.screenShareStream) ||
             (isMe && Boolean(localState?.isScreenSharing));
           const isExpanded = expandedUserId === participant.userId;
-          // Only hosts get an expandable row (the detail panel holds moderation
-          // actions); for everyone else there's nothing to reveal.
-          const canExpand = isAdmin && !isMe;
+          const canExpand = !isMe;
+          const participantVolume = getParticipantVolume(participant.userId);
+          const participantVolumePercent = Math.round(participantVolume * 100);
           const detailId = `participant-details-${participant.userId.replace(
             /[^a-zA-Z0-9_-]/g,
             "",
@@ -813,8 +817,60 @@ function ParticipantsPanel({
                   id={detailId}
                   className="mx-2 mb-1 mt-0.5 rounded-lg border border-white/10 bg-black/20 px-3 py-2.5"
                 >
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-3 text-[12px] font-medium text-[#a1a1aa]">
+                      <span>Local volume</span>
+                      <span className="tabular-nums text-[#fafafa]">
+                        {participantVolumePercent}%
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setParticipantVolume(
+                            participant.userId,
+                            participantVolume === 0 ? 1 : 0,
+                          )
+                        }
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
+                        aria-label={
+                          participantVolume === 0
+                            ? `Unmute ${displayName} locally`
+                            : `Mute ${displayName} locally`
+                        }
+                        title={
+                          participantVolume === 0
+                            ? "Unmute locally"
+                            : "Mute locally"
+                        }
+                      >
+                        {participantVolume === 0 ? (
+                          <VolumeX size={16} strokeWidth={STROKE} />
+                        ) : (
+                          <Volume2 size={16} strokeWidth={STROKE} />
+                        )}
+                      </button>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={5}
+                        value={participantVolumePercent}
+                        onChange={(event) =>
+                          setParticipantVolume(
+                            participant.userId,
+                            Number(event.currentTarget.value) / 100,
+                          )
+                        }
+                        className="h-1.5 min-w-0 flex-1 cursor-pointer accent-[#F95F4A]"
+                        aria-label={`Local volume for ${displayName}`}
+                        aria-valuetext={`${participantVolumePercent}%`}
+                      />
+                    </div>
+                  </div>
                   {isAdmin && !isMe && (
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-white/10 pt-2.5">
                       {canPromoteParticipant && (
                         <>
                           {isPendingPromotion ? (

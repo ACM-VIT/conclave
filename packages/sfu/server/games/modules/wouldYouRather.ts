@@ -209,6 +209,8 @@ export const wouldYouRatherModule: GameModule<WyrState> = {
     const topic = gameContentTopic(ctx.config) || "fresh party conversation";
     const rounds = numberOption(ctx.config, "rounds", ROUNDS_PER_GAME);
     return generateStructuredGameContent({
+      signal: ctx.signal,
+      aiEnvironment: ctx.aiEnvironment,
       gameName: "Would You Rather",
       topic,
       instructions: [
@@ -240,7 +242,7 @@ export const wouldYouRatherModule: GameModule<WyrState> = {
         },
         required: ["prompts"],
       },
-      maxOutputTokens: 280 + rounds * 80,
+      maxOutputTokens: 400 + rounds * 160,
       parse: (payload) => parseGeneratedPrompts(payload, rounds),
     });
   },

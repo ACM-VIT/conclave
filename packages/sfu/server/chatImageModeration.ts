@@ -1,9 +1,10 @@
-import type {
-  ModerationCreateParams,
-} from "openai/resources/moderations";
+import { createOpenAiClient } from "@conclave/ai/server";
+import { readAiEnvironment } from "@conclave/ai/models";
+import { AI_DEFAULT_MODELS } from "@conclave/ai/models";
+import type { ModerationCreateParams } from "openai/resources/moderations";
 import { getOpenAiClient } from "./openaiClient.js";
 
-export const CHAT_IMAGE_MODERATION_MODEL = "omni-moderation-latest";
+export const CHAT_IMAGE_MODERATION_MODEL = AI_DEFAULT_MODELS.moderation;
 
 type ModerationResponse = {
   results: Array<{
@@ -17,7 +18,7 @@ export type ChatImageModerationClient = {
   moderations: {
     create(
       body: ModerationCreateParams,
-      options?: { timeout?: number },
+      options?: { timeout?: number; signal?: AbortSignal; maxRetries?: number },
     ): Promise<ModerationResponse>;
   };
 };
@@ -33,6 +34,9 @@ export type ModerateChatImageOptions = {
   mimeType: string;
   timeoutMs: number;
   client?: ChatImageModerationClient;
+  apiKey?: string;
+  model?: string;
+  signal?: AbortSignal;
 };
 
 export const moderateChatImage = async ({
@@ -40,10 +44,18 @@ export const moderateChatImage = async ({
   mimeType,
   timeoutMs,
   client,
+  apiKey,
+  model = CHAT_IMAGE_MODERATION_MODEL,
+  signal,
 }: ModerateChatImageOptions): Promise<ChatImageModerationResult> => {
-  const response = await (client ?? getOpenAiClient()).moderations.create(
+  const response = await (
+    client ??
+    (apiKey
+      ? createOpenAiClient(readAiEnvironment(process.env), apiKey)
+      : getOpenAiClient())
+  ).moderations.create(
     {
-      model: CHAT_IMAGE_MODERATION_MODEL,
+      model,
       input: [
         {
           type: "image_url",
@@ -53,7 +65,7 @@ export const moderateChatImage = async ({
         },
       ],
     },
-    { timeout: timeoutMs },
+    { timeout: timeoutMs, ...(signal ? {signal} : {}), maxRetries: 0 },
   );
   const result = response.results[0];
   if (!result) {

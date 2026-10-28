@@ -1,5 +1,6 @@
 "use client";
 
+import type { RoomAiController } from "../hooks/useRoomAi";
 import {
   AudioLines,
   Camera,
@@ -56,6 +57,7 @@ import {
 type SettingsTab = "video" | "audio" | "connection";
 
 interface DeviceSettingsPanelProps {
+  roomAi?: RoomAiController;
   /** Video source for the preview tile: the published stream when the camera
    * is on, otherwise the private local-only preview. */
   localStream: MediaStream | null;
@@ -650,6 +652,7 @@ export default function DeviceSettingsPanel({
   onMediaQualitySettingsChange,
   selectedAudioInputDeviceId,
   selectedAudioOutputDeviceId,
+  roomAi,
   ttsSystemVoices = [],
   selectedTtsSystemVoiceUri,
   onTtsSystemVoiceChange,
@@ -1430,6 +1433,7 @@ export default function DeviceSettingsPanel({
 
             <Section label="Voice messages">
               <TtsVoiceSettings
+                roomAi={roomAi}
                 systemVoices={ttsSystemVoices}
                 selectedSystemVoiceUri={selectedTtsSystemVoiceUri}
                 onSystemVoiceChange={onTtsSystemVoiceChange}

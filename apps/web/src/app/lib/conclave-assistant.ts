@@ -4,6 +4,8 @@ import {
   TRANSCRIPT_QA_MODELS,
 } from "@conclave/meeting-core/transcript-models";
 
+import { isResponseModel } from "@conclave/ai/models";
+
 // Identity of the in-meeting "@Conclave" AI assistant. The SFU validates signed
 // assistant packets before broadcasting them with this stable bot identity.
 export const CONCLAVE_ASSISTANT_USER_ID = "conclave-assistant";
@@ -20,13 +22,12 @@ type ConclaveAssistantPartStatus = "streaming" | "done";
 export const CONCLAVE_ASSISTANT_GLOBAL_MODEL = DEFAULT_TRANSCRIPT_QA_MODEL;
 export const CONCLAVE_ASSISTANT_BYOK_MODELS = TRANSCRIPT_QA_MODELS;
 
-export type ConclaveAssistantModel =
-  (typeof TRANSCRIPT_QA_MODELS)[number]["id"];
+export type ConclaveAssistantModel = string;
 
 export const isConclaveAssistantModel = (
   value: string,
 ): value is ConclaveAssistantModel =>
-  CONCLAVE_ASSISTANT_BYOK_MODELS.some((model) => model.id === value);
+  isResponseModel(value);
 
 export interface ConclaveAssistantRelayPacket {
   id: string;
@@ -49,7 +50,7 @@ export interface ConclaveAssistantRelayPacket {
 }
 
 export class ConclaveAssistantApiKeyRequiredError extends Error {
-  constructor(message = "OpenAI API key required.") {
+  constructor(message = "AI provider API key required.", readonly model?: ConclaveAssistantModel) {
     super(message);
     this.name = "ConclaveAssistantApiKeyRequiredError";
   }
@@ -223,6 +224,8 @@ type AssistantStreamEvent =
   | {
       type: "error";
       error?: string;
+      code?: string;
+      model?: string;
       relay?: ConclaveAssistantRelayPacket;
     };
 
@@ -302,7 +305,7 @@ export const streamConclaveAssistant = async ({
       supportsToolApproval: true,
       ...(githubIssueApproval ? { githubIssueApproval } : {}),
       ...(apiKey ? { apiKey } : {}),
-      ...(apiKey && model ? { model } : {}),
+      ...(model ? { model } : {}),
     }),
     signal,
   });
@@ -310,15 +313,17 @@ export const streamConclaveAssistant = async ({
   if (!response.ok || !response.body) {
     let message = "Conclave could not answer right now.";
     let code = "";
+    let resolvedModel: ConclaveAssistantModel | undefined;
     try {
-      const data = (await response.json()) as { error?: string; code?: string };
+      const data = (await response.json()) as { error?: string; code?: string; model?: string };
       if (data?.error) message = data.error;
       if (data?.code) code = data.code;
+      if (data?.model && isConclaveAssistantModel(data.model)) resolvedModel = data.model;
     } catch {
       // Non-JSON error body; keep the default message.
     }
     if (response.status === 428 || code === "api_key_required") {
-      throw new ConclaveAssistantApiKeyRequiredError(message);
+      throw new ConclaveAssistantApiKeyRequiredError(message, resolvedModel);
     }
     throw new Error(message);
   }
@@ -331,7 +336,7 @@ export const streamConclaveAssistant = async ({
   let text = "";
   let reasoning = "";
   let pending = "";
-  let streamError: string | null = null;
+  const streamFailure: { error: Error | null } = { error: null };
   let completed = false;
   let pendingApproval: AssistantToolApproval | null = null;
   let lastRelayedAt = 0;
@@ -405,7 +410,13 @@ export const streamConclaveAssistant = async ({
       return;
     }
     if (event.type === "error") {
-      streamError = event.error || "Conclave could not answer right now.";
+      const message = event.error || "Conclave could not answer right now.";
+      streamFailure.error = event.code === "personal_api_key_rejected"
+        ? new ConclaveAssistantApiKeyRequiredError(
+            message,
+            typeof event.model === "string" && isConclaveAssistantModel(event.model) ? event.model : model,
+          )
+        : new Error(message);
       return;
     }
     if (event.type === "done") {
@@ -434,8 +445,8 @@ export const streamConclaveAssistant = async ({
     const event = parseAssistantStreamFrame(pending);
     if (event) handleLine(JSON.stringify(event));
   }
-  if (streamError) {
-    throw new Error(streamError);
+  if (streamFailure.error) {
+    throw streamFailure.error;
   }
   if (!completed && !pendingApproval) {
     onReasoningDone?.();

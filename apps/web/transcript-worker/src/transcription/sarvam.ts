@@ -1,3 +1,4 @@
+import { AI_ENDPOINTS } from "@conclave/ai/models";
 import { DEFAULT_TRANSCRIPTION_LOCALE } from "../constants";
 import { safeJsonParse, trimText } from "../utils";
 import type {
@@ -6,7 +7,7 @@ import type {
   LiveTranscriptionSession,
 } from "./types";
 
-const SARVAM_STT_WS_URL = "wss://api.sarvam.ai/speech-to-text/ws";
+const SARVAM_STT_WS_URL = AI_ENDPOINTS.sarvam.transcription;
 const SARVAM_SAMPLE_RATE = 16_000;
 const SARVAM_SAMPLE_RATE_PARAM = String(SARVAM_SAMPLE_RATE);
 const SARVAM_AUDIO_ENCODING = "audio/wav";

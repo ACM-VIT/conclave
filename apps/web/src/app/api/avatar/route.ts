@@ -1,24 +1,17 @@
-import { toFacehashHandler } from "facehash/next";
+import { renderAvatarSvg } from "@/lib/avatar-svg";
 
-export const { GET } = toFacehashHandler({
-  colors: [
-    "#F95F4A",
-    "#FF007A",
-    "#7C5CFF",
-    "#2DA8A8",
-    "#4F86F7",
-    "#3FA66A",
-    "#F59E0B",
-    "#14B8A6",
-    "#E879F9",
-    "#38BDF8",
-    "#FF8A3D",
-    "#FB7185",
-    "#C084FC",
-    "#6366F1",
-    "#10B981",
-    "#FF5EAE",
-  ],
-  showInitial: false,
-  variant: "gradient",
-});
+export function GET(request: Request): Response {
+  const params = new URL(request.url).searchParams;
+  const name = params.get("name");
+  if (!name || name.length > 512) {
+    return new Response("Provide a name between 1 and 512 characters.", { status: 400 });
+  }
+  return new Response(renderAvatarSvg(params), {
+    headers: {
+      "Content-Type": "image/svg+xml; charset=utf-8",
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}

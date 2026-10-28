@@ -139,5 +139,9 @@ export const auth = betterAuth({
 
   advanced: {
     useSecureCookies: process.env.NODE_ENV === "production",
+    ipAddress: {
+      // The web app runs on Workers, where Cloudflare sets this single IP.
+      ipAddressHeaders: ["cf-connecting-ip"],
+    },
   },
 });

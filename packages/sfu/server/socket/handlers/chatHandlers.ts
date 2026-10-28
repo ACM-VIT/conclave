@@ -1,4 +1,6 @@
+import { AI_GENERATION_LIMITS } from "@conclave/ai/limits";
 import jwt from "jsonwebtoken";
+import { resolveAiFeatureSettings } from "@conclave/ai/room-settings";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type {
   ChatGifAttachment,
@@ -29,11 +31,11 @@ const DM_COMMAND_PATTERN = /^\/dm\s+(\S+)\s+([\s\S]+)$/i;
 const CONCLAVE_MENTION_PATTERN = /(^|\s)@conclave\b/i;
 const CONCLAVE_BOT_USER_ID = "conclave-assistant";
 const CONCLAVE_BOT_DISPLAY_NAME = "Conclave";
-const MAX_CONCLAVE_CONTENT_LENGTH = 6000;
+const MAX_CONCLAVE_CONTENT_LENGTH = AI_GENERATION_LIMITS.relayContentChars;
 // Caps for the assistant process state (reasoning trace + tool steps) relayed
 // alongside the answer. Must stay in sync with the web assistant API route,
 // which clamps to the same limits before signing.
-const MAX_CONCLAVE_REASONING_LENGTH = 8000;
+const MAX_CONCLAVE_REASONING_LENGTH = AI_GENERATION_LIMITS.relayReasoningChars;
 const MAX_CONCLAVE_TASKS = 32;
 const MAX_CONCLAVE_TASK_ID_LENGTH = 120;
 const MAX_CONCLAVE_TASK_QUERY_LENGTH = 600;
@@ -683,8 +685,8 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
       _data: unknown,
       callback: (
         response:
-          | { token: string; uploadUrl: string; maxBytes: number }
-          | { error: string },
+          | { token: string; uploadUrl: string; maxBytes: number; timeoutMs: number }
+          | { error: string; code?: string },
       ) => void,
     ) => {
       if (!context.currentClient || !context.currentRoom) {
@@ -713,6 +715,11 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
         return;
       }
 
+      if (!config.openAi.apiKey && !room.aiCredentials.get("openai")) {
+        respond(callback, { error: "Add an OpenAI room key in AI settings to enable image safety checks.", code: "room_ai_key_required" });
+        return;
+      }
+
       const forwardedProtocol = socket.handshake.headers["x-forwarded-proto"];
       const forwardedHost = socket.handshake.headers["x-forwarded-host"];
       const protocol = Array.isArray(forwardedProtocol)
@@ -734,6 +741,7 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
         ),
         uploadUrl: `${origin}/chat-images`,
         maxBytes: MAX_CHAT_IMAGE_BYTES,
+        timeoutMs: Math.max(30_000, resolveAiFeatureSettings({}, "images", room.aiCredentials.effectiveFeatureSettings()).timeoutMs + 15_000),
       });
     },
   );
