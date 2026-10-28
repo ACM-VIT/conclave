@@ -39,6 +39,8 @@ enum PremeetingFixtureState: String, CaseIterable, Equatable {
     case lobby
     /// S10 6 l10: the same lobby with no name, so the primary is disabled with its reason.
     case lobbyNameMissing = "lobby-name-missing"
+    /// S10 6 f `newMeeting`: the generated code as the title, Start Meeting, no link and no Share (Q1), no camera.
+    case lobbyNewMeeting = "lobby-new-meeting"
     /// ENT-4 (S10 7 l; HD request B7-T8 R3): the permission priming states, each a joined-by-link lobby like `lobby` with
     /// the permissions `PermissionPrimingFixture` names (S/Features/Lobby/PermissionPrimingPolicy.swift). The fixture's
     /// hooks never request, so no system prompt can appear.

@@ -215,24 +215,24 @@ enum AppBridgeCodec {
         if !originMatches(origin, expected: expectation.origin) { return AppBridgeDecodeResult.rejected(.wrongOrigin) }
         if !isMainFrame { return AppBridgeDecodeResult.rejected(.notMainFrame) }
         if raw.count > AppBridgeProtocol.envelopeCharacterLimit { return AppBridgeDecodeResult.rejected(.oversized) }
-        guard let object = jsonObject(raw) else { return AppBridgeDecodeResult.rejected(.malformed) }
-        guard let versionNumber = number(object["v"]) else { return AppBridgeDecodeResult.rejected(.malformed) }
+        guard let envelope = jsonObject(raw) else { return AppBridgeDecodeResult.rejected(.malformed) }
+        guard let versionNumber = number(envelope["v"]) else { return AppBridgeDecodeResult.rejected(.malformed) }
         let version = Int(versionNumber)
-        guard let type = object["type"] as? String else { return AppBridgeDecodeResult.rejected(.malformed) }
+        guard let type = envelope["type"] as? String else { return AppBridgeDecodeResult.rejected(.malformed) }
         guard AppBridgeInboundType(rawValue: type) != nil else { return AppBridgeDecodeResult.rejected(.unknownType) }
         // A `ready` from another protocol version is reported (the card shows the version mismatch state); any other
         // message from another version is dropped.
         if version != AppBridgeProtocol.version && type != AppBridgeInboundType.ready.rawValue {
             return AppBridgeDecodeResult.rejected(.versionMismatch)
         }
-        let callSessionId = object["callSessionId"] as? String ?? ""
+        let callSessionId = envelope["callSessionId"] as? String ?? ""
         if callSessionId.isEmpty || callSessionId != expectation.callSessionId { return AppBridgeDecodeResult.rejected(.wrongCallSession) }
-        let appSessionId = object["appSessionId"] as? String ?? ""
+        let appSessionId = envelope["appSessionId"] as? String ?? ""
         if appSessionId.isEmpty || appSessionId != expectation.appSessionId { return AppBridgeDecodeResult.rejected(.staleAppSession) }
-        let requestId = object["requestId"] as? String ?? ""
+        let requestId = envelope["requestId"] as? String ?? ""
         if !isValidIdentifier(requestId) { return AppBridgeDecodeResult.rejected(.badRequestId) }
         var payload: [String: Any] = [:]
-        if let value = object["payload"] {
+        if let value = envelope["payload"] {
             guard let dictionary = value as? [String: Any] else { return AppBridgeDecodeResult.rejected(.badPayload) }
             payload = dictionary
         }
@@ -281,8 +281,8 @@ enum AppBridgeCodec {
             if png.count > base64CharacterLimit(AppBridgeProtocol.exportByteLimit) { return AppBridgeDecodeResult.rejected(.payloadTooLarge) }
             return accepted(AppBridgeInbound.make(type: type, requestId: requestId, ok: ok, error: error, pngBase64: png))
         case .resize:
-            let width = number(payload["width"]) ?? 0
-            let height = number(payload["height"]) ?? 0
+            let width = number(payload["width"]) ?? 0.0
+            let height = number(payload["height"]) ?? 0.0
             if width < 0 || height < 0 || width > 100000 || height > 100000 { return AppBridgeDecodeResult.rejected(.badPayload) }
             return accepted(AppBridgeInbound.make(type: type, requestId: requestId, width: Int(width), height: Int(height)))
         }

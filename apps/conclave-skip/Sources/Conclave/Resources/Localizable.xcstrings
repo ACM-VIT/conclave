@@ -1284,7 +1284,8 @@
     },
     "Camera Access Is Off" : {
       "comment" : "Pre-join lobby: title inside the preview card when camera access is denied; Alert title in a call: the camera permission is denied in system settings",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Camera Back" : {
       "comment" : "Call stage (iOS): value of the flip camera button while the back camera is used",
@@ -1330,7 +1331,8 @@
     },
     "Camera access is off" : {
       "comment" : "Settings (S60 2, SET-3): preview card text when the camera permission is denied",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Camera access is off in Settings." : {
       "comment" : "Pre-join lobby (iOS): accessibility hint of the camera toggle while camera access is denied in Settings, so the toggle reads Off",
@@ -1730,11 +1732,13 @@
     },
     "Conclave couldn't answer right now." : {
       "comment" : "Chat panel, Conclave AI row: error row when the answer failed",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Conclave couldn’t answer right now." : {
       "comment" : "Transcript panel (S60 6). Answer failure.",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Conclave diagnostics" : {
       "comment" : "Settings > About (S70 15 g): title of the system share sheet that sends the diagnostics file (one JSON file). Conclave is the app name.",
@@ -3758,7 +3762,8 @@
     },
     "Next Round" : {
       "comment" : "Wordle in the activity card (S60 10): host bar button that starts the next round after a round's results",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Nice picks. Run it back any time." : {
       "comment" : "Prompt games in the activity card (S60 9), Would You Rather: final results message",
@@ -4746,11 +4751,13 @@
     },
     "Remove %@" : {
       "comment" : "Effects panel (S60 4): accessibility label of the Remove button next to one applied effect; the effect name",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Remove %@?" : {
       "comment" : "People confirmation dialog (S50 3 g): Remove title; the person's name",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Remove All Effects" : {
       "comment" : "Effects panel (S60 4): button that removes every applied effect",
@@ -4814,11 +4821,13 @@
     },
     "Rename Page" : {
       "comment" : "Whiteboard toolbar in the SDK app card (S60 13): title of the rename page alert",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Rename Page…" : {
       "comment" : "Whiteboard toolbar in the SDK app card (S60 13): Page menu item that opens the rename alert",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Reopen" : {
       "comment" : "Webinar Q&A (S50 11 g): host action for an answered or dismissed question",
@@ -5569,7 +5578,8 @@
     },
     "Stop" : {
       "comment" : "Settings, Record voice (S60 2, L6-13): stops recording the voice sample",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Stop All Screen Shares?" : {
       "comment" : "Host Controls (S50 6 g): bulk confirmation title",
@@ -5587,7 +5597,8 @@
     },
     "Stop Live Notes" : {
       "comment" : "Transcript panel (S60 6). Destructive confirm in the stop confirmation; also the Stop button accessibility label.",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Stop Live Notes for Everyone?" : {
       "comment" : "Transcript panel (S60 6). Stop confirmation title.",
@@ -5595,7 +5606,8 @@
     },
     "Stop Live Notes…" : {
       "comment" : "Transcript panel (S60 6). Menu item that opens the stop confirmation.",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Stop Playback" : {
       "comment" : "Settings pages (S60 2): stops playing back the recorded microphone sample",
@@ -5631,7 +5643,8 @@
     },
     "Stop…" : {
       "comment" : "Transcript panel (S60 6). Button that opens the stop confirmation.",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Stroke Width %lld" : {
       "comment" : "Whiteboard toolbar in the SDK app card (S60 13): a stroke width choice in the Stroke Width menu; %lld is the width in points",
@@ -7381,7 +7394,8 @@
     },
     "next round" : {
       "comment" : "Game shell in the activity card (S60 8): suffix on a queued player's chip",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "no tap" : {
       "comment" : "Prompt games in the activity card (S60 9), Reaction: a result row value for someone who did not tap",

@@ -443,7 +443,9 @@ final class AppHostPresenter {
             if AppInkColor(rawValue: value) == nil { return nil }
             return ["color": value]
         case .setStrokeWidth:
-            guard let width = Int(value), AppStrokeWidths.steps.contains(width) else { return nil }
+            guard let width: Int = Int(value) else { return nil }
+            let steps: [Int] = AppStrokeWidths.steps
+            if !steps.contains(width) { return nil }
             return ["width": width]
         case .setFill:
             guard let fill = AppShapeFill(rawValue: value) else { return nil }
@@ -710,6 +712,7 @@ enum AppHostFixtures {
     /// Binds `presenter` to a fixture relay and scripts the state. Returns the relay (the caller keeps it alive with the
     /// fixture session).
     @discardableResult
+    @MainActor
     static func apply(named raw: String, presenter: AppHostPresenter, owner: AppHostFixtureOwner) -> ActiveAppSession? {
         guard let state = state(named: raw) else { return nil }
         let relay = ActiveAppSession()

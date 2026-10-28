@@ -169,16 +169,18 @@ final class TranscriptFixtureDriver {
     private var nextQuestion = 0
     private var nextSegment = 100_000
 
-    init(fixture: TranscriptFixtureState, presenter: TranscriptPresenter = TranscriptPresenter()) {
+    /// `presenter` defaults to a fresh presenter; the default is built inside the main-actor init because a default
+    /// argument expression runs nonisolated.
+    init(fixture: TranscriptFixtureState, presenter: TranscriptPresenter? = nil) {
         self.fixture = fixture
-        self.presenter = presenter
+        self.presenter = presenter ?? TranscriptPresenter()
         state.setLegacyPresentation(false)
-        presenter.onCommand = { [weak self] command in
+        self.presenter.onCommand = { [weak self] command in
             guard let self = self else { return false }
             return self.perform(command)
         }
         seed()
-        presenter.bind(state: state)
+        self.presenter.bind(state: state)
         applyInputs()
     }
 

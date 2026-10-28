@@ -140,12 +140,12 @@ final class ActiveAppSession {
             end()
             return
         }
-        if trimmed == appId && callSessionId == self.callSessionId && !appSessionId.isEmpty {
+        if trimmed == self.appId && callSessionId == self.callSessionId && !appSessionId.isEmpty {
             setReadOnly(isReadOnly)
             return
         }
         end()
-        appId = trimmed
+        self.appId = trimmed
         self.callSessionId = callSessionId
         appSessionId = "app-" + UUID().uuidString.lowercased()
         self.isReadOnly = isReadOnly
@@ -593,7 +593,7 @@ final class ActiveAppSession {
     }
 
     private func emit(_ event: ActiveAppEvent) {
-        onEvent?(event)
+        if let onEvent = onEvent { onEvent(event) }
     }
 
     /// The major version of a bundle version string ("1.2.3" -> 1); -1 when it does not start with digits.

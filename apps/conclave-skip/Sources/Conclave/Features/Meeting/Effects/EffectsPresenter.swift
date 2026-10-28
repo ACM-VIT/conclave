@@ -574,9 +574,9 @@ final class EffectsPresenter {
 
     /// The WP10 engine publishes its catalog and `availability == .panel` (C6-21).
     func engineDidPublish(catalog next: [EffectsTab], isPreparing preparing: Bool) {
-        catalog = next
+        self.catalog = next
         enginePublishesPanel = true
-        isPreparing = preparing
+        self.isPreparing = preparing
         rebuild()
     }
 

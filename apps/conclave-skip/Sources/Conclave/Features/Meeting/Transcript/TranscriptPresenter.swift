@@ -436,7 +436,7 @@ final class TranscriptPresenter {
     /// Binds the core's state once (the view model at init; the fixture with its own state). Installs the one hook and
     /// fills every leaf from the current state.
     func bind(state next: TranscriptState) {
-        state = next
+        self.state = next
         next.onPanelChanged = { [weak self] change in
             self?.stateChanged(change)
         }

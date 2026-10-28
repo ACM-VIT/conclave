@@ -215,7 +215,7 @@ object ScreenCaptureManager {
 
     /// SYS-10 (S70 10 d): why the last [requestCapture] returned false. Read right after it returns; `none` while a
     /// request is in flight or after a granted one.
-    fun lastStartFailure(): ScreenShareFailure = synchronized(stateLock) {
+    internal fun lastStartFailure(): ScreenShareFailure = synchronized(stateLock) {
         lastFailure
     }
 

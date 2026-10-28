@@ -139,6 +139,7 @@ struct NativeAppHostMenu: View {
 /// The card's status line for an app (HD request B7-T1 R2: the header identity reads it): "%lld editing" or
 /// "Editing locked".
 enum AppHostHeader {
+    @MainActor
     static func status(_ host: AppHostPresenter) -> String {
         return AppHostCopy.status(host.model)
     }

@@ -335,7 +335,7 @@ object NativePerformanceDiagnostics {
      * The one listener set per process (S70 15 k): the lifecycle flush and Debug StrictMode on the main thread, and the
      * exit-reason reader on a background thread (API 30). Later calls do nothing.
      */
-    fun installDiagnosticsListeners(store: DiagnosticsFileStore) {
+    internal fun installDiagnosticsListeners(store: DiagnosticsFileStore) {
         if (diagnosticsListenersInstalled) return
         diagnosticsListenersInstalled = true
         val register = {
