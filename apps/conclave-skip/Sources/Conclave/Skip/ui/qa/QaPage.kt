@@ -210,7 +210,8 @@ private fun QaComposer(people: PeoplePresenter, snapshot: QaPanelSnapshot) {
             if (reason != null) ConclaveComposerStatusLine(text = conclaveString(reason), identifier = "qa.composer.reason")
         },
         footer = {
-            ConclaveCharacterCounter(text.length, QaLimits.questionMax, QaLimits.questionCounterFrom, "qa.composer.counter")
+            ConclaveCharacterCounter(text.length, QaLimits.questionMax, QaLimits.questionCounterFrom, "qa.composer.counter",
+                announcesBands = true)
         },
     ) {
         ConclaveComposerField(

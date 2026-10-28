@@ -12,7 +12,9 @@ import UIKit
 // (never glass on glass, never coral-tinted glass). Text and placeholder keep the system colors. Increase Contrast
 // adds a 1 pt separator stroke to both shapes. Every other case draws the R32 opaque bordered field (system
 // background, 1 pt separator border, radiusBubble) with the attach control as a plain 44 pt button. Accessory rows
-// above the field, the counter and the bar host live in ConclaveFields+iOS.swift and are never glass.
+// above the field, the counter and the bar host live in ConclaveFields+iOS.swift and are never glass. Geometry (T3
+// borrow P5): one line of text is one 44 pt row in both branches, level with the attach circle; the shape counts and
+// the material rule are unchanged.
 
 /// The composer field row: an optional attach control, the field and Send. Keystrokes stay in the caller's local
 /// state (F00 C19 k); this view never reads a presenter.
@@ -130,14 +132,20 @@ private struct ConclaveComposerCluster<Attach: View, Field: View, Send: View>: V
         }
     }
 
-    /// The field and Send in one container: 12 by 8 padding, at least 44 pt tall.
+    /// The field and Send in one container, one 44 pt row (T3 borrow P5, a recorded C19 c deviation): the 12 by 8
+    /// padding wraps the text only, so a single line is centred in 44 pt, the same height as the attach circle. Send
+    /// is never padded: its 44 pt target fills the row at the trailing edge, so the glyph sits concentric with the
+    /// container's trailing corner. Multi-line text grows the container upward and the bottom alignment keeps Send
+    /// on the last line. Shared by both material branches (Chat, Transcript Ask and Q&A).
     private var fieldContainer: some View {
-        HStack(alignment: .bottom, spacing: CGFloat(ConclaveComposerMetrics.clusterSpacing)) {
+        HStack(alignment: .bottom, spacing: 0) {
             field
+                .padding(.vertical, CGFloat(ConclaveComposerMetrics.fieldVerticalPadding))
+                .frame(maxWidth: .infinity, minHeight: CGFloat(ConclaveComposerMetrics.minimumFieldHeight), alignment: .leading)
+                .padding(.leading, CGFloat(ConclaveComposerMetrics.fieldHorizontalPadding))
+                .padding(.trailing, CGFloat(ConclaveComposerMetrics.fieldTrailingGap))
             send
         }
-        .padding(.horizontal, CGFloat(ConclaveComposerMetrics.fieldHorizontalPadding))
-        .padding(.vertical, CGFloat(ConclaveComposerMetrics.fieldVerticalPadding))
         .frame(minHeight: CGFloat(ConclaveComposerMetrics.minimumFieldHeight))
     }
 }

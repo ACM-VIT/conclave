@@ -9,6 +9,7 @@ import android.text.format.DateFormat
 import android.text.format.DateUtils
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.browser.customtabs.CustomTabsClient
@@ -54,6 +55,13 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
     var viewerRowId by mutableStateOf("")
     /** Bumped to focus the composer (Reply, Send private message, Ask Conclave AI; S40 Q11). */
     var focusRequest by mutableStateOf(0)
+    /**
+     * T3 borrow P8 (S40 2 d composer focus): bumped by the composer each time its field gains focus
+     * (`onFocusChanged { it.hasFocus }`). Only the timeline's small follow effect reads it, so a focus gain recomposes
+     * no list or row.
+     */
+    var composerFocusRevision by mutableIntStateOf(0)
+        private set
     /** Text the composer inserts with the next focus ("@Conclave " from the empty state). */
     var pendingInsert = ""
     /** D23: a link that leaves Conclave waits here for its confirmation. */
@@ -65,6 +73,12 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
     var photoRowId by mutableStateOf("")
     /** CHT-5: the GIF picker (overlay sheet, or the side pane's in-pane page, S40 7 d). */
     var showsGifs by mutableStateOf(false)
+    /**
+     * T3 borrow P3: the composer's focus capture while the GIF picker is open. Kept here, not in the composer, because
+     * the side pane's in-pane GIF page removes the composer from the composition; the composer composed when the page
+     * closes takes it once (takeGifsFocusCapture). A plain field, never Compose state.
+     */
+    var gifsFocusCapture: ChatFocusCapture? = null
     /** CHT-7 (S40 4 d): a link in a Conclave AI answer waits here for the external link confirmation; "" when none. */
     var pendingAssistantUrl by mutableStateOf("")
 
@@ -77,12 +91,27 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
     fun openGifs() { showsGifs = true }
     fun closeGifs() { showsGifs = false }
 
+    /** P3: the GIF picker's focus capture, once (null after the first take). */
+    fun takeGifsFocusCapture(): ChatFocusCapture? {
+        val capture = gifsFocusCapture
+        gifsFocusCapture = null
+        return capture
+    }
+
     /** A card's entry (CH16): read only, never a fetch (the presenter fetched it when it built the row). */
     fun embed(url: String): ChatEmbedEntry = presenter.embeds.entry(url)
 
     fun focusComposer(insert: String = "") {
         pendingInsert = insert
         focusRequest += 1
+    }
+
+    /**
+     * P8: the composer's field gained focus. The timeline scrolls to the newest row only when that row (index 0 of the
+     * reversed list) is at least partly visible; otherwise the position and the jump pill stay.
+     */
+    fun composerDidFocus() {
+        composerFocusRevision += 1
     }
 
     fun reply(rowId: String) {

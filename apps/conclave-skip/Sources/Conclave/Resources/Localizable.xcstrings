@@ -424,7 +424,7 @@
       "extractionState" : "manual"
     },
     "%lld characters over the limit" : {
-      "comment" : "Chat panel: Send button value when the draft is too long (iOS)",
+      "comment" : "Chat panel: Send button value when the draft is too long (iOS); also announced once when an opted-in composer character counter (chat, Q&A question) goes over its limit",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -521,7 +521,7 @@
       "extractionState" : "manual"
     },
     "%lld of %lld Characters" : {
-      "comment" : "Text field: spoken value of the character counter, for example 38 of 40 characters",
+      "comment" : "Text field: spoken value of the character counter, for example 38 of 40 characters; also announced once when an opted-in composer counter (chat, Q&A question) reaches its near-limit band",
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
@@ -1762,7 +1762,7 @@
       "extractionState" : "manual"
     },
     "Chat locked by host" : {
-      "comment" : "Chat panel: composer placeholder while chat is locked for you",
+      "comment" : "Chat panel: composer placeholder while chat is locked for you; also the chat Send button value while chat is locked, spoken once after a blocked hardware Return (T3 borrow P6)",
       "extractionState" : "manual"
     },
     "Check your connection and try again." : {
@@ -4622,6 +4622,10 @@
       "comment" : "Debug component gallery: contrast class for pairs deliberately below the text threshold",
       "extractionState" : "manual"
     },
+    "Not joined yet" : {
+      "comment" : "Chat composer (S40 6 i, T3 borrow P6): the reason a disabled Send button gives to VoiceOver and TalkBack before you have joined the call; also spoken once when a hardware Return or Enter is pressed then",
+      "extractionState" : "manual"
+    },
     "Not quite" : {
       "comment" : "Prompt games in the activity card (S60 9), Trivia: your result at the reveal when your answer was wrong",
       "extractionState" : "manual"
@@ -4676,6 +4680,10 @@
     },
     "Offer Draw" : {
       "comment" : "Chess in the activity card (S60 11): button",
+      "extractionState" : "manual"
+    },
+    "Offline" : {
+      "comment" : "Chat composer (S40 6 i, T3 borrow P6): the reason a disabled Send button gives to VoiceOver and TalkBack while the device has no network; also spoken once when a hardware Return or Enter is pressed while offline",
       "extractionState" : "manual"
     },
     "On" : {
@@ -5433,7 +5441,7 @@
       "extractionState" : "manual"
     },
     "Reconnecting" : {
-      "comment" : "Video tile: centered pill and state while a participant reconnects; also the lobby status while reconnecting before the person was let in (ENT-1) and the call's recovery announcement (STG-5)",
+      "comment" : "Video tile: centered pill and state while a participant reconnects; also the lobby status while reconnecting before the person was let in (ENT-1) and the call's recovery announcement (STG-5); also the chat Send button value while reconnecting, spoken once after a blocked hardware Return (T3 borrow P6)",
       "extractionState" : "manual"
     },
     "Reconnecting to the call." : {
@@ -7259,7 +7267,7 @@
       "extractionState" : "manual"
     },
     "Uploading photo" : {
-      "comment" : "Chat composer: why Send is disabled while the attached photo is still preparing or uploading (accessibility value of Send, iOS)",
+      "comment" : "Chat composer: why Send is disabled while the attached photo is still preparing or uploading (accessibility value of Send, iOS); also spoken once after a blocked hardware Return (T3 borrow P6)",
       "extractionState" : "manual"
     },
     "Uploading…" : {

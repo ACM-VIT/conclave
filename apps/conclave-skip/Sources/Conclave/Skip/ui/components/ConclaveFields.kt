@@ -19,6 +19,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.KeyboardActionHandler
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -35,8 +38,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldColors
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,12 +51,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -61,6 +68,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -74,9 +82,11 @@ import java.util.Locale
  * S60 R6-8). The text stays in the caller's local state (keystrokes never reach a presenter until submit, F00 C19
  * k). Single-line fields are OutlinedTextFields with the label, the error as supporting text and isError; the
  * composer is a TextField on surfaceContainerHighest with no indicator, radius 20, growing to six lines with the
- * Send glyph (primary, auto-mirrored in RTL). Hardware Enter sends and Shift+Enter adds a newline. No send haptic
- * (Q11). Android composers are always the opaque field (owner OQ2 changes iOS only). Search is an OutlinedTextField
- * pinned under the app bar, never the SearchBar family (it opens a window over the stage, AND 7.7).
+ * Send glyph (primary, auto-mirrored in RTL), on a String value or on a TextFieldState (T3 borrow P4). Hardware Enter
+ * sends once per press (an auto-repeat is consumed) and Shift+Enter adds a newline; a screen's own hardware keys run
+ * first. No send haptic (Q11). Android composers are always the opaque field (owner OQ2 changes iOS only). Search is
+ * an OutlinedTextField pinned under the app bar, never the SearchBar family (it opens a window over the stage, AND
+ * 7.7).
  */
 
 /** What a single-line field holds; picks the keyboard, capitalization and IME action (F00 C19 d). */
@@ -111,10 +121,20 @@ internal fun ConclaveTextField(
 
 /** The near-limit counter ("38/40") with tabular digits and the description "38 of 40 characters", visible from
  *  [visibleFrom] characters (S10 DisplayNamePolicy: cap 40, visible from 30). Composers pass
- *  ConclaveComposerCounterPolicy.visibleFrom (90%), or 0 in voice mode where it always shows. */
+ *  ConclaveComposerCounterPolicy.visibleFrom (90%), or 0 in voice mode where it always shows.
+ *  [announcesBands] is opt-in (S40 6 i; T3 borrow P9; only the chat composer and the Q&A question pass true): the
+ *  counter is spoken once when it appears and at every crossing between near and over, never per character, through
+ *  ConclaveCounterBandAnnouncer. Every other caller keeps the silent counter. */
 @Composable
-internal fun ConclaveCharacterCounter(count: Int, limit: Int, visibleFrom: Int, identifier: String, modifier: Modifier = Modifier) {
-    if (count < visibleFrom) return
+internal fun ConclaveCharacterCounter(
+    count: Int, limit: Int, visibleFrom: Int, identifier: String, modifier: Modifier = Modifier, announcesBands: Boolean = false,
+) {
+    val band = ConclaveComposerCounterPolicy.band(count = count, limit = limit, visibleFrom = visibleFrom)
+    // Called before the hidden return, so it stays in the composition while the counter is hidden and sees every band
+    // change (hidden to near and hidden to over included). It emits no layout node, so it never adds the composer
+    // column's 8 dp spacing under the field at rest.
+    if (announcesBands) ConclaveCounterBandAnnouncer(count, limit, band)
+    if (band == ConclaveCounterBand.hidden) return
     val scheme = MaterialTheme.colorScheme
     val description = conclaveString("ds_char_count", count, limit)
     ConclaveText(
@@ -126,61 +146,197 @@ internal fun ConclaveCharacterCounter(count: Int, limit: Int, visibleFrom: Int, 
     )
 }
 
+/**
+ * P9 (T3 borrow; S40 6 i): an opted-in counter's band, spoken once per crossing as ConclaveComposerCounterPolicy
+ * .announces decides (hidden to near or over, and between near and over; never inside a band and never on the way
+ * back to hidden). The band last seen is kept in a plain holder that survives the counter's hidden stretches, so a
+ * recomposition never repeats it and a counter composed already in a band (a reopened panel) stays quiet. The text is
+ * the one composed at the crossing (the count description, for example 900 of 1000 characters, or the over-limit
+ * plural). It is posted from SideEffect through View.announceForAccessibility (as AppPageAnnouncer and AudioPages do):
+ * Compose's accessibility delegate reports a live region change only for a node that was already in the previous
+ * semantics snapshot, so a polite node that appears with the counter is silent, and a node kept while the counter is
+ * hidden would be an extra spaced child of the composer column.
+ */
+@Composable
+private fun ConclaveCounterBandAnnouncer(count: Int, limit: Int, band: ConclaveCounterBand) {
+    val view = LocalView.current
+    val memory = remember { ConclaveCounterBandMemory(band) }
+    val spoken = conclaveCounterAnnouncement(band, count, limit)
+    SideEffect {
+        val previous = memory.band
+        if (previous != band) {
+            memory.band = band
+            if (ConclaveComposerCounterPolicy.announces(previous = previous, next = band) && spoken.isNotEmpty()) {
+                @Suppress("DEPRECATION")
+                view.announceForAccessibility(spoken)
+            }
+        }
+    }
+}
+
+/** P9: the counter's spoken copy for a band (S40 6 g): the count description near the limit, the over-limit plural past
+ *  it, "" while hidden. */
+@Composable
+private fun conclaveCounterAnnouncement(band: ConclaveCounterBand, count: Int, limit: Int): String = when (band) {
+    ConclaveCounterBand.hidden -> ""
+    ConclaveCounterBand.near -> conclaveString("ds_char_count", count, limit)
+    ConclaveCounterBand.over -> {
+        val over = ConclaveComposerCounterPolicy.overflow(count = count, limit = limit)
+        conclavePlural("ds_char_over_limit", over, over)
+    }
+}
+
+/** P9: the band the announcer last saw; a plain field, never Compose state, so writing it recomposes nothing. */
+private class ConclaveCounterBandMemory(var band: ConclaveCounterBand)
+
 // Composer (F00 C19 d; S40 6 d, CL3, R40-6)
 
 /**
- * The composer field row: an optional [attach] control (an IconButton opening a DropdownMenu, the screen's), then
- * a TextField growing to six lines with the Send glyph as its trailing icon (enabled only when [sendEnabled]); IME
- * Send and hardware Enter send, Shift+Enter adds a newline. [sendLabel] replaces "Send" ("Ask", "Send voice
- * message"). The InCallPage composer slot applies imePadding.
+ * The composer field row: an optional [attach] control (an IconButton opening a DropdownMenu, the screen's) centred on
+ * the field's one-line height, then a TextField growing to six lines with the Send glyph as its trailing icon (enabled
+ * only when [sendEnabled]; while disabled, [sendDisabledReason] is its state description, S40 6 i). IME Send sends
+ * only when [sendEnabled] (Q13). Hardware keys go through conclaveComposerKey: [onHardwareKey] first (the screen's
+ * suggestion keys), then Enter and NumPadEnter send once per press and Shift+Enter adds a newline. [sendLabel]
+ * replaces "Send" ("Ask", "Send voice message"). [modifier] is the row's; [fieldModifier] is the TextField's own, for
+ * a screen that needs the field itself (a FocusRequester or a focus observer: on the row, a hardware keyboard's
+ * focus request lands on the attach control first). The InCallPage composer slot applies imePadding. Transcript Ask
+ * and Q&A use this value overload; the chat composer uses the TextFieldState overload below.
  */
 @Composable
 internal fun ConclaveComposerField(
     placeholder: String, value: String, onValueChange: (String) -> Unit, sendEnabled: Boolean, onSend: () -> Unit,
     identifier: String, modifier: Modifier = Modifier, sendLabel: String? = null, enabled: Boolean = true,
+    sendDisabledReason: String = "", onHardwareKey: ((KeyEvent) -> Boolean)? = null, fieldModifier: Modifier = Modifier,
     attach: (@Composable () -> Unit)? = null,
 ) {
-    val scheme = MaterialTheme.colorScheme
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ConclaveComposerMetrics.clusterSpacing.dp),
         verticalAlignment = Alignment.Bottom) {
-        if (attach != null) attach()
+        if (attach != null) ConclaveComposerAttachSlot(attach)
         TextField(
             value = value,
             onValueChange = onValueChange,
-            modifier = Modifier.weight(1f).testTag(identifier).onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown && event.key == Key.Enter && !event.isShiftPressed) {
-                    if (sendEnabled) onSend()
-                    true
-                } else {
-                    false
-                }
+            modifier = Modifier.weight(1f).then(fieldModifier).testTag(identifier).onPreviewKeyEvent { event ->
+                conclaveComposerKey(event, sendEnabled, onSend, onHardwareKey)
             },
             enabled = enabled,
             placeholder = { ConclaveText(placeholder, line = "$identifier.placeholder") },
-            trailingIcon = {
-                IconButton(onClick = onSend, enabled = sendEnabled, modifier = Modifier.testTag("$identifier.send")) {
-                    val tint = if (sendEnabled) scheme.primary else scheme.onSurface.copy(alpha = ConclaveDisabledOpacity.android.toFloat())
-                    if (sendLabel == null) {
-                        Icon(ConclaveIcons.SendFill1, contentDescription = conclaveString("ds_send"), tint = tint)
-                    } else {
-                        Icon(ConclaveIcons.SendFill1, contentDescription = sendLabel, tint = tint)
-                    }
-                }
-            },
+            trailingIcon = { ConclaveComposerSend(identifier, sendEnabled, onSend, sendLabel, sendDisabledReason) },
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { if (sendEnabled) onSend() }),
             maxLines = 6,
             shape = RoundedCornerShape(ConclaveComposerMetrics.androidCornerRadius.dp),
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = scheme.surfaceContainerHighest,
-                unfocusedContainerColor = scheme.surfaceContainerHighest,
-                disabledContainerColor = scheme.surfaceContainerHighest,
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-                disabledIndicatorColor = Color.Transparent,
-            ),
+            colors = conclaveComposerColors(),
         )
     }
+}
+
+/**
+ * The same composer row on a [TextFieldState] (T3 borrow P4): the material3 1.4.0 state TextField, so the screen can
+ * receive keyboard images, pasted images and drops through one contentReceiver and keep native text paste and undo.
+ * Six lines (TextFieldLineLimits.MultiLine), IME Send through onKeyboardAction only when [sendEnabled] (Q13), and the
+ * same Send, attach slot, colors, hardware keys and [fieldModifier] as the value overload. While Send is disabled an
+ * IME Send calls [onSendBlocked] instead (never onSend), so the screen can say why (S40 6 i; T3 borrow P6).
+ */
+@Composable
+internal fun ConclaveComposerField(
+    placeholder: String, state: TextFieldState, sendEnabled: Boolean, onSend: () -> Unit, identifier: String,
+    modifier: Modifier = Modifier, sendLabel: String? = null, sendDisabledReason: String = "", enabled: Boolean = true,
+    onHardwareKey: ((KeyEvent) -> Boolean)? = null, onSendBlocked: (() -> Unit)? = null, fieldModifier: Modifier = Modifier,
+    attach: (@Composable () -> Unit)? = null,
+) {
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ConclaveComposerMetrics.clusterSpacing.dp),
+        verticalAlignment = Alignment.Bottom) {
+        if (attach != null) ConclaveComposerAttachSlot(attach)
+        TextField(
+            state = state,
+            modifier = Modifier.weight(1f).then(fieldModifier).testTag(identifier).onPreviewKeyEvent { event ->
+                conclaveComposerKey(event, sendEnabled, onSend, onHardwareKey)
+            },
+            enabled = enabled,
+            placeholder = { ConclaveText(placeholder, line = "$identifier.placeholder") },
+            trailingIcon = { ConclaveComposerSend(identifier, sendEnabled, onSend, sendLabel, sendDisabledReason) },
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
+            onKeyboardAction = conclaveComposerImeSend(sendEnabled, onSendBlocked, onSend),
+            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
+            shape = RoundedCornerShape(ConclaveComposerMetrics.androidCornerRadius.dp),
+            colors = conclaveComposerColors(),
+        )
+    }
+}
+
+/**
+ * The composer's hardware keys (S40 6 d and 6 l8; T3 borrow P1 and P2). [onHardwareKey] sees every key event first,
+ * KeyDown and KeyUp, so a screen that consumes Escape can consume its KeyUp as well; returning true consumes the event.
+ * Then Enter and NumPadEnter on KeyDown without Shift: the first press sends when Send is enabled and an auto-repeat
+ * (repeatCount above 0) is consumed without sending, so a held key sends once and never fills the field with newlines.
+ * Shift+Enter falls through to the field as a newline. The soft keyboard's Send is an IME action, not a key event.
+ */
+internal fun conclaveComposerKey(
+    event: KeyEvent, sendEnabled: Boolean, onSend: () -> Unit, onHardwareKey: ((KeyEvent) -> Boolean)?,
+): Boolean {
+    if (onHardwareKey != null && onHardwareKey(event)) return true
+    if (event.type != KeyEventType.KeyDown) return false
+    if (event.key == Key.Enter && !event.isShiftPressed) {
+        if (event.nativeKeyEvent.repeatCount == 0 && sendEnabled) onSend()
+        return true
+    }
+    if (event.key == Key.NumPadEnter && !event.isShiftPressed) {
+        if (event.nativeKeyEvent.repeatCount == 0 && sendEnabled) onSend()
+        return true
+    }
+    return false
+}
+
+/** IME Send on the state field (Q13): sends only while Send is enabled and runs no default action, so a blocked Send
+ *  keeps the draft and the keyboard. A blocked press goes to [onSendBlocked] (the screen posts the reason, P6), never
+ *  to [onSend]. */
+internal fun conclaveComposerImeSend(
+    sendEnabled: Boolean, onSendBlocked: (() -> Unit)? = null, onSend: () -> Unit,
+): KeyboardActionHandler = KeyboardActionHandler { if (sendEnabled) onSend() else onSendBlocked?.invoke() }
+
+/** The disabled Send's state description (S40 6 i, AX2): the reason while Send is disabled and one is given. */
+internal fun conclaveSendStateDescription(sendEnabled: Boolean, reason: String): String? =
+    if (!sendEnabled && reason.isNotEmpty()) reason else null
+
+/** The attach control centred on the field's one-line height (T3 borrow P5): level with a single line of text, then
+ *  in the bottom band as the field grows to six lines. */
+@Composable
+private fun ConclaveComposerAttachSlot(attach: @Composable () -> Unit) {
+    Box(Modifier.heightIn(min = TextFieldDefaults.MinHeight), contentAlignment = Alignment.Center) {
+        attach()
+    }
+}
+
+/** Send: the glyph in primary while enabled and onSurface at the disabled opacity otherwise (auto-mirrored in RTL);
+ *  the disabled reason is its state description, so TalkBack never hears a bare disabled Send. */
+@Composable
+private fun ConclaveComposerSend(identifier: String, sendEnabled: Boolean, onSend: () -> Unit, sendLabel: String?, reason: String) {
+    val scheme = MaterialTheme.colorScheme
+    val stateText = conclaveSendStateDescription(sendEnabled, reason)
+    IconButton(onClick = onSend, enabled = sendEnabled, modifier = Modifier.testTag("$identifier.send").semantics {
+        if (stateText != null) stateDescription = stateText
+    }) {
+        val tint = if (sendEnabled) scheme.primary else scheme.onSurface.copy(alpha = ConclaveDisabledOpacity.android.toFloat())
+        if (sendLabel == null) {
+            Icon(ConclaveIcons.SendFill1, contentDescription = conclaveString("ds_send"), tint = tint)
+        } else {
+            Icon(ConclaveIcons.SendFill1, contentDescription = sendLabel, tint = tint)
+        }
+    }
+}
+
+/** The composer container: surfaceContainerHighest in every state and no indicator (S40 6 e). */
+@Composable
+private fun conclaveComposerColors(): TextFieldColors {
+    val scheme = MaterialTheme.colorScheme
+    return TextFieldDefaults.colors(
+        focusedContainerColor = scheme.surfaceContainerHighest,
+        unfocusedContainerColor = scheme.surfaceContainerHighest,
+        disabledContainerColor = scheme.surfaceContainerHighest,
+        focusedIndicatorColor = Color.Transparent,
+        unfocusedIndicatorColor = Color.Transparent,
+        disabledIndicatorColor = Color.Transparent,
+    )
 }
 
 /**

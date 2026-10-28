@@ -59,9 +59,24 @@ struct ChatFixtureControlsBar: View {
                 .font(.caption2)
                 .padding(.horizontal, 16)
                 .accessibilityIdentifier("chat.openLatency")
+            ChatGateLineReadout(driver: driver)
         }
         .padding(.vertical, 4)
         .background(Color(uiColor: .secondarySystemBackground))
+    }
+}
+
+/// T3 borrow P7 (R8): `chat.composer.gateLine`, the gate the status line draws, the real gate and the show counter.
+/// A leaf whose body reads `chat.composer` (through the readout), so the delayed line's own publish refreshes it
+/// without a tap.
+private struct ChatGateLineReadout: View {
+    let driver: ChatFixtureDriver
+
+    var body: some View {
+        Text(verbatim: driver.gateLineReadout)
+            .font(.caption2)
+            .padding(.horizontal, 16)
+            .accessibilityIdentifier("chat.composer.gateLine")
     }
 }
 #endif

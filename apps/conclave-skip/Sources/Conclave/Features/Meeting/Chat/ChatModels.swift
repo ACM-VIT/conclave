@@ -369,7 +369,13 @@ struct ChatCommandRow: Equatable, Identifiable {
 
 struct ChatComposerSnapshot: Equatable {
     let revision: Int
+    /// The real send gate: Send, its accessibility value and the placeholder follow it at once.
     let gate: ChatSendGate
+    /// T3 borrow P7 (S40 6 f): the gate the status line draws. It follows `gate` through `DelayedStatusPolicy`: a
+    /// reconnecting, offline or not-joined gate draws its line only after 400 ms and keeps it at least 400 ms (a
+    /// short blip draws nothing); locked, attendee and the first apply after init or reset are immediate. It starts
+    /// equal to `gate`. Views read it only for the line.
+    let gateLine: ChatSendGate
     let isHost: Bool
     /// Chat is locked for participants and you are a host who can still send (2 f note).
     let isLockedForOthers: Bool
@@ -402,7 +408,8 @@ struct ChatComposerSnapshot: Equatable {
     let attachKinds: [String]
 
     static let initial = ChatComposerSnapshot(
-        revision: 0, gate: ChatSendGate.notJoined, isHost: false, isLockedForOthers: false, privateTo: nil, recipients: [],
+        revision: 0, gate: ChatSendGate.notJoined, gateLine: ChatSendGate.notJoined, isHost: false, isLockedForOthers: false,
+        privateTo: nil, recipients: [],
         privateEnabled: true, photosEnabled: true, voiceEnabled: true, reply: nil, attachment: ChatAttachmentState.none,
         isVoiceMode: false, voiceKind: "system", textLimit: ChatComposerPolicy.textLimit, voiceLimit: ChatComposerPolicy.voiceLimit,
         assistant: AssistantAvailability.unknown, mentionOptions: [], commandRows: [], inlineNotice: ChatFailure.none,

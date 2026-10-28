@@ -23,6 +23,52 @@ struct ChatImplicitTarget: Equatable {
     static let none = ChatImplicitTarget(recipient: nil, failure: ChatFailure.none, isPrivateSyntax: false)
 }
 
+/// T3 borrow P1: what the trailing token of the draft triggers (S40 6 c suggestions): the mention list for a trailing
+/// `@word`, the command list for a bare `/word`, or nothing. The two never overlap (a bare `/word` has no trailing
+/// `@` token), so a mention wins by construction (INM C8).
+enum ChatSuggestionKind: String, CaseIterable {
+    case none, mention, command
+}
+
+/// T3 borrow P1: the suggestion trigger. `start` is the token's index in `ChatLinkifyPolicy.characters(draft)` (0 for
+/// a command); `query` is the lowercased text after the `@` or `/`. `key` (kind plus token start) names the trigger
+/// for the per-trigger Escape dismissal: typing more letters in the same token keeps the key.
+struct ChatSuggestionTrigger: Equatable {
+    let kind: ChatSuggestionKind
+    let start: Int
+    let query: String
+
+    static let none = ChatSuggestionTrigger(kind: ChatSuggestionKind.none, start: 0, query: "")
+
+    var key: String { kind.rawValue + ":" + String(start) }
+}
+
+/// T3 borrow P1: one row of the visible suggestion list, the shape the hardware keys work on. `id` is "m:" plus the
+/// mention id or "c:" plus the command id (the Android list keys); `insertText` is the whole draft after picking the
+/// row (`insertingMention` or `insertingCommand`); an unavailable (dimmed) row is skipped by the arrow keys.
+struct ChatSuggestionItem: Equatable {
+    let id: String
+    let insertText: String
+    let isAvailable: Bool
+}
+
+/// T3 borrow P1, P2: what a Return (or Enter) key press does in the composer.
+enum ChatReturnKeyAction: String, CaseIterable {
+    /// Not ours: the field handles it (a software Return inserts a newline, Q13; Shift+Return; an IME composing).
+    case ignore
+    /// Swallowed without an action (an auto-repeat of a held Return, so the cleared field never fills with newlines).
+    case consume
+    case send
+    /// Inserts the highlighted suggestion row.
+    case insertSuggestion
+}
+
+/// T3 borrow P6: the one reason Send is disabled (S40 6 i, AX2), shared by both platforms. `none` means Send is
+/// enabled; `attendee` has no copy (the composer is absent).
+enum ChatSendBlock: String, CaseIterable {
+    case none, empty, notJoined, reconnecting, offline, locked, attendee, overLimit, photoPending, photoFailed
+}
+
 /// CH20 (S40 0.5, 6 f): the shared pure composer rules, the same on both platforms.
 enum ChatComposerPolicy {
     /// The SFU's limits (chatHandlers.ts `messageContent.length > 1000`, meeting-core `TTS_MAX_TEXT_LENGTH` 500).
@@ -110,11 +156,10 @@ enum ChatComposerPolicy {
         limitLength(text: text, isVoice: isVoiceMode) > limit(text: text, isVoiceMode: isVoiceMode)
     }
 
-    /// Send is enabled with text, an open gate and the draft within its limit.
+    /// Send is enabled with text, an open gate and the draft within its limit. One source of truth with the Send
+    /// reason: `sendBlock(...) == .none` (T3 borrow P6).
     static func canSend(text: String, gate: ChatSendGate, isVoiceMode: Bool) -> Bool {
-        if gate != ChatSendGate.allowed { return false }
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
-        return !isOverLimit(text: text, isVoiceMode: isVoiceMode)
+        sendBlock(text: text, gate: gate, isVoiceMode: isVoiceMode, attachment: ChatAttachmentState.none) == ChatSendBlock.none
     }
 
     private static func voiceBody(_ trimmed: String) -> String? {
@@ -275,14 +320,231 @@ enum ChatComposerPolicy {
     }
 
     /// Send with a photo (6 f): a ready photo sends alone or with a caption; a photo still preparing, uploading or
-    /// failed blocks Send; without a photo the text rules apply.
+    /// failed blocks Send; without a photo the text rules apply. Defined through `sendBlock` (T3 borrow P6), so the
+    /// enabled state and the disabled reason can never disagree.
     static func canSend(text: String, gate: ChatSendGate, isVoiceMode: Bool, attachment: ChatAttachmentState) -> Bool {
-        if gate != ChatSendGate.allowed { return false }
-        if attachment.blocksSend { return false }
+        sendBlock(text: text, gate: gate, isVoiceMode: isVoiceMode, attachment: attachment) == ChatSendBlock.none
+    }
+
+    // MARK: Send reason (T3 borrow P6)
+
+    /// Why Send is disabled, in the precedence `canSend` always had: a closed gate first, then the photo (failed, then
+    /// still preparing or uploading), then a ready photo's caption limit, then an empty draft, then the limit.
+    static func sendBlock(text: String, gate: ChatSendGate, isVoiceMode: Bool, attachment: ChatAttachmentState) -> ChatSendBlock {
+        let gated = gateBlock(gate)
+        if gated != ChatSendBlock.none { return gated }
+        if attachment.phase == ChatAttachmentPhase.failed { return ChatSendBlock.photoFailed }
+        if attachment.blocksSend { return ChatSendBlock.photoPending }
         if attachment.isReady {
-            return !isOverLimit(text: text, isVoiceMode: isVoiceMode)
+            if isOverLimit(text: text, isVoiceMode: isVoiceMode) { return ChatSendBlock.overLimit }
+            return ChatSendBlock.none
         }
-        return canSend(text: text, gate: gate, isVoiceMode: isVoiceMode)
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return ChatSendBlock.empty }
+        if isOverLimit(text: text, isVoiceMode: isVoiceMode) { return ChatSendBlock.overLimit }
+        return ChatSendBlock.none
+    }
+
+    /// The gate's own block (`none` while the gate is open).
+    static func gateBlock(_ gate: ChatSendGate) -> ChatSendBlock {
+        switch gate {
+        case .allowed: return ChatSendBlock.none
+        case .notJoined: return ChatSendBlock.notJoined
+        case .reconnecting: return ChatSendBlock.reconnecting
+        case .offline: return ChatSendBlock.offline
+        case .locked: return ChatSendBlock.locked
+        case .attendee: return ChatSendBlock.attendee
+        }
+    }
+
+    /// Whether a blocked hardware Return (or IME Send) posts the reason politely: only gate and photo blocks, which the
+    /// presenter refuses silently. Route and limit blocks already announce their inline notice; an empty draft posts
+    /// nothing.
+    static func announcesBlockedSend(_ block: ChatSendBlock) -> Bool {
+        switch block {
+        case .notJoined, .reconnecting, .offline, .locked, .photoPending, .photoFailed: return true
+        default: return false
+        }
+    }
+
+    // MARK: Photo intake (T3 borrow P4)
+
+    /// The notice for a photo intake (paste, iPad drop, Android keyboard, clipboard or drop image) the view refused at
+    /// once: one attachment at a time (`oneAttachment`, also while the view's own copy is still in flight), private
+    /// mode (`privateTextOnly`) or photos off (`photosDisabled`). A closed gate refuses silently (the gate line says
+    /// why). `none` when nothing needs saying.
+    static func photoIntakeNotice(gate: ChatSendGate, isPrivateMode: Bool, photosEnabled: Bool, hasAttachment: Bool,
+                                  inFlight: Bool) -> ChatFailure {
+        if gate != ChatSendGate.allowed { return ChatFailure.none }
+        if isPrivateMode { return ChatFailure.privateTextOnly }
+        if !photosEnabled { return ChatFailure.photosDisabled }
+        if hasAttachment || inFlight { return ChatFailure.oneAttachment }
+        return ChatFailure.none
+    }
+
+    // MARK: Keyboard and focus (T3 borrow P3)
+
+    /// Android composer menus (the recipient chip and the attach menu): decided once, when the menu opens. While the
+    /// IME was up and TalkBack touch exploration is off, the menu does not take popup focus, so the IME stays up; with
+    /// a hardware keyboard and no IME, or under TalkBack, it stays focusable (arrow keys and TalkBack reach its items).
+    static func composerMenuIsFocusable(imeWasVisible: Bool, touchExploration: Bool) -> Bool {
+        !imeWasVisible || touchExploration
+    }
+
+    /// After Photo Library, the GIF page or a composer menu: the field gets focus back only when it had it before and
+    /// no VoiceOver or TalkBack runs (under assistive tech focus returns to the invoker, AX12). A plain open never
+    /// focuses (S40 Q11).
+    static func restoresComposerFocus(wasFocused: Bool, assistiveTechRunning: Bool) -> Bool {
+        wasFocused && !assistiveTechRunning
+    }
+
+    // MARK: Suggestion keys (T3 borrow P1, P2; hardware keyboard only)
+
+    /// The trigger of the draft's trailing token: a mention for a trailing `@word` (the token starts the draft or
+    /// follows whitespace), a command for a bare `/word` (no whitespace yet), else none.
+    static func suggestionTrigger(draft: String) -> ChatSuggestionTrigger {
+        let chars = ChatLinkifyPolicy.characters(draft)
+        var start = chars.count
+        while start > 0 && !ChatLinkifyPolicy.isSpace(chars[start - 1]) {
+            start -= 1
+        }
+        if start < chars.count && chars[start] == "@" {
+            let query = ChatLinkifyPolicy.join(chars, from: start + 1, to: chars.count).lowercased()
+            return ChatSuggestionTrigger(kind: ChatSuggestionKind.mention, start: start, query: query)
+        }
+        if !draft.hasPrefix("/") { return ChatSuggestionTrigger.none }
+        for character in draft {
+            if character.isWhitespace || character.isNewline { return ChatSuggestionTrigger.none }
+        }
+        return ChatSuggestionTrigger(kind: ChatSuggestionKind.command, start: 0, query: String(draft.dropFirst()).lowercased())
+    }
+
+    /// The rows the list shows, in its order, built from `mentionSuggestions` and `commandSuggestions` (no second
+    /// filter): mentions when any match, else commands.
+    static func suggestionItems(draft: String, mentionOptions: [ChatMentionOption], commandRows: [ChatCommandRow],
+                                isPrivateMode: Bool) -> [ChatSuggestionItem] {
+        let mentions = mentionSuggestions(draft: draft, options: mentionOptions)
+        var commands: [ChatCommandRow] = []
+        if mentions.isEmpty {
+            commands = commandSuggestions(draft: draft, rows: commandRows)
+        }
+        return suggestionItemsFor(mentions: mentions, commands: commands, draft: draft, isPrivateMode: isPrivateMode)
+    }
+
+    /// The same rows from lists the view already computed once (iOS computes them in the composer body).
+    static func suggestionItemsFor(mentions: [ChatMentionOption], commands: [ChatCommandRow], draft: String,
+                                   isPrivateMode: Bool) -> [ChatSuggestionItem] {
+        var items: [ChatSuggestionItem] = []
+        for option in mentions {
+            items.append(ChatSuggestionItem(id: mentionItemId(option.id),
+                                            insertText: insertingMention(draft: draft, token: option.token),
+                                            isAvailable: !(option.isAssistant && isPrivateMode)))
+        }
+        for row in commands {
+            items.append(ChatSuggestionItem(id: commandItemId(row.id), insertText: insertingCommand(row.id),
+                                            isAvailable: row.isAvailable))
+        }
+        return items
+    }
+
+    static func mentionItemId(_ optionId: String) -> String {
+        "m:" + optionId
+    }
+
+    static func commandItemId(_ commandId: String) -> String {
+        "c:" + commandId
+    }
+
+    /// The Escape dismissal after the draft changed: kept while the trigger is the same (kind plus token start, so
+    /// typing more letters keeps the list hidden), "" as soon as the trigger is none or another trigger resolves (so
+    /// deleting "@" and typing it again shows the list; T3 useComposerTriggerState).
+    static func dismissedKey(after trigger: ChatSuggestionTrigger, current: String) -> String {
+        if trigger.kind == ChatSuggestionKind.none { return "" }
+        if trigger.key == current { return current }
+        return ""
+    }
+
+    /// True while Escape dismissed the list for this trigger.
+    static func isDismissed(trigger: ChatSuggestionTrigger, dismissedKey: String) -> Bool {
+        if trigger.kind == ChatSuggestionKind.none || dismissedKey.isEmpty { return false }
+        return trigger.key == dismissedKey
+    }
+
+    /// The query a highlight belongs to: the trigger key plus its query, so a new letter or a new trigger resets it.
+    static func highlightQueryKey(_ trigger: ChatSuggestionTrigger) -> String {
+        trigger.key + "|" + trigger.query
+    }
+
+    /// Down (`delta` 1) or Up (`delta` -1): the next available row, wrapping around and skipping unavailable rows (a
+    /// Conclave addition; T3 wraps without skipping). From no highlight Down picks the first available row and Up the
+    /// last. "" when no row is available.
+    static func movedHighlight(currentId: String, items: [ChatSuggestionItem], delta: Int) -> String {
+        let count = items.count
+        if count == 0 { return "" }
+        if delta == 0 { return currentId }
+        let step = delta > 0 ? 1 : -1
+        var cursor = -1
+        var index = 0
+        while index < count {
+            if items[index].id == currentId {
+                cursor = index
+                break
+            }
+            index += 1
+        }
+        if cursor < 0 {
+            cursor = step > 0 ? -1 : count
+        }
+        var tries = 0
+        while tries < count {
+            cursor = ((cursor + step) % count + count) % count
+            if items[cursor].isAvailable { return items[cursor].id }
+            tries += 1
+        }
+        return ""
+    }
+
+    /// The highlight the list shows: the stored row id while it belongs to the current query and is still an
+    /// available row (kept across a refilter, for example someone joining), else the first available row ("" when
+    /// none). Views store the id and its query key and derive this in the body, never writing state there.
+    static func resolvedHighlight(currentId: String, items: [ChatSuggestionItem], highlightQuery: String,
+                                  currentQuery: String) -> String {
+        if highlightQuery == currentQuery && !currentId.isEmpty {
+            for item in items {
+                if item.id == currentId && item.isAvailable { return currentId }
+            }
+        }
+        for item in items {
+            if item.isAvailable { return item.id }
+        }
+        return ""
+    }
+
+    /// The highlighted row's insert text ("" when the id names no available row).
+    static func insertText(forHighlight highlightId: String, items: [ChatSuggestionItem]) -> String {
+        if highlightId.isEmpty { return "" }
+        for item in items {
+            if item.id == highlightId && item.isAvailable { return item.insertText }
+        }
+        return ""
+    }
+
+    /// Return (iOS) or Enter (Android), evaluated in this order: an IME composing ignores it (P2); a software keyboard
+    /// ignores it (the soft Return is a newline on iOS, Q13); Shift ignores it (newline); an auto-repeat is consumed
+    /// without sending (P2); with the list visible and a row highlighted it inserts the row, except that a row whose
+    /// insert text equals the trimmed draft sends (exact match, a Conclave decision: only argument-free commands such
+    /// as "/raise" can match); otherwise it sends.
+    static func returnKeyAction(isHardwareKeyboard: Bool, isShift: Bool, isComposing: Bool, isRepeat: Bool,
+                                suggestionsVisible: Bool, highlightedInsert: String, draft: String) -> ChatReturnKeyAction {
+        if isComposing { return ChatReturnKeyAction.ignore }
+        if !isHardwareKeyboard { return ChatReturnKeyAction.ignore }
+        if isShift { return ChatReturnKeyAction.ignore }
+        if isRepeat { return ChatReturnKeyAction.consume }
+        if suggestionsVisible && !highlightedInsert.isEmpty {
+            let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+            if highlightedInsert == trimmed { return ChatReturnKeyAction.send }
+            return ChatReturnKeyAction.insertSuggestion
+        }
+        return ChatReturnKeyAction.send
     }
 
     /// A ready photo travels with public text only: private mode is text-only (`privateTextOnly`); a voice message

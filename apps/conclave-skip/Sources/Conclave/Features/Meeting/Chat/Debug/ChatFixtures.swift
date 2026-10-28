@@ -30,6 +30,10 @@ enum ChatFixtureState: String, CaseIterable, Equatable {
     case attachmentUploading = "chat-attachment-uploading"
     /// CHT-6: voice mode on in the composer (S40 6 c).
     case voiceMode = "chat-voice-mode"
+    /// T3 borrow (R1, R10): a three-line draft in the composer (the field grows upward with Send on the last line).
+    case draftMultiline = "chat-draft-multiline"
+    /// T3 borrow (R2): the draft "@av", so the mention list is filtered to Avery (`chat-suggestions-mentions` uses "@").
+    case suggestionsMentionQuery = "chat-suggestions-mention-query"
 }
 
 /// Driver scripts, each started by the Debug control `chat.fixture.<script>` (0.9).
@@ -52,6 +56,14 @@ enum ChatFixtureScriptName: String, CaseIterable {
     case stream3tasks = "stream:3tasks"
     /// CHT-7: an answer that thinks, then fails (the asker's Try Again replays `stream:3tasks` under the same id).
     case assistantFail
+    /// T3 borrow P7 (R8): the gate reconnects for 250 ms, then opens; the status line never draws (show counter 0)
+    /// while Send greys out and comes back.
+    case gateBlip
+    /// T3 borrow P7 (R8): the gate reconnects for 1,500 ms, then opens; the line draws at about 400 ms and holds.
+    case gateLong
+    /// T3 borrow P4 (R7): two photos handed over back to back; one chip, the "Send one attachment at a time." notice
+    /// and one `attachPhoto` in the action log.
+    case photoTwice
 }
 
 /// CHT-4, CHT-5: tiny generated images (neutral grays: image content, not interface color) written into the caches
@@ -154,6 +166,10 @@ enum ChatFixtureScript {
     static let samId = "sam@example.com#web-2"
     static let priyaId = "priya@example.com#web-3"
     static let leftId = "morgan@example.com#web-4"
+    /// The `chat-draft-multiline` draft: three lines.
+    static let multilineDraft = "Agenda for tomorrow:\nBudget review at 10\nHiring sync after lunch"
+    /// The `chat-suggestions-mention-query` draft.
+    static let mentionQueryDraft = "@av"
 
     static func roster(longNames: Bool = false) -> [ChatRosterEntry] {
         [
@@ -496,7 +512,10 @@ final class ChatFixtureDriver {
     private var photoGeneration = 0
     /// CHT-7: bumped per played answer, so a replay (Try Again) stops the earlier script.
     private var streamGeneration = 0
-    private var sleep: (Double) async -> Void = { millis in
+    /// T3 borrow P7: bumped per gate script, so a newer `gateBlip` or `gateLong` stops the earlier one.
+    private var gateGeneration = 0
+    /// The driver's script pauses (tests inject a controlled sleep; the gate scripts read it when they start).
+    var sleep: (Double) async -> Void = { millis in
         try? await Task.sleep(nanoseconds: UInt64(max(0.0, millis) * 1_000_000.0))
     }
 
@@ -554,9 +573,20 @@ final class ChatFixtureDriver {
             chat.drafts.setText("@", for: key)
         case .voiceMode:
             chat.setVoiceMode(true)
+        case .draftMultiline:
+            chat.drafts.setText(ChatFixtureScript.multilineDraft, for: key)
+        case .suggestionsMentionQuery:
+            chat.drafts.setText(ChatFixtureScript.mentionQueryDraft, for: key)
         default:
             break
         }
+    }
+
+    /// The `chat.composer.gateLine` readout (T3 borrow P7, R8): the gate the line draws, the real gate and how often
+    /// the line went from hidden to drawn. ASCII for scripts.
+    var gateLineReadout: String {
+        "gateLine=" + chat.composer.gateLine.rawValue + " gate=" + chat.composer.gate.rawValue + " shows="
+            + String(chat.gateLineShowCount)
     }
 
     /// The `chat.fixture.voice` readout: the recording speaker's starts and cancels.
@@ -608,7 +638,18 @@ final class ChatFixtureDriver {
         case .resetCounters:
             counters.reset()
         case .attachPhoto:
+            // One attachment at a time (T3 borrow P4): like a person, the script removes a photo already in the
+            // composer before it picks the fixture photo.
+            removeAttachmentIfAny()
             chat.attachPhoto(fileURL: ChatFixtureAssets.photoURL, mimeType: "image/png", fileName: "photo.png")
+        case .photoTwice:
+            removeAttachmentIfAny()
+            chat.attachPhoto(fileURL: ChatFixtureAssets.photoURL, mimeType: "image/png", fileName: "photo.png")
+            chat.attachPhoto(fileURL: ChatFixtureAssets.photoURL, mimeType: "image/png", fileName: "second-photo.png")
+        case .gateBlip:
+            playGate(ChatSendGate.reconnecting, forMillis: 250.0)
+        case .gateLong:
+            playGate(ChatSendGate.reconnecting, forMillis: 1500.0)
         case .photoFail:
             failNextPhoto = true
         case .gifMoreFail:
@@ -759,6 +800,38 @@ final class ChatFixtureDriver {
     private func setAttachment(_ attachment: ChatAttachmentState) {
         inputs = withAttachment(attachment)
         chat.apply(inputs, change: ChatInputChange.attachment)
+    }
+
+    /// T3 borrow P4: Remove on the composer photo, when there is one (the core's part runs through `handle`).
+    private func removeAttachmentIfAny() {
+        if chat.composer.attachment.phase != ChatAttachmentPhase.none {
+            chat.removeAttachment()
+        }
+    }
+
+    /// T3 borrow P7 (R8): the core reports `gate` now and an open gate after `millis`, as a recovering connection
+    /// does. Send follows the gate at once; the status line follows `composer.gateLine`.
+    private func playGate(_ gate: ChatSendGate, forMillis millis: Double) {
+        gateGeneration += 1
+        let generation = gateGeneration
+        setGate(gate)
+        let wait = sleep
+        Task { @MainActor [weak self] in
+            await wait(millis)
+            guard let self = self, self.gateGeneration == generation else { return }
+            self.setGate(ChatSendGate.allowed)
+        }
+    }
+
+    private func setGate(_ gate: ChatSendGate) {
+        inputs = ChatInputs.make(callSession: inputs.callSession, roomId: inputs.roomId, localUserId: inputs.localUserId,
+                                 localName: inputs.localName, messages: inputs.messages, localRows: inputs.localRows,
+                                 isLocked: inputs.isLocked, privateEnabled: inputs.privateEnabled,
+                                 photosEnabled: inputs.photosEnabled, voiceEnabled: inputs.voiceEnabled,
+                                 reactionsEnabled: inputs.reactionsEnabled, gate: gate, isHost: inputs.isHost,
+                                 roster: inputs.roster, assistant: inputs.assistant, attachment: inputs.attachment,
+                                 activeTtsMessageId: inputs.activeTtsMessageId, voiceKind: inputs.voiceKind)
+        chat.apply(inputs, change: ChatInputChange.gate)
     }
 
     private func withAttachment(_ attachment: ChatAttachmentState) -> ChatInputs {

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imeNestedScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -95,6 +96,8 @@ internal fun ChatTimeline(
         val unreadIndex = reversed.ids.indexOf("unread")
         if (unreadIndex > 0) listState.scrollToItem(unreadIndex)
     }
+    // T3 borrow P8 (2 d composer focus): read inside its own scope, so a focus gain recomposes no list or row.
+    ChatComposerFocusFollow(listState, reduceMotion) { actions.composerFocusRevision }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val maxBubble = maxWidth * ConclaveBubbleGeometry.maxWidthFraction.toFloat()
         LazyColumn(
@@ -131,6 +134,31 @@ internal fun ChatTimeline(
             if (reduceMotion) listState.scrollToItem(0) else listState.animateScrollToItem(0)
         }
     }
+}
+
+/**
+ * T3 borrow P8 (S40 2 d composer focus, the T3 "follow when at the end" rule with one visibility test on every
+ * platform): when the composer's field gains focus (`revision` moves past the value seen at first composition) and the
+ * newest row is at least partly visible, the reversed list scrolls to index 0 (instantly under Remove animations);
+ * farther up, the position and the jump pill stay. The check runs before the IME insets shrink the list, and the
+ * reversed list keeps index 0 at the bottom while it shrinks. `revision` is read here, in this effect's own scope.
+ */
+@Composable
+internal fun ChatComposerFocusFollow(listState: LazyListState, reduceMotion: Boolean, revision: () -> Int) {
+    val current = revision()
+    val initial = remember { current }
+    LaunchedEffect(current) {
+        if (current == initial) return@LaunchedEffect
+        if (!ChatFocusFollow.newestVisible(listState)) return@LaunchedEffect
+        if (reduceMotion) listState.scrollToItem(0) else listState.animateScrollToItem(0)
+    }
+}
+
+/** P8: the one visibility rule. */
+internal object ChatFocusFollow {
+    /** The newest row (index 0 of the reversed list) is at least partly inside the viewport. */
+    fun newestVisible(listState: LazyListState): Boolean =
+        listState.layoutInfo.visibleItemsInfo.any { it.index == 0 }
 }
 
 /** 2 d empty state: F00 C14 column, then Ask Conclave AI (hidden when the assistant is unavailable). */
