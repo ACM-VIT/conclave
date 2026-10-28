@@ -1,4 +1,5 @@
 #if os(iOS) && !SKIP
+import Accessibility
 import SwiftUI
 import UIKit
 import WebKit
@@ -9,7 +10,9 @@ import WebKit
 // Show Video, panels and rotation never recreate it), the opening and failure states, and the Whiteboard toolbar.
 // `NativeAppHostMenu` is the header's host menu (Lock Editing, Close…; non-hosts see none). The embed draws only the
 // canvas; every tool is native and drives it through bridge commands (S60 Q14). Copy resolves here (`AppHostCopy`,
-// L6-14): the presenter publishes typed values and counts only.
+// L6-14): the presenter publishes typed values and counts only. ACT-8 adds Spin the Wheel (`WheelCardBar`: Spin and
+// Edit Names) and Watch Together (`AppWatchQueueButton` in the header), the native winner and title announcements, and
+// the two Activities pages (`AppWheelPage`, `AppWatchPage`, system appearance) that HD request B8-T2 R5 pushes.
 
 /// The card body for an SDK app.
 struct NativeAppHostBody: View {
@@ -55,6 +58,14 @@ struct NativeAppHostBody: View {
                     .accessibilityHidden(true)
                 WhiteboardToolbar(host: host, onPalette: { pencilPalette = $0 })
             }
+            if model.appId == "wheel" && model.canEdit
+                && (model.phase == AppHostPhase.ready || model.phase == AppHostPhase.closing) {
+                Rectangle()
+                    .fill(HostingTheme.inCallBorder)
+                    .frame(height: 1)
+                    .accessibilityHidden(true)
+                WheelCardBar(host: host)
+            }
             if host.showsDebugReadouts {
                 AppHostReadouts(host: host, registry: ActivityWebViewRegistry.shared)
             }
@@ -68,6 +79,7 @@ struct NativeAppHostBody: View {
             }
         }
         .modifier(AppExternalLinkConfirmation(registry: ActivityWebViewRegistry.shared))
+        .background { AppPageAnnouncer(host: host) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("app.host." + model.phase.rawValue)
     }
@@ -92,6 +104,10 @@ struct NativeAppHostMenu: View {
 
     var body: some View {
         let model = host.model
+        // ACT-8: Watch Together's "Queue" (everyone) opens Activities at the Watch page (S60 13 c).
+        if model.appId == "watch" && (model.phase == AppHostPhase.ready || model.phase == AppHostPhase.readOnly) {
+            AppWatchQueueButton(host: host)
+        }
         if model.canClose || model.canLock {
             let name = AppHostCopy.name(model.appId)
             Menu {
@@ -157,7 +173,8 @@ struct AppHostCanvas: View {
             .background(HostingTheme.token(DesignTokens.iosInCallSurface))
             .accessibilityElement(children: .contain)
             .accessibilityLabel(AppHostCopy.canvasLabel(model.appId))
-            .accessibilityHint(model.canEdit ? ConclaveStrings.text("Drawing works with touch or Apple Pencil. Use the toolbar to change tools.") : "")
+            .accessibilityHint(model.canEdit && model.appId == "whiteboard"
+                ? ConclaveStrings.text("Drawing works with touch or Apple Pencil. Use the toolbar to change tools.") : "")
             .accessibilityIdentifier("app.canvas")
     }
 }
@@ -739,6 +756,583 @@ enum AppInkSwatch {
     }
 }
 
+// MARK: Spin the Wheel and Watch Together on the card (S60 13 c, ACT-8)
+
+/// The Wheel card's bottom bar: "Spin" (the card's one primary, coral with the in-call on-coral ink) and "Edit Names"
+/// (opens Activities at the Wheel page). Reads only `host.wheel`.
+struct WheelCardBar: View {
+    let host: AppHostPresenter
+
+    var body: some View {
+        let wheel = host.wheel
+        let spinBusy = wheel.spinning || wheel.isPending(AppPageCommandKind.spin)
+        HStack(spacing: 8) {
+            Button {
+                _ = host.spinWheel()
+            } label: {
+                HStack(spacing: 8) {
+                    if spinBusy { ProgressView().tint(HostingTheme.inCallOnCoral) }
+                    Text(ConclaveStrings.text("Spin"))
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(HostingTheme.inCallOnCoral)
+                .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(HostingTheme.coralFill)
+            .disabled(!wheel.canSpin)
+            .opacity(wheel.canSpin || spinBusy ? 1 : HostingTheme.disabledOpacity)
+            .accessibilityValue(spinBusy ? ConclaveStrings.text("In Progress") : "")
+            .accessibilityIdentifier("app.wheel.spin")
+            Button {
+                _ = host.openPage()
+            } label: {
+                Text(ConclaveStrings.text("Edit Names"))
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.bordered)
+            .tint(HostingTheme.token(DesignTokens.iosInCallText))
+            .accessibilityIdentifier("app.wheel.editNames")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+}
+
+/// Watch Together's header button: "Queue" opens Activities at the Watch page (search, Up Next, Requests).
+struct AppWatchQueueButton: View {
+    let host: AppHostPresenter
+
+    var body: some View {
+        Button {
+            _ = host.openPage()
+        } label: {
+            Text(ConclaveStrings.text("Queue"))
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                .padding(.horizontal, 10)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("app.watch.queue")
+    }
+}
+
+/// The wheel winner ("Winner: %@") and a newly selected video's title, announced natively (S60 13 i). Zero size;
+/// reads only the two sequence leaves.
+struct AppPageAnnouncer: View {
+    let host: AppHostPresenter
+
+    var body: some View {
+        let winner = host.wheel.winnerSequence
+        let title = host.watch.titleSequence
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .onChange(of: winner) { _, _ in
+                let label = host.wheel.winnerLabel
+                if label.isEmpty { return }
+                AccessibilityNotification.Announcement(ConclaveStrings.format("Winner: %@", label)).post()
+            }
+            .onChange(of: title) { _, _ in
+                let name = host.watch.title
+                if name.isEmpty { return }
+                AccessibilityNotification.Announcement(name).post()
+            }
+    }
+}
+
+// MARK: Activities pages (S60 13 c, ACT-8; HD request B8-T2 R5 pushes them)
+
+/// The page body when its app is not the room's open app (closed or replaced while the page was up).
+struct AppPageUnavailable: View {
+    let appId: String
+
+    var body: some View {
+        Section {
+            Text(AppHostCopy.pageClosed(appId))
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("app.page.closed")
+        }
+    }
+}
+
+/// Activities > Spin the Wheel (system appearance): add names (a pasted list adds each line), Add Everyone Here, the
+/// names with swipe to delete, Shuffle, Sort, Clear, Remove Winner, Wheel Sounds and the last 25 results. Reads only
+/// `host.wheel` (and `host.model.appId` for the title).
+struct AppWheelPage: View {
+    let host: AppHostPresenter
+    @State private var draft = ""
+    @State private var confirmsClear = false
+    @FocusState private var focused: Bool
+    @Environment(\.panelPromoteToLargeDetent) private var promoteToLarge
+
+    var body: some View {
+        let wheel = host.wheel
+        let deleteAction: ((IndexSet) -> Void)? = wheel.canEdit ? { offsets in remove(offsets) } : nil
+        List {
+            if !wheel.isReady {
+                AppPageUnavailable(appId: "wheel")
+            } else {
+                if wheel.canEdit {
+                    Section {
+                        TextField(ConclaveStrings.text("Add a Name"), text: $draft, axis: .vertical)
+                            .lineLimit(1...4)
+                            .textInputAutocapitalization(.words)
+                            .submitLabel(.done)
+                            .focused($focused)
+                            .disabled(wheel.isFull)
+                            .onSubmit { addDraft() }
+                            .onChange(of: draft) { _, value in
+                                // Return or a pasted list: every line becomes a name.
+                                if value.contains("\n") { addDraft() }
+                            }
+                            .onChange(of: focused) { _, isFocused in if isFocused { promoteToLarge() } }
+                            .accessibilityIdentifier("app.wheel.add")
+                        Button {
+                            _ = host.addEveryoneToWheel()
+                        } label: {
+                            LabeledContent(ConclaveStrings.text("Add Everyone Here")) {
+                                if wheel.isPending(AppPageCommandKind.addEntries, target: "everyone") {
+                                    ProgressView()
+                                } else {
+                                    Text(ConclaveStrings.format("Wheel Missing Names %lld", wheel.missingNames.count))
+                                }
+                            }
+                        }
+                        .disabled(wheel.missingNames.isEmpty || wheel.isFull)
+                        .accessibilityIdentifier("app.wheel.addEveryone")
+                    } footer: {
+                        if wheel.isFull {
+                            Text(ConclaveStrings.text("The wheel is full."))
+                                .accessibilityIdentifier("app.wheel.full")
+                        }
+                    }
+                }
+                Section {
+                    if wheel.entries.isEmpty {
+                        Text(ConclaveStrings.text("No names yet."))
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("app.wheel.empty")
+                    } else {
+                        ForEach(wheel.entries) { entry in
+                            Text(verbatim: entry.label)
+                                .opacity(wheel.isPending(AppPageCommandKind.removeEntry, target: entry.id) ? HostingTheme.disabledOpacity : 1)
+                                .accessibilityIdentifier("app.wheel.entry")
+                        }
+                        .onDelete(perform: deleteAction)
+                    }
+                }
+                Section {
+                    if wheel.canEdit {
+                        Button(ConclaveStrings.text("Shuffle")) { _ = host.shuffleWheel() }
+                            .disabled(wheel.entries.count < 2 || wheel.isPending(AppPageCommandKind.shuffle))
+                            .accessibilityIdentifier("app.wheel.shuffle")
+                        Button(ConclaveStrings.text("Sort A to Z")) { _ = host.sortWheel() }
+                            .disabled(wheel.entries.count < 2 || wheel.isPending(AppPageCommandKind.sort))
+                            .accessibilityIdentifier("app.wheel.sort")
+                        Button(ConclaveStrings.text("Clear Names…"), role: .destructive) { confirmsClear = true }
+                            .disabled(wheel.entries.isEmpty || wheel.isPending(AppPageCommandKind.clearEntries))
+                            .accessibilityIdentifier("app.wheel.clear")
+                        Toggle(isOn: Binding(get: { host.wheel.removeWinner }, set: { _ = host.setWheelRemoveWinner($0) })) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(ConclaveStrings.text("Remove Winner After Each Spin"))
+                                Text(ConclaveStrings.text("Winners come off the wheel automatically, so nobody gets picked twice"))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .disabled(wheel.isPending(AppPageCommandKind.setRemoveWinner))
+                        .accessibilityIdentifier("app.wheel.removeWinner")
+                    }
+                    Toggle(ConclaveStrings.text("Wheel Sounds"), isOn: Binding(get: { host.wheel.sounds }, set: { _ = host.setWheelSounds($0) }))
+                        .disabled(wheel.isPending(AppPageCommandKind.setSounds))
+                        .accessibilityIdentifier("app.wheel.sounds")
+                }
+                if !wheel.results.isEmpty {
+                    Section(ConclaveStrings.text("Results")) {
+                        ForEach(wheel.results) { result in
+                            LabeledContent {
+                                Text(verbatim: result.byName)
+                            } label: {
+                                Text(verbatim: result.label)
+                            }
+                            .accessibilityIdentifier("app.wheel.result")
+                        }
+                        if wheel.canEdit {
+                            Button(ConclaveStrings.text("Clear Results")) { _ = host.clearWheelResults() }
+                                .disabled(wheel.isPending(AppPageCommandKind.clearResults))
+                                .accessibilityIdentifier("app.wheel.clearResults")
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle(AppHostCopy.name("wheel"))
+        .task { host.refreshRoster() }
+        .confirmationDialog(ConclaveStrings.text("Clear Names?"), isPresented: $confirmsClear, titleVisibility: .visible) {
+            Button(ConclaveStrings.text("Clear Names"), role: .destructive) { _ = host.clearWheelNames() }
+            Button(ConclaveStrings.text("Cancel"), role: .cancel) {}
+        } message: {
+            Text(ConclaveStrings.text("The wheel empties for everyone."))
+        }
+        .accessibilityIdentifier("app.wheel.page")
+    }
+
+    private func addDraft() {
+        let text = draft
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if !text.isEmpty { draft = "" }
+            return
+        }
+        if host.addWheelNames(text) == ActivityTapResult.dispatched { draft = "" }
+    }
+
+    private func remove(_ offsets: IndexSet) {
+        let entries = host.wheel.entries
+        for index in offsets where index < entries.count {
+            _ = host.removeWheelEntry(entries[index].id)
+        }
+    }
+}
+
+/// Activities > Watch Together (system appearance): the system search field (search, or paste a link to play or
+/// request it), Trending and the classics when nothing is queued, Up Next (Play Now, reorder and delete for those who
+/// control), Requests (hosts answer; a requester sees Pending and Cancel Request) and the host's Everyone Can Control.
+/// Reads only `host.watch`.
+struct AppWatchPage: View {
+    let host: AppHostPresenter
+    @State private var query = ""
+
+    var body: some View {
+        let watch = host.watch
+        List {
+            if !watch.isReady {
+                AppPageUnavailable(appId: "watch")
+            } else {
+                AppWatchNowSection(watch: watch)
+                AppWatchSearchSection(host: host, watch: watch)
+                if query.isEmpty && watch.queue.isEmpty && watch.searchPhase == WatchSearchPhase.idle {
+                    if !watch.trending.isEmpty {
+                        Section(ConclaveStrings.text("Trending")) {
+                            ForEach(watch.trending) { video in
+                                AppWatchVideoRow(host: host, watch: watch, video: video)
+                            }
+                        }
+                    }
+                    Section(ConclaveStrings.text("Or Start with a Classic")) {
+                        ForEach(WatchClassics.items) { video in
+                            AppWatchVideoRow(host: host, watch: watch, video: video)
+                        }
+                    }
+                }
+                AppWatchQueueSection(host: host, watch: watch)
+                AppWatchRequestsSection(host: host, watch: watch)
+                if watch.isHost {
+                    Section {
+                        Toggle(ConclaveStrings.text("Everyone Can Control"), isOn: Binding(
+                            get: { host.watch.everyoneCanControl },
+                            set: { _ = host.setWatchEveryoneCanControl($0) }))
+                            .disabled(watch.lockPending)
+                            .accessibilityIdentifier("app.watch.everyoneCanControl")
+                    } footer: {
+                        Text(ConclaveStrings.text("Playback, seeking and the queue. Off means host only."))
+                    }
+                }
+            }
+        }
+        .navigationTitle(AppHostCopy.name("watch"))
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                    prompt: Text(ConclaveStrings.text("Search YouTube or Paste a Link")))
+        .onSubmit(of: .search) {
+            let submitted = query
+            _ = host.submitWatchSearch(submitted)
+            if !WatchLinkPolicy.videoId(submitted).isEmpty { query = "" }
+        }
+        .onChange(of: query) { _, value in
+            if value.isEmpty { host.clearWatchSearch() }
+        }
+        .task { host.loadWatchTrending() }
+        .accessibilityIdentifier("app.watch.page")
+    }
+}
+
+/// What plays now, or the participant's waiting line, and a declined request's note.
+struct AppWatchNowSection: View {
+    let watch: WatchPageModel
+
+    var body: some View {
+        if !watch.videoId.isEmpty {
+            Section {
+                LabeledContent {
+                    Text(AppHostCopy.playback(watch.playback))
+                } label: {
+                    Text(verbatim: watch.title.isEmpty ? AppHostCopy.name("watch") : watch.title)
+                }
+                .accessibilityIdentifier("app.watch.now")
+            }
+        } else if !watch.canControl {
+            Section {
+                Text(ConclaveStrings.text("Waiting for the host to start something. Playback stays in sync for everyone."))
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("app.watch.waiting")
+            }
+        }
+        if watch.requestDeclined {
+            Section {
+                Text(ConclaveStrings.text("Your request was declined."))
+                    .accessibilityIdentifier("app.watch.declined")
+            }
+        }
+    }
+}
+
+/// Search results and the search states (searching, no results, search off, failed).
+struct AppWatchSearchSection: View {
+    let host: AppHostPresenter
+    let watch: WatchPageModel
+
+    var body: some View {
+        switch watch.searchPhase {
+        case .idle:
+            EmptyView()
+        case .searching:
+            Section {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("app.watch.searching")
+            }
+        case .results:
+            Section {
+                ForEach(watch.results) { video in
+                    AppWatchVideoRow(host: host, watch: watch, video: video)
+                }
+            }
+        case .empty:
+            Section {
+                Text(ConclaveStrings.text("No Results"))
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("app.watch.noResults")
+            }
+        case .unavailable:
+            Section {
+                Text(ConclaveStrings.text("Search is switched off on this server. Paste a YouTube link instead."))
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("app.watch.searchOff")
+            }
+        case .failed:
+            Section {
+                Text(ConclaveStrings.text("Couldn’t search YouTube. Try again."))
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("app.watch.searchFailed")
+            }
+        }
+    }
+}
+
+/// A search, trending or classic row: the title and channel, with the action for you now (Play Now, Add to Queue or
+/// Request). While something plays, those who control can still Play Now from the row's swipe action.
+struct AppWatchVideoRow: View {
+    let host: AppHostPresenter
+    let watch: WatchPageModel
+    let video: WatchVideoModel
+
+    var body: some View {
+        let action = watch.pickAction
+        let pending = watch.isPending(AppPageCommandKind.playNow, target: video.id)
+            || watch.isPending(AppPageCommandKind.enqueue, target: video.id)
+            || watch.isPending(AppPageCommandKind.request, target: video.id)
+        let row = LabeledContent {
+            if pending {
+                ProgressView()
+            } else if action != WatchPickAction.none {
+                Text(AppHostCopy.pickAction(action))
+                    .foregroundStyle(.tint)
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: video.title.isEmpty ? video.id : video.title)
+                    .lineLimit(2)
+                if !video.channel.isEmpty {
+                    Text(verbatim: video.channel)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        if action == WatchPickAction.none {
+            row
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("app.watch.video")
+        } else {
+            Button {
+                _ = host.pickWatchVideo(video, action: action)
+            } label: {
+                row
+            }
+            .foregroundStyle(.primary)
+            .disabled(pending)
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                if action == WatchPickAction.enqueue {
+                    Button(ConclaveStrings.text("Play Now")) {
+                        _ = host.pickWatchVideo(video, action: WatchPickAction.playNow)
+                    }
+                }
+            }
+            .accessibilityHint(AppHostCopy.pickAction(action))
+            .accessibilityIdentifier("app.watch.video")
+        }
+    }
+}
+
+/// Up Next: Play Now per row, drag to reorder and swipe to delete for those who control; plain rows otherwise.
+struct AppWatchQueueSection: View {
+    let host: AppHostPresenter
+    let watch: WatchPageModel
+
+    var body: some View {
+        let moveAction: ((IndexSet, Int) -> Void)? = watch.canControl ? { source, destination in move(source, destination) } : nil
+        let deleteAction: ((IndexSet) -> Void)? = watch.canControl ? { offsets in remove(offsets) } : nil
+        Section(ConclaveStrings.text("Up Next")) {
+            if watch.queue.isEmpty {
+                Text(ConclaveStrings.text("Nothing queued yet."))
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("app.watch.queueEmpty")
+            } else {
+                ForEach(watch.queue) { item in
+                    AppWatchQueueRow(host: host, watch: watch, item: item)
+                }
+                .onMove(perform: moveAction)
+                .onDelete(perform: deleteAction)
+            }
+        }
+    }
+
+    private func move(_ source: IndexSet, _ destination: Int) {
+        guard let first = source.first, source.count == 1 else { return }
+        _ = host.moveQueuedVideoRow(from: first, to: destination)
+    }
+
+    private func remove(_ offsets: IndexSet) {
+        let queue = host.watch.queue
+        for index in offsets where index < queue.count {
+            _ = host.removeQueuedVideo(queue[index].id)
+        }
+    }
+}
+
+struct AppWatchQueueRow: View {
+    let host: AppHostPresenter
+    let watch: WatchPageModel
+    let item: WatchItemModel
+
+    var body: some View {
+        let pending = watch.isPending(AppPageCommandKind.playNow, target: item.id)
+            || watch.isPending(AppPageCommandKind.move, target: item.id)
+            || watch.isPending(AppPageCommandKind.remove, target: item.id)
+        let index = watch.queue.firstIndex(where: { $0.id == item.id }) ?? 0
+        LabeledContent {
+            if pending {
+                ProgressView()
+            } else if watch.canControl {
+                Button(ConclaveStrings.text("Play Now")) { _ = host.playQueuedVideo(item.id) }
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("app.watch.queue.playNow")
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: item.title.isEmpty ? item.videoId : item.title)
+                    .lineLimit(2)
+                if !item.byName.isEmpty {
+                    Text(verbatim: item.byName)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .accessibilityIdentifier("app.watch.queue.item")
+        .accessibilityActions {
+            if watch.canControl && index > 0 {
+                Button(ConclaveStrings.text("Move Up")) { _ = host.moveQueuedVideo(item.id, direction: -1) }
+            }
+            if watch.canControl && index < watch.queue.count - 1 {
+                Button(ConclaveStrings.text("Move Down")) { _ = host.moveQueuedVideo(item.id, direction: 1) }
+            }
+        }
+    }
+}
+
+/// Requests: hosts see every pending pick with "Add to Queue" and "Decline"; a requester sees their own as "Pending"
+/// with "Cancel Request"; the participant footer explains where picks go.
+struct AppWatchRequestsSection: View {
+    let host: AppHostPresenter
+    let watch: WatchPageModel
+
+    var body: some View {
+        if watch.isHost && !watch.requests.isEmpty {
+            Section(ConclaveStrings.text("Requests")) {
+                ForEach(watch.requests) { request in
+                    let pending = watch.isPending(AppPageCommandKind.approve, target: request.id)
+                        || watch.isPending(AppPageCommandKind.decline, target: request.id)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(verbatim: request.title.isEmpty ? request.videoId : request.title)
+                            .lineLimit(2)
+                        if !request.byName.isEmpty {
+                            Text(verbatim: request.byName)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        HStack(spacing: 12) {
+                            if pending {
+                                ProgressView()
+                            } else {
+                                Button(ConclaveStrings.text("Add to Queue")) { _ = host.answerWatchRequest(request.id, approve: true) }
+                                    .buttonStyle(.bordered)
+                                    .accessibilityIdentifier("app.watch.request.approve")
+                                Button(ConclaveStrings.text("Decline"), role: .destructive) {
+                                    _ = host.answerWatchRequest(request.id, approve: false)
+                                }
+                                .buttonStyle(.bordered)
+                                .accessibilityIdentifier("app.watch.request.decline")
+                            }
+                        }
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("app.watch.request")
+                }
+            }
+        } else if watch.canRequest {
+            Section {
+                if let mine = watch.myRequest {
+                    LabeledContent {
+                        Text(ConclaveStrings.text("Pending"))
+                    } label: {
+                        Text(verbatim: mine.title.isEmpty ? mine.videoId : mine.title)
+                            .lineLimit(2)
+                    }
+                    .accessibilityIdentifier("app.watch.myRequest")
+                    Button(ConclaveStrings.text("Cancel Request"), role: .destructive) { _ = host.cancelWatchRequest() }
+                        .disabled(watch.isPending(AppPageCommandKind.cancelRequest))
+                        .accessibilityIdentifier("app.watch.cancelRequest")
+                }
+            } header: {
+                if watch.myRequest != nil { Text(ConclaveStrings.text("Requests")) }
+            } footer: {
+                Text(ConclaveStrings.text("Picks are sent to the host to approve."))
+                    .accessibilityIdentifier("app.watch.requestFooter")
+            }
+        }
+    }
+}
+
 // MARK: Copy (L6-14)
 
 /// The one exhaustive iOS copy mapping for the app host (Apple title case for controls and tags, sentence case for the
@@ -748,13 +1342,41 @@ enum AppHostCopy {
         return ActivitiesCopy.appName(appId)
     }
 
+    /// The header status (S60 13 g): Whiteboard "%lld editing" or "Editing locked"; Spin the Wheel "%lld names";
+    /// Watch Together "Playing" or "Paused". Locked apps with nothing else to say read "Editing locked".
     static func status(_ model: AppHostModel) -> String {
         if model.appId.isEmpty { return "" }
+        if model.appId == "wheel" && model.nameCount > 0 {
+            return ConclaveStrings.format("App Names %lld", model.nameCount)
+        }
+        if model.appId == "watch" && model.playback != "none" {
+            return playback(model.playback)
+        }
         if model.isLocked { return ConclaveStrings.text("Editing locked") }
         if model.appId == "whiteboard" && model.editorCount > 0 {
             return ConclaveStrings.format("App Editors %lld", model.editorCount)
         }
         return ""
+    }
+
+    static func playback(_ state: String) -> String {
+        if state == "playing" { return ConclaveStrings.text("Playing") }
+        if state == "paused" { return ConclaveStrings.text("Paused") }
+        return ""
+    }
+
+    static func pickAction(_ action: WatchPickAction) -> String {
+        switch action {
+        case .none: return ""
+        case .playNow: return ConclaveStrings.text("Play Now")
+        case .enqueue: return ConclaveStrings.text("Add to Queue")
+        case .request: return ConclaveStrings.text("Request")
+        }
+    }
+
+    /// An app page whose app is no longer the room's open app.
+    static func pageClosed(_ appId: String) -> String {
+        return ConclaveStrings.format("App Page Closed %@", name(appId))
     }
 
     static func tag(_ tag: AppHostTag) -> String {

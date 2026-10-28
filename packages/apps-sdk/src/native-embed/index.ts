@@ -11,6 +11,9 @@ export {
   payloadString,
   type CommandHandler,
   type CommandResult,
+  type AppStatusPayload,
   type EmbedStatusPayload,
   type HostStatus,
+  type WatchAppStatus,
+  type WheelAppStatus,
 } from "./session";

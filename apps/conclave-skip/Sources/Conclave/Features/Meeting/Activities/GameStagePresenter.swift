@@ -14,6 +14,12 @@ import Observation
 /// `WordleSceneBuilder` at the end of this file) the same way and keeps the one Wordle draft here
 /// (`wordleDraft`, keyed by the game, the round and the input kind), so the draft survives rotation, Show Video and
 /// unrelated pushes, stays on a rejected guess and clears only when the server records the guess or the round moves on.
+/// ACT-5 builds the chess scene (S60 11 j, `ChessSceneBuilder` at the end of this file) once per push, the FEN parsed
+/// into 64 squares here, and keeps the move in flight as `chessPendingMove` (the piece at its destination with a pending
+/// outline until that move's ack or the push that records it; a rejection restores the position and plays
+/// `moveRejected`). The draw, takeback and resign actions are payload-free moves gated by the projected eligibility.
+/// ACT-6 builds the Zip scene (S60 12 j, ZipSceneBuilder in Games/Native/Boards/ZipScene.swift) once per push; the
+/// draft path stays view-local in the boards until a finger lift, key run or step sends it.
 @MainActor
 @Observable
 final class GameStagePresenter {
@@ -29,6 +35,9 @@ final class GameStagePresenter {
     /// press re-evaluates only the board's draft row and the keys, never the scene (S60 10 k). The secret word a setter
     /// types and a guess share it; the key below keeps them apart.
     private(set) var wordleDraft: String = ""
+    /// ACT-5 (S60 11 f): the chess move in flight as the board draws it, or the rejection that restored the position. Its
+    /// own observation unit, read only by the board and its status line, so dispatching a move re-evaluates nothing else.
+    private(set) var chessPendingMove: ChessPendingMoveModel = ChessPendingMoveModel.none
 
     /// Core only: moves, join, rematch and end (the S1 `onCommand` pattern).
     @ObservationIgnored var onCommand: ((GameStageCommand) -> Void)? = nil
@@ -66,6 +75,10 @@ final class GameStagePresenter {
     /// The word of the guess or secret in flight, so the push that records it (or its successful ack) clears the draft
     /// exactly once; a rejection or the timeout keeps the draft (S60 10 f).
     @ObservationIgnored private var wordleSubmitted = ""
+    /// ACT-5: the request id of the chess move whose overlay shows (its ack or timeout settles it) and the position it
+    /// was sent from (a push with another position clears the overlay; the request stays pending until its ack).
+    @ObservationIgnored private var chessMoveRequestId = ""
+    @ObservationIgnored private var chessFenAtSend = ""
 
     static let moveTimeoutMillis = 10000.0
 
@@ -90,6 +103,8 @@ final class GameStagePresenter {
             knownPlayers = []
             announced = []
             wordleSubmitted = ""
+            // ACT-5: the chess move in flight belonged to the old game; its overlay goes on the rebuild below.
+            chessMoveRequestId = ""
         }
         if next.phase == "lobby" { announced = [] }
         if rematchPending && (!next.isFinished || next.phase == "lobby") { rematchPending = false }
@@ -118,6 +133,9 @@ final class GameStagePresenter {
         let ackedType = pendingType
         pendingRequestId = ""
         pendingType = ""
+        // ACT-5: whether this ack answers the chess move whose overlay shows (S60 11 f "move pending" and "move rejected").
+        let isChessMove = !chessMoveRequestId.isEmpty && chessMoveRequestId == requestId
+        if isChessMove { settleChessMove(rejected: !success) }
         if success {
             failure = GameFailure.none
             failureText = ""
@@ -133,9 +151,13 @@ final class GameStagePresenter {
             if ackedType == WordleIntent.guessType {
                 // S60 10 e, f: a rejected guess ("Not in word list") keeps the draft and plays `guessInvalid`.
                 advanceFeedback(FeedbackKind.guessInvalid)
-            } else if failure == GameFailure.notAccepted || ackedType == "submit" {
+            } else if isChessMove || failure == GameFailure.notAccepted || ackedType == "submit"
+                        || (projection.kind == GameSceneKind.zip && ackedType == ZipIntent.moveType) {
                 // A rejected bluff ("That is the real answer. Write a bluff.") is the S60 9 h rejection outcome too; R12
-                // names this presenter's rejection token `moveRejected` (S1 alone publishes `actionRejected`).
+                // names this presenter's rejection token `moveRejected` (S1 alone publishes `actionRejected`). ACT-5: a
+                // rejected chess move ("Illegal move") plays it once and the board shows the server position again.
+                // ACT-6: a refused Zip path ("That path isn’t allowed. Try again.") plays it once; the board shows
+                // the server’s path again.
                 advanceFeedback(FeedbackKind.moveRejected)
             }
         }
@@ -174,6 +196,8 @@ final class GameStagePresenter {
         publishInteraction()
         startTimeout(requestId: requestId)
         record(stamped.type)
+        // ACT-5: the chess overlay is set before the core sees the command, so a synchronous ack still finds it.
+        noteChessDispatch(stamped)
         onCommand?(GameStageCommand(kind: GameStageCommandKind.move, type: stamped.type,
                                     payloadJSON: GameMoveAdapter.payloadJSON(stamped), requestId: requestId))
         return ActivityTapResult.dispatched
@@ -295,6 +319,64 @@ final class GameStagePresenter {
         }
     }
 
+    // MARK: Chess moves and actions (ACT-5, S60 11 c, d, f, j; C6-17)
+
+    /// Views only: the board's destination tap, the promotion choice or the move chooser. Sends one `move {from, to,
+    /// promotion}` when the projection lists it (or, without projected moves, any empty or enemy square, S60R 23); a
+    /// promotion is never sent without the person's choice (no auto-queen). `ignored` for a move the projection does not
+    /// allow or while another move is pending; `explained` when the person cannot move now.
+    func sendChessMove(from: String, to: String, promotion: String) -> ActivityTapResult {
+        guard let chess = scene.chess else { return ActivityTapResult.explained }
+        if !pendingRequestId.isEmpty { return ActivityTapResult.ignored }
+        if !chess.canMove { return ActivityTapResult.explained }
+        if !ChessBoardPolicy.canSend(chess, from: from, to: to, promotion: promotion) { return ActivityTapResult.ignored }
+        return send(ChessIntent.move(from: from, to: to, promotion: promotion))
+    }
+
+    /// Views only: Offer Draw, Accept Draw, Decline, Request Takeback, Accept Takeback, Decline and Resign (after its
+    /// confirmation). Payload-free moves of the module's own types, sent only while the projection makes the person
+    /// eligible (`explained` otherwise).
+    func sendChessAction(_ action: ChessAction) -> ActivityTapResult {
+        guard let chess = scene.chess else { return ActivityTapResult.explained }
+        if !pendingRequestId.isEmpty { return ActivityTapResult.ignored }
+        if !ChessBoardPolicy.isEligible(action, scene: chess) { return ActivityTapResult.explained }
+        return send(ChessIntent.action(action))
+    }
+
+    /// Inside `send`: a chess move shows its piece at the destination with the pending outline from now on.
+    private func noteChessDispatch(_ intent: GameMoveIntent) {
+        if intent.type != ChessIntent.moveType || intent.from.isEmpty { return }
+        guard let chess = scene.chess else { return }
+        chessMoveRequestId = intent.requestId
+        chessFenAtSend = chess.fen
+        let next = ChessPendingMoveModel(from: intent.from, to: intent.to, promotion: intent.promotion,
+                                         piece: chess.pieceAt(intent.from), isRejected: false)
+        if next != chessPendingMove { chessPendingMove = next }
+    }
+
+    /// The move's ack or timeout: the overlay goes; a rejection leaves "Move rejected" until the position changes.
+    private func settleChessMove(rejected: Bool) {
+        chessMoveRequestId = ""
+        let next = rejected ? ChessPendingMoveModel.rejected : ChessPendingMoveModel.none
+        if next != chessPendingMove { chessPendingMove = next }
+    }
+
+    /// After each rebuild: a push with another position replaces the overlay (the board now shows the server's
+    /// position); the request itself stays pending until its own ack (C6-15). The overlay also goes when the game is no
+    /// longer being played, and a pending piece whose request was dropped with an ended game never lingers.
+    private func syncChessPending(_ chess: ChessScene?) {
+        guard let chess = chess else {
+            chessFenAtSend = ""
+            if chessPendingMove != ChessPendingMoveModel.none { chessPendingMove = ChessPendingMoveModel.none }
+            return
+        }
+        if chessPendingMove == ChessPendingMoveModel.none { return }
+        let orphaned = chessPendingMove.isPending && chessMoveRequestId.isEmpty
+        if chess.fen != chessFenAtSend || chess.phase != ChessPhase.playing || orphaned {
+            chessPendingMove = ChessPendingMoveModel.none
+        }
+    }
+
     /// The running game as the launcher needs it (Activities Now Playing and catalog gate).
     func summary() -> ActivityGameSummary {
         if !inputs.isActive { return ActivityGameSummary.none }
@@ -322,6 +404,9 @@ final class GameStagePresenter {
         wordleDraftKey = ""
         wordleSubmitted = ""
         setDraft("")
+        chessMoveRequestId = ""
+        chessFenAtSend = ""
+        if chessPendingMove != ChessPendingMoveModel.none { chessPendingMove = ChessPendingMoveModel.none }
         if chrome.withRevision(0) != GameChromeModel.empty { chrome = GameChromeModel.empty.withRevision(chrome.revision + 1) }
         if scene.withRevision(0) != GameScene.empty { scene = GameScene.empty.withRevision(scene.revision + 1) }
         if countdown != nil { countdown = nil }
@@ -400,15 +485,32 @@ final class GameStagePresenter {
         // own player view while you hold a seat.
         var wordle: WordleScene? = nil
         if let projected = projection.wordle { wordle = WordleSceneBuilder.scene(projected, context: context) }
+        // ACT-5 (S60 11 j): the chess scene of this push (the FEN parsed once into 64 squares, the legal moves with their
+        // flags, the clocks with this push's clock offset); your side and eligibility only from your own player view.
+        var chess: ChessScene? = nil
+        if let projected = projection.chess {
+            chess = ChessSceneBuilder.scene(projected, context: context, receivedAtMillis: pushReceivedAtMillis,
+                                            serverNowMillis: common.serverNowMillis)
+        }
+        // ACT-6 (S60 12 j): the Zip scene of this push (checkpoints, barriers, removed cells, the cell models with the
+        // eligible next cells, standings); your path, outcome, hints and hint cooldown (with this push's clock offset) only
+        // from your own player view while you hold a seat and the module counts you in the round.
+        var zip: ZipScene? = nil
+        if let projected = projection.zip {
+            zip = ZipSceneBuilder.scene(projected, context: context, serverNowMillis: common.serverNowMillis,
+                                        receivedAtMillis: pushReceivedAtMillis)
+        }
         let outcomes = [PromptOutcomePolicy.trivia(previous: scene.trivia, next: trivia),
                         PromptOutcomePolicy.reaction(previous: scene.reaction, next: reaction),
-                        WordleOutcomePolicy.solved(previous: scene.wordle, next: wordle)]
+                        WordleOutcomePolicy.solved(previous: scene.wordle, next: wordle),
+                        ZipOutcomePolicy.solved(previous: scene.zip, next: zip)]
         let nextScene = GameScene(revision: scene.revision, kind: sceneKind(phase: phase, isSeated: isSeated), players: players,
                                   pendingJoiners: pending, options: GameStagePresenter.optionSummary(config: inputs.config, options: inputs.options),
                                   lobby: lobby, projection: projection, trivia: trivia, bluff: bluff, wouldYouRather: wouldYouRather,
-                                  mostLikelyTo: mostLikelyTo, reaction: reaction, imposter: imposter, wordle: wordle)
+                                  mostLikelyTo: mostLikelyTo, reaction: reaction, imposter: imposter, wordle: wordle, chess: chess, zip: zip)
         if nextScene != scene { scene = nextScene.withRevision(scene.revision + 1) }
         syncWordleDraft(wordle)
+        syncChessPending(chess)
         for outcome in outcomes where outcome != FeedbackKind.none {
             advanceFeedback(outcome)
         }
@@ -569,6 +671,8 @@ final class GameStagePresenter {
         pendingType = ""
         failure = GameFailure.server
         failureText = ""
+        // ACT-5: an unanswered chess move drops its overlay (the next push shows whatever the server holds).
+        if chessMoveRequestId == requestId { settleChessMove(rejected: false) }
         // An unanswered guess keeps its draft and nothing is resent on its own (S60 10 f "submitting"); `wordleSubmitted`
         // stays, so a late push that does record the word still clears the draft once.
         publishInteraction()
@@ -1273,6 +1377,1216 @@ enum WordleFixtures {
             session.applyGame(inputs)
             if index == 0 && !typed.isEmpty { session.games.setWordleDraft(typed) }
             index += 1
+        }
+        return fixture
+    }
+}
+
+// MARK: - Chess scene (ACT-5, S60 11)
+
+// S60 11 j: the chess scene models, built once per push from `ChessProjection` (GameProjections.swift; G/chess.ts
+// publicView and playerView) and published inside `GameScene.chess`, so neither platform's board parses anything. The FEN
+// is read into 64 squares here, once (the legacy board parsed it per render, GSG:840). Legal moves come only from the
+// server projection, deduplicated (the module lists a promotion target once per piece), with flags read from the position
+// (promotion, capture, castle, en passant); no legality rule is invented. Your side, role and eligibility come only from
+// your own player view while you hold a seat. The selected square, the board flip and the move chooser are view-local;
+// the move in flight is `GameStagePresenter.chessPendingMove`. Shared (transpiled): String raw-value enums, scalar
+// structs and arrays of structs only. They live in this file because ACT-5 owns this presenter and the two board files.
+
+enum ChessPhase: String, CaseIterable, Equatable {
+    case lobby, playing, results
+}
+
+enum ChessMode: String, CaseIterable, Equatable {
+    case duel, teams, computer
+}
+
+/// A side of the board; `none` for no side (watching, no offer, no running clock, the winner of a draw).
+enum ChessSide: String, CaseIterable, Equatable {
+    case none, white, black
+}
+
+/// The status line (S60 11 f): the lobby, your move, the other side to move, or finished. Check is the scene's own
+/// `isCheck` flag, so "Your Move" and "Check" show together.
+enum ChessStatus: String, CaseIterable, Equatable {
+    case waiting, yourMove, toMove, finished
+}
+
+/// Your part (S60 11 j): a duel or solo side, a team captain, a team member (the board is read-only) or watching.
+enum ChessRole: String, CaseIterable, Equatable {
+    case white, black, whiteCaptain, blackCaptain, whiteTeam, blackTeam, watching
+}
+
+/// G/chess.ts `ChessResultReason` ("fifty-move" is `fiftyMove`); `none` while the game runs.
+enum ChessResultReason: String, CaseIterable, Equatable {
+    case none, checkmate, timeout, resignation, stalemate, threefold, insufficient, fiftyMove, agreement
+}
+
+enum ChessPieceKind: String, CaseIterable, Equatable {
+    case king, queen, rook, bishop, knight, pawn
+}
+
+/// The four promotion choices (S60 11 c "Promote To"); the raw value is the module's `promotion` field.
+enum ChessPromotion: String, CaseIterable, Equatable {
+    case queen = "q", rook = "r", bishop = "b", knight = "n"
+}
+
+/// The eligibility-gated actions (S60 11 c, C6-17); the raw value is the module's move type, sent without a payload.
+enum ChessAction: String, CaseIterable, Equatable {
+    case offerDraw, acceptDraw, declineDraw, requestTakeback, acceptTakeback, declineTakeback, resign
+}
+
+/// Why Request Takeback shows disabled (S60 11 i "eligibility reasons when disabled").
+enum ChessTakebackReason: String, CaseIterable, Equatable {
+    case none, notMoved, pending
+}
+
+/// What a board tap does (S60 11 c "tap source then destination is primary").
+enum ChessTapAction: String, CaseIterable, Equatable {
+    case none, select, deselect, move, promote
+}
+
+/// How the move chooser reads a destination (S60 11 c: "f3", "takes on e5"; castling and en passant named too).
+enum ChessDestinationKind: String, CaseIterable, Equatable {
+    case quiet, capture, enPassant, castle
+}
+
+struct ChessSquareModel: Equatable, Identifiable {
+    /// Algebraic ("e4"), the stable id of the square on both platforms and in the accessibility tree.
+    let id: String
+    /// 0 (a) to 7 (h).
+    let file: Int
+    /// 1 to 8.
+    let rank: Int
+    /// "wN" (color, then K Q R B N P) or "" for an empty square.
+    let piece: String
+    let isLight: Bool
+    let isLastMove: Bool
+    /// The king of the side to move while it is in check.
+    let isCheck: Bool
+}
+
+struct ChessLegalMoveModel: Equatable, Identifiable {
+    /// "e2e4".
+    let id: String
+    let from: String
+    let to: String
+    let needsPromotion: Bool
+    let isCapture: Bool
+    let isCastle: Bool
+    let isEnPassant: Bool
+}
+
+/// The clocks of one push (S60 11 c): remaining time per side as the server resolved it at `serverNow`, which is the
+/// client clock `referenceMillis` (the push's arrival), so the one timer leaf subtracts only the time since then from the
+/// running side. `moveDeadlineMillis` is the rapid-fire per-move deadline on the client clock (0 when off).
+struct ChessClockModel: Equatable {
+    let hasClock: Bool
+    let whiteMillis: Double
+    let blackMillis: Double
+    let runningSide: ChessSide
+    let referenceMillis: Double
+    let moveLimitMillis: Double
+    let moveDeadlineMillis: Double
+    let incrementMillis: Double
+
+    static let none = ChessClockModel(hasClock: false, whiteMillis: 0, blackMillis: 0, runningSide: ChessSide.none, referenceMillis: 0,
+                                      moveLimitMillis: 0, moveDeadlineMillis: 0, incrementMillis: 0)
+    /// "Low time" under 10 s (S60 11 c): the warning color with its text twin, never a shake.
+    static let lowTimeMillis = 10000.0
+
+    /// The side's remaining time at `nowMillis` (client clock); only the running side counts down.
+    func remainingMillis(_ side: ChessSide, nowMillis: Double) -> Double {
+        var base = 0.0
+        if side == ChessSide.white { base = whiteMillis }
+        if side == ChessSide.black { base = blackMillis }
+        if side != runningSide || referenceMillis <= 0 { return max(0.0, base) }
+        return max(0.0, base - max(0.0, nowMillis - referenceMillis))
+    }
+
+    var hasMoveTimer: Bool { moveLimitMillis > 0 && moveDeadlineMillis > 0 && runningSide != ChessSide.none }
+
+    func moveRemainingMillis(nowMillis: Double) -> Double {
+        if !hasMoveTimer { return 0 }
+        return max(0.0, moveDeadlineMillis - nowMillis)
+    }
+
+    func isLow(_ side: ChessSide, nowMillis: Double) -> Bool {
+        hasClock && remainingMillis(side, nowMillis: nowMillis) < ChessClockModel.lowTimeMillis
+    }
+
+    /// Whole seconds shown on a chip, rounded up so "0:01" shows until the flag falls.
+    static func wholeSeconds(_ millis: Double) -> Int {
+        if millis <= 0 { return 0 }
+        return Int((millis / 1000.0).rounded(.up))
+    }
+}
+
+/// One move-list row (S60 11 c "1. e4 e5"); SAN stays verbatim. `whiteAutoName` and `blackAutoName` name whom the server
+/// auto-played for when the rapid-fire timer ran out ("Auto-played for %@"), "" otherwise.
+struct ChessMoveRowModel: Equatable, Identifiable {
+    let id: String
+    let number: Int
+    let white: String
+    let black: String
+    let whiteAutoName: String
+    let blackAutoName: String
+}
+
+struct ChessTeamMemberModel: Equatable, Identifiable {
+    let id: String
+    let name: String
+    let isCaptain: Bool
+    let isYou: Bool
+    let isComputer: Bool
+}
+
+/// A draw offer or a takeback request (S60 11 f). `isYourSide` shows "Draw offered" or "Takeback requested"; `canRespond`
+/// shows Accept and Decline to the opposing captain only.
+struct ChessOfferModel: Equatable {
+    let side: ChessSide
+    let byName: String
+    let isYourSide: Bool
+    let canRespond: Bool
+
+    static let none = ChessOfferModel(side: ChessSide.none, byName: "", isYourSide: false, canRespond: false)
+
+    var isActive: Bool { side != ChessSide.none }
+}
+
+/// The end of the game (S60 11 g results); `winner` is `none` for a draw.
+struct ChessResultModel: Equatable {
+    let reason: ChessResultReason
+    let winner: ChessSide
+    let isDraw: Bool
+    let byName: String
+
+    static let none = ChessResultModel(reason: ChessResultReason.none, winner: ChessSide.none, isDraw: false, byName: "")
+
+    var isFinished: Bool { reason != ChessResultReason.none }
+}
+
+/// The move in flight as the board draws it (S60 11 f "move pending": the piece at the destination with a pending
+/// outline until the ack or the push), or the rejection that restored the position ("Move rejected").
+struct ChessPendingMoveModel: Equatable {
+    let from: String
+    let to: String
+    let promotion: String
+    let piece: String
+    let isRejected: Bool
+
+    static let none = ChessPendingMoveModel(from: "", to: "", promotion: "", piece: "", isRejected: false)
+    static let rejected = ChessPendingMoveModel(from: "", to: "", promotion: "", piece: "", isRejected: true)
+
+    var isPending: Bool { !from.isEmpty }
+}
+
+/// What a tap on `square` does given the view-local selection: the new selection, or a move to send (or to complete
+/// with a promotion choice first).
+struct ChessTapOutcome: Equatable {
+    let action: ChessTapAction
+    let selected: String
+    let from: String
+    let to: String
+}
+
+/// S60 11 j. `squares` holds all 64 squares in FEN order (a8 to h8, then down to a1 to h1); the board maps them to the
+/// display order of its orientation (`ChessBoardPolicy.displayOrder`). The pending move and the selection are not here.
+struct ChessScene: Equatable {
+    let phase: ChessPhase
+    let mode: ChessMode
+    /// The side at the bottom by default: your side, else White. Watching people flip it locally ("Flip Board").
+    let orientation: ChessSide
+    let turnSide: ChessSide
+    /// Your side while you hold one (also as a team member); `none` when watching.
+    let localSide: ChessSide
+    let squares: [ChessSquareModel]
+    let legalMoves: [ChessLegalMoveModel]
+    /// False when the projection carries no legal destinations: the chooser then offers every empty or enemy square and
+    /// the server decides (S60R 23).
+    let hasProjectedLegalMoves: Bool
+    /// The FEN en passant target ("d6") or "".
+    let passantSquare: String
+    let status: ChessStatus
+    let isCheck: Bool
+    let role: ChessRole
+    let teamWhite: [ChessTeamMemberModel]
+    let teamBlack: [ChessTeamMemberModel]
+    /// The captain (the one who moves) of each side: a name, the computer's server name, or you.
+    let whiteMoverName: String
+    let whiteMoverIsYou: Bool
+    let blackMoverName: String
+    let blackMoverIsYou: Bool
+    /// Computer mode with more than one person on the human side ("The room vs the computer").
+    let isRoomVsComputer: Bool
+    let botName: String
+    let botSide: ChessSide
+    let clocks: ChessClockModel
+    let moves: [ChessMoveRowModel]
+    let plyCount: Int
+    let lastMoveFrom: String
+    let lastMoveTo: String
+    let drawOffer: ChessOfferModel
+    let takebackRequest: ChessOfferModel
+    let canMove: Bool
+    let canOfferDraw: Bool
+    /// Request Takeback shows for a captain while takebacks are allowed; `canRequestTakeback` enables it and
+    /// `takebackReason` says why it is disabled.
+    let showsTakeback: Bool
+    let canRequestTakeback: Bool
+    let takebackReason: ChessTakebackReason
+    let canResign: Bool
+    /// Watching people may flip the board for themselves (R6-1 `flip_board`).
+    let canFlip: Bool
+    let isReconnecting: Bool
+    let isPlayer: Bool
+    let result: ChessResultModel
+    let fen: String
+
+    /// One-shot announcement keys (S60 11 h: turn, check and result are announced once); "" when nothing is due.
+    var turnKey: String { status == ChessStatus.yourMove ? "chess-turn-" + fen : "" }
+    var checkKey: String { isCheck && phase == ChessPhase.playing ? "chess-check-" + fen : "" }
+    var resultKey: String { result.isFinished ? "chess-result-" + result.reason.rawValue + "-" + String(plyCount) : "" }
+
+    /// The board is read-only: no move is possible for this person now (team member, watching, reconnecting, waiting).
+    var isReadOnly: Bool { !canMove }
+
+    func square(_ id: String) -> ChessSquareModel? {
+        let index = ChessBoardPolicy.index(of: id)
+        if index < 0 || index >= squares.count { return nil }
+        return squares[index]
+    }
+
+    func pieceAt(_ id: String) -> String {
+        guard let found = square(id) else { return "" }
+        return found.piece
+    }
+
+    /// The projected move from `from` to `to`, if any.
+    func legalMove(from: String, to: String) -> ChessLegalMoveModel? {
+        for move in legalMoves where move.from == from && move.to == to {
+            return move
+        }
+        return nil
+    }
+
+    /// The destinations a selected piece can reach: projected moves, or (without them) every empty or enemy square.
+    func destinations(from: String) -> [ChessLegalMoveModel] {
+        var result: [ChessLegalMoveModel] = []
+        if hasProjectedLegalMoves {
+            for move in legalMoves where move.from == from {
+                result.append(move)
+            }
+            return result
+        }
+        let mover = ChessBoardPolicy.side(ofPiece: pieceAt(from))
+        if mover == ChessSide.none { return result }
+        for target in squares where target.id != from && ChessBoardPolicy.side(ofPiece: target.piece) != mover {
+            result.append(ChessBoardPolicy.legalMove(from: from, to: target.id, moving: pieceAt(from), target: target.piece,
+                                                     passant: passantSquare))
+        }
+        return result
+    }
+
+    /// The target squares of `destinations(from:)`, for the board's dots and rings.
+    func targets(from: String) -> [String] {
+        var result: [String] = []
+        for move in destinations(from: from) {
+            result.append(move.to)
+        }
+        return result
+    }
+
+    /// The move from `from` to `to` the person may send (projected, or a candidate square without projected moves).
+    func sendableMove(from: String, to: String) -> ChessLegalMoveModel? {
+        for move in destinations(from: from) where move.to == to {
+            return move
+        }
+        return nil
+    }
+
+    /// Move chooser step one (S60 11 c): your pieces that have a destination, in board order.
+    func movablePieces() -> [ChessSquareModel] {
+        var result: [ChessSquareModel] = []
+        if localSide == ChessSide.none { return result }
+        for candidate in squares where ChessBoardPolicy.side(ofPiece: candidate.piece) == localSide {
+            if !destinations(from: candidate.id).isEmpty { result.append(candidate) }
+        }
+        return result
+    }
+}
+
+enum ChessSceneBuilder {
+    /// G/chess.ts CHESS_BOT_ID.
+    static let botId = "@chess-bot"
+
+    static func scene(_ projection: ChessProjection, context: PromptSceneContext, receivedAtMillis: Double,
+                      serverNowMillis: Double) -> ChessScene {
+        let phase = parsePhase(projection.phase)
+        let mode = parseMode(projection.mode)
+        let turnSide = parseSide(projection.turnSide)
+        let isPlayer = context.isPlayer
+        let recovering = context.isRecovering
+        let playing = phase == ChessPhase.playing
+        let localSide = isPlayer ? parseSide(projection.side) : ChessSide.none
+        let pieces = ChessBoardPolicy.placement(projection.fen)
+        let passant = ChessBoardPolicy.field(projection.fen, 3)
+        var lastFrom = ""
+        var lastTo = ""
+        if let last = projection.moves.last {
+            lastFrom = last.from
+            lastTo = last.to
+        }
+        var checkSquare = ""
+        if projection.inCheck && turnSide != ChessSide.none {
+            let king = turnSide == ChessSide.white ? "wK" : "bK"
+            var position = 0
+            for piece in pieces {
+                if piece == king { checkSquare = ChessBoardPolicy.squareId(atIndex: position) }
+                position += 1
+            }
+        }
+        var squares: [ChessSquareModel] = []
+        var index = 0
+        for piece in pieces {
+            let id = ChessBoardPolicy.squareId(atIndex: index)
+            let file = index % 8
+            let rank = 8 - index / 8
+            squares.append(ChessSquareModel(id: id, file: file, rank: rank, piece: piece, isLight: (file + rank) % 2 == 0,
+                                            isLastMove: id == lastFrom || id == lastTo, isCheck: id == checkSquare))
+            index += 1
+        }
+        var legal: [ChessLegalMoveModel] = []
+        if playing {
+            for origin in projection.legalMoves {
+                let moving = ChessBoardPolicy.piece(at: origin.id, pieces: pieces)
+                var seen: [String] = []
+                for target in origin.targets {
+                    if seen.contains(target) { continue }
+                    seen.append(target)
+                    legal.append(ChessBoardPolicy.legalMove(from: origin.id, to: target, moving: moving,
+                                                            target: ChessBoardPolicy.piece(at: target, pieces: pieces), passant: passant))
+                }
+            }
+        }
+        var role = ChessRole.watching
+        if isPlayer {
+            switch projection.role {
+            case "white-captain": role = projection.whiteTeam.count > 1 ? ChessRole.whiteCaptain : ChessRole.white
+            case "black-captain": role = projection.blackTeam.count > 1 ? ChessRole.blackCaptain : ChessRole.black
+            case "white-team": role = ChessRole.whiteTeam
+            case "black-team": role = ChessRole.blackTeam
+            default: role = ChessRole.watching
+            }
+        }
+        let teamWhite = team(projection.whiteTeam, projection: projection, context: context)
+        let teamBlack = team(projection.blackTeam, projection: projection, context: context)
+        var whiteMover = ChessTeamMemberModel(id: "", name: "", isCaptain: true, isYou: false, isComputer: false)
+        for member in teamWhite where member.isCaptain {
+            whiteMover = member
+        }
+        var blackMover = ChessTeamMemberModel(id: "", name: "", isCaptain: true, isYou: false, isComputer: false)
+        for member in teamBlack where member.isCaptain {
+            blackMover = member
+        }
+        let botSide = parseSide(projection.botSide)
+        var humans = 0
+        for member in teamWhite where !member.isComputer {
+            humans += 1
+        }
+        for member in teamBlack where !member.isComputer {
+            humans += 1
+        }
+
+        let hasClock = projection.timeControlMillis > 0 && projection.whiteClockMillis >= 0 && projection.blackClockMillis >= 0
+        let offset = serverNowMillis > 0 && receivedAtMillis > 0 ? receivedAtMillis - serverNowMillis : 0
+        var moveDeadline = 0.0
+        if playing && receivedAtMillis > 0 && projection.moveTimeMillis > 0 && projection.turnStartedAtMillis > 0 {
+            moveDeadline = projection.turnStartedAtMillis + projection.moveTimeMillis + offset
+        }
+        let clocks = ChessClockModel(hasClock: hasClock, whiteMillis: max(0.0, projection.whiteClockMillis),
+                                     blackMillis: max(0.0, projection.blackClockMillis), runningSide: playing ? turnSide : ChessSide.none,
+                                     referenceMillis: receivedAtMillis, moveLimitMillis: max(0.0, projection.moveTimeMillis),
+                                     moveDeadlineMillis: moveDeadline, incrementMillis: projection.incrementMillis)
+
+        let active = playing && isPlayer && !recovering
+        let drawSide = parseSide(projection.drawOfferSide)
+        let drawOffer = ChessOfferModel(side: drawSide, byName: projection.drawOfferName,
+                                        isYourSide: drawSide != ChessSide.none && drawSide == localSide,
+                                        canRespond: active && drawSide != ChessSide.none && projection.canRespondToDraw)
+        let takebackSide = parseSide(projection.takebackSide)
+        let takeback = ChessOfferModel(side: takebackSide, byName: projection.takebackName,
+                                       isYourSide: takebackSide != ChessSide.none && takebackSide == localSide,
+                                       canRespond: active && takebackSide != ChessSide.none && projection.canRespondToTakeback)
+        let canMove = active && projection.canMove
+        let isCaptain = role == ChessRole.white || role == ChessRole.black || role == ChessRole.whiteCaptain
+            || role == ChessRole.blackCaptain
+        let showsTakeback = playing && isPlayer && isCaptain && projection.allowTakebacks
+        let canRequestTakeback = active && showsTakeback && projection.canRequestTakeback
+        var takebackReason = ChessTakebackReason.none
+        if showsTakeback && !canRequestTakeback {
+            if takeback.isActive {
+                takebackReason = ChessTakebackReason.pending
+            } else if !sideHasMoved(projection.moves, side: localSide) {
+                takebackReason = ChessTakebackReason.notMoved
+            }
+        }
+        var status = ChessStatus.toMove
+        if phase == ChessPhase.lobby {
+            status = ChessStatus.waiting
+        } else if phase == ChessPhase.results {
+            status = ChessStatus.finished
+        } else if canMove {
+            status = ChessStatus.yourMove
+        }
+        var result = ChessResultModel.none
+        if !projection.resultReason.isEmpty {
+            let isDraw = projection.resultWinner == "draw"
+            result = ChessResultModel(reason: parseReason(projection.resultReason), winner: isDraw ? ChessSide.none : parseSide(projection.resultWinner),
+                                      isDraw: isDraw, byName: projection.resultByName)
+        }
+        return ChessScene(phase: phase, mode: mode, orientation: localSide == ChessSide.none ? ChessSide.white : localSide,
+                          turnSide: turnSide, localSide: localSide, squares: squares, legalMoves: legal,
+                          hasProjectedLegalMoves: !legal.isEmpty, passantSquare: passant == "-" ? "" : passant, status: status,
+                          isCheck: projection.inCheck && playing, role: role, teamWhite: teamWhite, teamBlack: teamBlack,
+                          whiteMoverName: whiteMover.name, whiteMoverIsYou: whiteMover.isYou, blackMoverName: blackMover.name,
+                          blackMoverIsYou: blackMover.isYou, isRoomVsComputer: mode == ChessMode.computer && humans > 1,
+                          botName: projection.botName, botSide: botSide, clocks: clocks, moves: moveRows(projection.moves),
+                          plyCount: projection.moves.count, lastMoveFrom: lastFrom, lastMoveTo: lastTo, drawOffer: drawOffer,
+                          takebackRequest: takeback, canMove: canMove, canOfferDraw: active && projection.canOfferDraw && !drawOffer.isActive,
+                          showsTakeback: showsTakeback, canRequestTakeback: canRequestTakeback, takebackReason: takebackReason,
+                          canResign: active && projection.canResign, canFlip: role == ChessRole.watching, isReconnecting: recovering,
+                          isPlayer: isPlayer, result: result, fen: projection.fen)
+    }
+
+    /// Team rows with names (the computer by its server name, "Computer (medium)").
+    static func team(_ members: [ChessTeamMemberProjection], projection: ChessProjection, context: PromptSceneContext) -> [ChessTeamMemberModel] {
+        var result: [ChessTeamMemberModel] = []
+        for member in members {
+            let isComputer = member.id == botId
+            var name = member.name
+            if isComputer && !projection.botName.isEmpty { name = projection.botName }
+            if name.isEmpty { name = context.knownName(member.id) }
+            result.append(ChessTeamMemberModel(id: member.id, name: name, isCaptain: member.isCaptain,
+                                               isYou: !context.localId.isEmpty && member.id == context.localId, isComputer: isComputer))
+        }
+        return result
+    }
+
+    /// "1. e4 e5" rows from the module's move records, with the auto-played names (needs HD request B8-T3 R1 for
+    /// `byName` and `isAuto`).
+    static func moveRows(_ moves: [ChessMoveProjection]) -> [ChessMoveRowModel] {
+        var rows: [ChessMoveRowModel] = []
+        var number = 0
+        var white = ""
+        var whiteAuto = ""
+        var isOpen = false
+        for move in moves {
+            let autoName = move.isAuto ? move.byName : ""
+            if move.color == "b" {
+                if !isOpen {
+                    number += 1
+                    white = ""
+                    whiteAuto = ""
+                }
+                rows.append(ChessMoveRowModel(id: "m" + String(number), number: number, white: white, black: move.san,
+                                              whiteAutoName: whiteAuto, blackAutoName: autoName))
+                isOpen = false
+            } else {
+                if isOpen {
+                    rows.append(ChessMoveRowModel(id: "m" + String(number), number: number, white: white, black: "",
+                                                  whiteAutoName: whiteAuto, blackAutoName: ""))
+                }
+                number += 1
+                white = move.san
+                whiteAuto = autoName
+                isOpen = true
+            }
+        }
+        if isOpen {
+            rows.append(ChessMoveRowModel(id: "m" + String(number), number: number, white: white, black: "", whiteAutoName: whiteAuto,
+                                          blackAutoName: ""))
+        }
+        return rows
+    }
+
+    static func sideHasMoved(_ moves: [ChessMoveProjection], side: ChessSide) -> Bool {
+        if side == ChessSide.none { return false }
+        let color = side == ChessSide.white ? "w" : "b"
+        for move in moves where move.color == color {
+            return true
+        }
+        return false
+    }
+
+    static func parsePhase(_ raw: String) -> ChessPhase {
+        switch raw {
+        case "playing": return ChessPhase.playing
+        case "results": return ChessPhase.results
+        default: return ChessPhase.lobby
+        }
+    }
+
+    static func parseMode(_ raw: String) -> ChessMode {
+        switch raw {
+        case "teams": return ChessMode.teams
+        case "computer": return ChessMode.computer
+        default: return ChessMode.duel
+        }
+    }
+
+    static func parseSide(_ raw: String) -> ChessSide {
+        switch raw {
+        case "white": return ChessSide.white
+        case "black": return ChessSide.black
+        default: return ChessSide.none
+        }
+    }
+
+    static func parseReason(_ raw: String) -> ChessResultReason {
+        switch raw {
+        case "checkmate": return ChessResultReason.checkmate
+        case "timeout": return ChessResultReason.timeout
+        case "resignation": return ChessResultReason.resignation
+        case "stalemate": return ChessResultReason.stalemate
+        case "threefold": return ChessResultReason.threefold
+        case "insufficient": return ChessResultReason.insufficient
+        case "fifty-move": return ChessResultReason.fiftyMove
+        case "agreement": return ChessResultReason.agreement
+        default: return ChessResultReason.none
+        }
+    }
+}
+
+/// Board rules both platforms share (S60 11 c, d): square ids, the FEN placement, move flags read from the position, the
+/// display order of an orientation (the board never mirrors under RTL, D18), hit testing and the tap state machine.
+enum ChessBoardPolicy {
+    static let files = "abcdefgh"
+    /// The board side caps: a phone card gives about 311 pt/dp (cells about 38); tablets stop at 480; compact height 300.
+    static let maxSide = 480.0
+    static let compactMaxSide = 300.0
+    static let squareCount = 64
+
+    static func fileIndex(_ letter: String) -> Int {
+        var position = 0
+        for character in files {
+            if String(character) == letter { return position }
+            position += 1
+        }
+        return -1
+    }
+
+    /// "e4" for file 4, rank 4; "" outside the board.
+    static func squareId(file: Int, rank: Int) -> String {
+        if file < 0 || file > 7 || rank < 1 || rank > 8 { return "" }
+        var position = 0
+        for character in files {
+            if position == file { return String(character) + String(rank) }
+            position += 1
+        }
+        return ""
+    }
+
+    /// The square at a FEN-order index (0 is a8, 63 is h1).
+    static func squareId(atIndex index: Int) -> String {
+        if index < 0 || index >= squareCount { return "" }
+        return squareId(file: index % 8, rank: 8 - index / 8)
+    }
+
+    /// The FEN-order index of "e4", or -1.
+    static func index(of id: String) -> Int {
+        var file = -1
+        var rank = -1
+        var position = 0
+        for character in id {
+            let text = String(character)
+            if position == 0 {
+                file = fileIndex(text)
+            } else if position == 1 {
+                rank = Int(text) ?? -1
+            }
+            position += 1
+        }
+        if position != 2 || file < 0 || rank < 1 || rank > 8 { return -1 }
+        return (8 - rank) * 8 + file
+    }
+
+    /// The FEN piece placement as 64 codes in FEN order ("wN", "bp" never: the kind letter is always uppercase); an
+    /// unreadable placement is an empty board.
+    static func placement(_ fen: String) -> [String] {
+        var pieces: [String] = []
+        for character in fen {
+            if character == " " { break }
+            let text = String(character)
+            if text == "/" { continue }
+            if let count = Int(text) {
+                var added = 0
+                while added < count {
+                    pieces.append("")
+                    added += 1
+                }
+            } else {
+                let upper = text.uppercased()
+                pieces.append((text == upper ? "w" : "b") + upper)
+            }
+        }
+        if pieces.count != squareCount { return Array(repeating: "", count: squareCount) }
+        return pieces
+    }
+
+    /// One space-separated FEN field (3 is the en passant target, "-" when none).
+    static func field(_ fen: String, _ position: Int) -> String {
+        var current = 0
+        var text = ""
+        for character in fen {
+            if character == " " {
+                if current == position { return text }
+                current += 1
+                text = ""
+            } else if current == position {
+                text += String(character)
+            }
+        }
+        return current == position ? text : ""
+    }
+
+    static func piece(at id: String, pieces: [String]) -> String {
+        let position = index(of: id)
+        if position < 0 || position >= pieces.count { return "" }
+        return pieces[position]
+    }
+
+    static func side(ofPiece code: String) -> ChessSide {
+        if code.count != 2 { return ChessSide.none }
+        if code.hasPrefix("w") { return ChessSide.white }
+        if code.hasPrefix("b") { return ChessSide.black }
+        return ChessSide.none
+    }
+
+    static func kind(ofPiece code: String) -> ChessPieceKind? {
+        if code.count != 2 { return nil }
+        if code.hasSuffix("K") { return ChessPieceKind.king }
+        if code.hasSuffix("Q") { return ChessPieceKind.queen }
+        if code.hasSuffix("R") { return ChessPieceKind.rook }
+        if code.hasSuffix("B") { return ChessPieceKind.bishop }
+        if code.hasSuffix("N") { return ChessPieceKind.knight }
+        if code.hasSuffix("P") { return ChessPieceKind.pawn }
+        return nil
+    }
+
+    /// A move's flags from the position alone (no legality is decided here): a pawn reaching the last rank promotes, an
+    /// enemy on the target or a diagonal pawn step onto the en passant square captures, a king moving two files castles.
+    static func legalMove(from: String, to: String, moving: String, target: String, passant: String) -> ChessLegalMoveModel {
+        let fromIndex = index(of: from)
+        let toIndex = index(of: to)
+        if fromIndex < 0 || toIndex < 0 {
+            return ChessLegalMoveModel(id: from + to, from: from, to: to, needsPromotion: false, isCapture: false, isCastle: false,
+                                       isEnPassant: false)
+        }
+        let fromFile = fromIndex % 8
+        let toFile = toIndex % 8
+        let toRank = 8 - toIndex / 8
+        let mover = side(ofPiece: moving)
+        let moverKind = kind(ofPiece: moving)
+        let isPawn = moverKind == ChessPieceKind.pawn
+        let needsPromotion = isPawn && ((mover == ChessSide.white && toRank == 8) || (mover == ChessSide.black && toRank == 1))
+        let isEnPassant = isPawn && target.isEmpty && fromFile != toFile && !passant.isEmpty && to == passant
+        let targetSide = side(ofPiece: target)
+        let isCapture = (targetSide != ChessSide.none && targetSide != mover) || isEnPassant
+        let distance = toFile > fromFile ? toFile - fromFile : fromFile - toFile
+        let isCastle = moverKind == ChessPieceKind.king && distance == 2
+        return ChessLegalMoveModel(id: from + to, from: from, to: to, needsPromotion: needsPromotion, isCapture: isCapture,
+                                   isCastle: isCastle, isEnPassant: isEnPassant)
+    }
+
+    /// The 64 square ids top-left first, row by row: White at the bottom reads a8 to h1; Black at the bottom reads h1 to a8.
+    static func displayOrder(_ orientation: ChessSide) -> [String] {
+        var order: [String] = []
+        var position = 0
+        while position < squareCount {
+            order.append(squareId(atIndex: orientation == ChessSide.black ? squareCount - 1 - position : position))
+            position += 1
+        }
+        return order
+    }
+
+    /// Where a square sits in the display grid (row * 8 + column) for an orientation, or -1.
+    static func displayIndex(of id: String, orientation: ChessSide) -> Int {
+        let position = index(of: id)
+        if position < 0 { return -1 }
+        return orientation == ChessSide.black ? squareCount - 1 - position : position
+    }
+
+    /// The 64 squares top-left first for an orientation (the canvas and the accessibility overlay read them in this
+    /// order): the scene's FEN order for White at the bottom, reversed for Black. No square id is parsed per frame.
+    static func displayedSquares(_ scene: ChessScene, orientation: ChessSide) -> [ChessSquareModel] {
+        if orientation != ChessSide.black { return scene.squares }
+        var result: [ChessSquareModel] = []
+        var position = scene.squares.count - 1
+        while position >= 0 {
+            result.append(scene.squares[position])
+            position -= 1
+        }
+        return result
+    }
+
+    static func opposite(_ side: ChessSide) -> ChessSide {
+        if side == ChessSide.white { return ChessSide.black }
+        if side == ChessSide.black { return ChessSide.white }
+        return ChessSide.none
+    }
+
+    /// The orientation the board draws: the scene's (your side, else White), turned around by a watcher's Flip Board.
+    static func orientation(_ scene: ChessScene, flipped: Bool) -> ChessSide {
+        if flipped && scene.canFlip { return opposite(scene.orientation) }
+        return scene.orientation
+    }
+
+    static func destinationKind(_ move: ChessLegalMoveModel) -> ChessDestinationKind {
+        if move.isCastle { return ChessDestinationKind.castle }
+        if move.isEnPassant { return ChessDestinationKind.enPassant }
+        if move.isCapture { return ChessDestinationKind.capture }
+        return ChessDestinationKind.quiet
+    }
+
+    /// The square under a point of a board `side` points or pixels wide (the canvas tap); "" outside it.
+    static func square(atX x: Double, y: Double, side: Double, orientation: ChessSide) -> String {
+        if side <= 0 || x < 0 || y < 0 || x >= side || y >= side { return "" }
+        let cell = side / 8.0
+        let column = min(7, Int(x / cell))
+        let row = min(7, Int(y / cell))
+        let position = row * 8 + column
+        return squareId(atIndex: orientation == ChessSide.black ? squareCount - 1 - position : position)
+    }
+
+    /// Tap source, then destination (S60 11 c): your piece with a move selects; the same square deselects; a destination
+    /// moves (or asks for the promotion piece first); another piece of yours switches; anything else deselects.
+    static func tap(_ scene: ChessScene, selected: String, square: String) -> ChessTapOutcome {
+        if !scene.canMove || square.isEmpty {
+            return ChessTapOutcome(action: ChessTapAction.none, selected: "", from: "", to: "")
+        }
+        let isOwn = scene.localSide != ChessSide.none && side(ofPiece: scene.pieceAt(square)) == scene.localSide
+        let canStart = isOwn && !scene.destinations(from: square).isEmpty
+        if selected.isEmpty {
+            if canStart { return ChessTapOutcome(action: ChessTapAction.select, selected: square, from: "", to: "") }
+            return ChessTapOutcome(action: ChessTapAction.none, selected: "", from: "", to: "")
+        }
+        if selected == square { return ChessTapOutcome(action: ChessTapAction.deselect, selected: "", from: "", to: "") }
+        if let move = scene.sendableMove(from: selected, to: square) {
+            let action = move.needsPromotion ? ChessTapAction.promote : ChessTapAction.move
+            return ChessTapOutcome(action: action, selected: "", from: selected, to: square)
+        }
+        if canStart { return ChessTapOutcome(action: ChessTapAction.select, selected: square, from: "", to: "") }
+        return ChessTapOutcome(action: ChessTapAction.deselect, selected: "", from: "", to: "")
+    }
+
+    /// Whether `sendChessMove` may send this: a move the person may make, with a promotion choice exactly when needed.
+    static func canSend(_ scene: ChessScene, from: String, to: String, promotion: String) -> Bool {
+        if !scene.canMove { return false }
+        guard let move = scene.sendableMove(from: from, to: to) else { return false }
+        if move.needsPromotion { return ChessPromotion(rawValue: promotion) != nil }
+        return promotion.isEmpty
+    }
+
+    static func isEligible(_ action: ChessAction, scene: ChessScene) -> Bool {
+        switch action {
+        case .offerDraw: return scene.canOfferDraw
+        case .acceptDraw, .declineDraw: return scene.drawOffer.canRespond
+        case .requestTakeback: return scene.canRequestTakeback
+        case .acceptTakeback, .declineTakeback: return scene.takebackRequest.canRespond
+        case .resign: return scene.canResign
+        }
+    }
+
+    /// The piece the board draws on `square` with the move in flight applied (the mover at its destination, promoted).
+    static func shownPiece(_ scene: ChessScene, pending: ChessPendingMoveModel, square: String) -> String {
+        if pending.isPending {
+            if square == pending.from { return "" }
+            if square == pending.to { return promotedPiece(pending.piece, promotion: pending.promotion) }
+        }
+        return scene.pieceAt(square)
+    }
+
+    static func promotedPiece(_ code: String, promotion: String) -> String {
+        if promotion.isEmpty || code.count != 2 { return code }
+        return (code.hasPrefix("w") ? "w" : "b") + promotion.uppercased()
+    }
+}
+
+/// G/chess.ts moves (S60 11 j intents, C6-17): `move {from, to, promotion}` through `GameMoveAdapter`, and the seven
+/// payload-free actions by their module type. They travel over the existing native `sendGameMove(type:payloadJSON:
+/// requestId:)` path, which already passes any move type through, so the takeback moves need no core change.
+enum ChessIntent {
+    static let moveType = "move"
+
+    static func move(from: String, to: String, promotion: String) -> GameMoveIntent {
+        GameMoveIntent.make(type: moveType, from: from, to: to, promotion: promotion)
+    }
+
+    static func action(_ action: ChessAction) -> GameMoveIntent {
+        GameMoveIntent.make(type: action.rawValue)
+    }
+}
+
+// MARK: - Chess fixtures (ACT-5, S60 11 l, L6-12)
+
+/// Debug fixture states for chess, layered on the stage fixture like the Wordle states (`CONCLAVE_STAGE_FIXTURE` /
+/// `conclave.stageFixture`; HD requests B8-T3 R5 and R6 hook them into `ActivityFixtureScript` and `StageFixtureState`).
+/// No socket, network, audio or capture: module-shaped public and player views whose positions, legal moves and move
+/// records come from chess.js 1.4.0, the library G/chess.ts uses (HD/scratch/B8-T3/positions.cjs), and the shell's
+/// commands land in the recording `ActivityFixtureOwner` behind the `game.emits` readout. You are the seated host unless
+/// the state says otherwise; Avery (r1), Ben (r2) and Cai (r3) are the other players.
+enum ChessFixtureState: String, CaseIterable, Equatable {
+    case yourMove = "game-chess-your-move"
+    case waiting = "game-chess-waiting"
+    case check = "game-chess-check"
+    case promotion = "game-chess-promotion"
+    case special = "game-chess-castle-en-passant"
+    case drawOffered = "game-chess-draw-offered"
+    case takebackRequested = "game-chess-takeback"
+    case teamsMember = "game-chess-teams-member"
+    case computer = "game-chess-computer"
+    case spectator = "game-chess-spectator"
+    case lowTime = "game-chess-low-time"
+    case checkmate = "game-chess-checkmate"
+    case drawAgreed = "game-chess-draw-agreed"
+    case reconnecting = "game-chess-reconnecting"
+}
+
+/// One seated person as the module names them in teams and move records.
+struct ChessFixtureSeat: Equatable {
+    let id: String
+    let name: String
+}
+
+enum ChessFixtures {
+    static let serverNow = ActivityFixtureScript.serverNow
+
+    static let you = ChessFixtureSeat(id: "you", name: "You")
+    static let avery = ChessFixtureSeat(id: "r1", name: "Avery")
+    static let ben = ChessFixtureSeat(id: "r2", name: "Ben")
+    static let cai = ChessFixtureSeat(id: "r3", name: "Cai")
+    static let computer = ChessFixtureSeat(id: "@chess-bot", name: "Computer")
+
+    // Positions (chess.js 1.4.0 `fen()` after the plies below).
+    static let startFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    static let openingFen = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3"
+    static let checkFen = "rnbqkbnr/ppp2ppp/3p4/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 1 3"
+    static let promotionFen = "rnbq1bnr/pP2kppp/8/4p3/8/8/PPPP1PPP/RNBQKBNR w KQ - 1 5"
+    static let takebackFen = "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3"
+    static let kingsPawnFen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
+    static let knightFen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2"
+    static let specialFen = "rnbqkbnr/1pp1ppp1/7p/p2pP3/2B5/5N2/PPPP1PPP/RNBQK2R w KQkq d6 0 5"
+    static let foolsMateFen = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3"
+
+    // Legal moves exactly as G/chess.ts `legalMoves` projects them (a promotion target once per piece).
+    static let startLegal = "{\"a2\":[\"a3\",\"a4\"],\"b2\":[\"b3\",\"b4\"],\"c2\":[\"c3\",\"c4\"],\"d2\":[\"d3\",\"d4\"],"
+        + "\"e2\":[\"e3\",\"e4\"],\"f2\":[\"f3\",\"f4\"],\"g2\":[\"g3\",\"g4\"],\"h2\":[\"h3\",\"h4\"],\"b1\":[\"a3\",\"c3\"],"
+        + "\"g1\":[\"f3\",\"h3\"]}"
+    static let openingLegal = "{\"f3\":[\"d4\",\"e5\",\"g5\",\"h4\",\"g1\"],\"a2\":[\"a3\",\"a4\"],\"b2\":[\"b3\",\"b4\"],"
+        + "\"c2\":[\"c3\",\"c4\"],\"d2\":[\"d3\",\"d4\"],\"g2\":[\"g3\",\"g4\"],\"h2\":[\"h3\",\"h4\"],\"b1\":[\"a3\",\"c3\"],"
+        + "\"d1\":[\"e2\"],\"e1\":[\"e2\"],\"f1\":[\"e2\",\"d3\",\"c4\",\"b5\",\"a6\"],\"h1\":[\"g1\"]}"
+    static let checkLegal = "{\"b8\":[\"d7\",\"c6\"],\"c8\":[\"d7\"],\"d8\":[\"d7\"],\"e8\":[\"e7\"],\"c7\":[\"c6\"]}"
+    static let promotionLegal = "{\"b7\":[\"a8\",\"a8\",\"a8\",\"a8\",\"c8\",\"c8\",\"c8\",\"c8\"],\"a2\":[\"a3\",\"a4\"],"
+        + "\"b2\":[\"b3\",\"b4\"],\"c2\":[\"c3\",\"c4\"],\"d2\":[\"d3\",\"d4\"],\"f2\":[\"f3\",\"f4\"],\"g2\":[\"g3\",\"g4\"],"
+        + "\"h2\":[\"h3\",\"h4\"],\"b1\":[\"a3\",\"c3\"],\"d1\":[\"e2\",\"f3\",\"g4\",\"h5\"],\"e1\":[\"e2\"],"
+        + "\"f1\":[\"e2\",\"d3\",\"c4\",\"b5\",\"a6\"],\"g1\":[\"e2\",\"f3\",\"h3\"]}"
+    static let takebackLegal = "{\"a8\":[\"b8\"],\"d8\":[\"e7\",\"f6\",\"g5\",\"h4\"],\"e8\":[\"e7\"],"
+        + "\"f8\":[\"e7\",\"d6\",\"c5\",\"b4\",\"a3\"],\"g8\":[\"h6\",\"f6\",\"e7\"],\"a7\":[\"a6\",\"a5\"],\"b7\":[\"b6\",\"b5\"],"
+        + "\"d7\":[\"d6\",\"d5\"],\"f7\":[\"f6\",\"f5\"],\"g7\":[\"g6\",\"g5\"],\"h7\":[\"h6\",\"h5\"],"
+        + "\"c6\":[\"b8\",\"e7\",\"d4\",\"b4\",\"a5\"]}"
+    static let kingsPawnLegal = "{\"a2\":[\"a3\",\"a4\"],\"b2\":[\"b3\",\"b4\"],\"c2\":[\"c3\",\"c4\"],\"d2\":[\"d3\",\"d4\"],"
+        + "\"f2\":[\"f3\",\"f4\"],\"g2\":[\"g3\",\"g4\"],\"h2\":[\"h3\",\"h4\"],\"b1\":[\"a3\",\"c3\"],"
+        + "\"d1\":[\"e2\",\"f3\",\"g4\",\"h5\"],\"e1\":[\"e2\"],\"f1\":[\"e2\",\"d3\",\"c4\",\"b5\",\"a6\"],\"g1\":[\"e2\",\"f3\",\"h3\"]}"
+    static let knightLegal = "{\"b8\":[\"c6\",\"a6\"],\"d8\":[\"e7\",\"f6\",\"g5\",\"h4\"],\"e8\":[\"e7\"],"
+        + "\"f8\":[\"e7\",\"d6\",\"c5\",\"b4\",\"a3\"],\"g8\":[\"h6\",\"f6\",\"e7\"],\"a7\":[\"a6\",\"a5\"],\"b7\":[\"b6\",\"b5\"],"
+        + "\"c7\":[\"c6\",\"c5\"],\"d7\":[\"d6\",\"d5\"],\"f7\":[\"f6\",\"f5\"],\"g7\":[\"g6\",\"g5\"],\"h7\":[\"h6\",\"h5\"]}"
+    static let specialLegal = "{\"e5\":[\"e6\",\"d6\"],\"c4\":[\"b5\",\"a6\",\"d5\",\"d3\",\"e2\",\"f1\",\"b3\"],"
+        + "\"f3\":[\"d4\",\"g5\",\"h4\",\"g1\"],\"a2\":[\"a3\",\"a4\"],\"b2\":[\"b3\",\"b4\"],\"c2\":[\"c3\"],\"d2\":[\"d3\",\"d4\"],"
+        + "\"g2\":[\"g3\",\"g4\"],\"h2\":[\"h3\",\"h4\"],\"b1\":[\"a3\",\"c3\"],\"d1\":[\"e2\"],\"e1\":[\"e2\",\"f1\",\"g1\"],"
+        + "\"h1\":[\"g1\",\"f1\"]}"
+
+    // The plies (SAN, from, to) that reach each position.
+    static let openingSan = ["e4", "e5", "Nf3", "Nc6"]
+    static let openingFrom = ["e2", "e7", "g1", "b8"]
+    static let openingTo = ["e4", "e5", "f3", "c6"]
+    static let checkSan = ["e4", "e5", "Nf3", "d6", "Bb5+"]
+    static let checkFrom = ["e2", "e7", "g1", "d7", "f1"]
+    static let checkTo = ["e4", "e5", "f3", "d6", "b5"]
+    static let promotionSan = ["e4", "d5", "exd5", "c6", "dxc6", "e5", "cxb7", "Ke7"]
+    static let promotionFrom = ["e2", "d7", "e4", "c7", "d5", "e7", "c6", "e8"]
+    static let promotionTo = ["e4", "d5", "d5", "c6", "c6", "e5", "b7", "e7"]
+    static let takebackSan = ["e4", "e5", "Nf3", "Nc6", "Bc4"]
+    static let takebackFrom = ["e2", "e7", "g1", "b8", "f1"]
+    static let takebackTo = ["e4", "e5", "f3", "c6", "c4"]
+    static let specialSan = ["e4", "a6", "Nf3", "a5", "Bc4", "h6", "e5", "d5"]
+    static let specialFrom = ["e2", "a7", "g1", "a6", "f1", "h7", "e4", "d7"]
+    static let specialTo = ["e4", "a6", "f3", "a5", "c4", "h6", "e5", "d5"]
+    static let foolsMateSan = ["f3", "e5", "g4", "Qh4#"]
+    static let foolsMateFrom = ["f2", "e7", "g2", "d8"]
+    static let foolsMateTo = ["f3", "e5", "g4", "h4"]
+
+    static func state(named raw: String) -> ChessFixtureState? {
+        ChessFixtureState(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Epoch milliseconds as JSON text. Int64, because a transpiled Swift `Int` is a 32-bit Kotlin `Int`.
+    static func at(_ offsetMillis: Double) -> String { String(Int64(serverNow + offsetMillis)) }
+
+    static func text(_ value: String) -> String { value.isEmpty ? "null" : GameMoveAdapter.quoted(value) }
+
+    static func flag(_ value: Bool) -> String { value ? "true" : "false" }
+
+    static func member(_ seat: ChessFixtureSeat, captain: Bool) -> String {
+        "{\"id\":" + text(seat.id) + ",\"name\":" + text(seat.name) + ",\"captain\":" + flag(captain) + "}"
+    }
+
+    /// The module's move records: White moves the even plies, Black the odd ones; `autoPly` was auto-played (rapid fire).
+    static func records(san: [String], from: [String], to: [String], white: ChessFixtureSeat, black: ChessFixtureSeat,
+                        autoPly: Int) -> [String] {
+        var result: [String] = []
+        var ply = 0
+        while ply < san.count && ply < from.count && ply < to.count {
+            let isWhite = ply % 2 == 0
+            let seat = isWhite ? white : black
+            var item = "{\"san\":" + text(san[ply]) + ",\"from\":" + text(from[ply]) + ",\"to\":" + text(to[ply])
+            item += ",\"color\":\"" + (isWhite ? "w" : "b") + "\",\"promotion\":null,\"byPlayerId\":" + text(seat.id)
+            item += ",\"byName\":" + text(seat.name) + ",\"auto\":" + flag(ply == autoPly)
+            item += ",\"at\":" + at(Double(ply - san.count) * 5000.0) + "}"
+            result.append(item)
+            ply += 1
+        }
+        return result
+    }
+
+    static func offer(_ side: String, _ seat: ChessFixtureSeat) -> String {
+        "{\"side\":" + text(side) + ",\"byPlayerId\":" + text(seat.id) + ",\"byName\":" + text(seat.name) + "}"
+    }
+
+    static func clocks(_ white: Int, _ black: Int) -> String {
+        "{\"white\":" + String(white) + ",\"black\":" + String(black) + "}"
+    }
+
+    static let noClocks = "{\"white\":null,\"black\":null}"
+    static let mediumBot = "{\"side\":\"black\",\"level\":\"medium\",\"name\":\"Computer (medium)\"}"
+
+    /// G/chess.ts publicView with the fields the native scene reads.
+    static func publicView(phase: String, mode: String, fen: String, turnSide: String, inCheck: Bool, legal: String, moves: [String],
+                           white: [String], black: [String], clocks: String, timeControl: String, increment: Int, moveTime: String,
+                           takebacks: Bool, bot: String, turnStartedAt: String, drawOffer: String, takeback: String,
+                           result: String) -> String {
+        var json = "{\"phase\":" + text(phase) + ",\"mode\":" + text(mode) + ",\"serverNow\":" + at(0)
+        json += ",\"timeControlMs\":" + timeControl + ",\"incrementMs\":" + String(increment) + ",\"moveTimeMs\":" + moveTime
+        json += ",\"allowTakebacks\":" + flag(takebacks) + ",\"bot\":" + bot + ",\"clocks\":" + clocks
+        json += ",\"fen\":" + text(fen) + ",\"turn\":\"" + (turnSide == "white" ? "w" : "b") + "\",\"turnSide\":" + text(turnSide)
+        json += ",\"turnStartedAt\":" + turnStartedAt + ",\"inCheck\":" + flag(inCheck) + ",\"legalMoves\":" + legal
+        json += ",\"teams\":{\"white\":[" + white.joined(separator: ",") + "],\"black\":[" + black.joined(separator: ",") + "]}"
+        json += ",\"moves\":[" + moves.joined(separator: ",") + "],\"drawOffer\":" + drawOffer + ",\"takebackRequest\":" + takeback
+        json += ",\"result\":" + result + "}"
+        return json
+    }
+
+    /// G/chess.ts playerView.
+    static func playerView(side: String, role: String, canMove: Bool, canResign: Bool, canOfferDraw: Bool, canRespondToDraw: Bool,
+                           canRequestTakeback: Bool, canRespondToTakeback: Bool) -> String {
+        var json = "{\"side\":" + text(side) + ",\"role\":" + text(role) + ",\"canMove\":" + flag(canMove)
+        json += ",\"canResign\":" + flag(canResign) + ",\"canOfferDraw\":" + flag(canOfferDraw)
+        json += ",\"canRespondToDraw\":" + flag(canRespondToDraw) + ",\"canRequestTakeback\":" + flag(canRequestTakeback)
+        json += ",\"canRespondToTakeback\":" + flag(canRespondToTakeback) + "}"
+        return json
+    }
+
+    /// A duel public view between `white` and `black` (5 + 3, takebacks on): the common shape of most states.
+    static func duelView(fen: String, turnSide: String, inCheck: Bool, legal: String, moves: [String], white: ChessFixtureSeat,
+                         black: ChessFixtureSeat, clocks: String, drawOffer: String, takeback: String) -> String {
+        publicView(phase: "playing", mode: "duel", fen: fen, turnSide: turnSide, inCheck: inCheck, legal: legal, moves: moves,
+                   white: [member(white, captain: true)], black: [member(black, captain: true)], clocks: clocks, timeControl: "300000",
+                   increment: 3000, moveTime: "null", takebacks: true, bot: "null", turnStartedAt: at(-2000), drawOffer: drawOffer,
+                   takeback: takeback, result: "null")
+    }
+
+    static func publicView(_ state: ChessFixtureState) -> String {
+        switch state {
+        case .yourMove, .reconnecting:
+            return duelView(fen: openingFen, turnSide: "white", inCheck: false, legal: openingLegal,
+                            moves: records(san: openingSan, from: openingFrom, to: openingTo, white: you, black: avery, autoPly: -1),
+                            white: you, black: avery, clocks: clocks(238000, 252000), drawOffer: "null", takeback: "null")
+        case .waiting:
+            return duelView(fen: openingFen, turnSide: "white", inCheck: false, legal: openingLegal,
+                            moves: records(san: openingSan, from: openingFrom, to: openingTo, white: avery, black: you, autoPly: -1),
+                            white: avery, black: you, clocks: clocks(238000, 252000), drawOffer: "null", takeback: "null")
+        case .check:
+            return duelView(fen: checkFen, turnSide: "black", inCheck: true, legal: checkLegal,
+                            moves: records(san: checkSan, from: checkFrom, to: checkTo, white: avery, black: you, autoPly: -1),
+                            white: avery, black: you, clocks: clocks(240000, 251000), drawOffer: "null", takeback: "null")
+        case .promotion:
+            return duelView(fen: promotionFen, turnSide: "white", inCheck: false, legal: promotionLegal,
+                            moves: records(san: promotionSan, from: promotionFrom, to: promotionTo, white: you, black: avery, autoPly: -1),
+                            white: you, black: avery, clocks: clocks(230000, 244000), drawOffer: "null", takeback: "null")
+        case .special:
+            return duelView(fen: specialFen, turnSide: "white", inCheck: false, legal: specialLegal,
+                            moves: records(san: specialSan, from: specialFrom, to: specialTo, white: you, black: avery, autoPly: -1),
+                            white: you, black: avery, clocks: clocks(200000, 210000), drawOffer: "null", takeback: "null")
+        case .drawOffered:
+            return duelView(fen: openingFen, turnSide: "white", inCheck: false, legal: openingLegal,
+                            moves: records(san: openingSan, from: openingFrom, to: openingTo, white: you, black: avery, autoPly: -1),
+                            white: you, black: avery, clocks: clocks(238000, 252000), drawOffer: offer("black", avery), takeback: "null")
+        case .takebackRequested:
+            return duelView(fen: takebackFen, turnSide: "black", inCheck: false, legal: takebackLegal,
+                            moves: records(san: takebackSan, from: takebackFrom, to: takebackTo, white: avery, black: you, autoPly: -1),
+                            white: avery, black: you, clocks: clocks(236000, 250000), drawOffer: "null", takeback: offer("white", avery))
+        case .teamsMember:
+            return publicView(phase: "playing", mode: "teams", fen: kingsPawnFen, turnSide: "white", inCheck: false, legal: kingsPawnLegal,
+                              moves: records(san: ["e4", "e5"], from: ["e2", "e7"], to: ["e4", "e5"], white: avery, black: ben, autoPly: -1),
+                              white: [member(avery, captain: true), member(you, captain: false)],
+                              black: [member(ben, captain: true), member(cai, captain: false)], clocks: clocks(594000, 597000),
+                              timeControl: "600000", increment: 0, moveTime: "null", takebacks: true, bot: "null", turnStartedAt: at(-4000),
+                              drawOffer: "null", takeback: "null", result: "null")
+        case .computer:
+            return publicView(phase: "playing", mode: "computer", fen: kingsPawnFen, turnSide: "white", inCheck: false, legal: kingsPawnLegal,
+                              moves: records(san: ["e4", "e5"], from: ["e2", "e7"], to: ["e4", "e5"], white: you, black: computer, autoPly: -1),
+                              white: [member(you, captain: true)], black: [member(computer, captain: true)], clocks: noClocks,
+                              timeControl: "null", increment: 0, moveTime: "null", takebacks: true, bot: mediumBot, turnStartedAt: at(-1000),
+                              drawOffer: "null", takeback: "null", result: "null")
+        case .spectator:
+            return publicView(phase: "playing", mode: "duel", fen: knightFen, turnSide: "black", inCheck: false, legal: knightLegal,
+                              moves: records(san: ["e4", "e5", "Nf3"], from: ["e2", "e7", "g1"], to: ["e4", "e5", "f3"], white: avery,
+                                             black: ben, autoPly: -1),
+                              white: [member(avery, captain: true)], black: [member(ben, captain: true)], clocks: clocks(581000, 574000),
+                              timeControl: "600000", increment: 0, moveTime: "null", takebacks: true, bot: "null", turnStartedAt: at(-6000),
+                              drawOffer: "null", takeback: "null", result: "null")
+        case .lowTime:
+            return publicView(phase: "playing", mode: "duel", fen: openingFen, turnSide: "white", inCheck: false, legal: openingLegal,
+                              moves: records(san: openingSan, from: openingFrom, to: openingTo, white: you, black: avery, autoPly: 3),
+                              white: [member(you, captain: true)], black: [member(avery, captain: true)], clocks: clocks(8000, 41000),
+                              timeControl: "60000", increment: 0, moveTime: "10000", takebacks: true, bot: "null", turnStartedAt: at(-3000),
+                              drawOffer: "null", takeback: "null", result: "null")
+        case .checkmate:
+            return publicView(phase: "results", mode: "duel", fen: foolsMateFen, turnSide: "white", inCheck: true, legal: "{}",
+                              moves: records(san: foolsMateSan, from: foolsMateFrom, to: foolsMateTo, white: you, black: avery, autoPly: -1),
+                              white: [member(you, captain: true)], black: [member(avery, captain: true)], clocks: clocks(590000, 585000),
+                              timeControl: "600000", increment: 0, moveTime: "null", takebacks: true, bot: "null", turnStartedAt: "null",
+                              drawOffer: "null", takeback: "null", result: "{\"winner\":\"black\",\"reason\":\"checkmate\"}")
+        case .drawAgreed:
+            return publicView(phase: "results", mode: "duel", fen: openingFen, turnSide: "white", inCheck: false, legal: "{}",
+                              moves: records(san: openingSan, from: openingFrom, to: openingTo, white: avery, black: you, autoPly: -1),
+                              white: [member(avery, captain: true)], black: [member(you, captain: true)], clocks: clocks(238000, 252000),
+                              timeControl: "300000", increment: 3000, moveTime: "null", takebacks: true, bot: "null", turnStartedAt: "null",
+                              drawOffer: "null", takeback: "null",
+                              result: "{\"winner\":\"draw\",\"reason\":\"agreement\",\"byPlayerId\":\"r1\",\"byName\":\"Avery\"}")
+        }
+    }
+
+    static func playerView(_ state: ChessFixtureState) -> String {
+        switch state {
+        case .yourMove, .reconnecting, .promotion, .special, .lowTime:
+            return playerView(side: "white", role: "white-captain", canMove: true, canResign: true, canOfferDraw: true,
+                              canRespondToDraw: false, canRequestTakeback: true, canRespondToTakeback: false)
+        case .waiting:
+            return playerView(side: "black", role: "black-captain", canMove: false, canResign: true, canOfferDraw: true,
+                              canRespondToDraw: false, canRequestTakeback: true, canRespondToTakeback: false)
+        case .check:
+            return playerView(side: "black", role: "black-captain", canMove: true, canResign: true, canOfferDraw: true,
+                              canRespondToDraw: false, canRequestTakeback: true, canRespondToTakeback: false)
+        case .drawOffered:
+            return playerView(side: "white", role: "white-captain", canMove: true, canResign: true, canOfferDraw: true,
+                              canRespondToDraw: true, canRequestTakeback: true, canRespondToTakeback: false)
+        case .takebackRequested:
+            return playerView(side: "black", role: "black-captain", canMove: true, canResign: true, canOfferDraw: true,
+                              canRespondToDraw: false, canRequestTakeback: false, canRespondToTakeback: true)
+        case .teamsMember:
+            return playerView(side: "white", role: "white-team", canMove: false, canResign: false, canOfferDraw: false,
+                              canRespondToDraw: false, canRequestTakeback: false, canRespondToTakeback: false)
+        case .computer:
+            return playerView(side: "white", role: "white-captain", canMove: true, canResign: true, canOfferDraw: false,
+                              canRespondToDraw: false, canRequestTakeback: true, canRespondToTakeback: false)
+        case .spectator:
+            return ""
+        case .checkmate:
+            return playerView(side: "white", role: "white-captain", canMove: false, canResign: false, canOfferDraw: false,
+                              canRespondToDraw: false, canRequestTakeback: false, canRespondToTakeback: false)
+        case .drawAgreed:
+            return playerView(side: "black", role: "black-captain", canMove: false, canResign: false, canOfferDraw: false,
+                              canRespondToDraw: false, canRequestTakeback: false, canRespondToTakeback: false)
+        }
+    }
+
+    static func players(_ state: ChessFixtureState) -> [GamePlayerInput] {
+        switch state {
+        case .teamsMember: return ActivityFixtureScript.players(4, includingYou: true)
+        case .computer: return ActivityFixtureScript.players(1, includingYou: true)
+        case .spectator: return ActivityFixtureScript.players(2, includingYou: false)
+        default: return ActivityFixtureScript.players(2, includingYou: true)
+        }
+    }
+
+    static func isFinished(_ state: ChessFixtureState) -> Bool {
+        state == ChessFixtureState.checkmate || state == ChessFixtureState.drawAgreed
+    }
+
+    /// One push for `state`: you hold a seat (except watching) and host (except watching and the participant's draw).
+    static func push(_ state: ChessFixtureState, isRecovering: Bool) -> GameStageInputs {
+        let seated = state != ChessFixtureState.spectator
+        return GameStageInputs.make(callSession: 1, isActive: true, gameId: "chess", name: "Chess",
+                                    phase: isFinished(state) ? "results" : "playing", players: players(state),
+                                    isFinished: isFinished(state), minPlayers: 1, publicViewJSON: publicView(state),
+                                    playerViewJSON: playerView(state), localPlayerId: seated ? ActivityFixtureScript.localUserId : "",
+                                    isHost: seated && state != ChessFixtureState.drawAgreed, isRecovering: isRecovering,
+                                    receivedAtMillis: Date().timeIntervalSince1970 * 1000.0)
+    }
+
+    /// The pushes the fixture applies in order: one for most states; the reconnecting state first plays your move and
+    /// then the same push while recovering (the board turns read-only until the snapshot).
+    static func pushes(_ state: ChessFixtureState) -> [GameStageInputs] {
+        if state == ChessFixtureState.reconnecting {
+            return [push(ChessFixtureState.yourMove, isRecovering: false), push(state, isRecovering: true)]
+        }
+        return [push(state, isRecovering: false)]
+    }
+
+    /// A playing duel push after `san` plies at `fen` (you White against Avery), for the transition checks on both
+    /// platforms (the recording push that clears the overlay, the start position without a move).
+    static func duelPush(fen: String, turnSide: String, legal: String, san: [String], from: [String], to: [String],
+                         canRequestTakeback: Bool) -> GameStageInputs {
+        let view = duelView(fen: fen, turnSide: turnSide, inCheck: false, legal: legal,
+                            moves: records(san: san, from: from, to: to, white: you, black: avery, autoPly: -1), white: you, black: avery,
+                            clocks: clocks(300000, 300000), drawOffer: "null", takeback: "null")
+        let mine = playerView(side: "white", role: "white-captain", canMove: turnSide == "white", canResign: true, canOfferDraw: true,
+                              canRespondToDraw: false, canRequestTakeback: canRequestTakeback, canRespondToTakeback: false)
+        return GameStageInputs.make(callSession: 1, isActive: true, gameId: "chess", name: "Chess", phase: "playing",
+                                    players: ActivityFixtureScript.players(2, includingYou: true), minPlayers: 1, publicViewJSON: view,
+                                    playerViewJSON: mine, localPlayerId: ActivityFixtureScript.localUserId, isHost: true,
+                                    receivedAtMillis: Date().timeIntervalSince1970 * 1000.0)
+    }
+
+    /// What the stage layer shows for a chess state: the game is live under its server name (S20 11 j).
+    static func stageInputs(named raw: String, base: StageInputs) -> StageInputs {
+        if state(named: raw) == nil { return base }
+        let game = ActivityFixtureScript.stageInputs(named: ActivityFixtureState.gameTrivia6.rawValue, base: base)
+        return StageFixtureScript.copy(game, isGameActive: true, gameName: "Chess")
+    }
+
+    /// Feeds the activity session for a chess state and wires its commands to the recording owner, the way
+    /// `WordleFixtures.apply(named:session:owner:)` does. Nil for any other name.
+    @discardableResult
+    static func apply(named raw: String, session: ActivitySession, owner: ActivityFixtureOwner) -> ChessFixtureState? {
+        guard let fixture = state(named: raw) else { return nil }
+        session.activities.onCommand = { [weak owner] command in
+            owner?.record(command)
+        }
+        session.games.onCommand = { [weak owner, weak session] command in
+            guard let owner = owner else { return }
+            owner.record(command)
+            guard let session = session else { return }
+            if command.kind == GameStageCommandKind.move && owner.acknowledgesMoves {
+                session.games.moveAcknowledged(requestId: command.requestId, success: true, serverText: "")
+            } else if command.kind == GameStageCommandKind.end && owner.failsEnd {
+                session.games.endFailed(serverText: "")
+            }
+        }
+        session.applyActivities(ActivityFixtureScript.activitiesInputs(ActivityFixtureState.gameTrivia6))
+        for inputs in pushes(fixture) {
+            session.applyGame(inputs)
         }
         return fixture
     }

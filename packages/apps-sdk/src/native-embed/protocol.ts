@@ -4,8 +4,11 @@
 //   { "v": 1, "type": "<type>", "callSessionId": "<id>", "appSessionId": "<id>", "requestId": "<id>", "payload": {...} }
 //
 // Embed to native: ready, sync, update, awareness, status, ack, resize.
-// Native to embed: snapshot, update, awareness, status, resync, close and the host commands (setTool, setColor,
-// setStrokeWidth, setFill, undo, redo, setPage, addPage, renamePage, deletePage, zoomToFit, export).
+// Native to embed: snapshot, update, awareness, status, resync, close and the host commands: Whiteboard (setTool,
+// setColor, setStrokeWidth, setFill, undo, redo, setPage, addPage, renamePage, deletePage, zoomToFit, export), Spin the
+// Wheel (addEntries, removeEntry, shuffle, sort, clearEntries, spin, setRemoveWinner, setSounds, clearResults) and Watch
+// Together (playNow, enqueue, request, approve, decline, cancelRequest, move, remove; ACT-8). A Wheel or Watch embed adds
+// its page data to `status` under `app` (`isValidAppStatus`), so the native Activities pages never parse Yjs.
 //
 // The embed has no socket and no network (its page CSP sets connect-src 'none'); the native session relays the room's
 // Yjs bytes (base64 in the payload) and nothing else. Never put auth tokens, personal API keys or native method names on
@@ -60,6 +63,78 @@ export const NATIVE_TO_EMBED_TYPES = [
   "deletePage",
   "zoomToFit",
   "export",
+  "addEntries",
+  "removeEntry",
+  "shuffle",
+  "sort",
+  "clearEntries",
+  "spin",
+  "setRemoveWinner",
+  "setSounds",
+  "clearResults",
+  "playNow",
+  "enqueue",
+  "request",
+  "approve",
+  "decline",
+  "cancelRequest",
+  "move",
+  "remove",
+] as const;
+
+/** Host commands: everything native sends that is not part of the relay (the embed answers each with an `ack`). */
+export const HOST_COMMAND_TYPES = [
+  "setTool",
+  "setColor",
+  "setStrokeWidth",
+  "setFill",
+  "undo",
+  "redo",
+  "setPage",
+  "addPage",
+  "renamePage",
+  "deletePage",
+  "zoomToFit",
+  "export",
+  "addEntries",
+  "removeEntry",
+  "shuffle",
+  "sort",
+  "clearEntries",
+  "spin",
+  "setRemoveWinner",
+  "setSounds",
+  "clearResults",
+  "playNow",
+  "enqueue",
+  "request",
+  "approve",
+  "decline",
+  "cancelRequest",
+  "move",
+  "remove",
+] as const;
+
+/**
+ * Commands that change the room document; a read-only embed (locked for a participant) refuses them with
+ * `{ ok: false, error: "readOnly" }`. `setSounds` is a local preference and `request` / `cancelRequest` ride awareness
+ * (presence is allowed while editing is locked, as on web), so they stay open to a locked participant.
+ */
+export const APP_EDIT_COMMANDS = [
+  "addEntries",
+  "removeEntry",
+  "shuffle",
+  "sort",
+  "clearEntries",
+  "spin",
+  "setRemoveWinner",
+  "clearResults",
+  "playNow",
+  "enqueue",
+  "approve",
+  "decline",
+  "move",
+  "remove",
 ] as const;
 
 export type EmbedToNativeType = (typeof EMBED_TO_NATIVE_TYPES)[number];
@@ -107,6 +182,27 @@ export const INK_COLORS = [
 ] as const;
 
 export const STROKE_WIDTHS = [2, 3, 5, 8, 12] as const;
+
+/** Spin the Wheel bounds (the SDK `wheel/core/doc`: 64 names of 48 characters, 25 results). Swift twin: `AppWheelLimits`. */
+export const WHEEL_LIMITS = {
+  entries: 64,
+  label: 48,
+  results: 25,
+  name: 64,
+} as const;
+
+/** Watch Together bounds for the page data in `status.app`. Swift twin: `AppWatchLimits`. */
+export const WATCH_LIMITS = {
+  queue: 50,
+  requests: 50,
+  title: 120,
+  name: 64,
+  userId: 128,
+} as const;
+
+/** The YouTube embed host the Watch page frames (privacy-enhanced mode); nothing else may be framed. */
+export const WATCH_FRAME_ORIGIN = "https://www.youtube-nocookie.com";
+export const WATCH_PLAYBACK_STATES = ["playing", "paused", "none"] as const;
 
 /** Why a message was dropped; the same strings as Swift `AppBridgeRejection`. Logged by reason only, never content. */
 export type RejectionReason =
@@ -275,7 +371,7 @@ const isEmbedToNativeType = (value: string): value is EmbedToNativeType =>
 const isNativeToEmbedType = (value: string): value is NativeToEmbedType =>
   (NATIVE_TO_EMBED_TYPES as readonly string[]).includes(value);
 
-/** The status payload rules (Swift `AppBridgeCodec.parseStatus`). */
+/** The status payload rules (Swift `AppBridgeCodec.parseStatus`, plus `AppEmbedAppCodec.parse` for `app`). */
 export const isValidStatusPayload = (payload: Record<string, unknown>): boolean => {
   const tool = payload.tool ?? "pen";
   if (!isWhiteboardTool(tool)) return false;
@@ -284,7 +380,74 @@ export const isValidStatusPayload = (payload: Record<string, unknown>): boolean 
   if (typeof width !== "number" || width < 1 || width > 64) return false;
   const pageId = payload.pageId ?? "";
   if (pageId !== "" && !isValidIdentifier(pageId)) return false;
-  return true;
+  return isValidAppStatus(payload.app);
+};
+
+const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+
+/** An 11-character YouTube video id. */
+export const isValidVideoId = (value: unknown): value is string => typeof value === "string" && VIDEO_ID_PATTERN.test(value);
+
+const isBoundedText = (value: unknown, limit: number, allowEmpty: boolean): boolean =>
+  typeof value === "string" && value.length <= limit && (allowEmpty || value.trim().length > 0);
+
+const isOptionalBoolean = (value: unknown): boolean => value === undefined || typeof value === "boolean";
+
+const isBoundedList = (value: unknown, limit: number, item: (entry: unknown) => boolean): boolean =>
+  value === undefined || (Array.isArray(value) && value.length <= limit && value.every(item));
+
+const isWheelEntry = (value: unknown): boolean =>
+  isRecord(value) && isValidIdentifier(value.id) && isBoundedText(value.label, WHEEL_LIMITS.label, false);
+
+const isWheelResult = (value: unknown): boolean =>
+  isRecord(value) &&
+  isValidIdentifier(value.id) &&
+  isBoundedText(value.label, WHEEL_LIMITS.label, false) &&
+  isBoundedText(value.byName ?? "", WHEEL_LIMITS.name, true);
+
+const isWatchItem = (value: unknown): boolean =>
+  isRecord(value) &&
+  isValidIdentifier(value.id) &&
+  isValidVideoId(value.videoId) &&
+  isBoundedText(value.title ?? "", WATCH_LIMITS.title, true) &&
+  isBoundedText(value.byName ?? "", WATCH_LIMITS.name, true);
+
+const isWatchRequest = (value: unknown): boolean =>
+  isWatchItem(value) && isRecord(value) && isBoundedText(value.byId ?? "", WATCH_LIMITS.userId, true);
+
+/**
+ * The Wheel or Watch page data an embed adds to `status` (ACT-8). Absent is fine (the Whiteboard sends none); anything
+ * present must be one of the two kinds, within the bounds, with valid ids; one bad item rejects the whole status
+ * (`badPayload`). Swift twin: `AppEmbedAppCodec.parse` in AppHostPresenter.swift.
+ */
+export const isValidAppStatus = (value: unknown): boolean => {
+  if (value === undefined) return true;
+  if (!isRecord(value)) return false;
+  if (value.kind === "wheel") {
+    return (
+      isBoundedList(value.entries, WHEEL_LIMITS.entries, isWheelEntry) &&
+      isBoundedList(value.results, WHEEL_LIMITS.results, isWheelResult) &&
+      isOptionalBoolean(value.removeWinner) &&
+      isOptionalBoolean(value.sounds) &&
+      isOptionalBoolean(value.spinning) &&
+      (value.winnerSpinId === undefined || value.winnerSpinId === "" || isValidIdentifier(value.winnerSpinId)) &&
+      isBoundedText(value.winnerLabel ?? "", WHEEL_LIMITS.label, true)
+    );
+  }
+  if (value.kind === "watch") {
+    const playback = value.playback ?? "none";
+    return (
+      (value.videoId === undefined || value.videoId === "" || isValidVideoId(value.videoId)) &&
+      isBoundedText(value.title ?? "", WATCH_LIMITS.title, true) &&
+      typeof playback === "string" &&
+      (WATCH_PLAYBACK_STATES as readonly string[]).includes(playback) &&
+      isBoundedList(value.queue, WATCH_LIMITS.queue, isWatchItem) &&
+      isBoundedList(value.requests, WATCH_LIMITS.requests, isWatchRequest) &&
+      (value.myRequestId === undefined || value.myRequestId === "" || isValidIdentifier(value.myRequestId)) &&
+      isOptionalBoolean(value.requestDeclined)
+    );
+  }
+  return false;
 };
 
 /**

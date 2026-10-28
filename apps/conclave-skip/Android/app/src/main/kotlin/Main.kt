@@ -64,6 +64,8 @@ open class MainActivity: AppCompatActivity {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         UIApplication.launch(this)
+        // SYS-3 (S70 2 a): a local notification's tap that recreated the activity (a no-op for any other intent).
+        LocalNotifications.handleTap(intent)
         // Register the MediaProjection consent launcher (must happen at onCreate
         // before the Activity reaches STARTED) so screen-share can request it.
         ScreenCaptureManager.register(this)
@@ -236,6 +238,8 @@ open class MainActivity: AppCompatActivity {
         if (intent.action == CallActionDispatcher.ACTION_RETURN_TO_CALL) {
             // The activity is already in front; record returnToCall against the posted presence session.
             CallActionDispatcher.returnToCall(intent.getIntExtra(CallActionDispatcher.EXTRA_PRESENCE_SESSION, -1))
+            // SYS-3: an admission or chat notification's tap also carries its kind and room (Chat at the message).
+            LocalNotifications.handleTap(intent)
             return
         }
         handleIncomingDeepLink(intent)

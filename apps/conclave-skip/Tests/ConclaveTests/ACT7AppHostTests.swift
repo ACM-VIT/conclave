@@ -111,7 +111,8 @@ struct ACT7AppHostTests {
         #expect(!AppBridgeCodec.originMatches("conclave-embed://app.evil", expected: AppBridgeProtocol.iosOrigin))
         #expect(!AppBridgeCodec.originMatches("anything", expected: ""))
         #expect(AppBridgeProtocol.entryFile(appId: "whiteboard") == "whiteboard.html")
-        #expect(AppBridgeProtocol.entryFile(appId: "wheel").isEmpty && AppBridgeProtocol.entryFile(appId: "watch").isEmpty)
+        #expect(AppBridgeProtocol.entryFile(appId: "wheel") == "wheel.html" && AppBridgeProtocol.entryFile(appId: "watch") == "watch.html")
+        #expect(AppBridgeProtocol.entryFile(appId: "slides").isEmpty, "an app this build has no embed for")
         #expect(AppBridgeProtocol.iosEntryURL(appId: "whiteboard", callSessionId: "c", appSessionId: "a")
             == "conclave-embed://app/whiteboard.html#v=1&callSessionId=c&appSessionId=a&appId=whiteboard")
         #expect(AppBridgeProtocol.androidEntryURL(appId: "whiteboard", callSessionId: "c", appSessionId: "a")
@@ -434,9 +435,9 @@ struct ACT7AppHostTests {
                              AppHostCoreCommand(kind: .setLocked, flag: false)])
     }
 
-    @Test func wheelAndWatchShowTheVersionMismatchUntilACT8() {
+    @Test func anAppWithoutAnEmbedShowsTheVersionMismatch() {
         let wire = Wire()
-        let (presenter, _) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true))
+        let (presenter, _) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "slides", isHost: true))
         #expect(presenter.model.phase == .versionMismatch && presenter.model.issue == .versionMismatch)
         #expect(!presenter.model.hasEmbed && !presenter.model.wantsWebView)
         presenter.retry()

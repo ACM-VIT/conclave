@@ -97,6 +97,8 @@ internal fun ActivitiesPage(
     val title = when (key?.route) {
         ActivitiesRoute.setup -> session.activities.setup?.name ?: conclaveString("stg_panel_activities")
         ActivitiesRoute.browser -> conclaveString("br_title")
+        ActivitiesRoute.wheel -> appHostName("wheel")
+        ActivitiesRoute.watch -> appHostName("watch")
         else -> conclaveString("stg_panel_activities")
     }
     InCallPage(
@@ -125,6 +127,9 @@ internal fun ActivitiesPage(
         when (key?.route) {
             ActivitiesRoute.setup -> GameSetupPage(session.activities, key.id, reservation)
             ActivitiesRoute.browser -> BrowserLauncherPage(session.activities, reservation)
+            // ACT-8 (S60 13 d): K/ui/apps/AppPages.kt.
+            ActivitiesRoute.wheel -> AppWheelPage(session.appHost, reservation)
+            ActivitiesRoute.watch -> AppWatchPage(session.appHost, reservation)
             else -> ActivitiesRoot(session, reservation, onPush = { pages?.push(it.encoded()) }, onClose = onClose)
         }
     }

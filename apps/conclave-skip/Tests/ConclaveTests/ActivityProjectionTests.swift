@@ -252,7 +252,7 @@ struct ActivityProjectionTests {
         #expect(ActivitiesDestinationPolicy.landing(destination: .activitiesApp, targetId: "wheel").route == .wheel)
         #expect(ActivitiesDestinationPolicy.landing(destination: .activitiesApp, targetId: "whiteboard") == ActivitiesLanding.root)
         #expect(ActivitiesDestinationPolicy.landing(destination: .chatPrivate, targetId: "x") == ActivitiesLanding.root)
-        #expect(!ActivitiesDestinationPolicy.isRenderable(.wheel) && !ActivitiesDestinationPolicy.isRenderable(.watch))
+        #expect(ActivitiesDestinationPolicy.isRenderable(.wheel) && ActivitiesDestinationPolicy.isRenderable(.watch))
         #expect(ActivitiesRoute.allCases.map { $0.rawValue } == ["root", "setup", "browser", "wheel", "watch"])
     }
 

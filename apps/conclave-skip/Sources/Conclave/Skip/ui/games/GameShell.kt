@@ -132,6 +132,10 @@ private fun GameShellScene(games: GameStagePresenter, storeURL: String, onShowVi
         GameSceneKind.reaction, GameSceneKind.imposter -> PromptGameSceneBody(games)
         // ACT-4 (S60 10): Wordle, every phase (K/ui/games/boards/WordleBoard.kt).
         GameSceneKind.wordle -> WordleSceneBody(games)
+        // ACT-5 (S60 11): chess, playing and results (K/ui/games/boards/ChessBoard.kt).
+        GameSceneKind.chess -> ChessSceneBody(games)
+        // ACT-6 (S60 12): Zip, every phase after the lobby (K/ui/games/boards/ZipBoard.kt).
+        GameSceneKind.zip -> ZipSceneBody(games)
         GameSceneKind.unsupported -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             GameKitNotice(
                 GameKitNoticeKind.unsupported, "",
@@ -242,6 +246,8 @@ private fun GameShellBottomBar(games: GameStagePresenter) {
             PromptGameHostBar(games)
             // ACT-4 (S60 10 f): Next round at a Wordle round's results (seated host only).
             WordleHostBar(games)
+            // ACT-6 (S60 12 f): Next round at a Zip round's results (seated host only).
+            ZipHostBar(games)
         }
     }
     if (prompt) GameShellEndDialog(games, chrome.name, onDismiss = { prompt = false })

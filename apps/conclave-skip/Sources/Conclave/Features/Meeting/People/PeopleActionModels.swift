@@ -216,6 +216,13 @@ enum PeopleAnnouncementKind {
     static let qaOff = "qaOff"
     /// PPL-7 (S50 12 g): "%@ is now the host." when the host role moves.
     static let newHost = "peopleNewHost"
+    /// PPL-3 (S50 4 g): "%lld admitted" after an Admit All acknowledgement; `name` carries the count as digits.
+    static let admittedAll = "peopleAdmittedAll"
+    /// PPL-3 (S50 4 i): a new knock while Participants is open, announced once politely ("%@ wants to join"); the
+    /// stage banner's own announcement is suppressed meanwhile (`MeetingNoticePolicy`).
+    static let knock = "peopleKnock"
+    /// Several new knocks in one update ("%lld people want to join"); `name` carries the count as digits.
+    static let knockMany = "peopleKnockMany"
 }
 
 /// What the action table reads besides the row (S50 3 j): the viewer, the S1 blocked reason, the DM policy, webinar

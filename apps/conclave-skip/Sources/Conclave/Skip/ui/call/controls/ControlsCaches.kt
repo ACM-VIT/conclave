@@ -7,7 +7,8 @@ package conclave.module
  * unchanged control keeps its exact CallControlUi instance, so only the changed cell recomposes under key(id). Only
  * Kotlin scalars and transpiled String enums cross into the cell composables; no stability annotations on Skip
  * collections (R14). CTL-2 reads LeaveCache in LeaveControl.kt; CTL-5 and CTL-6 (MoreSheet.kt) read MoreCache and
- * ReactionsCache; CTL-3 adds AudioRouteCache.
+ * ReactionsCache; CTL-3 (AudioRouteSheet.kt) reads AudioRouteCache; CTL-4 (the Camera cell, MediaShortcutMenu.kt) reads
+ * MediaShortcutsCache.
  */
 
 /** One bar control as Kotlin scalars. `gesture` is ControlBarPolicy.gestureKind for the model (S30 1 h). */
@@ -179,5 +180,53 @@ internal class ReactionsCache(private val presenter: CallControlsPresenter) {
         val previous = cached
         if (previous != null && previous.revision == state.revision) return previous
         return ReactionsUi(state).also { cached = it }
+    }
+}
+
+/**
+ * `controls.route` as Kotlin values (CTL-3, CL14): the route sheet's rows from the shared RoutePickerPolicy, rebuilt only
+ * on a new route revision. `snapshot` stays the transpiled value for the shared dismissal rules.
+ */
+internal class AudioRouteUi(source: AudioRouteSnapshot) {
+    val snapshot: AudioRouteSnapshot = source
+    val revision: Int = source.revision
+    val currentId: String = source.currentId
+    val pendingId: String = source.pendingId
+    val phase: RouteSwitchPhase = source.phase
+    val bluetoothAccess: BluetoothRouteAccess = source.bluetoothAccess
+    val rows: List<AudioRouteRowModel> = buildList { for (row in RoutePickerPolicy.rows(source)) add(row) }
+}
+
+internal class AudioRouteCache(private val presenter: CallControlsPresenter) {
+    private var cached: AudioRouteUi? = null
+
+    fun current(): AudioRouteUi {
+        // Always read the observed property (the route owner's snapshot through the presenter), even on a cache hit.
+        val state = presenter.route
+        val previous = cached
+        if (previous != null && previous.revision == state.revision) return previous
+        return AudioRouteUi(state).also { cached = it }
+    }
+}
+
+/** `controls.shortcuts` as Kotlin values (CTL-4, CL14): the Camera control's long-press items. */
+internal class MediaShortcutsUi(source: MediaShortcutSnapshot) {
+    val snapshot: MediaShortcutSnapshot = source
+    val revision: Int = source.revision
+    val camera: List<MediaShortcutItem> = buildList { for (item in source.camera) add(item) }
+    val hasEnabledCameraItem: Boolean = MediaShortcutPolicy.hasEnabledItem(source.camera)
+    /** The items TalkBack lists as custom actions (S30 2 d, AX4). */
+    val accessibilityItems: List<MediaShortcutItem> = buildList { for (item in MediaShortcutPolicy.accessibilityItems(source.camera)) add(item) }
+}
+
+internal class MediaShortcutsCache(private val presenter: CallControlsPresenter) {
+    private var cached: MediaShortcutsUi? = null
+
+    fun current(): MediaShortcutsUi {
+        // Always read the observed property, even on a cache hit.
+        val state = presenter.shortcuts
+        val previous = cached
+        if (previous != null && previous.revision == state.revision) return previous
+        return MediaShortcutsUi(state).also { cached = it }
     }
 }

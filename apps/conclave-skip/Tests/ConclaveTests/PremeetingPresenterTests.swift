@@ -451,6 +451,14 @@ struct PremeetingPresenterTests {
                 #expect(premeeting.home.noticeKind == .roomClosed && premeeting.outcome == nil)
             case .homeRejoin:
                 #expect(premeeting.home.rejoin != nil && premeeting.currentInputs.rejoinRoomId == PremeetingFixtureScript.roomLabel)
+            // Batch 8 integrator (HD request B8-T7 R2): the ENT-9 webinar landing fixtures (T/ENT9WebinarLandingTests.swift
+            // checks each one's status after the landing appears).
+            case .webinarLoading, .webinarEarly, .webinarEarlyOneMinute, .webinarEarlyShort, .webinarNoCalendar, .webinarOpen,
+                 .webinarNameNeeded, .webinarInviteCode, .webinarJoining, .webinarAlmostThere, .webinarToCall,
+                 .webinarWaitingHost, .webinarLocked, .webinarFull, .webinarUnavailable, .webinarEnded, .webinarCancelled,
+                 .webinarFailed:
+                #expect(premeeting.path.last?.kind == .webinarLanding, "\(state)")
+                #expect(premeeting.webinar?.status == .loading && premeeting.webinarJoinRequestCount == 0, "\(state)")
             }
         }
     }

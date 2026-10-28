@@ -27,6 +27,8 @@ enum PremeetingAppWiring {
         ConclaveAppDelegate.shared.registerPremeeting(presenter)
         // ENT-3 (S10 6 j): the lobby's core, preview, permission, route and presence hooks, production only.
         LobbyProductionHooks.install(presenter: presenter, viewModel: viewModel, appState: appState)
+        // ENT-9 (S10 12 j): the webinar landing's lookup and its one-tap attendee join (Q7), production only.
+        WebinarLandingProductionHooks.install(presenter: presenter, viewModel: viewModel, appState: appState)
         // ENT-5 (S10 0.8 C6, HD request B5-T5 R1): the native root presents the entry itself (the lobby's Connecting
         // state and the entry transition), so the view model never arms the legacy overlay, its 12 s safety task or
         // the reveal timers on this route.

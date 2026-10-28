@@ -81,6 +81,9 @@ fun SystemFixtureRoot(stateName: String) {
                 ScreenAwakeFixtureReadouts()
                 // SYS-15 (AC-SI18-1, AC-SI18-2): sys.diagListeners, sys.diagBuffer, a test error and a 6 s test hang.
                 DiagnosticsFixtureReadouts()
+                // SYS-3 (S70 2 l, SX1): sys.notifications (permission/banner/posted) and the admission and mention
+                // posts for the silent AVD check (grants set by pm grant and revoke, never by a prompt).
+                NotificationFixtureReadouts()
                 FixtureCommand(conclaveString("ctl_route_phone")) { session.setAudioRoute(AudioRouteKind.receiver) }
                 FixtureCommand(conclaveString("ctl_route_speaker")) { session.setAudioRoute(AudioRouteKind.speaker) }
                 FixtureCommand(conclaveString("chat_link_open")) { NativeExternalHandoff.openWebLink("https://conclave.acmvit.in") }

@@ -91,6 +91,9 @@ private fun PeopleFixtureControls(session: PeopleFixtureSession, modifier: Modif
             FixtureReadout(session.recomposeReadout(), "people.recompose", tick)
             FixtureReadout(session.focusReadout(), "people.focus", tick)
             FixtureReadout(session.countersReadout(), "people.counters", tick)
+            // PPL-3: the action log with the last outcome token, and the knock banner state.
+            FixtureReadout(session.actionsReadout(), "people.actions", tick)
+            FixtureReadout(session.noticesReadout(), "stage.notices", tick)
             FixtureReadout(session.panelReadout(), "panel.current", tick)
             FixtureReadout(session.renderersReadout(), "stage.renderers", tick)
         }

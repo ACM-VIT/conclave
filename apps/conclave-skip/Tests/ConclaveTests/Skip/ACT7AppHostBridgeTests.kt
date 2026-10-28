@@ -67,7 +67,8 @@ class ACT7AppHostBridgeTests {
     @Test fun androidUrlsAndOriginsAreTheBundleOnly() {
         assertEquals("https://appassets.androidplatform.net/assets/native-embed/whiteboard.html#v=1&callSessionId=c&appSessionId=a&appId=whiteboard",
             AppBridgeProtocol.androidEntryURL(appId = "whiteboard", callSessionId = "c", appSessionId = "a"))
-        assertEquals("", AppBridgeProtocol.androidEntryURL(appId = "wheel", callSessionId = "c", appSessionId = "a"))
+        assertEquals("", AppBridgeProtocol.androidEntryURL(appId = "slides", callSessionId = "c", appSessionId = "a"))
+        assertEquals("native-embed/watch.html", AppBridgeProtocol.androidAssetPath(appId = "watch"))
         assertEquals("native-embed/whiteboard.html", AppBridgeProtocol.androidAssetPath(appId = "whiteboard"))
         assertTrue(AppBridgeProtocol.isBundleURL("https://appassets.androidplatform.net/assets/native-embed/whiteboard.html", origin = AppBridgeProtocol.androidOrigin))
         assertFalse(AppBridgeProtocol.isBundleURL("https://appassets.androidplatform.net.evil.example/x", origin = AppBridgeProtocol.androidOrigin))

@@ -117,6 +117,7 @@ private fun NoticeBanner(stage: StagePresenter, notice: MeetingNotice) {
         actions = actions,
         onDismiss = if (notice.isDismissible) ({ stage.dismissNotice(id = notice.id) }) else null,
         maxLines = if (expanded) Int.MAX_VALUE else ConclaveBannerLaneMetrics.LINE_LIMIT,
+        announces = notice.announcement != NoticeAnnouncement.none,
     )
 }
 

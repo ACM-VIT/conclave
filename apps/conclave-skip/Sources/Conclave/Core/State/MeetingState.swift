@@ -452,6 +452,14 @@ final class MeetingState {
         didSet { onPeopleInputChanged?() }
     }
 
+    /// S50 PH3 (PPL-3): when each raised hand went up, in server milliseconds (`HandRaisedNotification.timestamp`),
+    /// keyed by the id People shows (your `userId`; a remote participant's canonical stage id). A lowered hand forgets
+    /// its time; `handRaisedSnapshot` entries carry no time, so a hand first seen there reads 0 and sorts after timed
+    /// hands by join order. Reset per call session, on cleanup and when every hand is cleared.
+    var raisedAtByUserId: [String: Double] = [:] {
+        didSet { onPeopleInputChanged?() }
+    }
+
     /// PH13: the key the SFU blocks by for `id`: the admin snapshot's key, else the part before "#".
     func userKey(for id: String) -> String {
         let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -529,7 +537,17 @@ final class MeetingState {
     var browserURL: String? {
         didSet { onActivityInputChanged?() }
     }
-    var browserNoVncURL: String?
+    /// ACT-9 (S60 14 k): the browser card resolves its input URL from this once per change.
+    var browserNoVncURL: String? {
+        didSet { onActivityInputChanged?() }
+    }
+    /// S60 C6-20 (ACT-9): the host's `browser:getCapabilities` probe said available (false until it does, after a
+    /// timeout or for anyone but a host). Read by the Activities launcher's shared browser row.
+    var isBrowserAvailable: Bool = false {
+        didSet {
+            if oldValue != isBrowserAvailable { onActivityInputChanged?() }
+        }
+    }
     var browserControllerUserId: String? {
         didSet { onActivityInputChanged?() }
     }

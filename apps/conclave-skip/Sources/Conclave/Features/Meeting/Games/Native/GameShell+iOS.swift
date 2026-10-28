@@ -124,6 +124,12 @@ struct GameShellScene: View {
         // ACT-4 (S60 10): Wordle, every phase (Games/Native/Boards/WordleBoard+iOS.swift).
         case GameSceneKind.wordle:
             WordleSceneBody(games: games)
+        // ACT-5 (S60 11): chess, playing and results (Games/Native/Boards/ChessBoard+iOS.swift).
+        case GameSceneKind.chess:
+            ChessSceneBody(games: games)
+        // ACT-6 (S60 12): Zip, every phase after the lobby (Games/Native/Boards/ZipBoard+iOS.swift).
+        case GameSceneKind.zip:
+            ZipSceneBody(games: games)
         case GameSceneKind.unsupported:
             VStack(alignment: .leading, spacing: 10) {
                 GameKitNotice(kind: .unsupported, message: "", buttonTitle: storeURL.isEmpty ? "" : ConclaveStrings.text("Update App"),
@@ -258,6 +264,8 @@ struct GameShellBottomBar: View {
                 PromptGameHostBar(games: games)
                 // ACT-4 (S60 10 f): Next Round at a Wordle round's results (seated host only).
                 WordleHostBar(games: games)
+                // ACT-6 (S60 12 f): Next Round at a Zip round's results (seated host only).
+                ZipHostBar(games: games)
             }
         }
         .padding(.horizontal, 16)

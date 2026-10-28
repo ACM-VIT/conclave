@@ -82,6 +82,11 @@ enum PeopleFailureCopy {
     static let qaRateLimited = "qaRateLimited"
     static let qaTooShort = "qaTooShort"
     static let qaModerate = "qaModerate"
+    /// PPL-3 (S50 4 g, 5 g): "Couldn't admit %@.", "Couldn't admit everyone.", "Couldn't deny %@."; Lower All uses
+    /// `hands` ("Couldn't lower all hands.").
+    static let admit = "admit"
+    static let admitAll = "admitAll"
+    static let deny = "deny"
     static let generic = "generic"
 
     static func kind(action: String, failure: String, sourceKey: String) -> String {
@@ -119,11 +124,17 @@ enum PeopleFailureCopy {
         case .setMaxAttendees, .setAttendeeCode, .clearAttendeeCode, .setLinkSlug, .clearLinkSlug: return webinar
         case .qaSubmit: return qaSend
         case .qaUpvote, .qaModerate: return qaModerate
+        case .admit: return admit
+        case .admitAll: return admitAll
+        case .deny: return deny
         default: return generic
         }
     }
 
     private static func bulkKind(_ sourceKey: String) -> String {
+        // PPL-3: a header bulk action reports at its section (Lower All on Raised Hands, Mute All on the roster).
+        if sourceKey == PeopleSectionID.raisedHands.rawValue { return hands }
+        if sourceKey == PeopleSectionID.inMeeting.rawValue || sourceKey == PeopleSectionID.panelists.rawValue { return muteAll }
         guard let bulk = HostBulkID(rawValue: sourceKey) else { return generic }
         switch bulk {
         case .muteAll: return muteAll

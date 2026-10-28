@@ -108,7 +108,8 @@ private struct ParticipantsList: View {
                         if section.id == PeopleSectionID.attendees.rawValue {
                             WebinarAttendeesHeader(people: people)
                         } else {
-                            PeopleSectionHeader(section: section)
+                            // PPL-3 (S50 1 c, 4 c, 5 c): the host header actions, hidden while searching.
+                            PeopleSectionHeader(people: people, section: section, showsActions: !searching)
                         }
                     } footer: {
                         if section.id == PeopleSectionID.attendees.rawValue && !searching {
@@ -185,7 +186,7 @@ private struct PeopleSectionRow: View {
 
     var body: some View {
         if sectionId == PeopleSectionID.waiting.rawValue {
-            PeopleWaitingRowView(entry: people.waiting.entry(for: key), probe: people.recompose)
+            PeopleWaitingRowView(people: people, entry: people.waiting.entry(for: key), probe: people.recompose)
         } else if key.hasPrefix(PeopleOrderPolicy.attendeePrefix) {
             // PPL-5 (S50 10 c): attendee hand-queue and invited rows carry their one inline action, not a Menu.
             WebinarAttendeeRowView(people: people, key: key, sectionId: sectionId, queueCount: queueCount)

@@ -9,6 +9,7 @@
     "check:apps:fix": "node ./scripts/check-app-integrations.mjs --fix",
     "build:native-embed": "node ./src/native-embed/build/build-native-embed.mjs",
     "test:native-embed": "node --test ./scripts/native-embed-contract-test.mjs",
+    "test:native-embed-apps": "node --test ./src/native-embed/tests/wheel-watch-contract-test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "main": "src/index.ts",

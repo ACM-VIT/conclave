@@ -8,8 +8,11 @@ import Foundation
 // acknowledgment in `controls-end-confirm`, a slow one in `controls-end-slow-ack`, a refused one in
 // `controls-end-failed`); CTL-5 and CTL-6 the More states (`controls-webinar-host`, `controls-no-link`,
 // `controls-reactions-off`, `controls-host-reactions-off`, `controls-more-hand-raising`) with a scripted request handler
-// (reactions, captions, layout, Flip, Lock); the route and recap states arrive with CTL-3 and TRN-2 (CC8). The art
-// state (`controls-art-shipped`) waits for the flat reaction assets (CC14, S30 Q10).
+// (reactions, captions, layout, Flip, Lock); CTL-3 and CTL-4 the route and shortcut states (`controls-route-bluetooth`,
+// `controls-route-failed`, `controls-route-bt-no-permission`, `controls-route-wired`, `controls-two-inputs`,
+// `controls-camera-effects`, `controls-system-effects`) over the session's own `AudioRouteOwner` with a scripted backend (every session has one,
+// so the route sheet and the Mic menu work on every state); the recap states arrive with TRN-2 (CC8). The art state
+// (`controls-art-shipped`) waits for the flat reaction assets (CC14, S30 Q10).
 
 enum ControlsFixtureState: String, CaseIterable, Equatable {
     case guest = "controls-guest"
@@ -39,6 +42,14 @@ enum ControlsFixtureState: String, CaseIterable, Equatable {
     case reactionsOff = "controls-reactions-off"
     case hostReactionsOff = "controls-host-reactions-off"
     case moreHandRaising = "controls-more-hand-raising"
+    // CTL-3 and CTL-4 (S30 3 l1, l2, l2b and the wired route; 2 l1, l4, l6; S70 5 l4).
+    case routeBluetooth = "controls-route-bluetooth"
+    case routeFailed = "controls-route-failed"
+    case routeBluetoothNoPermission = "controls-route-bt-no-permission"
+    case routeWired = "controls-route-wired"
+    case twoInputs = "controls-two-inputs"
+    case cameraEffects = "controls-camera-effects"
+    case systemEffects = "controls-system-effects"
 }
 
 /// Pure scripts per state (shared by the fixture roots and both test hosts).
@@ -155,13 +166,86 @@ enum ControlsFixtureScript {
             isGameActive: state == .webinarHost,
             gameName: gameName(state),
             canFlipCamera: true,
-            isFlipInFlight: false
+            isFlipInFlight: false,
+            effectsPanelAvailable: state == .cameraEffects,
+            canShowSystemVideoEffects: state == .systemEffects && local.isCameraOn
         )
+    }
+
+    // MARK: Routes (CTL-3)
+
+    static let receiverRouteId = "receiver"
+    static let speakerRouteId = "speaker"
+    static let bluetoothRouteId = "bt-pixel"
+    static let wiredRouteId = "wired"
+    /// Scripted device names (fixture data, not app copy); the receiver and the speaker stay unnamed, so Android draws
+    /// its `ctl_route_*` labels and iOS draws nothing of its own (the system list owns the iOS output names).
+    static let bluetoothName = "Pixel Buds Pro"
+    static let builtInInputId = "input-built-in"
+    static let bluetoothInputId = "input-bt-pixel"
+    static let usbInputId = "input-usb"
+
+    /// The routes a state starts with. Speaker on every bar state; Phone selected with a Bluetooth headset present in
+    /// the route states (S30 3 l1); the unnamed R70-2 row without the Android 12+ grant (3 l2b); two microphones for
+    /// the iOS 17 to 25 picker (2 l6).
+    static func routeState(_ state: ControlsFixtureState, currentId: String, currentInputId: String,
+                           bluetoothGranted: Bool) -> AudioRoutePlatformState {
+        let receiver = AudioRouteOption(id: receiverRouteId, kind: AudioRouteKind.receiver, name: "", isConnecting: false)
+        let speaker = AudioRouteOption(id: speakerRouteId, kind: AudioRouteKind.speaker, name: "", isConnecting: false)
+        let headset = AudioRouteOption(id: bluetoothRouteId, kind: AudioRouteKind.bluetooth, name: bluetoothName, isConnecting: false)
+        let builtIn = AudioRouteOption(id: builtInInputId, kind: AudioRouteKind.receiver, name: "iPhone Microphone", isConnecting: false)
+        switch state {
+        case .routeBluetooth, .routeFailed:
+            return AudioRoutePlatformState.make(options: [receiver, speaker, headset], currentId: currentId, defaultId: bluetoothRouteId,
+                                                inputs: [builtIn, AudioRouteOption(id: bluetoothInputId, kind: AudioRouteKind.bluetooth,
+                                                                                   name: bluetoothName, isConnecting: false)],
+                                                currentInputId: currentInputId, canToggleSpeaker: true, canChooseInput: true,
+                                                canShowMicModes: false)
+        case .routeBluetoothNoPermission:
+            if bluetoothGranted {
+                return AudioRoutePlatformState.make(options: [receiver, speaker, headset], currentId: currentId,
+                                                    defaultId: bluetoothRouteId, canToggleSpeaker: true)
+            }
+            let access = AudioRouteOption(id: AudioRouteOwner.bluetoothAccessOptionId, kind: AudioRouteKind.bluetooth, name: "",
+                                          isConnecting: false)
+            return AudioRoutePlatformState.make(options: [receiver, speaker, access], currentId: currentId, defaultId: speakerRouteId,
+                                                canToggleSpeaker: true, bluetoothAccess: BluetoothRouteAccess.needsGrant)
+        case .routeWired:
+            // S30 3 l on a wired headset: unnamed, so Android draws "Wired headset" (`ctl_route_wired`).
+            let wired = AudioRouteOption(id: wiredRouteId, kind: AudioRouteKind.wired, name: "", isConnecting: false)
+            return AudioRoutePlatformState.make(options: [receiver, speaker, wired], currentId: currentId, defaultId: wiredRouteId,
+                                                inputs: [builtIn], currentInputId: currentInputId, canToggleSpeaker: true,
+                                                canShowMicModes: true)
+        case .twoInputs:
+            return AudioRoutePlatformState.make(options: [receiver, speaker], currentId: currentId, defaultId: speakerRouteId,
+                                                inputs: [builtIn, AudioRouteOption(id: usbInputId, kind: AudioRouteKind.usb,
+                                                                                   name: "USB Microphone", isConnecting: false)],
+                                                currentInputId: currentInputId, canToggleSpeaker: true, canChooseInput: true,
+                                                canShowMicModes: true)
+        default:
+            return AudioRoutePlatformState.make(options: [receiver, speaker], currentId: currentId, defaultId: speakerRouteId,
+                                                inputs: [builtIn], currentInputId: currentInputId, canToggleSpeaker: true,
+                                                canShowMicModes: true)
+        }
+    }
+
+    /// The route a state opens on: Phone in the route states (S30 3 l1), the speaker elsewhere (video calls default to
+    /// the loudspeaker, S70 5 c).
+    static func initialRouteId(_ state: ControlsFixtureState) -> String {
+        switch state {
+        case .routeBluetooth, .routeFailed, .routeBluetoothNoPermission:
+            return receiverRouteId
+        case .routeWired:
+            return wiredRouteId
+        default:
+            return speakerRouteId
+        }
     }
 
     /// A four-person stage (you plus three remotes with cameras on); a remote presents in `controls-remote-share`.
     static func stageInputs(_ state: ControlsFixtureState, isMuted: Bool, isCameraOff: Bool, isHandRaised: Bool,
-                            recovering: Bool, handPending: Bool = false) -> StageInputs {
+                            recovering: Bool, handPending: Bool = false, routeKind: String = "speaker",
+                            routeName: String = "") -> StageInputs {
         var roster: [StageParticipantInput] = []
         roster.append(StageParticipantInput.make(userId: localUserId, displayName: "You", isLocal: true, isMuted: isMuted,
                                                  isCameraOff: isCameraOff, isHandRaised: isHandRaised, joinSerial: 0,
@@ -178,19 +262,25 @@ enum ControlsFixtureScript {
         return StageInputs.make(callSession: 1, isInCall: true, localUserId: localUserId, roomLabel: roomLabel,
                                 meetingLink: meetingLink, participants: roster,
                                 screenShareUserId: state == .remoteShare ? "r1" : "",
-                                isWebinarAttendee: isAttendee(state), canFlipCamera: true, routeKind: "speaker",
-                                routeName: "Speaker", isHandRaised: isHandRaised, handToggleInFlight: handPending,
+                                isWebinarAttendee: isAttendee(state), canFlipCamera: true, routeKind: routeKind,
+                                routeName: routeName, isHandRaised: isHandRaised, handToggleInFlight: handPending,
                                 isRecovering: recovering, joinedAtMillis: joinedAtMillis)
     }
 }
 
-/// CTL-5: the local preferences the scripted request handler changes (captions, layout, the room lock).
+/// CTL-5: the local preferences the scripted request handler changes (captions, layout, the room lock). CTL-4: whether
+/// the scripted camera runs (the iOS system video effects item follows it, CC11).
 struct ControlsFixtureLocal: Equatable {
     let captionsOn: Bool
     let layoutMode: String
     let isRoomLocked: Bool
+    let isCameraOn: Bool
 
-    static let initial = ControlsFixtureLocal(captionsOn: false, layoutMode: "auto", isRoomLocked: false)
+    static let initial = ControlsFixtureLocal(captionsOn: false, layoutMode: "auto", isRoomLocked: false, isCameraOn: true)
+
+    func withCamera(_ on: Bool) -> ControlsFixtureLocal {
+        ControlsFixtureLocal(captionsOn: captionsOn, layoutMode: layoutMode, isRoomLocked: isRoomLocked, isCameraOn: on)
+    }
 }
 
 /// `controls.counters` (CL13). Plain, never observed: readouts refresh on demand.
@@ -212,6 +302,11 @@ final class ControlsFixtureCounters {
     private(set) var layout = 0
     private(set) var lock = 0
     private(set) var systemEffects = 0
+    /// CTL-3 and CTL-4: what reached the scripted route backend and the iOS microphone modes request.
+    private(set) var routeApply = 0
+    private(set) var inputApply = 0
+    private(set) var bluetoothRequest = 0
+    private(set) var micModes = 0
 
     func recordMicrophone() { toggleMicrophone += 1 }
     func recordCamera() { toggleCamera += 1 }
@@ -227,6 +322,22 @@ final class ControlsFixtureCounters {
     func recordLayout() { layout += 1 }
     func recordLock() { lock += 1 }
     func recordSystemEffects() { systemEffects += 1 }
+    func recordRouteApply() { routeApply += 1 }
+    func recordInputApply() { inputApply += 1 }
+    func recordBluetoothRequest() { bluetoothRequest += 1 }
+    func recordMicModes() { micModes += 1 }
+
+    /// CTL-3 and CTL-4 (CL13 `controls.counters`): routeRequest, inputRequest and speaker are the presenter's requests;
+    /// routeApply, inputApply and bluetoothRequest what reached the scripted backend; micModes and systemEffects the iOS
+    /// system modules.
+    func routeSummary(routeRequest: Int, inputRequest: Int, speaker: Int, routeRetry: Int, routeFailed: Int,
+                      audioSettings: Int) -> String {
+        "routeRequest=" + String(routeRequest) + " inputRequest=" + String(inputRequest) + " speaker=" + String(speaker)
+            + " routeApply=" + String(routeApply) + " inputApply=" + String(inputApply)
+            + " bluetoothRequest=" + String(bluetoothRequest) + " routeRetry=" + String(routeRetry)
+            + " routeFailed=" + String(routeFailed) + " audioSettings=" + String(audioSettings)
+            + " micModes=" + String(micModes) + " systemEffects=" + String(systemEffects)
+    }
 
     /// CTL-5 and CTL-6 (CL13 `controls.counters`): the core requests plus the presenter's view-side counts.
     func moreSummary(copyLink: Int, invite: Int, sheetDismissed: Int, keyboard: Int) -> String {
@@ -276,6 +387,11 @@ final class ControlsFixtureSession {
     private var local = ControlsFixtureLocal.initial
     /// CTL-6 (S20 SC12): the last S1 hand-row pending value the stage saw, so the stage chip follows the ticket.
     private var stageHandPending = false
+    /// CTL-3: the session's own route owner (never the process-wide one) and the scripted platform it drives.
+    let routeOwner = AudioRouteOwner()
+    private var routeCurrentId = ControlsFixtureScript.speakerRouteId
+    private var routeCurrentInputId = ControlsFixtureScript.builtInInputId
+    private var bluetoothGranted = false
 
     init(state: ControlsFixtureState) {
         self.state = state
@@ -284,9 +400,12 @@ final class ControlsFixtureSession {
         let stagePresenter = StagePresenter(shell: owner)
         stage = stagePresenter
         controls = CallControlsPresenter(shell: owner, stage: stagePresenter)
+        routeCurrentId = ControlsFixtureScript.initialRouteId(state)
         // Live by default (a tap plays micOff, 1 l11); muted where the cell starts from a tap toward live.
         isMuted = state == .slowAck || state == .hostDisabledMedia
-        isCameraOff = state == .audioOnly || state == .cameraDenied || state == .hostDisabledMedia
+        // CTL-4 (S30 2 l4): `controls-camera-effects` starts with the camera off, so its menu holds only Effects.
+        isCameraOff = state == .audioOnly || state == .cameraDenied || state == .hostDisabledMedia || state == .cameraEffects
+        local = local.withCamera(!isCameraOff)
         handInFlight = state == .handRaising || state == .moreHandRaising
         if ControlsFixtureScript.forcesWide(state) {
             controls.setCompositionOverride(ControlBarComposition.wide)
@@ -310,6 +429,26 @@ final class ControlsFixtureSession {
         controls.onRequest = { [weak self] request in
             self?.handleRequest(request) ?? false
         }
+        // CTL-3: the session's route owner with a scripted backend; a refused apply reaches the toast as the view model's
+        // `onRouteFailed` does, and the toast's Retry comes back through the stage's notice command (HD/requests/B8-T6.md).
+        controls.routeOwner = routeOwner
+        routeOwner.backend = AudioRouteBackend(
+            applyOutput: { [weak self] id in self?.applyRouteOutput(id) ?? false },
+            adoptOutput: { _ in },
+            applyInput: { [weak self] id in self?.applyRouteInput(id) ?? false },
+            requestBluetoothAccess: { [weak self] in self?.grantBluetoothAccess() },
+            refresh: { [weak self] in self?.publishRoutes() }
+        )
+        routeOwner.onRouteFailed = { [weak self] id in
+            self?.controls.routeFailed(id: id)
+        }
+        stage.onNoticeCommand = { [weak self] command in
+            guard let self = self else { return }
+            if command.actionId == NoticeAction.retry && command.noticeKind == NoticeKind.routeFailed {
+                _ = self.controls.retryRoute(id: command.detail)
+            }
+        }
+        publishRoutes()
         if ControlsFixtureScript.isRecovering(state) {
             // Admission first, so the recovery keeps the stage (S10 0.4).
             push()
@@ -347,6 +486,32 @@ final class ControlsFixtureSession {
         counters.summary(explain: controls.explainCount, permissionAlert: controls.promptCount, endRequested: controls.endRequestCount)
             + " " + counters.moreSummary(copyLink: controls.copyLinkCount, invite: controls.inviteCount,
                                          sheetDismissed: controls.moreSheetDismissCount, keyboard: controls.keyboardCommandCount)
+            + " " + counters.routeSummary(routeRequest: controls.routeRequestCount, inputRequest: controls.inputRequestCount,
+                                          speaker: controls.speakerRequestCount, routeRetry: controls.routeRetryCount,
+                                          routeFailed: controls.routeFailureCount, audioSettings: controls.audioSettingsCount)
+    }
+
+    /// CTL-3 `controls.route`: the current route, the phase, the pending id, the access state and the row ids with "*"
+    /// on the selected one; CTL-4 `controls.shortcuts`: the Camera items, "(reason)" while disabled.
+    func routeReadout() -> String {
+        let route = controls.route
+        var ids: [String] = []
+        for row in RoutePickerPolicy.rows(route) {
+            ids.append(row.id + (row.isSelected ? "*" : "") + (row.isPending ? "~" : ""))
+        }
+        return "current=" + route.currentId + " phase=" + route.phase.rawValue + " pending=" + route.pendingId
+            + " access=" + route.bluetoothAccess.rawValue + " speaker=" + (route.isSpeakerOn ? "on" : "off")
+            + " input=" + route.currentInputId + " rows=" + ids.joined(separator: ",")
+    }
+
+    func shortcutsReadout() -> String {
+        var ids: [String] = []
+        for item in controls.shortcuts.camera {
+            ids.append(item.id + (item.isEnabled ? "" : "(" + item.reason.rawValue + ")"))
+        }
+        let mic = controls.bar.control(CallControlKind.microphone)?.hasShortcut ?? false
+        let camera = controls.bar.control(CallControlKind.camera)?.hasShortcut ?? false
+        return "mic=" + (mic ? "1" : "0") + " camera=" + (camera ? "1" : "0") + " items=" + (ids.isEmpty ? "none" : ids.joined(separator: ","))
     }
 
     /// CTL-5 `controls.more`: the row ids in section order, each with "(reason)" while disabled and "*" while pending.
@@ -434,6 +599,7 @@ final class ControlsFixtureSession {
         case .toggleCamera:
             counters.recordCamera()
             isCameraOff = !isCameraOff
+            local = local.withCamera(!isCameraOff)
             if state == .slowAck {
                 cameraInFlight = true
                 scheduleAck(kind: MeetingActionKind.camera)
@@ -522,22 +688,59 @@ final class ControlsFixtureSession {
             counters.recordFlipCamera()
         case .showSystemVideoEffects:
             counters.recordSystemEffects()
+        case .showSystemMicrophoneModes:
+            counters.recordMicModes()
         case .setCaptions:
             counters.recordCaptions()
             local = ControlsFixtureLocal(captionsOn: request.value == CallControlsRequest.on, layoutMode: local.layoutMode,
-                                         isRoomLocked: local.isRoomLocked)
+                                         isRoomLocked: local.isRoomLocked, isCameraOn: local.isCameraOn)
             refreshControls()
         case .setLayoutMode:
             counters.recordLayout()
-            local = ControlsFixtureLocal(captionsOn: local.captionsOn, layoutMode: request.value, isRoomLocked: local.isRoomLocked)
+            local = ControlsFixtureLocal(captionsOn: local.captionsOn, layoutMode: request.value, isRoomLocked: local.isRoomLocked,
+                                         isCameraOn: local.isCameraOn)
             refreshControls()
         case .setRoomLock:
             counters.recordLock()
             local = ControlsFixtureLocal(captionsOn: local.captionsOn, layoutMode: local.layoutMode,
-                                         isRoomLocked: request.value == CallControlsRequest.on)
+                                         isRoomLocked: request.value == CallControlsRequest.on, isCameraOn: local.isCameraOn)
             refreshControls()
         }
         return true
+    }
+
+    // MARK: Scripted route backend (CTL-3)
+
+    /// `controls-route-failed` refuses every apply (the owner fails at once, S30 3 l2); the others land at once.
+    private func applyRouteOutput(_ id: String) -> Bool {
+        counters.recordRouteApply()
+        if state == .routeFailed { return false }
+        if !id.isEmpty { routeCurrentId = id }
+        publishRoutes()
+        pushStage()
+        return true
+    }
+
+    private func applyRouteInput(_ id: String) -> Bool {
+        counters.recordInputApply()
+        routeCurrentInputId = id
+        publishRoutes()
+        return true
+    }
+
+    /// S30 3 l2b with the grant stubbed: the one request is granted, the row becomes the named device and the route is
+    /// selected (the Android client's `requestBluetoothAccessFromRouteSheet` does the same after a real grant).
+    private func grantBluetoothAccess() {
+        counters.recordBluetoothRequest()
+        if state != .routeBluetoothNoPermission || bluetoothGranted { return }
+        bluetoothGranted = true
+        publishRoutes()
+        routeOwner.requestRoute(id: ControlsFixtureScript.bluetoothRouteId)
+    }
+
+    private func publishRoutes() {
+        routeOwner.publish(ControlsFixtureScript.routeState(state, currentId: routeCurrentId, currentInputId: routeCurrentInputId,
+                                                            bluetoothGranted: bluetoothGranted))
     }
 
     /// S20 SC12 in the fixture (HD/requests/B6-T3.md R1 mirrors it in the view model): the stage chip shows raising in
@@ -570,8 +773,11 @@ final class ControlsFixtureSession {
     }
 
     private func pushStage() {
+        let route = routeOwner.route
         stage.apply(ControlsFixtureScript.stageInputs(state, isMuted: isMuted, isCameraOff: isCameraOff, isHandRaised: isHandRaised,
-                                                      recovering: recovering, handPending: handInFlight || stageHandPending))
+                                                      recovering: recovering, handPending: handInFlight || stageHandPending,
+                                                      routeKind: route.currentId.isEmpty ? "speaker" : route.routeKind.rawValue,
+                                                      routeName: route.routeName))
     }
 
     private func refreshControls() {

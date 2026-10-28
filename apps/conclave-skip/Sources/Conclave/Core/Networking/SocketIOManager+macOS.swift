@@ -308,6 +308,9 @@ final class SocketIOManager {
     func getBrowserState() async throws -> BrowserStateNotification {
         BrowserStateNotification(active: false, url: nil, noVncUrl: nil, controllerUserId: nil, provider: nil, roomId: nil)
     }
+    func getBrowserCapabilities() async throws -> BrowserCapabilitiesResponse {
+        BrowserCapabilitiesResponse(available: false)
+    }
     func launchBrowser(url: String) async throws -> LaunchBrowserResponse {
         LaunchBrowserResponse(success: true, noVncUrl: nil, provider: nil, error: nil)
     }

@@ -120,6 +120,10 @@
         }
       }
     },
+    "%@ asked for a takeback." : {
+      "comment" : "Chess in the activity card (S60 11): line when the other side asked to undo a move; the argument is a name",
+      "extractionState" : "manual"
+    },
     "%@ becomes the host. You stay in the meeting as a co-host." : {
       "comment" : "People confirmation dialog (S50 3 g): Make Host message; the person's name",
       "extractionState" : "manual"
@@ -198,6 +202,10 @@
       "comment" : "Game shell in the activity card (S60 8): lobby line when too few players joined; %@ is the game name",
       "extractionState" : "manual"
     },
+    "%@ offered a draw." : {
+      "comment" : "Chess in the activity card (S60 11): line when the other side offered a draw; the argument is a name",
+      "extractionState" : "manual"
+    },
     "%@ opened a game vote" : {
       "comment" : "In-call toast: a person opened a vote on which game to play",
       "extractionState" : "manual"
@@ -221,6 +229,10 @@
           }
         }
       }
+    },
+    "%@ solved it first" : {
+      "comment" : "Zip in the activity card (S60 12): the round's results headline; the argument is a player's name",
+      "extractionState" : "manual"
     },
     "%@ started" : {
       "comment" : "Activity card on the stage (S20 11): accessibility announcement when a game, app or the shared browser starts; %@ is its name",
@@ -383,6 +395,30 @@
         }
       }
     },
+    "%lld admitted" : {
+      "comment" : "Participants (S50 4 g): screen reader announcement after Admit All succeeds; the number of people admitted",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld admitted"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld admitted"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "%lld allowed, %lld blocked" : {
       "comment" : "Host Controls (S50 6 g): Access List row value; allowed and blocked counts",
       "extractionState" : "manual"
@@ -414,6 +450,30 @@
     "%lld fps" : {
       "comment" : "Settings (S60 2, SET-3): frame rate value, frames per second",
       "extractionState" : "manual"
+    },
+    "%lld hints used" : {
+      "comment" : "Zip in the activity card (S60 12) (iOS): how many hints you used this round, also in the standings",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld hint used"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld hints used"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "%lld kbps" : {
       "comment" : "Settings (S60 2, SET-3): bitrate value, kilobits per second",
@@ -467,6 +527,10 @@
     },
     "%lld of %lld answered" : {
       "comment" : "Prompt games in the activity card (S60 9), Trivia: how many players answered, for example 4 of 6 answered",
+      "extractionState" : "manual"
+    },
+    "%lld of %lld cells" : {
+      "comment" : "Zip in the activity card (S60 12) (iOS): progress, the cells your path covers of the cells in the puzzle (the total is always 30 or more); also a player's standing while they play",
       "extractionState" : "manual"
     },
     "%lld of %lld characters" : {
@@ -550,6 +614,10 @@
       "comment" : "Game shell in the activity card (S60 8): countdown seconds shown in the timer capsule",
       "extractionState" : "manual"
     },
+    "%lld s per move" : {
+      "comment" : "Chess in the activity card (S60 11): rapid fire: the time limit for each move in seconds",
+      "extractionState" : "manual"
+    },
     "%lld suggestions" : {
       "comment" : "Chat panel: spoken number of mention or command suggestions (iOS)",
       "extractionState" : "manual",
@@ -624,6 +692,26 @@
     },
     "+%lld joining" : {
       "comment" : "Game shell in the activity card (S60 8): header status part, people queued for the next round",
+      "extractionState" : "manual"
+    },
+    ", checkpoint %lld" : {
+      "comment" : "Zip in the activity card (S60 12): appended to a cell's position when it holds a numbered checkpoint; keep the leading comma",
+      "extractionState" : "manual"
+    },
+    ", end of path" : {
+      "comment" : "Zip in the activity card (S60 12): appended to the label of the last cell of your path; keep the leading comma",
+      "extractionState" : "manual"
+    },
+    ", next" : {
+      "comment" : "Zip in the activity card (S60 12): appended to the label of a cell your path may take next; keep the leading comma",
+      "extractionState" : "manual"
+    },
+    ", not part of the puzzle" : {
+      "comment" : "Zip in the activity card (S60 12): appended to the label of a removed cell the path skips; keep the leading comma",
+      "extractionState" : "manual"
+    },
+    ", visited" : {
+      "comment" : "Zip in the activity card (S60 12): appended to a cell's label when your path covers it; keep the leading comma",
       "extractionState" : "manual"
     },
     "1080p Full HD" : {
@@ -710,12 +798,24 @@
       "comment" : "Role changes (S50 12 g): stage invitation message when the host's name is unknown",
       "extractionState" : "manual"
     },
+    "A takeback is pending" : {
+      "comment" : "Chess in the activity card (S60 11): why Request Takeback is unavailable",
+      "extractionState" : "manual"
+    },
     "AI" : {
       "comment" : "Video tile: short tag after the name of an AI voice agent a web host brought into the call (Android only with request R10b); also the Conclave AI tag in chat rows (CHT-7)",
       "extractionState" : "manual"
     },
     "About" : {
       "comment" : "Settings: section header above the privacy policy and version rows (first used by the webinar attendee settings page)",
+      "extractionState" : "manual"
+    },
+    "Accept Draw" : {
+      "comment" : "Chess in the activity card (S60 11): button",
+      "extractionState" : "manual"
+    },
+    "Accept Takeback" : {
+      "comment" : "Chess in the activity card (S60 11): button",
       "extractionState" : "manual"
     },
     "Access List" : {
@@ -810,12 +910,32 @@
       "comment" : "Chat composer: accessibility label of the attach button that opens the attachment menu",
       "extractionState" : "manual"
     },
+    "Add Everyone Here" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): button that adds everyone in the call to the wheel",
+      "extractionState" : "manual"
+    },
     "Add Photo" : {
       "comment" : "Effects panel (S60 4): tile that opens the photo picker to add a background image",
       "extractionState" : "manual"
     },
     "Add Reaction" : {
       "comment" : "Chat panel: accessibility action and page title for adding a reaction",
+      "extractionState" : "manual"
+    },
+    "Add a Name" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): placeholder of the field that adds a name (a pasted list adds one name per line)",
+      "extractionState" : "manual"
+    },
+    "Add to Calendar" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): button that opens the system calendar editor prefilled with the webinar",
+      "extractionState" : "manual"
+    },
+    "Add to Queue" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): button that adds a video to Up Next (also approves a participant's request)",
+      "extractionState" : "manual"
+    },
+    "Add your name so the host knows who’s asking when you join the Q&A." : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): footer under the name field when a guest has no name yet",
       "extractionState" : "manual"
     },
     "Add your name to join." : {
@@ -840,6 +960,10 @@
     },
     "Admit All" : {
       "comment" : "Host knock banner action: lets everyone waiting in",
+      "extractionState" : "manual"
+    },
+    "Admitting…" : {
+      "comment" : "Participants (S50 4 g): the Waiting header's Admit All button while it admits everyone waiting",
       "extractionState" : "manual"
     },
     "Advanced" : {
@@ -884,6 +1008,10 @@
     },
     "Allowed people skip the waiting room, even when the meeting is locked. Blocked people can’t join and are removed if they’re here." : {
       "comment" : "Access List page (S50 7 g): footer under the buttons",
+      "extractionState" : "manual"
+    },
+    "Almost There" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): status beside a spinner once the connection to the server is up",
       "extractionState" : "manual"
     },
     "Also while locked" : {
@@ -960,6 +1088,42 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "App Names %lld" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): header status: how many names are on the wheel; %lld is the count",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld name"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld names"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "App Page Closed %@" : {
+      "comment" : "Activities page of an app (S60 13): shown when the app was closed or replaced while the page was open; %@ is the app name",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is no longer open."
           }
         }
       }
@@ -1100,6 +1264,10 @@
       "comment" : "Layout panel (S60 3): switch that turns off sending and receiving video for this call",
       "extractionState" : "manual"
     },
+    "Audio Settings" : {
+      "comment" : "In-call Mic control long-press menu and VoiceOver custom action: opens Settings at its Audio section",
+      "extractionState" : "manual"
+    },
     "Audio switched to %@" : {
       "comment" : "In-call toast: the audio output changed by itself (for example headphones connected); the argument is the route name",
       "extractionState" : "manual"
@@ -1114,6 +1282,10 @@
     },
     "Auto" : {
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): layout mode in the Layout submenu, chosen automatically",
+      "extractionState" : "manual"
+    },
+    "Auto-played for %@" : {
+      "comment" : "Chess in the activity card (S60 11): note under a move the server played when the move timer ran out; the argument is a name",
       "extractionState" : "manual"
     },
     "Automatic" : {
@@ -1194,6 +1366,34 @@
     },
     "Beta" : {
       "comment" : "Transcript panel (S60 6). Tag next to the Live Notes kicker.",
+      "extractionState" : "manual"
+    },
+    "Bishop" : {
+      "comment" : "Chess in the activity card (S60 11): chess piece name",
+      "extractionState" : "manual"
+    },
+    "Black captain: you move" : {
+      "comment" : "Chess in the activity card (S60 11): your role line when you lead the Black team",
+      "extractionState" : "manual"
+    },
+    "Black team: call the moves together" : {
+      "comment" : "Chess in the activity card (S60 11): your role line on the Black team when someone else moves the pieces",
+      "extractionState" : "manual"
+    },
+    "Black to Move" : {
+      "comment" : "Chess in the activity card (S60 11): status heading while Black is to move",
+      "extractionState" : "manual"
+    },
+    "Black wins by checkmate" : {
+      "comment" : "Chess in the activity card (S60 11): result",
+      "extractionState" : "manual"
+    },
+    "Black wins by resignation" : {
+      "comment" : "Chess in the activity card (S60 11): result",
+      "extractionState" : "manual"
+    },
+    "Black wins on time" : {
+      "comment" : "Chess in the activity card (S60 11): result when White’s clock ran out",
       "extractionState" : "manual"
     },
     "Blend in. You don’t know the word. Category: %@" : {
@@ -1400,12 +1600,20 @@
       "comment" : "Chat panel: button that removes the reply bar",
       "extractionState" : "manual"
     },
+    "Cancel Request" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): participant button that withdraws their video request",
+      "extractionState" : "manual"
+    },
     "Cancel Vote" : {
       "comment" : "Activities panel (S60 7): host button that closes the open game vote",
       "extractionState" : "manual"
     },
     "Cancel the vote to pick a game directly." : {
       "comment" : "Activities panel (S60 7): why catalog rows are disabled during a vote",
+      "extractionState" : "manual"
+    },
+    "Captain-led team chess" : {
+      "comment" : "Chess in the activity card (S60 11): mode line for teams where each side’s captain moves",
       "extractionState" : "manual"
     },
     "Caption Style" : {
@@ -1572,6 +1780,266 @@
       "comment" : "Pre-join lobby (iOS): navigation subtitle while the room’s occupancy is being checked",
       "extractionState" : "manual"
     },
+    "Chess Black" : {
+      "comment" : "Chess in the activity card (S60 11): the Black side, on its clock and in other lines",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Black"
+          }
+        }
+      }
+    },
+    "Chess Board" : {
+      "comment" : "Chess in the activity card (S60 11): screen reader label of the board",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chess board"
+          }
+        }
+      }
+    },
+    "Chess Captain %@" : {
+      "comment" : "Chess in the activity card (S60 11): marks the team captain in the team line; the argument is a name",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ (captain)"
+          }
+        }
+      }
+    },
+    "Chess Check" : {
+      "comment" : "Chess in the activity card (S60 11): the king of the side to move is in check",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check"
+          }
+        }
+      }
+    },
+    "Chess Choose Square %@" : {
+      "comment" : "Chess in the activity card (S60 11): heading of the move list’s second step; the argument is a piece and square, for example Knight on g1",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@: choose a square"
+          }
+        }
+      }
+    },
+    "Chess Chooser Back" : {
+      "comment" : "Chess in the activity card (S60 11): steps back in the move list (its own key: Back is the back camera)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Back"
+          }
+        }
+      }
+    },
+    "Chess Clock Running" : {
+      "comment" : "Chess in the activity card (S60 11): screen reader state of the clock that is counting down",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Running"
+          }
+        }
+      }
+    },
+    "Chess Clock Spoken %@ %@" : {
+      "comment" : "Chess in the activity card (S60 11): screen reader label of a clock, for example White, 3 minutes, 58 seconds left",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, %2$@ left"
+          }
+        }
+      }
+    },
+    "Chess Decline" : {
+      "comment" : "Chess in the activity card (S60 11): button that declines a draw offer or a takeback request",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Decline"
+          }
+        }
+      }
+    },
+    "Chess Empty Square" : {
+      "comment" : "Chess in the activity card (S60 11): a square without a piece, read after its name",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "empty"
+          }
+        }
+      }
+    },
+    "Chess Move Left %@" : {
+      "comment" : "Chess in the activity card (S60 11): rapid fire: screen reader time left for the current move",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ left this move"
+          }
+        }
+      }
+    },
+    "Chess Move Row %lld %@" : {
+      "comment" : "Chess in the activity card (S60 11): a move list row before Black answers, for example 3. Bc4",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld. %2$@"
+          }
+        }
+      }
+    },
+    "Chess Move Row %lld %@ %@" : {
+      "comment" : "Chess in the activity card (S60 11): one move list row in chess notation, for example 1. e4 e5",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld. %2$@ %3$@"
+          }
+        }
+      }
+    },
+    "Chess Pending Square" : {
+      "comment" : "Chess in the activity card (S60 11): your move to this square waits for the server",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "pending"
+          }
+        }
+      }
+    },
+    "Chess Piece On %@ %@" : {
+      "comment" : "Chess in the activity card (S60 11): a piece and its square, for example Knight on g1",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ on %2$@"
+          }
+        }
+      }
+    },
+    "Chess Promotes %@" : {
+      "comment" : "Chess in the activity card (S60 11): a pawn move that promotes; the argument is the destination",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@, promotes"
+          }
+        }
+      }
+    },
+    "Chess Square %@ %@" : {
+      "comment" : "Chess in the activity card (S60 11): joins a square and a fact for the screen reader, for example e4, white knight",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, %2$@"
+          }
+        }
+      }
+    },
+    "Chess Team Black %@" : {
+      "comment" : "Chess in the activity card (S60 11): who plays Black; the argument is a list of names",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Black: %@"
+          }
+        }
+      }
+    },
+    "Chess Team White %@" : {
+      "comment" : "Chess in the activity card (S60 11): who plays White; the argument is a list of names",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "White: %@"
+          }
+        }
+      }
+    },
+    "Chess White" : {
+      "comment" : "Chess in the activity card (S60 11): the White side, on its clock and in other lines",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "White"
+          }
+        }
+      }
+    },
+    "Choose Microphone" : {
+      "comment" : "In-call Mic control: VoiceOver custom action name (iOS 26 and later) that opens the system microphone picker",
+      "extractionState" : "manual"
+    },
+    "Choose Microphone…" : {
+      "comment" : "In-call Mic control long-press menu (iOS 26 and later): opens the system microphone picker",
+      "extractionState" : "manual"
+    },
+    "Choose Next Cell" : {
+      "comment" : "Zip in the activity card (S60 12): toggle that shows the step chooser (the cells your path may take next as buttons) and the chooser's heading",
+      "extractionState" : "manual"
+    },
+    "Choose a Move" : {
+      "comment" : "Chess in the activity card (S60 11): opens the accessible list of moves",
+      "extractionState" : "manual"
+    },
+    "Choose a Piece" : {
+      "comment" : "Chess in the activity card (S60 11): heading of the move list’s first step",
+      "extractionState" : "manual"
+    },
     "Choose a less detailed image." : {
       "comment" : "Effects panel (S60 4): error when a picked image stays too large after compression",
       "extractionState" : "manual"
@@ -1594,6 +2062,22 @@
     },
     "Clear Link" : {
       "comment" : "Webinar Settings (S50 9 g): removes the custom link",
+      "extractionState" : "manual"
+    },
+    "Clear Names" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): destructive confirmation button that removes every name",
+      "extractionState" : "manual"
+    },
+    "Clear Names?" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): confirmation title before removing every name",
+      "extractionState" : "manual"
+    },
+    "Clear Names…" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): destructive button that removes every name (asks first)",
+      "extractionState" : "manual"
+    },
+    "Clear Results" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): button that clears the list of past winners for everyone",
       "extractionState" : "manual"
     },
     "Clear chat on this device" : {
@@ -1860,6 +2344,30 @@
       "comment" : "Prompt games in the activity card (S60 9), Trivia: accessibility announcement at the reveal; %@ is the correct option",
       "extractionState" : "manual"
     },
+    "Costs %lld points" : {
+      "comment" : "Zip in the activity card (S60 12) (iOS): accessibility hint of the hint button, the points the next hint takes off your round score",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Costs %lld point"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Costs %lld points"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Could Not Load" : {
       "comment" : "Debug component gallery: sample title of the error state",
       "extractionState" : "manual"
@@ -1909,6 +2417,14 @@
       "comment" : "Lobby failure title when starting a new meeting failed",
       "extractionState" : "manual"
     },
+    "Couldn’t admit %@." : {
+      "comment" : "Participants (S50 4 g): failure shown when admitting one person waiting failed; the person's name, followed by Retry",
+      "extractionState" : "manual"
+    },
+    "Couldn’t admit everyone." : {
+      "comment" : "Participants (S50 4 g): failure shown when Admit All failed, followed by Retry",
+      "extractionState" : "manual"
+    },
     "Couldn’t cancel the invite." : {
       "comment" : "Webinar People (S50 10 g): failure withdrawing a stage invitation",
       "extractionState" : "manual"
@@ -1931,6 +2447,10 @@
     },
     "Couldn’t delete your account. Check your connection and try again." : {
       "comment" : "Account: the account deletion request failed (iOS footer, Android snackbar with Retry)",
+      "extractionState" : "manual"
+    },
+    "Couldn’t deny %@." : {
+      "comment" : "Participants (S50 4 g): failure shown when denying one person waiting failed; the person's name, followed by Retry",
       "extractionState" : "manual"
     },
     "Couldn’t end the call for everyone. Try again." : {
@@ -1960,6 +2480,14 @@
     },
     "Couldn’t load sign-in options." : {
       "comment" : "Account (signed out): the sign-in providers could not be fetched; a Try Again button follows",
+      "extractionState" : "manual"
+    },
+    "Couldn’t load this webinar." : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): status message body when the webinar lookup failed",
+      "extractionState" : "manual"
+    },
+    "Couldn’t lower all hands." : {
+      "comment" : "Participants and Host Controls (S50 5 g): failure shown when Lower All (or Lower All Hands) failed, followed by Retry",
       "extractionState" : "manual"
     },
     "Couldn’t make %@ a co-host." : {
@@ -2008,6 +2536,10 @@
     },
     "Couldn’t save the invite code." : {
       "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry)",
+      "extractionState" : "manual"
+    },
+    "Couldn’t search YouTube. Try again." : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): shown when a search failed",
       "extractionState" : "manual"
     },
     "Couldn’t send the notice." : {
@@ -2127,6 +2659,10 @@
       "comment" : "Transcript panel (S60 6). Minutes section title; also an export heading.",
       "extractionState" : "manual"
     },
+    "Decline" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): host button that declines a participant's video request",
+      "extractionState" : "manual"
+    },
     "Decorative" : {
       "comment" : "Debug component gallery: contrast class with no requirement",
       "extractionState" : "manual"
@@ -2211,6 +2747,10 @@
       "comment" : "People confirmation dialog (S50 3 g): Deny All confirm button (S50 4)",
       "extractionState" : "manual"
     },
+    "Deny All…" : {
+      "comment" : "Participants (S50 4 g): the item in the Waiting header's overflow menu that asks before denying everyone waiting to join",
+      "extractionState" : "manual"
+    },
     "Details" : {
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): short visible label of the Meeting Details action in the three-item row of the menu; the spoken label is Meeting Details",
       "extractionState" : "manual"
@@ -2263,6 +2803,38 @@
       "comment" : "Settings (S60 2, SET-3): Connection detail: total receive rate",
       "extractionState" : "manual"
     },
+    "Draw One Path, Fill Every Cell" : {
+      "comment" : "Zip in the activity card (S60 12): the task heading above the board while playing, also the board's accessibility label",
+      "extractionState" : "manual"
+    },
+    "Draw by agreement" : {
+      "comment" : "Chess in the activity card (S60 11): result",
+      "extractionState" : "manual"
+    },
+    "Draw by insufficient material" : {
+      "comment" : "Chess in the activity card (S60 11): result",
+      "extractionState" : "manual"
+    },
+    "Draw by stalemate" : {
+      "comment" : "Chess in the activity card (S60 11): result",
+      "extractionState" : "manual"
+    },
+    "Draw by the fifty-move rule" : {
+      "comment" : "Chess in the activity card (S60 11): result",
+      "extractionState" : "manual"
+    },
+    "Draw by threefold repetition" : {
+      "comment" : "Chess in the activity card (S60 11): result",
+      "extractionState" : "manual"
+    },
+    "Draw offered" : {
+      "comment" : "Chess in the activity card (S60 11): line while your side’s draw offer waits for an answer",
+      "extractionState" : "manual"
+    },
+    "Draw on time" : {
+      "comment" : "Chess in the activity card (S60 11): result when a clock ran out against a side that cannot mate",
+      "extractionState" : "manual"
+    },
     "Drawing works with touch or Apple Pencil. Use the toolbar to change tools." : {
       "comment" : "SDK app card on the stage (S60 13): VoiceOver hint of the whiteboard canvas",
       "extractionState" : "manual"
@@ -2273,6 +2845,10 @@
     },
     "Earlier raised hands appear when the queue next updates." : {
       "comment" : "Webinar People (S50 10 g): footer for a host promoted mid-webinar before the first queue update",
+      "extractionState" : "manual"
+    },
+    "Edit Names" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): card button that opens the list of names on the wheel",
       "extractionState" : "manual"
     },
     "Editing locked" : {
@@ -2376,8 +2952,16 @@
       "comment" : "Pre-join lobby: note under the invite code field",
       "extractionState" : "manual"
     },
+    "Enter the invite code from the organizer." : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): footer under the invite code field",
+      "extractionState" : "manual"
+    },
     "Everyone" : {
       "comment" : "Chat panel: recipient choice that sends to everyone; Host Controls (S50 6 g): section header for actions on everyone",
+      "extractionState" : "manual"
+    },
+    "Everyone Can Control" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): host switch; on lets everyone control playback and the queue",
       "extractionState" : "manual"
     },
     "Everyone except hosts is muted. People can unmute again unless unmuting is turned off." : {
@@ -2454,6 +3038,10 @@
     },
     "Finished the GitHub issue request" : {
       "comment" : "Chat panel, Conclave AI row: a finished step; GitHub is a product name",
+      "extractionState" : "manual"
+    },
+    "Flip Board" : {
+      "comment" : "Chess in the activity card (S60 11): button for people watching that turns the board around",
       "extractionState" : "manual"
     },
     "Flip Camera" : {
@@ -2576,6 +3164,10 @@
       "comment" : "Settings (S60 1): explanation under Message notifications",
       "extractionState" : "manual"
     },
+    "Getting You In" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): status beside a spinner right after Start Watching",
+      "extractionState" : "manual"
+    },
     "Glass Prominent" : {
       "comment" : "Debug component gallery: inert specimen button in the glass prominent style",
       "extractionState" : "manual"
@@ -2662,6 +3254,14 @@
       "comment" : "Layout panel (S60 3): switch that hides tiles of people whose camera is off (their audio still plays)",
       "extractionState" : "manual"
     },
+    "Hint" : {
+      "comment" : "Zip in the activity card (S60 12): button that asks the server to extend your path by one correct cell (it costs points)",
+      "extractionState" : "manual"
+    },
+    "Hint (%lld s)" : {
+      "comment" : "Zip in the activity card (S60 12): the hint button while it cools down; the number is the seconds until it is available again",
+      "extractionState" : "manual"
+    },
     "Hold" : {
       "comment" : "Debug system fixture: button that sends a system hold command (as CallKit does for Hold and Accept)",
       "extractionState" : "manual"
@@ -2684,6 +3284,10 @@
     },
     "Hosted by %@" : {
       "comment" : "Transcript panel (S60 6). Status detail; the argument is a person’s name.",
+      "extractionState" : "manual"
+    },
+    "Hosted by the organizer" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): line under the title when the host name is unknown",
       "extractionState" : "manual"
     },
     "Hosted by you" : {
@@ -3034,6 +3638,10 @@
       "comment" : "Share sheet (iOS): message sent with the meeting link; also the Meeting Details share (STG-6)",
       "extractionState" : "manual"
     },
+    "Join the Audience" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): title when the webinar has no title",
+      "extractionState" : "manual"
+    },
     "Join the Game" : {
       "comment" : "Game shell in the activity card (S60 8): VoiceOver label of the Join button",
       "extractionState" : "manual"
@@ -3105,8 +3713,20 @@
       "comment" : "Effects panel (S60 4): detail under Framing and the iOS Center Stage switch",
       "extractionState" : "manual"
     },
+    "Keyboard" : {
+      "comment" : "Shared browser card on the stage (S60 14): button next to the website field that opens the keyboard for typing into the shared page (controller only)",
+      "extractionState" : "manual"
+    },
     "Keys are used only for this session and are never stored." : {
       "comment" : "Transcript panel (S60 6). Key coverage line when a key is needed.",
+      "extractionState" : "manual"
+    },
+    "King" : {
+      "comment" : "Chess in the activity card (S60 11): chess piece name",
+      "extractionState" : "manual"
+    },
+    "Knight" : {
+      "comment" : "Chess in the activity card (S60 11): chess piece name",
       "extractionState" : "manual"
     },
     "Large text, needs 3" : {
@@ -3245,6 +3865,10 @@
       "comment" : "Debug component gallery: sample text of the information banner and the animated banner",
       "extractionState" : "manual"
     },
+    "Live chess duel" : {
+      "comment" : "Chess in the activity card (S60 11): mode line for a one against one game",
+      "extractionState" : "manual"
+    },
     "Live notes are on for this meeting." : {
       "comment" : "In-call banner (priority 12): live notes (transcription) started",
       "extractionState" : "manual"
@@ -3309,6 +3933,10 @@
       "comment" : "Account (signed out): label of the spinner while the sign-in providers load",
       "extractionState" : "manual"
     },
+    "Loading Webinar" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): label beside the spinner while the webinar loads",
+      "extractionState" : "manual"
+    },
     "Loading Your Game View" : {
       "comment" : "Game shell in the activity card (S60 8): notice title while your private view is on its way",
       "extractionState" : "manual"
@@ -3357,8 +3985,16 @@
       "comment" : "Settings (S60 2, SET-3): Connection page notice",
       "extractionState" : "manual"
     },
+    "Low time" : {
+      "comment" : "Chess in the activity card (S60 11): shown on a clock under 10 seconds",
+      "extractionState" : "manual"
+    },
     "Lower" : {
       "comment" : "Status chip: visible short action that lowers your raised hand",
+      "extractionState" : "manual"
+    },
+    "Lower All" : {
+      "comment" : "Participants (S50 5 g): the Raised Hands header button for hosts that lowers every raised hand at once",
       "extractionState" : "manual"
     },
     "Lower All Hands" : {
@@ -3412,6 +4048,10 @@
       "comment" : "People row actions (S50 3 g; the single source for row menus, accessibility actions and the stage tile menu, RECONCILE R19): transfer the host role (asks first)",
       "extractionState" : "manual",
       "generatesSymbol" : false
+    },
+    "Make a move first" : {
+      "comment" : "Chess in the activity card (S60 11): why Request Takeback is unavailable",
+      "extractionState" : "manual"
     },
     "Make up a believable answer" : {
       "comment" : "Prompt games in the activity card (S60 9), Bluff: placeholder of the bluff text field",
@@ -3481,6 +4121,10 @@
       "comment" : "Premeeting Home (iOS): large navigation title of the start screen (HIG: not the app name)",
       "extractionState" : "manual"
     },
+    "Mentioned you" : {
+      "comment" : "System notification subtitle (S70 2 g, sentence case) for a chat message that mentions you; the title is the sender’s name",
+      "extractionState" : "manual"
+    },
     "Message" : {
       "comment" : "Chat panel: composer placeholder and the field's label",
       "extractionState" : "manual"
@@ -3523,6 +4167,10 @@
     },
     "Mic" : {
       "comment" : "Pre-join lobby (iOS): Voice Control name of the microphone toggle",
+      "extractionState" : "manual"
+    },
+    "Mic Mode" : {
+      "comment" : "In-call Mic control: VoiceOver custom action name that opens the system microphone modes (Standard, Voice Isolation, Wide Spectrum)",
       "extractionState" : "manual"
     },
     "Mic Mode…" : {
@@ -3609,8 +4257,16 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "More Shared Browser Actions" : {
+      "comment" : "Shared browser card on the stage (S60 14): accessibility label of the host menu button in the card header",
+      "extractionState" : "manual"
+    },
     "More Transcript Actions" : {
       "comment" : "Transcript panel (S60 6). Accessibility label of the overflow menu.",
+      "extractionState" : "manual"
+    },
+    "More Waiting Actions" : {
+      "comment" : "Participants (S50 4 g): accessibility label of the Waiting header's overflow button (it holds Deny All)",
       "extractionState" : "manual"
     },
     "More than one person matches that name. Choose them from the list." : {
@@ -3631,6 +4287,18 @@
     },
     "Move %@ to the Audience?" : {
       "comment" : "People confirmation dialog (S50 3 g): Move to Audience title; the person's name",
+      "extractionState" : "manual"
+    },
+    "Move Down" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): VoiceOver action that moves a queued video one place down",
+      "extractionState" : "manual"
+    },
+    "Move Up" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): VoiceOver action that moves a queued video one place up",
+      "extractionState" : "manual"
+    },
+    "Move rejected" : {
+      "comment" : "Chess in the activity card (S60 11): your move was not accepted and the position was restored",
       "extractionState" : "manual"
     },
     "Move to Audience" : {
@@ -3663,8 +4331,20 @@
       "comment" : "Debug component gallery: label of the readout naming the controls that did not fit and moved to More",
       "extractionState" : "manual"
     },
+    "Moves" : {
+      "comment" : "Chess in the activity card (S60 11): heading of the move list",
+      "extractionState" : "manual"
+    },
     "Mute" : {
       "comment" : "Call controls: Voice Control input label of the microphone toggle while it is on",
+      "extractionState" : "manual"
+    },
+    "Mute All…" : {
+      "comment" : "Participants (S50 1 g): the In This Meeting header button for hosts; opens the Mute Everyone confirmation",
+      "extractionState" : "manual"
+    },
+    "Mute Browser Audio" : {
+      "comment" : "Shared browser host menu (S60 14): silences the shared browser's sound for you only",
       "extractionState" : "manual"
     },
     "Mute Everyone" : {
@@ -3809,6 +4489,14 @@
       "comment" : "Webinar Q&A (S50 11 g): empty Answered filter",
       "extractionState" : "manual"
     },
+    "No cell can come next. Undo or reset." : {
+      "comment" : "Zip in the activity card (S60 12): step chooser when your path has no legal next cell",
+      "extractionState" : "manual"
+    },
+    "No clock" : {
+      "comment" : "Chess in the activity card (S60 11): the game has no time control",
+      "extractionState" : "manual"
+    },
     "No data yet" : {
       "comment" : "Settings (S60 2, SET-3): Connection detail value before data arrives",
       "extractionState" : "manual"
@@ -3825,8 +4513,20 @@
       "comment" : "Prompt games in the activity card (S60 9), Most Likely To: final results message",
       "extractionState" : "manual"
     },
+    "No hints" : {
+      "comment" : "Zip in the activity card (S60 12): standings, a player who solved the puzzle without a hint",
+      "extractionState" : "manual"
+    },
     "No meeting found with this code. Check it and try again." : {
       "comment" : "Pre-join lobby: issue row after the server found no meeting for the code",
+      "extractionState" : "manual"
+    },
+    "No moves yet" : {
+      "comment" : "Chess in the activity card (S60 11): empty move list",
+      "extractionState" : "manual"
+    },
+    "No names yet." : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): empty list of names",
       "extractionState" : "manual"
     },
     "No one here yet" : {
@@ -3923,6 +4623,10 @@
       "comment" : "In-call control bar: state value of the Share Screen toggle while you are not sharing",
       "extractionState" : "manual"
     },
+    "Nothing queued yet." : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): empty Up Next",
+      "extractionState" : "manual"
+    },
     "Notice" : {
       "comment" : "Host Controls (S50 6 g): section header",
       "extractionState" : "manual"
@@ -3943,6 +4647,10 @@
       "comment" : "Settings (S60 1): shown when the system blocks notifications for the app",
       "extractionState" : "manual"
     },
+    "Notify Me When I’m Let In" : {
+      "comment" : "Lobby waiting state (S10 9 g, RECONCILE R5, iOS only): switch that asks Conclave to post a notification when the host lets you into the meeting while the app is in the background",
+      "extractionState" : "manual"
+    },
     "Now Playing" : {
       "comment" : "Activities panel (S60 7): section header for running activities",
       "extractionState" : "manual"
@@ -3953,6 +4661,10 @@
     },
     "Off in audio-only mode" : {
       "comment" : "In-call control bar: why the camera is unavailable in audio-only mode",
+      "extractionState" : "manual"
+    },
+    "Offer Draw" : {
+      "comment" : "Chess in the activity card (S60 11): button",
       "extractionState" : "manual"
     },
     "On" : {
@@ -3985,6 +4697,10 @@
     },
     "Only http and https URLs are supported." : {
       "comment" : "Activities panel (S60 7): shared browser URL validation, other scheme",
+      "extractionState" : "manual"
+    },
+    "Only the person sharing can control it." : {
+      "comment" : "Shared browser card (S60 14 i): accessibility hint on the shared page for people who are only watching it",
       "extractionState" : "manual"
     },
     "Only visible to you" : {
@@ -4081,6 +4797,10 @@
     },
     "Options" : {
       "comment" : "Transcript panel (S60 6). Disclosure title for the provider and key options (iOS).",
+      "extractionState" : "manual"
+    },
+    "Or Start with a Classic" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): section title of well known videos shown before anything is queued",
       "extractionState" : "manual"
     },
     "Original message isn't available" : {
@@ -4185,6 +4905,14 @@
     },
     "Paused" : {
       "comment" : "In-call control bar: microphone state while another call or app holds the audio; also the live notes status value in Meeting Details (STG-6)",
+      "extractionState" : "manual"
+    },
+    "Pawn" : {
+      "comment" : "Chess in the activity card (S60 11): chess piece name",
+      "extractionState" : "manual"
+    },
+    "Pending" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): shown next to your own request while the host has not answered",
       "extractionState" : "manual"
     },
     "People Want To Join %lld" : {
@@ -4307,6 +5035,10 @@
       "comment" : "Activities panel (S60 7): games footer hint for hosts",
       "extractionState" : "manual"
     },
+    "Picks are sent to the host to approve." : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): footer for participants while only the host controls playback",
+      "extractionState" : "manual"
+    },
     "Pin" : {
       "comment" : "Menu item on a video tile and on a person in Participants: shows this person large for you only (S50 3 g, the single source for every surface)",
       "extractionState" : "manual"
@@ -4327,6 +5059,10 @@
       "comment" : "Activities panel (S60 7): switch that plays the shared browser sound on this device",
       "extractionState" : "manual"
     },
+    "Play Now" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): button that plays a video for everyone right away",
+      "extractionState" : "manual"
+    },
     "Play Test Sound" : {
       "comment" : "Settings (S60 1): button that plays one short tone through the current audio output",
       "extractionState" : "manual"
@@ -4341,6 +5077,10 @@
     },
     "Play Voice Messages" : {
       "comment" : "Settings (S60 1): switch that reads other people’s voice messages aloud on this device",
+      "extractionState" : "manual"
+    },
+    "Playback, seeking and the queue. Off means host only." : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): footer under Everyone Can Control",
       "extractionState" : "manual"
     },
     "Players" : {
@@ -4479,6 +5219,10 @@
       "comment" : "Chat panel: label above a private message you sent and the recipient chip; the argument is the recipient's name",
       "extractionState" : "manual"
     },
+    "Promote To" : {
+      "comment" : "Chess in the activity card (S60 11): title of the promotion choice",
+      "extractionState" : "manual"
+    },
     "Provider" : {
       "comment" : "Transcript panel (S60 6). Picker label: the transcription provider (OpenAI or Sarvam).",
       "extractionState" : "manual"
@@ -4505,6 +5249,10 @@
     },
     "Q&A is off." : {
       "comment" : "Webinar Q&A (S50 11 g): announcement when the host turns Q&A off and the panel closes",
+      "extractionState" : "manual"
+    },
+    "Queen" : {
+      "comment" : "Chess in the activity card (S60 11): chess piece name",
       "extractionState" : "manual"
     },
     "Question" : {
@@ -4537,6 +5285,10 @@
     },
     "Questions show up here the next time you join." : {
       "comment" : "Webinar Q&A (S50 11 g): body for the unavailable state",
+      "extractionState" : "manual"
+    },
+    "Queue" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): card header button that opens search, Up Next and Requests",
       "extractionState" : "manual"
     },
     "Raise Hand" : {
@@ -4585,6 +5337,10 @@
     },
     "Ratio %@ against %@: %@" : {
       "comment" : "Debug component gallery: contrast verdict: ratio, contrast class, then Passes or Fails",
+      "extractionState" : "manual"
+    },
+    "Reach out to the organizer for a replay or about future sessions." : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): status message body after the webinar ended",
       "extractionState" : "manual"
     },
     "React with %@" : {
@@ -4745,6 +5501,10 @@
       "comment" : "Premeeting: accessibility label of the Rejoin button and the join sheet suggestion; the argument is the meeting code",
       "extractionState" : "manual"
     },
+    "Remaining %@" : {
+      "comment" : "Zip in the activity card (S60 12): the round timer chip; the argument is the time left as 2:41, or spoken as 2 minutes, 41 seconds",
+      "extractionState" : "manual"
+    },
     "Remove" : {
       "comment" : "Premeeting Home (iOS): trailing swipe action that removes a recent meeting",
       "extractionState" : "manual"
@@ -4800,6 +5560,10 @@
     },
     "Remove Photo" : {
       "comment" : "Chat composer: button on the attached photo chip that removes the photo before sending",
+      "extractionState" : "manual"
+    },
+    "Remove Winner After Each Spin" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): switch title",
       "extractionState" : "manual"
     },
     "Remove and Block" : {
@@ -4865,12 +5629,40 @@
       "comment" : "Chat panel: reply bar title when replying to your own message",
       "extractionState" : "manual"
     },
+    "Request" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): participant button that asks the host to play a video",
+      "extractionState" : "manual"
+    },
     "Request Declined" : {
       "comment" : "Outcome screen title after the request to join was declined",
       "extractionState" : "manual"
     },
+    "Request Takeback" : {
+      "comment" : "Chess in the activity card (S60 11): button that asks to undo your last move",
+      "extractionState" : "manual"
+    },
+    "Requests" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): section title of videos participants asked the host to play",
+      "extractionState" : "manual"
+    },
+    "Reset" : {
+      "comment" : "Zip in the activity card (S60 12): button that clears your path back to checkpoint 1",
+      "extractionState" : "manual"
+    },
     "Reset Zoom" : {
       "comment" : "Call stage: chip and accessibility action on a zoomed shared screen that returns it to its normal size",
+      "extractionState" : "manual"
+    },
+    "Resign" : {
+      "comment" : "Chess in the activity card (S60 11): confirms resigning (Android also uses it on the button that opens the confirmation)",
+      "extractionState" : "manual"
+    },
+    "Resign This Game?" : {
+      "comment" : "Chess in the activity card (S60 11): resign confirmation title",
+      "extractionState" : "manual"
+    },
+    "Resign…" : {
+      "comment" : "Chess in the activity card (S60 11): button that opens the resign confirmation",
       "extractionState" : "manual"
     },
     "Resolution" : {
@@ -4929,6 +5721,10 @@
       "comment" : "Debug component gallery: readout value for right-to-left layout",
       "extractionState" : "manual"
     },
+    "Rook" : {
+      "comment" : "Chess in the activity card (S60 11): chess piece name",
+      "extractionState" : "manual"
+    },
     "Room" : {
       "comment" : "Debug component gallery: sample title of the value row",
       "extractionState" : "manual"
@@ -4965,6 +5761,10 @@
     },
     "Round %lld of %lld · Set the Word" : {
       "comment" : "Wordle in the activity card (S60 10): heading while a player picks the secret word, for example Round 1 of 3 · Set the Word",
+      "extractionState" : "manual"
+    },
+    "Row %lld, column %lld" : {
+      "comment" : "Zip in the activity card (S60 12): a board cell for screen readers and the step chooser's buttons; the numbers start at 1 from the top left (the board never mirrors)",
       "extractionState" : "manual"
     },
     "Row %lld, empty" : {
@@ -5049,6 +5849,14 @@
     },
     "Search Participants" : {
       "comment" : "Participants (S50 1 g): placeholder of the search field above the list",
+      "extractionState" : "manual"
+    },
+    "Search YouTube or Paste a Link" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): search field prompt; a pasted YouTube link plays or is requested right away",
+      "extractionState" : "manual"
+    },
+    "Search is switched off on this server. Paste a YouTube link instead." : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): shown when this server has no YouTube search",
       "extractionState" : "manual"
     },
     "Searched the web" : {
@@ -5163,6 +5971,10 @@
       "comment" : "Activities panel (S60 7): host row naming the shared browser provider",
       "extractionState" : "manual"
     },
+    "Session Info" : {
+      "comment" : "Shared browser host menu (S60 14, Q3): opens a short note naming the kind of browser running the session (Chromium or Cloud browser); also the note's title",
+      "extractionState" : "manual"
+    },
     "Session Readout" : {
       "comment" : "Debug hosting preview: section title of the meeting session readout (WP2-S2b); developer only, the values are machine-readable codes",
       "extractionState" : "manual"
@@ -5195,6 +6007,10 @@
       "comment" : "Opens the share sheet with the meeting link (F00 11, RECONCILE R14): the call stage chip and solo card button (STG-1) and the premeeting Home recent row menu item (ENT-1); also the Meeting Details share row (STG-6)",
       "extractionState" : "manual"
     },
+    "Share Link" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): button that shares the webinar link",
+      "extractionState" : "manual"
+    },
     "Share Photo" : {
       "comment" : "Photo viewer: toolbar button that opens the share sheet for the photo",
       "extractionState" : "manual"
@@ -5225,6 +6041,14 @@
     },
     "Shared Screen from %@" : {
       "comment" : "Call stage and webinar attendee viewer: accessibility label of a shared screen; the argument is the presenter's name",
+      "extractionState" : "manual"
+    },
+    "Shared browser, %@" : {
+      "comment" : "Shared browser card (S60 14 i): accessibility label of the shared page; %@ is the website shown (for example example.com), or who is sharing when the site is unknown",
+      "extractionState" : "manual"
+    },
+    "Shared by %@" : {
+      "comment" : "Shared browser card (S60 14): line under the shared page naming the person in control of the browser; %@ is their display name",
       "extractionState" : "manual"
     },
     "Shares sound from apps that allow it. Your call audio is never included." : {
@@ -5309,6 +6133,10 @@
     },
     "Shows meeting details." : {
       "comment" : "Meeting capsule (iOS): VoiceOver hint of the capsule button; also the webinar attendee capsule, which opens Webinar Details (STG-8)",
+      "extractionState" : "manual"
+    },
+    "Shuffle" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): button that shuffles the names for everyone",
       "extractionState" : "manual"
     },
     "Sidebar" : {
@@ -5426,6 +6254,10 @@
       "comment" : "Webinar Q&A (S50 11 g): accessibility name of the sort control (iOS)",
       "extractionState" : "manual"
     },
+    "Sort A to Z" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): button that sorts the names alphabetically for everyone",
+      "extractionState" : "manual"
+    },
     "Sound for Join Requests" : {
       "comment" : "Settings (S60 1): host switch that plays a sound when someone asks to join",
       "extractionState" : "manual"
@@ -5452,6 +6284,10 @@
     },
     "Speaking" : {
       "comment" : "Video tile (iOS): state read with a participant tile while they speak; also a voice message bubble's label while it plays (CHT-6)",
+      "extractionState" : "manual"
+    },
+    "Spin" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): the card's primary button; spins the wheel for everyone",
       "extractionState" : "manual"
     },
     "Spin the Wheel" : {
@@ -5502,6 +6338,10 @@
       "comment" : "Settings (S60 2, SET-3): button that starts a local camera preview only you see",
       "extractionState" : "manual"
     },
+    "Start Watching" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): primary button that joins the webinar as an attendee; also announced when the webinar opens",
+      "extractionState" : "manual"
+    },
     "Start a meeting, or join one with a code or link." : {
       "comment" : "Premeeting Home: empty state body on first run",
       "extractionState" : "manual"
@@ -5523,6 +6363,10 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "Starting browser" : {
+      "comment" : "Shared browser card (S60 14 f): shown with a spinner while the shared browser has no picture yet; also the header status",
+      "extractionState" : "manual"
+    },
     "Starting microphone" : {
       "comment" : "Settings pages (S60 2): shown while the microphone test starts",
       "extractionState" : "manual"
@@ -5531,6 +6375,14 @@
       "comment" : "Pre-join lobby: the primary button's pending label while a new meeting is starting (S10 8 g)",
       "extractionState" : "manual",
       "generatesSymbol" : false
+    },
+    "Starts Soon" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): status tag above the title before the webinar starts (neutral tag)",
+      "extractionState" : "manual"
+    },
+    "Starts in %@" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): countdown; the argument is the time left, like 12:41 or 1:12:41",
+      "extractionState" : "manual"
     },
     "Starts when live notes are on" : {
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): subtitle of the Captions toggle while live notes are off",
@@ -5728,6 +6580,10 @@
       "comment" : "Prompt games in the activity card (S60 9), Imposter: the discussion instruction",
       "extractionState" : "manual"
     },
+    "Takeback requested" : {
+      "comment" : "Chess in the activity card (S60 11): line while your side’s takeback request waits for an answer",
+      "extractionState" : "manual"
+    },
     "Tap Now" : {
       "comment" : "Prompt games in the activity card (S60 9), Reaction: the pad when it turns green; also its accessibility label and the go announcement",
       "extractionState" : "manual"
@@ -5770,6 +6626,10 @@
     },
     "That move wasn’t accepted. Try again." : {
       "comment" : "Game shell in the activity card (S60 8): a move was rejected",
+      "extractionState" : "manual"
+    },
+    "That path isn’t allowed. Try again." : {
+      "comment" : "Zip in the activity card (S60 12): the server refused your path; your last accepted path is back on the board",
       "extractionState" : "manual"
     },
     "That person already left." : {
@@ -5876,6 +6736,30 @@
       "comment" : "Transcript panel (S60 6). Take over blurb when Conclave covers the key.",
       "extractionState" : "manual"
     },
+    "The lobby opens %lld minutes before the start." : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): note in the countdown card; the number is the early entry window in minutes (iOS)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The lobby opens %lld minute before the start."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The lobby opens %lld minutes before the start."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "The media connection didn’t go through. Try again." : {
       "comment" : "Join failure body: the audio and video connection failed (S10 8 g; also a failed rejoin, 10 f)",
       "extractionState" : "manual"
@@ -5896,8 +6780,20 @@
       "comment" : "Chat panel: reason under a failed reply",
       "extractionState" : "manual"
     },
+    "The organizer cancelled this session. Reach out to them for an update." : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): status message body when the webinar was cancelled",
+      "extractionState" : "manual"
+    },
+    "The room vs the computer" : {
+      "comment" : "Chess in the activity card (S60 11): mode line when several people play the computer together",
+      "extractionState" : "manual"
+    },
     "The secret word was %@" : {
       "comment" : "Prompt games in the activity card (S60 9), Imposter: on the result; %@ is the word",
+      "extractionState" : "manual"
+    },
+    "The shared browser couldn’t load." : {
+      "comment" : "Shared browser card (S60 14 f): failure state when the page, its secure connection or the browser view failed, or no picture arrived; Try Again and Show Video follow",
       "extractionState" : "manual"
     },
     "The shared browser couldn’t start. Try again." : {
@@ -5922,6 +6818,14 @@
     },
     "The webinar is live." : {
       "comment" : "Webinar attendee viewer (S20 12): spoken announcement when the webinar's program feed starts",
+      "extractionState" : "manual"
+    },
+    "The wheel empties for everyone." : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): confirmation message before removing every name",
+      "extractionState" : "manual"
+    },
+    "The wheel is full." : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): shown when the wheel already has the most names it can hold",
       "extractionState" : "manual"
     },
     "The word was %@" : {
@@ -6006,6 +6910,10 @@
       "comment" : "Debug component gallery: body of the page the sample navigation row opens",
       "extractionState" : "manual"
     },
+    "This page updates on its own when the host opens the room." : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): body under Waiting for the Host to Start",
+      "extractionState" : "manual"
+    },
     "This permanently deletes your Conclave account and signs you out on this device. This can’t be undone." : {
       "comment" : "Account: message of the account deletion confirmation dialog",
       "extractionState" : "manual"
@@ -6016,6 +6924,18 @@
     },
     "This version of Conclave can no longer join meetings. Update to continue." : {
       "comment" : "Premeeting: the update banner and explanation body",
+      "extractionState" : "manual"
+    },
+    "This webinar is full." : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): status message when the webinar reached its attendee limit",
+      "extractionState" : "manual"
+    },
+    "This webinar is locked." : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): status message when the host locked the webinar",
+      "extractionState" : "manual"
+    },
+    "This webinar isn’t available." : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): status message when the webinar is not enabled or the link has no room",
       "extractionState" : "manual"
     },
     "This will load when you’re back online." : {
@@ -6117,6 +7037,10 @@
     },
     "Transcript View" : {
       "comment" : "Transcript panel (S60 6). Accessibility label of the segmented control that switches Transcript, Ask and Minutes.",
+      "extractionState" : "manual"
+    },
+    "Trending" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): section title of popular videos shown before anything is queued",
       "extractionState" : "manual"
     },
     "Truncated Text" : {
@@ -6241,12 +7165,20 @@
       "comment" : "Settings (S60 2, SET-3): Advanced setting title: what to keep when the connection or device struggles",
       "extractionState" : "manual"
     },
+    "Undo" : {
+      "comment" : "Zip in the activity card (S60 12): button that takes the last cell off your path",
+      "extractionState" : "manual"
+    },
     "Unlocking…" : {
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): title of the Lock Meeting row while the request to unlock the meeting is pending (host only)",
       "extractionState" : "manual"
     },
     "Unmute" : {
       "comment" : "Call controls: Voice Control input label of the microphone toggle while it is muted",
+      "extractionState" : "manual"
+    },
+    "Unmute Browser Audio" : {
+      "comment" : "Shared browser host menu (S60 14): turns the shared browser's sound back on for you only",
       "extractionState" : "manual"
     },
     "Unmute to test your microphone." : {
@@ -6267,6 +7199,10 @@
     },
     "Unread Messages" : {
       "comment" : "Chat panel: VoiceOver rotor listing the messages after the unread divider",
+      "extractionState" : "manual"
+    },
+    "Up Next" : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): section title of the queued videos",
       "extractionState" : "manual"
     },
     "Up to 40 characters. Everyone sees the new name." : {
@@ -6391,6 +7327,10 @@
     },
     "Video Codec" : {
       "comment" : "Settings (S60 2, SET-3): Connection detail: the codec of the video you send",
+      "extractionState" : "manual"
+    },
+    "Video Effects" : {
+      "comment" : "In-call Camera control: VoiceOver custom action name that opens the system video effects in Control Center",
       "extractionState" : "manual"
     },
     "Video Effects…" : {
@@ -6531,8 +7471,16 @@
       "comment" : "Participants section header (S50 1 g): people asking to join, shown to hosts",
       "extractionState" : "manual"
     },
+    "Waiting for the Host to Start" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): status beside a spinner when the webinar is not live yet; also announced",
+      "extractionState" : "manual"
+    },
     "Waiting for the host" : {
       "comment" : "Game shell in the activity card (S60 8): what participants see on the results",
+      "extractionState" : "manual"
+    },
+    "Waiting for the host to start something. Playback stays in sync for everyone." : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): shown to participants while nothing plays",
       "extractionState" : "manual"
     },
     "Waiting for the host to start the next round" : {
@@ -6591,6 +7539,10 @@
         }
       }
     },
+    "We Hit a Snag" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): status message title when the webinar could not be loaded or joined",
+      "extractionState" : "manual"
+    },
     "We couldn’t reach Conclave. Check your connection and try again." : {
       "comment" : "Join failure body: the network or the server could not be reached (S10 8 g; also a failed rejoin, 10 f)",
       "extractionState" : "manual"
@@ -6603,8 +7555,16 @@
       "comment" : "Premeeting Home: role tag after the time of a recent webinar you attended; also the Meeting Details webinar section header and the attendee title fallback (STG-6, STG-8)",
       "extractionState" : "manual"
     },
+    "Webinar Cancelled" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): status message title when the organizer cancelled the webinar; also announced",
+      "extractionState" : "manual"
+    },
     "Webinar Details" : {
       "comment" : "Webinar Details panel for attendees (S20 12, 15): panel title",
+      "extractionState" : "manual"
+    },
+    "Webinar Ended" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): status message title after the webinar ended; also announced",
       "extractionState" : "manual"
     },
     "Webinar Link" : {
@@ -6659,12 +7619,44 @@
       "comment" : "Transcript panel (S60 6). Minutes message while notes run with nothing summarized yet.",
       "extractionState" : "manual"
     },
+    "We’ll notify you when you’re let in." : {
+      "comment" : "Lobby waiting state (S10 9 g, iOS only): footer under the Notify Me When I’m Let In switch while it is on",
+      "extractionState" : "manual"
+    },
     "What are the action items?" : {
       "comment" : "Transcript panel (S60 6). Ask suggestion (fills the field).",
       "extractionState" : "manual"
     },
     "What decisions have we made?" : {
       "comment" : "Transcript panel (S60 6). Ask suggestion (fills the field).",
+      "extractionState" : "manual"
+    },
+    "Wheel Missing Names %lld" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): value next to Add Everyone Here: how many people in the call are not on the wheel yet; %lld is the count",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld not on the wheel"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld not on the wheel"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Wheel Sounds" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): switch for the spin sounds on this device",
       "extractionState" : "manual"
     },
     "When the meeting is locked, new people wait until a host admits them. Guests are people who aren’t signed in." : {
@@ -6679,12 +7671,36 @@
       "comment" : "Effects panel (S60 4): footer about the video quality limit while effects run",
       "extractionState" : "manual"
     },
+    "White captain: you move" : {
+      "comment" : "Chess in the activity card (S60 11): your role line when you lead the White team",
+      "extractionState" : "manual"
+    },
     "White glyph on the Leave red" : {
       "comment" : "Debug component gallery: caption of the live contrast row for the white Leave glyph on the system red fill",
       "extractionState" : "manual"
     },
     "White label on the accent color" : {
       "comment" : "Debug component gallery: contrast pair caption",
+      "extractionState" : "manual"
+    },
+    "White team: call the moves together" : {
+      "comment" : "Chess in the activity card (S60 11): your role line on the White team when someone else moves the pieces",
+      "extractionState" : "manual"
+    },
+    "White to Move" : {
+      "comment" : "Chess in the activity card (S60 11): status heading while White is to move",
+      "extractionState" : "manual"
+    },
+    "White wins by checkmate" : {
+      "comment" : "Chess in the activity card (S60 11): result",
+      "extractionState" : "manual"
+    },
+    "White wins by resignation" : {
+      "comment" : "Chess in the activity card (S60 11): result",
+      "extractionState" : "manual"
+    },
+    "White wins on time" : {
+      "comment" : "Chess in the activity card (S60 11): result when Black’s clock ran out",
       "extractionState" : "manual"
     },
     "Whiteboard" : {
@@ -6955,6 +7971,14 @@
       "comment" : "Chat panel: status line when the draft starts with @name or /dm name; the argument is the person's name",
       "extractionState" : "manual"
     },
+    "Winner: %@" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): VoiceOver announcement when a spin lands; %@ is the winning name (user content)",
+      "extractionState" : "manual"
+    },
+    "Winners come off the wheel automatically, so nobody gets picked twice" : {
+      "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): explanation under the Remove Winner After Each Spin switch",
+      "extractionState" : "manual"
+    },
     "Wordle Delete Key" : {
       "comment" : "Wordle in the activity card (S60 10): accessibility name of the key on the on-screen letter keyboard that removes the last letter",
       "extractionState" : "manual",
@@ -7079,12 +8103,24 @@
       "comment" : "Prompt games in the activity card (S60 9), Bluff: marks the option you picked, at the reveal",
       "extractionState" : "manual"
     },
+    "You play Black" : {
+      "comment" : "Chess in the activity card (S60 11): your role line",
+      "extractionState" : "manual"
+    },
+    "You play White" : {
+      "comment" : "Chess in the activity card (S60 11): your role line",
+      "extractionState" : "manual"
+    },
     "You set the word. Watch everyone guess." : {
       "comment" : "Wordle in the activity card (S60 10): shown to the player who picked the secret word while the others guess",
       "extractionState" : "manual"
     },
     "You solved it" : {
       "comment" : "Wordle in the activity card (S60 10): your result when you guessed the word",
+      "extractionState" : "manual"
+    },
+    "You vs the computer" : {
+      "comment" : "Chess in the activity card (S60 11): mode line when one person plays the computer",
       "extractionState" : "manual"
     },
     "You're already muted." : {
@@ -7127,6 +8163,10 @@
     },
     "Your Messages" : {
       "comment" : "Settings, Voice messages (S60 2): section header for the voice your voice messages use",
+      "extractionState" : "manual"
+    },
+    "Your Move" : {
+      "comment" : "Chess in the activity card (S60 11): status heading when it is your turn to move",
       "extractionState" : "manual"
     },
     "Your Name" : {
@@ -7220,8 +8260,16 @@
       "comment" : "Chat panel: system row when a reaction failed",
       "extractionState" : "manual"
     },
+    "Your request was declined." : {
+      "comment" : "Watch Together in the activity card or its Activities page (S60 13): shown to a participant after the host declined their video request",
+      "extractionState" : "manual"
+    },
     "Your screen share isn’t sending. Return to the shared screen or share again." : {
       "comment" : "In-call banner (priority 10): no screen frames for 5 seconds",
+      "extractionState" : "manual"
+    },
+    "Your side loses." : {
+      "comment" : "Chess in the activity card (S60 11): resign confirmation message",
       "extractionState" : "manual"
     },
     "Your sign-in expired. Sign in again, or keep going as a guest." : {
@@ -7235,6 +8283,10 @@
     },
     "Your word: %@" : {
       "comment" : "Prompt games in the activity card (S60 9), Imposter: the held secret card for the crew; %@ is the secret word",
+      "extractionState" : "manual"
+    },
+    "You’ll join as an attendee. Your camera and mic stay off." : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): note above Start Watching",
       "extractionState" : "manual"
     },
     "You’ll join as soon as someone lets you in." : {
@@ -7257,6 +8309,10 @@
       "comment" : "Status view: title of the offline state",
       "extractionState" : "manual"
     },
+    "You’re a Little Early" : {
+      "comment" : "Webinar landing (ENT-9, S10 12 g): title of the countdown card before the lobby opens",
+      "extractionState" : "manual"
+    },
     "You’re changing your name too quickly. Try again in a moment." : {
       "comment" : "Change Name dialog (S50 3 c, 3 d, 3 g): refusal shown after Save",
       "extractionState" : "manual"
@@ -7267,6 +8323,10 @@
     },
     "You’re in. Joining now." : {
       "comment" : "Accessibility announcement when the host lets the person in (S10 9 g)",
+      "extractionState" : "manual"
+    },
+    "You’re in. Tap to return to the call." : {
+      "comment" : "System notification body (S70 2 g) posted when the host lets you into the meeting while Conclave is in the background; the title is the meeting name",
       "extractionState" : "manual"
     },
     "You’re no longer a host." : {
@@ -7321,6 +8381,10 @@
       "comment" : "Webinar Q&A (S50 11 g): refusal under the composer",
       "extractionState" : "manual"
     },
+    "You’re sharing" : {
+      "comment" : "Shared browser card (S60 14): line under the shared page when you are the person in control of the browser",
+      "extractionState" : "manual"
+    },
     "You’re sharing your screen" : {
       "comment" : "In-call banner (priority 9): your screen share is live",
       "extractionState" : "manual"
@@ -7346,6 +8410,30 @@
     "You’re watching. Roles are secret." : {
       "comment" : "Game shell in the activity card (S60 8): Imposter spectator notice",
       "extractionState" : "manual"
+    },
+    "Zip Solved In %@" : {
+      "comment" : "Zip in the activity card (S60 12): your result and a player's standing when they finished the path; the argument is the solve time as 0:15, or spoken as 15 seconds",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solved in %@"
+          }
+        }
+      }
+    },
+    "Zip Time Up" : {
+      "comment" : "Zip in the activity card (S60 12): your result and a player's standing when the round ended before they finished",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Time’s up"
+          }
+        }
+      }
     },
     "Zoom %@x" : {
       "comment" : "Call stage: accessibility value of a zoomed shared screen; the argument is the zoom factor, such as 2 or 2.5",
@@ -7383,6 +8471,34 @@
       "comment" : "Prompt body fallback when the new meeting code is unknown (lower case: it sits mid sentence)",
       "extractionState" : "manual"
     },
+    "black bishop" : {
+      "comment" : "Chess in the activity card (S60 11): a piece on a square",
+      "extractionState" : "manual"
+    },
+    "black king" : {
+      "comment" : "Chess in the activity card (S60 11): a piece on a square",
+      "extractionState" : "manual"
+    },
+    "black knight" : {
+      "comment" : "Chess in the activity card (S60 11): a piece on a square",
+      "extractionState" : "manual"
+    },
+    "black pawn" : {
+      "comment" : "Chess in the activity card (S60 11): a piece on a square",
+      "extractionState" : "manual"
+    },
+    "black queen" : {
+      "comment" : "Chess in the activity card (S60 11): a piece on a square",
+      "extractionState" : "manual"
+    },
+    "black rook" : {
+      "comment" : "Chess in the activity card (S60 11): a piece on a square",
+      "extractionState" : "manual"
+    },
+    "castles to %@" : {
+      "comment" : "Chess in the activity card (S60 11): a castling move; the argument is the king’s square",
+      "extractionState" : "manual"
+    },
     "custom-link" : {
       "comment" : "Webinar Settings (S50 9 g): placeholder in the custom link field; an example slug, keep lowercase with a hyphen",
       "extractionState" : "manual",
@@ -7390,6 +8506,18 @@
     },
     "iPhone" : {
       "comment" : "Audio route name for the iPhone's own receiver (the earpiece), as the system route list names it; shown in the Mic shortcut and route toasts (S30 3 g, SYS-2)",
+      "extractionState" : "manual"
+    },
+    "in check" : {
+      "comment" : "Chess in the activity card (S60 11): the king on this square is in check",
+      "extractionState" : "manual"
+    },
+    "last move" : {
+      "comment" : "Chess in the activity card (S60 11): a square of the last move",
+      "extractionState" : "manual"
+    },
+    "legal move" : {
+      "comment" : "Chess in the activity card (S60 11): a square the selected piece can move to",
       "extractionState" : "manual"
     },
     "next round" : {
@@ -7421,10 +8549,42 @@
       "comment" : "Debug component gallery: haptic tap result: the haptics preference or app state blocks feedback",
       "extractionState" : "manual"
     },
+    "takes on %@" : {
+      "comment" : "Chess in the activity card (S60 11): a capturing move in the move list; the argument is a square",
+      "extractionState" : "manual"
+    },
+    "takes on %@ en passant" : {
+      "comment" : "Chess in the activity card (S60 11): an en passant capture; the argument is a square",
+      "extractionState" : "manual"
+    },
     "too soon" : {
       "comment" : "Prompt games in the activity card (S60 9), Reaction: a result row value for someone who tapped early (lowercase in the results list)",
       "extractionState" : "manual",
       "generatesSymbol" : false
+    },
+    "white bishop" : {
+      "comment" : "Chess in the activity card (S60 11): a piece on a square",
+      "extractionState" : "manual"
+    },
+    "white king" : {
+      "comment" : "Chess in the activity card (S60 11): a piece on a square",
+      "extractionState" : "manual"
+    },
+    "white knight" : {
+      "comment" : "Chess in the activity card (S60 11): a piece on a square",
+      "extractionState" : "manual"
+    },
+    "white pawn" : {
+      "comment" : "Chess in the activity card (S60 11): a piece on a square",
+      "extractionState" : "manual"
+    },
+    "white queen" : {
+      "comment" : "Chess in the activity card (S60 11): a piece on a square",
+      "extractionState" : "manual"
+    },
+    "white rook" : {
+      "comment" : "Chess in the activity card (S60 11): a piece on a square",
+      "extractionState" : "manual"
     },
     "your current meeting" : {
       "comment" : "Prompt body fallback when the current meeting code is unknown (lower case: it sits mid sentence)",

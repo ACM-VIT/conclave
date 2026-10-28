@@ -16,7 +16,10 @@ import Observation
 /// PPL-5 adds the webinar host sections (attendee hand queue rows, panelists, invited rows) and `webinarQueueKnown`;
 /// PPL-6 adds `qa` (`WebinarQAPresenter`, the same ledger) and feeds `qaUnseen`; PPL-7 applies `PeopleRolePolicy`
 /// (PL13: what closes, pops, clears or announces on each role, target or session change) and publishes the attendee
-/// side's `stageInvitation`. Extension point: PPL-3 the waiting and hand actions.
+/// side's `stageInvitation`. PPL-3 adds admissions and the hand queue (S50 4, 5): Admit and Deny on `waiting:` rows
+/// through `perform`, Admit All and Deny All from the Waiting header and from the S20 knock banner (stage origin, so a
+/// failure uses the toast lane, PL14), one Lower All, the header actions (`headerActions`), the "%lld admitted" and
+/// new-knock announcements, and the knock banner's pending state on the stage.
 @MainActor
 @Observable
 final class PeoplePresenter {
@@ -38,6 +41,9 @@ final class PeoplePresenter {
     private(set) var rename: PeopleRenameState = PeopleRenameState.idle
     /// PPL-7 (S50 12, PH9): the attendee side of `webinar:promoted`; drives the invitation alert over the viewer.
     private(set) var stageInvitation: StageInvitationModel? = nil
+    /// PPL-3 (S50 1 c, 4, 5): the section header buttons (Admit All and Deny All, Lower All, Mute All...). Own stored
+    /// property: only the headers read it, so a pending Admit All never re-evaluates the list (S50 4 k).
+    private(set) var headerActions: PeopleHeaderActions = PeopleHeaderActions.none
 
     @ObservationIgnored let rows = PersonRowStore()
     @ObservationIgnored let waiting = WaitingRowStore()
@@ -92,6 +98,10 @@ final class PeoplePresenter {
     @ObservationIgnored private var retryOrder: [Int] = []
     /// Q14 fallback when no core flag arrives (fixtures): a renameDisabled refusal seen by this presenter.
     @ObservationIgnored private var renameDisabledLocally = false
+    /// PPL-3 (S50 4 i): the waiting ids of the last rebuild, so a new knock while Participants is open is announced
+    /// once; the baseline is set by the first host rebuild, so the initial pending list never announces.
+    @ObservationIgnored private var knownWaitingIds: [String] = []
+    @ObservationIgnored private var waitingBaselineReady = false
 
     init(shell: MeetingShellPresenter, stage: StagePresenter) {
         self.shell = shell
@@ -278,6 +288,10 @@ final class PeoplePresenter {
         }
         if attendeeCount != 0 { attendeeCount = 0 }
         if qaUnseen != 0 { qaUnseen = 0 }
+        if headerActions != PeopleHeaderActions.none { headerActions = PeopleHeaderActions.none }
+        knownWaitingIds = []
+        waitingBaselineReady = false
+        stage.setKnockActionsPending(false)
     }
 
     // MARK: Actions (S50 3, PPL-2)
@@ -303,6 +317,8 @@ final class PeoplePresenter {
     /// Returns `.ignored` synchronously for a missing row, an unavailable item or a duplicate.
     @discardableResult
     func perform(_ action: PersonActionID, rowId: String, source: String) -> ControlTapResult {
+        // PPL-3 (S50 4): Admit and Deny act on `waiting:` rows, which live in the waiting store.
+        if PeopleOrderPolicy.isWaitingKey(rowId) { return performWaiting(action, rowId: rowId, source: source) }
         guard rows.contains(rowId) else { return ControlTapResult.ignored }
         let model = rows.entry(for: rowId).model
         var item: PersonActionModel? = nil
@@ -354,17 +370,39 @@ final class PeoplePresenter {
                         source: source, sourceKey: rowId, targetName: displayName(model))
     }
 
-    /// PPL-3 header action (S50 4): Admit All never confirms.
+    /// PPL-3 header action (S50 4): Admit All never confirms. The command's `number` carries how many were waiting, so
+    /// the acknowledgement announces "%lld admitted" (S50 4 g).
     @discardableResult
     func admitAll() -> ControlTapResult {
-        guard snapshot.canUseHostActions, snapshot.section(PeopleSectionID.waiting) != nil else { return ControlTapResult.ignored }
-        return dispatch(PeopleCommand.make(PeopleCommandKind.admitAll), key: "admitAll:" + PeopleSectionID.waiting.rawValue,
-                        source: PeopleActionSource.sectionHeader, sourceKey: PeopleSectionID.waiting.rawValue, targetName: "")
+        dispatchAdmitAll(source: PeopleActionSource.sectionHeader)
     }
 
-    /// PPL-3 header action (S50 4): Deny All confirms from the Waiting header.
+    /// The S20 knock banner's Admit All (two or more waiting, S20 10 f row 8): the same command from the stage, so a
+    /// failure posts to the toast lane (PL14 stage origin) and the outcome token stays this presenter's (S50 0.5).
+    @discardableResult
+    func admitAllFromStage() -> ControlTapResult {
+        dispatchAdmitAll(source: PeopleActionSource.stage)
+    }
+
+    /// The S20 knock banner's Admit (one person waiting): `pendingId` is the server's pending id exactly as sent.
+    @discardableResult
+    func admitFromStage(pendingId: String) -> ControlTapResult {
+        if pendingId.isEmpty { return ControlTapResult.ignored }
+        let key = PeopleOrderPolicy.waitingKey(pendingId)
+        if waiting.contains(key) {
+            return performWaiting(PersonActionID.admit, rowId: key, source: PeopleActionSource.stage)
+        }
+        // The banner and People read the same pending list; this covers a banner that is one update ahead.
+        guard snapshot.canUseHostActions else { return ControlTapResult.ignored }
+        return dispatch(PeopleCommand.make(PeopleCommandKind.admit, targetId: pendingId), key: PeopleAdmissionsPolicy.admitKey(key),
+                        source: PeopleActionSource.stage, sourceKey: key, targetName: "")
+    }
+
+    /// PPL-3 header action (S50 4): Deny All confirms from the Waiting header, which offers it only while two or more
+    /// people wait (one waiting shows the row buttons only, S50 4 c).
     func requestDenyAll() {
-        guard snapshot.canUseHostActions, let section = snapshot.section(PeopleSectionID.waiting) else { return }
+        guard snapshot.canUseHostActions, headerActions.showsAdmitAll, headerActions.isDenyAllEnabled,
+              let section = snapshot.section(PeopleSectionID.waiting) else { return }
         nextConfirmationId += 1
         present(PeopleConfirmation(id: nextConfirmationId, kind: PeopleConfirmationKind.denyAll,
                                    targetId: PeopleSectionID.waiting.rawValue, targetName: "", count: section.count,
@@ -372,14 +410,52 @@ final class PeoplePresenter {
                                    isConfirmEnabled: true, reason: PeopleActionReason.none))
     }
 
+    /// PPL-3 (S50 5 c, Q4, Q9): the one Lower All on the Raised Hands header, for hosts and co-hosts, acting at once.
+    /// It shares the Host Controls bulk key, so Lower All Hands there shows the same pending state.
+    @discardableResult
+    func lowerAllHands() -> ControlTapResult {
+        guard snapshot.canUseHostActions, headerActions.showsLowerAll, headerActions.isLowerAllEnabled else {
+            return ControlTapResult.ignored
+        }
+        return dispatch(PeopleCommand.make(PeopleCommandKind.bulk, text: HostBulkID.lowerAllHands.rawValue),
+                        key: PeopleAdmissionsPolicy.lowerAllKey, source: PeopleActionSource.sectionHeader,
+                        sourceKey: PeopleSectionID.raisedHands.rawValue, targetName: "")
+    }
+
     /// The In This Meeting header's Mute All (S50 1 c): the same confirmation as Host Controls, from the header.
     func requestMuteAll() {
-        guard snapshot.canUseHostActions else { return }
+        guard snapshot.canUseHostActions, headerActions.showsMuteAll, headerActions.isMuteAllEnabled else { return }
         nextConfirmationId += 1
         present(PeopleConfirmation(id: nextConfirmationId, kind: PeopleConfirmationKind.muteAll,
                                    targetId: HostBulkID.muteAll.rawValue, targetName: "", count: 0,
                                    source: PeopleActionSource.sectionHeader, canBlock: false, isGuest: false,
                                    isConfirmEnabled: true, reason: PeopleActionReason.none))
+    }
+
+    /// Admit or Deny on one waiting row (S50 4 c, 4 d; PL2). Deny never confirms (one person, they can ask again).
+    /// Returns `.ignored` for an unknown row, a disabled row (recovering, offline, a bulk admission in flight) or a
+    /// duplicate (the row already shows its spinner).
+    private func performWaiting(_ action: PersonActionID, rowId: String, source: String) -> ControlTapResult {
+        guard action == PersonActionID.admit || action == PersonActionID.deny, waiting.contains(rowId),
+              snapshot.canUseHostActions else { return ControlTapResult.ignored }
+        let model = waiting.entry(for: rowId).model
+        guard model.isEnabled else { return ControlTapResult.ignored }
+        record("perform:" + action.rawValue)
+        let kind = action == PersonActionID.admit ? PeopleCommandKind.admit : PeopleCommandKind.deny
+        return dispatch(PeopleCommand.make(kind, targetId: model.serverId), key: PeopleActionPolicy.ledgerKey(kind, target: rowId),
+                        source: source, sourceKey: rowId, targetName: model.name)
+    }
+
+    private func dispatchAdmitAll(source: String) -> ControlTapResult {
+        guard snapshot.canUseHostActions, headerActions.isAdmitAllEnabled,
+              let section = snapshot.section(PeopleSectionID.waiting) else { return ControlTapResult.ignored }
+        return dispatch(PeopleCommand.make(PeopleCommandKind.admitAll, number: section.count), key: PeopleAdmissionsPolicy.admitAllKey,
+                        source: source, sourceKey: PeopleSectionID.waiting.rawValue, targetName: "")
+    }
+
+    /// The roster section a header Mute All started from (Panelists in the webinar host branch).
+    private func rosterSectionId() -> String {
+        snapshot.section(PeopleSectionID.panelists) != nil ? PeopleSectionID.panelists.rawValue : PeopleSectionID.inMeeting.rawValue
     }
 
     /// Host Controls confirmations (bulk, Remove Code, Block, Rotate Link, Remove Attendee Code; source `hostControls`).
@@ -416,10 +492,19 @@ final class PeoplePresenter {
                      key: PeopleActionPolicy.ledgerKey(kind, target: current.targetId), source: current.source,
                      sourceKey: current.targetId, targetName: current.targetName)
         case .denyAll:
-            dispatch(PeopleCommand.make(PeopleCommandKind.denyAll), key: "denyAll:" + PeopleSectionID.waiting.rawValue,
+            dispatch(PeopleCommand.make(PeopleCommandKind.denyAll, number: current.count), key: PeopleAdmissionsPolicy.denyAllKey,
                      source: current.source, sourceKey: PeopleSectionID.waiting.rawValue, targetName: "")
         case .muteAll, .camerasOff, .stopAllShares:
-            if let bulk = HostControlsPolicy.bulk(for: current.kind) { host.dispatchBulk(bulk) }
+            if let bulk = HostControlsPolicy.bulk(for: current.kind) {
+                if current.source == PeopleActionSource.sectionHeader {
+                    // PPL-3 (S50 1 c): the header Mute All reports at its section (PL14 inline at the source), on the
+                    // shared bulk key so Host Controls shows it pending too.
+                    dispatch(PeopleCommand.make(PeopleCommandKind.bulk, text: bulk.rawValue), key: HostControlsPolicy.bulkKey(bulk),
+                             source: current.source, sourceKey: rosterSectionId(), targetName: "")
+                } else {
+                    host.dispatchBulk(bulk)
+                }
+            }
         case .clearInviteCode:
             host.dispatchClearMeetingInviteCode()
         case .block:
@@ -540,6 +625,10 @@ final class PeoplePresenter {
             publishFeedback(FeedbackKind.hostAdmitted)
         case .admitAll:
             publishFeedback(FeedbackKind.hostAdmittedAll)
+            // S50 4 g: "%lld admitted" after Admit All (the count dispatched with the command).
+            if entry.command.number > 0 {
+                stage.announce(kind: PeopleAnnouncementKind.admittedAll, name: String(entry.command.number))
+            }
         case .deny, .denyAll:
             publishFeedback(FeedbackKind.hostDenied)
         case .remove, .block:
@@ -576,6 +665,8 @@ final class PeoplePresenter {
         // Lost host while it was in flight: a host action finishes silently (S50 6 f, 12; PH2). Your own rename, Q&A
         // questions and votes and a stage decline still report.
         if !snapshot.isHostViewer && PeopleRolePolicy.isHostCommand(entry.command.kind) { return }
+        // PPL-3 (S50 4 f): a stale waiting entry leaves silently.
+        if PeopleAdmissionsPolicy.isSilentFailure(kind: entry.command.kind, failure: failure) { return }
         publishFeedback(entry.command.kind == PeopleCommandKind.qaSubmit ? FeedbackKind.questionFailed : FeedbackKind.hostActionFailed)
         nextFailureId += 1
         let placement = PeopleFailurePlacementPolicy.placement(origin: PeopleActionSource.origin(entry.source),
@@ -650,6 +741,24 @@ final class PeoplePresenter {
                                        targetName: current.targetName, count: current.count, source: current.source,
                                        canBlock: current.canBlock, isGuest: current.isGuest, isConfirmEnabled: enabled,
                                        reason: reason))
+        }
+    }
+
+    /// PPL-3 (S50 4 f): a header dialog follows its header. Deny All closes once fewer than two people wait (the
+    /// header no longer offers it) and keeps its title count current otherwise; Mute All closes when you are alone.
+    private func validateHeaderConfirmation(_ header: PeopleHeaderActions, waitingCount: Int) {
+        guard let current = confirmation, current.source == PeopleActionSource.sectionHeader else { return }
+        if current.kind == PeopleConfirmationKind.denyAll {
+            if !header.showsAdmitAll {
+                clearConfirmation()
+            } else if current.count != waitingCount {
+                present(PeopleConfirmation(id: current.id, kind: current.kind, targetId: current.targetId,
+                                           targetName: current.targetName, count: waitingCount, source: current.source,
+                                           canBlock: current.canBlock, isGuest: current.isGuest,
+                                           isConfirmEnabled: current.isConfirmEnabled, reason: current.reason))
+            }
+        } else if current.kind == PeopleConfirmationKind.muteAll && !header.showsMuteAll {
+            clearConfirmation()
         }
     }
 
@@ -803,6 +912,32 @@ final class PeoplePresenter {
         focusRequest = PeopleFocusRequest(id: nextFocusId, sectionId: sectionId)
     }
 
+    /// S50 4 i: a new knock while Participants is open is announced once politely ("%@ wants to join"); the stage
+    /// banner's assertive announcement is suppressed while Participants is current (`MeetingNoticePolicy`), so it is
+    /// read once. The first host rebuild only records the baseline (the initial pending list never announces).
+    private func announceNewKnocks(_ requests: [PeopleWaitingInput], viewerIsHost: Bool) {
+        if !viewerIsHost {
+            knownWaitingIds = []
+            waitingBaselineReady = false
+            return
+        }
+        if waitingBaselineReady && openPresentationID != 0 {
+            let fresh = PeopleAdmissionsPolicy.newRequests(previous: knownWaitingIds, current: requests)
+            if fresh.count == 1 {
+                let name = fresh[0].displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+                stage.announce(kind: PeopleAnnouncementKind.knock, name: name.isEmpty ? fresh[0].id : name)
+            } else if fresh.count > 1 {
+                stage.announce(kind: PeopleAnnouncementKind.knockMany, name: String(fresh.count))
+            }
+        }
+        var ids: [String] = []
+        for request in requests {
+            ids.append(request.id)
+        }
+        knownWaitingIds = ids
+        waitingBaselineReady = true
+    }
+
     private func rebuild(previousViewer: PersonRole) {
         let ordered = PeopleOrderPolicy.order(inputs)
         let viewer = ordered.viewerRole
@@ -917,18 +1052,32 @@ final class PeoplePresenter {
             handNames.append(name)
         }
 
+        // PPL-3 (S50 4): waiting rows carry their own Admit or Deny in flight; a bulk admission disables every row.
+        let pendingKeys = ledger.pendingKeys()
+        let bulkAdmission = pendingKeys.contains(PeopleAdmissionsPolicy.admitAllKey)
+            || pendingKeys.contains(PeopleAdmissionsPolicy.denyAllKey)
         var waitingKeys: [String] = []
         var waitingSearch: [String] = []
         var waitingNames: [String] = []
-        let waitingEnabled = blocked == MeetingBlockedReason.none
         for request in ordered.waiting {
-            let model = PeopleRowPolicy.waitingModel(request, isEnabled: waitingEnabled, reason: blocked.rawValue)
+            let key = PeopleOrderPolicy.waitingKey(request.id)
+            let pending = PeopleActionPolicy.rowPendingAction(ledger.pendingAction(forRow: key))
+            let model = PeopleAdmissionsPolicy.waitingRow(request, pendingAction: pending, blockedReason: blocked.rawValue,
+                                                          bulkPending: bulkAdmission)
             waiting.write(model)
             waitingKeys.append(model.id)
             waitingSearch.append(model.name.lowercased())
             waitingNames.append(model.name)
         }
         waiting.prune(keeping: waitingKeys)
+        announceNewKnocks(ordered.waiting, viewerIsHost: viewer.isHostRole)
+        stage.setKnockActionsPending(PeopleAdmissionsPolicy.hasAdmissionPending(pendingKeys))
+        let header = PeopleAdmissionsPolicy.headerActions(viewerIsHost: viewer.isHostRole, blockedReason: blocked.rawValue,
+                                                          waitingCount: ordered.waiting.count,
+                                                          showsMeetingHands: !webinarHost && !ordered.raisedHands.isEmpty,
+                                                          rosterCount: meetingKeys.count, pendingKeys: pendingKeys)
+        if header != headerActions { headerActions = header }
+        validateHeaderConfirmation(header, waitingCount: ordered.waiting.count)
 
         var sections: [PeopleSection] = []
         if !waitingKeys.isEmpty {

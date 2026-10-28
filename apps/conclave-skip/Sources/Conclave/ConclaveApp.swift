@@ -133,6 +133,9 @@ public final class ConclaveAppDelegate: Sendable {
         NativeRouteFlags.shared.configureFromLaunchEnvironment()
         PerformanceDiagnostics.install()
         #if os(iOS) && !SKIP
+        // SYS-3 (S70 2 c): the UNUserNotificationCenter delegate before launch finishes, so a notification tap that
+        // launched the app still arrives (it waits in SystemNotifications until the core installs its handler).
+        LocalNotificationDelegate.install()
         // F00 C25 c (FND-3): TipKit once at launch, so the TipKit datastore keeps each one-time tip dismissed across
         // relaunches. Debug launches with CONCLAVE_RESET_TIPS=1 start with every tip eligible again (TipKit requires
         // resetDatastore before configure, so the reset is a launch switch rather than a menu item).

@@ -435,8 +435,12 @@ private struct ActivitiesPageView: View {
             GameSetupPage(gameId: page.id, activities: session.activities)
         case .browser:
             BrowserLauncherPage(activities: session.activities)
-        case .root, .wheel, .watch:
-            // Wheel and Watch pages land with ACT-8; the destination policy never pushes them before.
+        case .wheel:
+            // ACT-8 (S60 13 c): system appearance pages in the Activities stack (NativeAppHost+iOS.swift).
+            AppWheelPage(host: session.appHost)
+        case .watch:
+            AppWatchPage(host: session.appHost)
+        case .root:
             EmptyView()
         }
     }

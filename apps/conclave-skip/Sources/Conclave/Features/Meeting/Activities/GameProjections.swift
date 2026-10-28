@@ -248,6 +248,10 @@ struct ChessMoveProjection: Equatable {
     let to: String
     let color: String
     let promotion: String
+    /// Who moved: the captain, "Computer", or the captain the server auto-played for.
+    let byName: String
+    /// True when the server played the move (rapid-fire expiry).
+    let isAuto: Bool
 }
 
 /// G/chess.ts.
@@ -263,6 +267,8 @@ struct ChessProjection: Equatable {
     let timeControlMillis: Double
     let incrementMillis: Double
     let moveTimeMillis: Double
+    /// The server time the current turn began (the rapid-fire deadline base); 0 when no turn runs.
+    let turnStartedAtMillis: Double
     let allowTakebacks: Bool
     let botSide: String
     let botName: String
@@ -302,6 +308,8 @@ struct ZipStandingProjection: Equatable, Identifiable {
     let totalCells: Int
     let outcome: String
     let hintsUsed: Int
+    /// Epoch milliseconds (server clock) when this player solved the puzzle (`solvedAt`); 0 while unsolved.
+    let solvedAtMillis: Double
 }
 
 /// G/zip.ts.
@@ -330,6 +338,8 @@ struct ZipProjection: Equatable {
     let hintsUsed: Int
     let hintAvailableAtMillis: Double
     let mistakes: Int
+    /// Epoch milliseconds (server clock) when you solved it (player view `solvedAt`); 0 while unsolved.
+    let solvedAtMillis: Double
 }
 
 /// Scene kinds (S60 0.5 `GameScene.kind`).
@@ -737,13 +747,16 @@ enum GameProjectionParser {
         var history: [ChessMoveProjection] = []
         for item in GameProjectionJSON.objects(view, "moves") {
             history.append(ChessMoveProjection(san: GameProjectionJSON.string(item, "san"), from: GameProjectionJSON.string(item, "from"), to: GameProjectionJSON.string(item, "to"),
-                                               color: GameProjectionJSON.string(item, "color"), promotion: GameProjectionJSON.string(item, "promotion")))
+                                               color: GameProjectionJSON.string(item, "color"), promotion: GameProjectionJSON.string(item, "promotion"),
+                                               byName: GameProjectionJSON.string(item, "byName"), isAuto: GameProjectionJSON.bool(item, "auto")))
         }
         return ChessProjection(phase: phase, mode: GameProjectionJSON.string(view, "mode"), fen: GameProjectionJSON.string(view, "fen"), turnSide: GameProjectionJSON.string(view, "turnSide"),
                                inCheck: GameProjectionJSON.bool(view, "inCheck"), whiteClockMillis: GameProjectionJSON.double(clocks, "white", missing: -1),
                                blackClockMillis: GameProjectionJSON.double(clocks, "black", missing: -1),
                                timeControlMillis: GameProjectionJSON.double(view, "timeControlMs"), incrementMillis: GameProjectionJSON.double(view, "incrementMs"),
-                               moveTimeMillis: GameProjectionJSON.double(view, "moveTimeMs"), allowTakebacks: GameProjectionJSON.bool(view, "allowTakebacks"),
+                               moveTimeMillis: GameProjectionJSON.double(view, "moveTimeMs"),
+                               turnStartedAtMillis: GameProjectionJSON.double(view, "turnStartedAt"),
+                               allowTakebacks: GameProjectionJSON.bool(view, "allowTakebacks"),
                                botSide: GameProjectionJSON.string(bot, "side"), botName: GameProjectionJSON.string(bot, "name"), botLevel: GameProjectionJSON.string(bot, "level"),
                                whiteTeam: chessTeam(GameProjectionJSON.child(view, "teams"), side: "white"),
                                blackTeam: chessTeam(GameProjectionJSON.child(view, "teams"), side: "black"), legalMoves: legal, moves: history,
@@ -768,7 +781,7 @@ enum GameProjectionParser {
             if id.isEmpty { continue }
             standings.append(ZipStandingProjection(id: id, name: GameProjectionJSON.string(item, "playerName"), cellsFilled: GameProjectionJSON.int(item, "cellsFilled"),
                                                    totalCells: GameProjectionJSON.int(item, "totalCells"), outcome: GameProjectionJSON.string(item, "outcome"),
-                                                   hintsUsed: GameProjectionJSON.int(item, "hintsUsed")))
+                                                   hintsUsed: GameProjectionJSON.int(item, "hintsUsed"), solvedAtMillis: GameProjectionJSON.double(item, "solvedAt")))
         }
         let empty: [String: Any] = [:]
         let result = GameProjectionJSON.child(view, "result") ?? empty
@@ -781,6 +794,6 @@ enum GameProjectionParser {
                              solutionPath: GameProjectionJSON.ints(result, "solutionPath"), winnerId: GameProjectionJSON.string(result, "winnerId"),
                              winnerName: GameProjectionJSON.string(result, "winnerName"), path: GameProjectionJSON.ints(mine, "path"), outcome: GameProjectionJSON.string(mine, "outcome"),
                              hintsUsed: GameProjectionJSON.int(mine, "hintsUsed"), hintAvailableAtMillis: GameProjectionJSON.double(mine, "hintAvailableAt"),
-                             mistakes: GameProjectionJSON.int(mine, "mistakes"))
+                             mistakes: GameProjectionJSON.int(mine, "mistakes"), solvedAtMillis: GameProjectionJSON.double(mine, "solvedAt"))
     }
 }

@@ -396,9 +396,11 @@ enum MeetingNoticePolicy {
 
     /// Every active banner in table order, before dismissals; the lane shows the first one that is not dismissed.
     /// `hostNotice` is the latched host notice (or nil); `liveNotesEpisode` re-arms the live notes banner per session;
-    /// `currentPanel` is the current panel's raw value ("" for none).
+    /// `currentPanel` is the current panel's raw value ("" for none). `knockPending` (PPL-3) is true while an admission
+    /// is in flight in the People presenter: the knock banner's Admit or Admit All stays visible but disabled, so a
+    /// second tap cannot race the first.
     static func bannerCandidates(_ inputs: StageNoticeInputs, hostNotice: MeetingNotice?, liveNotesEpisode: Int,
-                                 currentPanel: String, platform: String) -> [MeetingNotice] {
+                                 currentPanel: String, platform: String, knockPending: Bool = false) -> [MeetingNotice] {
         var result: [MeetingNotice] = []
         let android = platform == NoticePlatform.android
         if android && inputs.isCaptivePortal {
@@ -444,13 +446,17 @@ enum MeetingNoticePolicy {
         if inputs.isHost && !inputs.pendingUserIds.isEmpty {
             let count = inputs.pendingUserIds.count
             let one = count == 1
-            let second = one ? NoticeAction.make(NoticeAction.admit) : NoticeAction.make(NoticeAction.admitAll)
+            let secondId = one ? NoticeAction.admit : NoticeAction.admitAll
+            let second = NoticeAction.make(secondId, isEnabled: !knockPending)
+            // S50 4 i (PPL-3): while Participants is current, People announces a new knock once politely, so the banner
+            // stays silent instead of reading the same news assertively a second time.
+            let peopleShown = currentPanel == MeetingPanel.participants.rawValue
             result.append(MeetingNotice.make(id: NoticeKind.knock + ":", kind: NoticeKind.knock, lane: NoticeLane.banner,
                                              priority: 8, severity: NoticeSeverity.info,
                                              userId: one ? inputs.pendingUserIds[0] : "",
                                              name: one ? inputs.pendingFirstName : "", count: count,
                                              actions: [NoticeAction.make(NoticeAction.view), second], isDismissible: false,
-                                             announcement: NoticeAnnouncement.assertiveOnce))
+                                             announcement: peopleShown ? NoticeAnnouncement.none : NoticeAnnouncement.assertiveOnce))
         }
         if inputs.isScreenSharing {
             result.append(banner(NoticeKind.sharing, 9, NoticeSeverity.info, arm: "",
@@ -640,6 +646,8 @@ final class MeetingNoticeCenter {
     private var recoveryGraceUntilMillis = 0.0
     private var knownPendingIds: [String] = []
     private var knockBaselineReady = false
+    /// PPL-3: an admission is in flight in the People presenter (the knock banner's Admit stays disabled meanwhile).
+    private(set) var knockActionsPending = false
     private var hasHostNotice = false
     private var hostNoticeSerial = 0
     private var hostNoticeText = ""
@@ -709,6 +717,14 @@ final class MeetingNoticeCenter {
         if raw == MeetingPanel.chat.rawValue {
             dropToasts { notice in notice.kind == NoticeKind.chatPreview }
         }
+        recomputeBanner(nowMillis: nowMillis)
+    }
+
+    /// PPL-3: the People presenter reports whether an admission (Admit, Deny, Admit All, Deny All) is in flight; the
+    /// knock banner's Admit or Admit All is disabled meanwhile.
+    func setKnockActionsPending(_ pending: Bool, nowMillis: Double) {
+        if pending == knockActionsPending { return }
+        knockActionsPending = pending
         recomputeBanner(nowMillis: nowMillis)
     }
 
@@ -894,6 +910,7 @@ final class MeetingNoticeCenter {
         recoveryGraceUntilMillis = 0.0
         knownPendingIds = []
         knockBaselineReady = false
+        knockActionsPending = false
         liveNotesEpisode = 0
         clearHostNotice()
     }
@@ -911,7 +928,7 @@ final class MeetingNoticeCenter {
         }
         let candidates = MeetingNoticePolicy.bannerCandidates(inputs, hostNotice: hostCandidate,
                                                               liveNotesEpisode: liveNotesEpisode, currentPanel: currentPanel,
-                                                              platform: platform)
+                                                              platform: platform, knockPending: knockActionsPending)
         var top: MeetingNotice? = nil
         for candidate in candidates {
             if dismissed[candidate.kind] == candidate.id { continue }

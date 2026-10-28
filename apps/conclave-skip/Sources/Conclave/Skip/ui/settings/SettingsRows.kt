@@ -204,12 +204,9 @@ private fun SettingsRootRow(
                 supporting = conclaveString("set_data_saver_detail"),
                 secondary = if (video.systemDataSaverOn) conclaveString("set_system_data_saver") else null) { settings.setDataSaver(it) }
         }
-        SettingsRowID.messageNotifications -> {
-            val general = settings.general
-            ConclaveValueRow(title = conclaveString(SettingsCopy.rowName(row)),
-                value = conclaveString(SettingsCopy.notificationPermissionName(general.notificationPermission)), identifier = tag)
-        }
-        SettingsRowID.callNotification -> SettingsCallNotificationItem(settings, tag)
+        // SYS-3 (S70 2 g): both rows read the process-lifetime SystemNotifications snapshot (K/ui/lobby/NotificationRows.kt).
+        SettingsRowID.messageNotifications -> MessageNotificationsItem(tag)
+        SettingsRowID.callNotification -> CallNotificationStatusItem(tag)
         SettingsRowID.openLinks -> SettingsOpenLinksItem(settings, tag)
         SettingsRowID.alwaysShowControls -> {
             val general = settings.general
@@ -344,20 +341,6 @@ private fun SettingsFacingItem(settings: SettingsPresenter, identifier: String) 
         colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
         modifier = Modifier.testTag(identifier),
     )
-}
-
-/** Android call notification status (S70 2 g); shown only once its capability input is on. */
-@Composable
-private fun SettingsCallNotificationItem(settings: SettingsPresenter, identifier: String) {
-    val general = settings.general
-    val context = LocalContext.current
-    SettingsNavItem(conclaveString("sys_call_notif_title"), conclaveString(SettingsCopy.callNotificationName(general.callNotificationEnabled)),
-        identifier, enabled = !general.callNotificationEnabled) {
-        val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
-            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-            .putExtra(Settings.EXTRA_CHANNEL_ID, NotificationChannelMigrationPolicy.channelId)
-        NativeExternalHandoff.openSettings(intent)
-    }
 }
 
 /** Android 12+ Open Conclave links status (S70 9 g); shown only once its capability input is on. */

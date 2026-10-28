@@ -8,8 +8,11 @@ import Foundation
 // Envelope (one JSON object per message, both directions):
 //   { "v": 1, "type": "<type>", "callSessionId": "<id>", "appSessionId": "<id>", "requestId": "<id>", "payload": {...} }
 // Embed to native: ready, sync, update, awareness, status, ack, resize.
-// Native to embed: snapshot, update, awareness, status, resync, close and the host commands (setTool, setColor,
-// setStrokeWidth, setFill, undo, redo, setPage, addPage, renamePage, deletePage, zoomToFit, export).
+// Native to embed: snapshot, update, awareness, status, resync, close and the host commands: Whiteboard (setTool,
+// setColor, setStrokeWidth, setFill, undo, redo, setPage, addPage, renamePage, deletePage, zoomToFit, export), Spin the
+// Wheel (addEntries, removeEntry, shuffle, sort, clearEntries, spin, setRemoveWinner, setSounds, clearResults) and Watch
+// Together (playNow, enqueue, request, approve, decline, cancelRequest, move, remove; ACT-8). A Wheel or Watch embed adds
+// its page data to `status` under `app` (`AppEmbedAppCodec` in AppHostPresenter.swift).
 // Binary Yjs and awareness payloads travel as base64. The bridge never carries auth tokens, personal API keys or native
 // method names (D14): the embed has no socket and no network (its page CSP sets connect-src 'none'); the native
 // session relays the room's Yjs bytes and nothing else. A rejected message is counted by reason, never logged with its
@@ -48,10 +51,12 @@ enum AppBridgeProtocol {
     /// A host command shows pending until its `ack`, at most this long (S60 13 j).
     static let commandTimeoutMillis = 10000.0
 
-    /// The bundled entry for an SDK app id, or "" when this build has no embed for it (Wheel and Watch land with ACT-8;
-    /// until then the card shows the version mismatch state: "Update Conclave to use %@.").
+    /// The bundled entry for an SDK app id, or "" when this build has no embed for it (the card then shows the version
+    /// mismatch state: "Update Conclave to use %@."). Spin the Wheel and Watch Together since ACT-8.
     static func entryFile(appId: String) -> String {
         if appId == "whiteboard" { return "whiteboard.html" }
+        if appId == "wheel" { return "wheel.html" }
+        if appId == "watch" { return "watch.html" }
         return ""
     }
 
@@ -109,6 +114,8 @@ enum AppBridgeInboundType: String, CaseIterable, Equatable {
 enum AppBridgeOutboundType: String, CaseIterable, Equatable {
     case snapshot, update, awareness, status, resync, close
     case setTool, setColor, setStrokeWidth, setFill, undo, redo, setPage, addPage, renamePage, deletePage, zoomToFit, export
+    case addEntries, removeEntry, shuffle, sort, clearEntries, spin, setRemoveWinner, setSounds, clearResults
+    case playNow, enqueue, request, approve, decline, cancelRequest, move, remove
 }
 
 /// Why an inbound message was dropped. Counted and surfaced by reason only, never with its content.
@@ -147,10 +154,12 @@ struct AppEmbedStatus: Equatable {
     let pages: [AppPageModel]
     let elementCount: Int
     let editorCount: Int
+    /// ACT-8: a Wheel or Watch embed's page data (`status.app`); empty for the Whiteboard.
+    let app: AppEmbedAppStatus
 
     static let empty = AppEmbedStatus(tool: AppWhiteboardTool.pen.rawValue, color: "#e3e3e8", strokeWidth: 3, filled: false,
                                       canUndo: false, canRedo: false, pageId: "", pageName: "", pages: [],
-                                      elementCount: 0, editorCount: 0)
+                                      elementCount: 0, editorCount: 0, app: AppEmbedAppStatus.empty)
 }
 
 /// What the session expects of every inbound envelope.
@@ -374,11 +383,13 @@ enum AppBridgeCodec {
         }
         let elementCount = Int(number(payload["elementCount"]) ?? 0)
         let editorCount = Int(number(payload["editorCount"]) ?? 0)
+        // ACT-8: absent is the empty page data; anything else must pass the protocol.ts `isValidAppStatus` rules.
+        guard let app = AppEmbedAppCodec.parse(payload["app"]) else { return nil }
         return AppEmbedStatus(tool: tool, color: color, strokeWidth: width, filled: payload["filled"] as? Bool ?? false,
                               canUndo: payload["canUndo"] as? Bool ?? false, canRedo: payload["canRedo"] as? Bool ?? false,
                               pageId: pageId, pageName: clipped(payload["pageName"] as? String ?? "", AppBridgeProtocol.pageNameLimit),
                               pages: pages, elementCount: max(0, min(elementCount, 1_000_000)),
-                              editorCount: max(0, min(editorCount, 10_000)))
+                              editorCount: max(0, min(editorCount, 10_000)), app: app)
     }
 
     static func clipped(_ value: String, _ limit: Int) -> String {

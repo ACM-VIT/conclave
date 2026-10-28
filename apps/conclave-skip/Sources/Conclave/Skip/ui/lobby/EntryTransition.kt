@@ -134,3 +134,17 @@ internal fun EntryExpansionLayer(start: Rect, hostOrigin: Offset, onFinished: ()
         },
     )
 }
+
+/**
+ * SYS-3 (S70 2 d, S10 7 d): the native call root posts `stageEntryFinished` once the root transition (and the card
+ * expansion, when it runs) has settled on the call, so the notifications priming banner never shows during the entry.
+ * The host passes the settled flag (HD request B8-T5 R4); keyed on it, so it posts once per entry.
+ */
+@Composable
+internal fun StageEntryFinishedEffect(settled: Boolean) {
+    LaunchedEffect(settled) {
+        if (settled) {
+            SystemNotifications.shared.stageEntryFinished()
+        }
+    }
+}

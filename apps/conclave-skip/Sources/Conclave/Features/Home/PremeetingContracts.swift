@@ -341,6 +341,10 @@ struct PremeetingInputs: Equatable {
     // ENT-5 (S10 8 f): the classifier's category raw value and diagnostic code of the last join failure ("" when none)
     let joinFailureCategory: String
     let joinFailureCode: String
+    // ENT-9 (S10 12 f): the socket connected during this attempt (`connectionState` is connected or joining), so the
+    // webinar landing says "Almost There" after "Getting You In". False until the view model fills it (HD request
+    // B8-T7 R1).
+    let entrySocketConnected: Bool
 
     static func make(
         callSession: Int = 0,
@@ -373,7 +377,8 @@ struct PremeetingInputs: Equatable {
         rejoinRoomId: String = "",
         serverRestartText: String = "",
         joinFailureCategory: String = "",
-        joinFailureCode: String = ""
+        joinFailureCode: String = "",
+        entrySocketConnected: Bool = false
     ) -> PremeetingInputs {
         PremeetingInputs(
             callSession: callSession,
@@ -406,7 +411,8 @@ struct PremeetingInputs: Equatable {
             rejoinRoomId: rejoinRoomId,
             serverRestartText: serverRestartText,
             joinFailureCategory: joinFailureCategory,
-            joinFailureCode: joinFailureCode
+            joinFailureCode: joinFailureCode,
+            entrySocketConnected: entrySocketConnected
         )
     }
 
@@ -443,7 +449,8 @@ struct PremeetingInputs: Equatable {
             rejoinRoomId: rejoinRoomId,
             serverRestartText: serverRestartText,
             joinFailureCategory: joinFailureCategory,
-            joinFailureCode: joinFailureCode
+            joinFailureCode: joinFailureCode,
+            entrySocketConnected: entrySocketConnected
         )
     }
 
@@ -480,7 +487,8 @@ struct PremeetingInputs: Equatable {
             rejoinRoomId: rejoinRoomId,
             serverRestartText: serverRestartText,
             joinFailureCategory: joinFailureCategory,
-            joinFailureCode: joinFailureCode
+            joinFailureCode: joinFailureCode,
+            entrySocketConnected: entrySocketConnected
         )
     }
 
@@ -518,7 +526,8 @@ struct PremeetingInputs: Equatable {
             rejoinRoomId: base.rejoinRoomId,
             serverRestartText: base.serverRestartText,
             joinFailureCategory: base.joinFailureCategory,
-            joinFailureCode: base.joinFailureCode
+            joinFailureCode: base.joinFailureCode,
+            entrySocketConnected: base.entrySocketConnected
         )
     }
 }

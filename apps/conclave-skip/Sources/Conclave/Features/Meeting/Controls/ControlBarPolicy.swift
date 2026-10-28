@@ -140,8 +140,13 @@ enum ControlBarPolicy {
                 blocked = true
                 reason = ControlBlockedReason.disabledByHost
             }
+            // CTL-4 (S30 2): the Mic long press (the iOS menu, the Android route sheet) and the Camera long press when one
+            // of its items can act.
+            let shortcut = kind == CallControlKind.microphone ? MediaShortcutPolicy.microphoneHasShortcut(inputs: inputs)
+                                                              : MediaShortcutPolicy.cameraHasShortcut(inputs: inputs)
             return model(kind, isOn: row.isOn, blocked: blocked, pending: row.isPending, reason: reason, name: "",
-                         appliesAfterReconnect: row.hint == MeetingControlHint.appliesAfterReconnect, badge: 0, dot: false)
+                         appliesAfterReconnect: row.hint == MeetingControlHint.appliesAfterReconnect, badge: 0, dot: false,
+                         shortcut: shortcut)
         case .screenShare:
             guard let row = inputs.row(MeetingControlID.screenShare), row.isVisible else { return nil }
             let reason = ControlBarPolicy.controlReason(row.blockedReason)
@@ -267,10 +272,11 @@ enum ControlBarPolicy {
     }
 
     private static func model(_ kind: CallControlKind, isOn: Bool, blocked: Bool, pending: Bool, reason: ControlBlockedReason,
-                              name: String, appliesAfterReconnect: Bool, badge: Int, dot: Bool) -> CallControlModel {
+                              name: String, appliesAfterReconnect: Bool, badge: Int, dot: Bool,
+                              shortcut: Bool = false) -> CallControlModel {
         CallControlModel(id: kind.rawValue, kind: kind, isOn: isOn, visual: visual(kind: kind, isOn: isOn), isBlocked: blocked,
                          isPending: pending, reason: reason, reasonName: name, appliesAfterReconnect: appliesAfterReconnect,
-                         badgeCount: badge, showsDot: dot, hasShortcut: false)
+                         badgeCount: badge, showsDot: dot, hasShortcut: shortcut)
     }
 
     // MARK: Fit (S30 1 c, 1 d; F00 C05; PN A1 CompactBarFit)

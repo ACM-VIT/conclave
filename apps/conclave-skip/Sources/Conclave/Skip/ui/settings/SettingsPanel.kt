@@ -174,7 +174,16 @@ internal fun AppSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier
     // S70 15 a (R70-4, RECONCILE R26): outside a call, About still offers Export Diagnostics (after a failed join).
     val settings = remember {
         SettingsPresenter(scope = SettingsScope.app).also {
-            it.apply(SettingsInputs.make(canExportDiagnostics = DiagnosticsExportPolicy.isOffered))
+            // SYS-3 (S70 2 g, R26): the notification rows outside a call too.
+            val notifications = SystemNotifications.shared.snapshot
+            it.apply(SettingsInputs.make(
+                messageNotificationsAvailable = true,
+                messageNotificationsOn = notifications.messageNotificationsPreference,
+                notificationPermission = notifications.settingsPermission,
+                callNotificationStatusAvailable = true,
+                callNotificationEnabled = notifications.callNotificationOn,
+                canExportDiagnostics = DiagnosticsExportPolicy.isOffered,
+            ))
         }
     }
     val stack = rememberSaveable(saver = settingsStackSaver) { mutableStateListOf<String>() }

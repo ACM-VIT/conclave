@@ -81,7 +81,14 @@ struct AccountView: View {
     /// failed join, when no call exists.
     private static func makeAppSettings() -> SettingsPresenter {
         let settings = SettingsPresenter(scope: SettingsScope.app)
-        settings.apply(SettingsInputs.make(canExportDiagnostics: DiagnosticsExportPolicy.isOffered))
+        // SYS-3 (S70 2 c, R26): one Message Notifications preference in a call and outside one.
+        let notifications = SystemNotifications.shared.snapshot
+        settings.apply(SettingsInputs.make(messageNotificationsAvailable: true,
+                                           messageNotificationsOn: notifications.messageNotificationsPreference,
+                                           notificationPermission: notifications.settingsPermission,
+                                           callNotificationStatusAvailable: SystemNotifications.platformIsAndroid,
+                                           callNotificationEnabled: notifications.callNotificationOn,
+                                           canExportDiagnostics: DiagnosticsExportPolicy.isOffered))
         return settings
     }
 }

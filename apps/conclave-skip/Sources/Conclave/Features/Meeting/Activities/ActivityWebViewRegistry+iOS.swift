@@ -52,7 +52,7 @@ final class ActivityWebViewRegistry {
             DispatchQueue.main.async { session.embedFailed(appSessionId: id, issue: AppHostIssue.loadFailed) }
             return nil
         }
-        let entry = makeEntry(appSessionId: id, reloadSerial: model.reloadSerial, session: session)
+        let entry = makeEntry(appSessionId: id, appId: model.appId, reloadSerial: model.reloadSerial, session: session)
         entries[id] = entry
         session.bundleOrigin = AppBridgeProtocol.iosOrigin
         session.onBridgeEnded = { [weak self] endedId in
@@ -96,9 +96,14 @@ final class ActivityWebViewRegistry {
         if pendingExternalURL != nil { pendingExternalURL = nil }
     }
 
-    private func makeEntry(appSessionId id: String, reloadSerial: Int, session: ActiveAppSession) -> ActivityWebViewEntry {
+    private func makeEntry(appSessionId id: String, appId: String, reloadSerial: Int, session: ActiveAppSession) -> ActivityWebViewEntry {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = WKWebsiteDataStore.nonPersistent()
+        // ACT-8: Watch Together plays inline and follows the room's playback, and the Wheel's spin sounds follow the
+        // native Spin tap, without a tap inside the page (the YouTube player's own play button stays the prompt when
+        // WebKit still blocks it). The Whiteboard keeps the default.
+        configuration.allowsInlineMediaPlayback = true
+        if AppEmbedFramePolicy.playsMediaWithoutTap(appId: appId) { configuration.mediaTypesRequiringUserActionForPlayback = [] }
         configuration.setURLSchemeHandler(schemeHandler, forURLScheme: AppBridgeProtocol.iosScheme)
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
@@ -158,6 +163,15 @@ final class NativeEmbedSchemeHandler: NSObject, WKURLSchemeHandler {
         return Bundle.module.url(forResource: name, withExtension: "html")
     }
 
+    /// ACT-8: the page's `frame-src` (only Watch Together frames the YouTube player, `AppEmbedFramePolicy`).
+    static func frameSource(path: String) -> String {
+        let file = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        for candidate in ["whiteboard", "wheel", "watch"] where AppBridgeProtocol.entryFile(appId: candidate) == file {
+            return AppEmbedFramePolicy.frameSource(appId: candidate)
+        }
+        return "'none'"
+    }
+
     func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
         guard let url = urlSchemeTask.request.url, url.host == AppBridgeProtocol.iosHost,
               let fileURL = NativeEmbedSchemeHandler.resourceURL(path: url.path),
@@ -166,7 +180,8 @@ final class NativeEmbedSchemeHandler: NSObject, WKURLSchemeHandler {
                   "Content-Type": "text/html; charset=utf-8",
                   "Content-Length": String(data.count),
                   "Cache-Control": "no-store",
-                  "Content-Security-Policy": "connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'",
+                  "Content-Security-Policy": "connect-src 'none'; frame-src " + NativeEmbedSchemeHandler.frameSource(path: url.path)
+                      + "; object-src 'none'; base-uri 'none'; form-action 'none'",
               ]) else {
             urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
             return
@@ -217,6 +232,11 @@ final class NativeEmbedNavigationDelegate: NSObject, WKNavigationDelegate, WKUID
         let target = navigationAction.request.url?.absoluteString ?? ""
         let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? false
         if isMainFrame && AppBridgeProtocol.isBundleURL(target, origin: AppBridgeProtocol.iosOrigin) {
+            return .allow
+        }
+        // ACT-8: Watch Together's YouTube player frame (nothing else may load in a subframe).
+        if !isMainFrame && navigationAction.targetFrame != nil
+            && AppEmbedFramePolicy.allowsSubframe(appId: session?.appId ?? "", url: target) {
             return .allow
         }
         offerExternalLink(navigationAction: navigationAction, target: target)

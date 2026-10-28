@@ -168,6 +168,8 @@ private enum SocketEvent {
     static let browserNavigate = SfuClientEvent.browserNavigate.rawValue
     static let browserClose = SfuClientEvent.browserClose.rawValue
     static let browserGetState = SfuClientEvent.browserGetState.rawValue
+    /// C6-20 (ACT-9): the capability probe; `SfuClientEvent.browserGetCapabilities` lands with HD request B8-T1 R2.
+    static let browserGetCapabilities = SfuClientEvent.browserGetCapabilities.rawValue
     static let browserActivity = SfuClientEvent.browserActivity.rawValue
     static let appsOpen = SfuClientEvent.appsOpen.rawValue
     static let appsClose = SfuClientEvent.appsClose.rawValue
@@ -1249,20 +1251,35 @@ final class SocketIOManager {
         return try JSONDecoder().decode(BrowserStateNotification.self, from: data)
     }
 
+    /// C6-20 (ACT-9): `browser:getCapabilities` is an `async (callback) =>` handler, so the probe is emitted ack-only
+    /// with NO payload (AGENTS.md "Socket Ack Shapes"; a `{}` payload would bind to the callback), with the web's 22 s
+    /// timeout. The answer never carries an `error` key; a timeout throws and the caller treats it as unavailable.
+    func getBrowserCapabilities() async throws -> BrowserCapabilitiesResponse {
+        let data = try await emitAckOnly(event: SocketEvent.browserGetCapabilities,
+                                         timeoutSeconds: SharedBrowserTimeouts.seconds(SharedBrowserTimeouts.capabilitiesAckMillis))
+        return try JSONDecoder().decode(BrowserCapabilitiesResponse.self, from: data)
+    }
+
+    /// Launch, navigate and close wait up to 45 s (C6-20, WEB APP-40): launching Kitesurf can take two sequential cloud
+    /// requests that the SFU caps at 20 s each.
     func launchBrowser(url: String) async throws -> LaunchBrowserResponse {
         let request = LaunchBrowserRequest(url: url)
-        let data = try await emit(event: SocketEvent.browserLaunch, payload: request)
+        let data = try await emit(event: SocketEvent.browserLaunch, payload: request,
+                                  timeoutSeconds: SharedBrowserTimeouts.seconds(SharedBrowserTimeouts.commandAckMillis))
         return try JSONDecoder().decode(LaunchBrowserResponse.self, from: data)
     }
 
     func navigateBrowser(url: String) async throws -> LaunchBrowserResponse {
         let request = NavigateBrowserRequest(url: url)
-        let data = try await emit(event: SocketEvent.browserNavigate, payload: request)
+        let data = try await emit(event: SocketEvent.browserNavigate, payload: request,
+                                  timeoutSeconds: SharedBrowserTimeouts.seconds(SharedBrowserTimeouts.commandAckMillis))
         return try JSONDecoder().decode(LaunchBrowserResponse.self, from: data)
     }
 
+    /// `browser:close` is `async (callback) =>`: ack-only, no payload.
     func closeBrowser() async throws {
-        _ = try await emitAckOnly(event: SocketEvent.browserClose)
+        _ = try await emitAckOnly(event: SocketEvent.browserClose,
+                                  timeoutSeconds: SharedBrowserTimeouts.seconds(SharedBrowserTimeouts.commandAckMillis))
     }
 
     func sendBrowserActivity() {
@@ -1606,13 +1623,13 @@ final class SocketIOManager {
     /// payloaded emit() below would send `{}` as a real first arg, so the server
     /// would bind the ack callback to that object and never reply. Mirrors the
     /// web client's `socket.emit(event, callback)` and the Kotlin emitAckOnly.
-    func emitAckOnly(event: String) async throws -> Data {
+    func emitAckOnly(event: String, timeoutSeconds: TimeInterval = 30) async throws -> Data {
         guard let socket = socket else {
             throw SocketError.notConnected
         }
 
         return try await withCheckedThrowingContinuation { continuation in
-            socket.emitWithAck(event).timingOut(after: 30) { [weak self] data in
+            socket.emitWithAck(event).timingOut(after: timeoutSeconds) { [weak self] data in
                 guard let self else {
                     continuation.resume(returning: Data())
                     return

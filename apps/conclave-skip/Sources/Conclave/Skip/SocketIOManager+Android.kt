@@ -124,6 +124,8 @@ internal object SocketEvent {
     val browserNavigate = SfuClientEvent.browserNavigate.rawValue
     val browserClose = SfuClientEvent.browserClose.rawValue
     val browserGetState = SfuClientEvent.browserGetState.rawValue
+    /** C6-20 (ACT-9): the capability probe; SfuClientEvent.browserGetCapabilities lands with HD request B8-T1 R2. */
+    val browserGetCapabilities = SfuClientEvent.browserGetCapabilities.rawValue
     val browserActivity = SfuClientEvent.browserActivity.rawValue
     val appsOpen = SfuClientEvent.appsOpen.rawValue
     val appsClose = SfuClientEvent.appsClose.rawValue
@@ -1212,20 +1214,32 @@ internal class SocketIOManager {
         return JSONDecoder().decode(BrowserStateNotification::class, from = data)
     }
 
+    /**
+     * C6-20 (ACT-9): browser:getCapabilities is an `async (callback) =>` handler, so the probe is emitted ack-only with
+     * NO data argument (AGENTS.md "Socket Ack Shapes"; JSONObject() would bind to the callback), with the web's 22 s
+     * timeout. A timeout throws and the caller treats it as unavailable.
+     */
+    internal suspend fun getBrowserCapabilities(): BrowserCapabilitiesResponse {
+        val data = emitAckOnly(SocketEvent.browserGetCapabilities, timeoutMs = SharedBrowserTimeouts.capabilitiesAckMillis.toLong())
+        return JSONDecoder().decode(BrowserCapabilitiesResponse::class, from = data)
+    }
+
+    /** Launch, navigate and close wait up to 45 s (C6-20, WEB APP-40). */
     internal suspend fun launchBrowser(url: String): LaunchBrowserResponse {
         val request = LaunchBrowserRequest(url = url)
-        val data = emit(SocketEvent.browserLaunch, request)
+        val data = emit(SocketEvent.browserLaunch, request, timeoutMs = SharedBrowserTimeouts.commandAckMillis.toLong())
         return JSONDecoder().decode(LaunchBrowserResponse::class, from = data)
     }
 
     internal suspend fun navigateBrowser(url: String): LaunchBrowserResponse {
         val request = NavigateBrowserRequest(url = url)
-        val data = emit(SocketEvent.browserNavigate, request)
+        val data = emit(SocketEvent.browserNavigate, request, timeoutMs = SharedBrowserTimeouts.commandAckMillis.toLong())
         return JSONDecoder().decode(LaunchBrowserResponse::class, from = data)
     }
 
+    /** browser:close is `async (callback) =>`: ack-only, no data argument. */
     internal suspend fun closeBrowser() {
-        emitAckOnly(SocketEvent.browserClose)
+        emitAckOnly(SocketEvent.browserClose, timeoutMs = SharedBrowserTimeouts.commandAckMillis.toLong())
     }
 
     internal fun sendBrowserActivity() {
@@ -1676,9 +1690,9 @@ internal class SocketIOManager {
     /// Emit an event whose SFU handler takes ONLY the ack callback (no data
     /// argument). The socket.io Java client treats a trailing Ack as the ack and
     /// sends zero data args, so the server's `(callback) => …` binds correctly.
-    private suspend fun emitAckOnly(event: String): Data {
+    private suspend fun emitAckOnly(event: String, timeoutMs: Long = ACK_TIMEOUT_MS): Data {
         val socket = socket ?: throw ErrorException("Socket not connected")
-        return withAckTimeout(event) {
+        return withAckTimeout(event, timeoutMs) {
             suspendCancellableCoroutine { cont ->
                 socket.emit(event, object : io.socket.client.Ack {
                     override fun call(vararg args: Any?) {

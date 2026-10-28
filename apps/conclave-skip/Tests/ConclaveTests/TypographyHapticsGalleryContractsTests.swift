@@ -1264,7 +1264,9 @@ private let properNouns: Set<String> = ["Android", "iOS", "PiP", "TalkBack", "JS
                                         // Batch 6 (CHT-7 steps, SET-1 account row): company and product names.
                                         "GitHub", "Apple", "Google",
                                         // Batch 7 (TRN-2 key and coverage copy): provider names and the possessive.
-                                        "OpenAI", "Sarvam", "Conclave\u{2019}s"]
+                                        "OpenAI", "Sarvam", "Conclave\u{2019}s",
+                                        // Batch 8 (ACT-5 chess copy): the side names.
+                                        "White", "Black"]
 
 /// Material sentence case: each sentence starts with a capital, a digit or a format argument, and later words
 /// are lowercase unless they are proper nouns or acronyms. A fragment that is substituted into a sentence may

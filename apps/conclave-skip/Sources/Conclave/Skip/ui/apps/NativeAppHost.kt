@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -70,6 +71,8 @@ import java.io.File
  * states and the Whiteboard toolbar (a LazyRow of 48 dp labelled toggles with tooltips; menus are DropdownMenus).
  * NativeAppHostMenu is the header's host menu: IconButton(MoreVertFill0) with "Lock editing" (checkbox item) and
  * "Close %1$s" in error. Tool selection plays selectionChanged on Android only; no other haptic (S60 13 e, h).
+ * ACT-8: Spin the wheel's card bar (Spin, the card's one primary, and Edit names), Watch together's header "Queue", and
+ * the winner and selected video title announced natively (S60 13 i). The two Activities pages are in AppPages.kt.
  */
 
 @Composable
@@ -100,15 +103,79 @@ internal fun NativeAppHostBody(host: AppHostPresenter, onShowVideo: () -> Unit, 
             HorizontalDivider(color = LocalConclaveExtendedColors.current.border)
             WhiteboardToolbar(host)
         }
+        if (model.appId == "wheel" && model.canEdit && (model.phase == AppHostPhase.ready || model.phase == AppHostPhase.closing)) {
+            HorizontalDivider(color = LocalConclaveExtendedColors.current.border)
+            WheelCardBar(host)
+        }
         if (host.showsDebugReadouts) AppHostReadouts(host)
     }
+    AppPageAnnouncer(host)
     AppExternalLinkDialog()
+}
+
+/** Spin (the card's one primary, primaryContainer) and Edit names (opens Activities at the Wheel page). */
+@Composable
+private fun WheelCardBar(host: AppHostPresenter) {
+    val wheel = host.wheel
+    val scheme = MaterialTheme.colorScheme
+    val spinBusy = wheel.spinning || wheel.isPending(AppPageCommandKind.spin)
+    val pendingText = conclaveString("ds_in_progress")
+    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+            onClick = { host.spinWheel() },
+            enabled = wheel.canSpin,
+            colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("app.wheel.spin").semantics {
+                if (spinBusy) stateDescription = pendingText
+            },
+        ) {
+            if (spinBusy) {
+                CircularProgressIndicator(Modifier.size(18.dp), color = scheme.onPrimaryContainer, strokeWidth = 2.dp)
+                Spacer(Modifier.size(8.dp))
+            }
+            Text(conclaveString("app_wheel_spin"), maxLines = 1)
+        }
+        OutlinedButton(
+            onClick = { host.openPage() },
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("app.wheel.editNames"),
+        ) {
+            Text(conclaveString("app_wheel_edit_names"), maxLines = 1)
+        }
+    }
+}
+
+/** Watch together's header button: "Queue" opens Activities at the Watch page. */
+@Composable
+private fun AppWatchQueueButton(host: AppHostPresenter) {
+    TextButton(onClick = { host.openPage() }, modifier = Modifier.heightIn(min = 48.dp).testTag("app.watch.queue")) {
+        Text(conclaveString("app_watch_queue"), color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+    }
+}
+
+/** The wheel winner ("Winner: %1$s") and a newly selected video's title, announced natively (S60 13 i). */
+@Composable
+private fun AppPageAnnouncer(host: AppHostPresenter) {
+    val view = LocalView.current
+    val winnerSequence = host.wheel.winnerSequence
+    val titleSequence = host.watch.titleSequence
+    val winnerText = conclaveString("app_wheel_winner", host.wheel.winnerLabel)
+    val initialWinner = remember { winnerSequence }
+    val initialTitle = remember { titleSequence }
+    LaunchedEffect(winnerSequence) {
+        if (winnerSequence != initialWinner && host.wheel.winnerLabel.isNotEmpty()) view.announceForAccessibility(winnerText)
+    }
+    LaunchedEffect(titleSequence) {
+        val title = host.watch.title
+        if (titleSequence != initialTitle && title.isNotEmpty()) view.announceForAccessibility(title)
+    }
 }
 
 /** The header's host menu (S60 13 d); non-hosts see nothing. */
 @Composable
 internal fun NativeAppHostMenu(host: AppHostPresenter) {
     val model = host.model
+    // ACT-8: Watch together's "Queue" (everyone) before the host menu (S60 13 d).
+    if (model.appId == "watch" && (model.phase == AppHostPhase.ready || model.phase == AppHostPhase.readOnly)) AppWatchQueueButton(host)
     if (!model.canClose && !model.canLock) return
     var expanded by remember { mutableStateOf(false) }
     var confirmClose by remember { mutableStateOf(false) }
@@ -174,7 +241,7 @@ internal fun nativeAppHostStatus(host: AppHostPresenter): String = appHostStatus
 private fun AppHostCanvas(host: AppHostPresenter, model: AppHostModel) {
     val background = MaterialTheme.colorScheme.surfaceContainer.toArgb()
     val label = if (model.appId == "whiteboard") conclaveString("app_wb_canvas") else appHostName(model.appId)
-    val hint = if (model.canEdit) conclaveString("app_wb_canvas_hint") else ""
+    val hint = if (model.canEdit && model.appId == "whiteboard") conclaveString("app_wb_canvas_hint") else ""
     AndroidView(
         factory = { context -> FrameLayout(context) },
         modifier = Modifier.fillMaxSize().testTag("app.canvas").semantics {

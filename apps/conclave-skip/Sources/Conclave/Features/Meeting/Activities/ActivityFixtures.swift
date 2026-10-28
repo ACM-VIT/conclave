@@ -35,6 +35,8 @@ final class ActivityFixtureOwner {
     var acknowledgesMoves = true
     /// ACT-7 (HD request B7-T1 R5): the app host fixture's recording owner (Close, Lock Editing, relayed bytes).
     let appHost = AppHostFixtureOwner()
+    /// ACT-9 (HD request B8-T1 R3): the browser card fixture's recording owner (navigate, audio, close, refresh).
+    let browser = BrowserFixtureOwner()
     var failsEnd = false
 
     func record(_ command: ActivitiesCommand) {
@@ -155,13 +157,22 @@ enum ActivityFixtureScript {
     // MARK: Stage layer
 
     /// What the activity layer adds to the stage fixture inputs (presence and names only, S20 11 j).
-    static func stageInputs(named raw: String, base: StageInputs) -> StageInputs {
-        // ACT-7 app host states (HD request B7-T1 R5) show the Whiteboard card like `app-opening`.
-        if AppHostFixtures.isFixture(raw) { return stageInputs(named: ActivityFixtureState.appOpening.rawValue, base: base) }
-        // ACT-3 prompt game states (HD request B6-T7 R4) and ACT-4 Wordle states (HD request B7-T7 R4); `base` for any
-        // other name.
+    static func stageInputs(named raw: String, base: StageInputs, appId appOverride: String = "") -> StageInputs {
+        // ACT-7 app host states (HD request B7-T1 R5) show the app card like `app-opening`; ACT-8 states name their app
+        // (HD request B8-T2 R6).
+        if AppHostFixtures.isFixture(raw) {
+            return stageInputs(named: ActivityFixtureState.appOpening.rawValue, base: base, appId: AppHostFixtures.appId(named: raw))
+        }
+        // ACT-9 browser states (HD request B8-T1 R3): the browser is live on the stage (presence only).
+        if BrowserStageFixtures.isFixture(raw) { return BrowserStageFixtures.stageInputs(named: raw, base: base) }
+        // ACT-3 prompt game states (HD request B6-T7 R4), ACT-4 Wordle states (HD request B7-T7 R4), ACT-5 chess and
+        // ACT-6 Zip states (HD requests B8-T3 R5, B8-T4 R8); `base` for any other name.
         guard let state = state(named: raw) else {
             if WordleFixtures.state(named: raw) != nil { return WordleFixtures.stageInputs(named: raw, base: base) }
+            // ACT-5 chess states (HD request B8-T3 R5).
+            if ChessFixtures.state(named: raw) != nil { return ChessFixtures.stageInputs(named: raw, base: base) }
+            // ACT-6 Zip states (HD request B8-T4 R8).
+            if ZipFixtures.state(named: raw) != nil { return ZipFixtures.stageInputs(named: raw, base: base) }
             return PromptGameFixtures.stageInputs(named: raw, base: base)
         }
         var appId = ""
@@ -173,7 +184,7 @@ enum ActivityFixtureScript {
             gameActive = true
             gameName = "Trivia"
         case .appOpening, .appFailed:
-            appId = "whiteboard"
+            appId = appOverride.isEmpty ? "whiteboard" : appOverride
         case .gameTrivia6, .gameLobbyHost, .gameLobbyHostUnseated, .gameSpectator, .gameResults, .gamePrivateLoading, .activitiesGameLive:
             gameActive = true
             gameName = "Trivia"
@@ -203,9 +214,10 @@ enum ActivityFixtureScript {
 
     // MARK: Launcher and shell layers
 
-    static func activitiesInputs(_ state: ActivityFixtureState) -> ActivitiesInputs {
+    static func activitiesInputs(_ state: ActivityFixtureState, appId appOverride: String = "") -> ActivitiesInputs {
         let host = state != .activitiesParticipantIdle && state != .gameSpectator
-        let appId = state == .appAndGame || state == .appOpening || state == .appFailed ? "whiteboard" : ""
+        let appId = state == .appAndGame || state == .appOpening || state == .appFailed
+            ? (appOverride.isEmpty ? "whiteboard" : appOverride) : ""
         var voteOpen = false
         var counts: [ActivityVoteCount] = []
         var myVote = ""
@@ -307,17 +319,32 @@ enum ActivityFixtureScript {
     @discardableResult
     @MainActor
     static func apply(named raw: String, session: ActivitySession, owner: ActivityFixtureOwner) -> ActivityFixtureState? {
+        if BrowserStageFixtures.isFixture(raw) {
+            // ACT-9 browser states (HD request B8-T1 R3): the scripted browser card.
+            BrowserStageFixtures.apply(named: raw, presenter: session.browser, owner: owner.browser)
+            return nil
+        }
         if AppHostFixtures.isFixture(raw) {
             // ACT-7 app host states (HD request B7-T1 R5): the `app-opening` layer, then the scripted host.
             apply(named: ActivityFixtureState.appOpening.rawValue, session: session, owner: owner)
+            let fixtureApp = AppHostFixtures.appId(named: raw)
+            if fixtureApp != "whiteboard" {
+                // ACT-8 (HD request B8-T2 R6): the launcher names the fixture's app.
+                session.applyActivities(activitiesInputs(ActivityFixtureState.appOpening, appId: fixtureApp))
+            }
             AppHostFixtures.apply(named: raw, presenter: session.appHost, owner: owner.appHost)
             return nil
         }
         guard let state = state(named: raw) else {
-            // ACT-3 prompt game states (HD request B6-T7 R4) and ACT-4 Wordle states (HD request B7-T7 R4); nothing for
-            // any other name (each returns nil for a name it does not own).
+            // ACT-3 prompt game states (HD request B6-T7 R4), ACT-4 Wordle states (HD request B7-T7 R4), ACT-5 chess and
+            // ACT-6 Zip states (HD requests B8-T3 R5, B8-T4 R8); nothing for any other name (each returns nil for a name
+            // it does not own).
             PromptGameFixtures.apply(named: raw, session: session, owner: owner)
             WordleFixtures.apply(named: raw, session: session, owner: owner)
+            // ACT-5 chess states (HD request B8-T3 R5); nil for any other name.
+            ChessFixtures.apply(named: raw, session: session, owner: owner)
+            // ACT-6 Zip states (HD request B8-T4 R8); nil for any other name.
+            ZipFixtures.apply(named: raw, session: session, owner: owner)
             return nil
         }
         session.activities.onCommand = { [weak owner] command in
