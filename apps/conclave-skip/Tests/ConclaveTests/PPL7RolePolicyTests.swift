@@ -294,9 +294,9 @@ struct PPL7RolePolicyTests {
         #expect(invite.people.stageInvitation?.promotedByName == "Ishaan")
     }
 }
-#endif
 
 private func ppl7Source(_ packageRelativePath: String) throws -> String {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     return try String(contentsOf: root.appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
 }
+#endif

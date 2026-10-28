@@ -11,7 +11,8 @@
     },
     "%@ Is Running" : {
       "comment" : "Status chip: an activity keeps running while the video is shown; the argument is the activity name, for example Trivia",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "%@ and %lld others" : {
       "comment" : "Grouped name (iOS, F00 C13): first name, then how many others, for example on a grouped chat preview; the stage chat preview title names the newest sender (CHT-8)",
@@ -145,7 +146,8 @@
     },
     "%@ is running" : {
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): status under Activities naming the game that is running, for example Trivia",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "%@ joined" : {
       "comment" : "In-call toast: a person joined; the argument is their name",
@@ -786,11 +788,13 @@
     },
     "Answer in Writing" : {
       "comment" : "Webinar Q&A (S50 11 g): title of the written answer page or dialog",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Answer in Writing…" : {
       "comment" : "Webinar Q&A (S50 11 g): host action that opens the written answer",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Answer locked in" : {
       "comment" : "Prompt games in the activity card (S60 9), Trivia: after you answer; joined with the answered count by a middle dot",
@@ -1752,7 +1756,8 @@
     },
     "Custom Link" : {
       "comment" : "Webinar Settings (S50 9 g): row and page title for the custom webinar link slug",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Dark" : {
       "comment" : "Debug component gallery: readout value for dark appearance",
@@ -2149,7 +2154,8 @@
     },
     "Hand Raised" : {
       "comment" : "Video tile: state read with a participant tile while their hand is raised",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Hand lowered" : {
       "comment" : "In-call screen reader announcement (used by R3): the server confirmed your lowered hand",
@@ -2157,7 +2163,8 @@
     },
     "Hand raised" : {
       "comment" : "In-call screen reader announcement (used by R3): the server confirmed your raised hand",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Haptics" : {
       "comment" : "Debug component gallery: section title for haptic mapping specimens",
@@ -2696,11 +2703,13 @@
     },
     "Microphone Access Is Off" : {
       "comment" : "Pre-join lobby: title of the row under the card when microphone access is denied; Alert title in a call: the microphone permission is denied in system settings",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Microphone access is off." : {
       "comment" : "Settings pages (S60 2): shown when the app has no microphone permission",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Microphone access is off. Turn it on in Settings." : {
       "comment" : "In-call banner (priority 16): microphone permission was revoked during the call",
@@ -2732,11 +2741,13 @@
     },
     "More Reactions" : {
       "comment" : "Chat panel: submenu with the other three reactions (iOS)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "More Reactions…" : {
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): item that opens the reactions tray with more reactions (shown once the extra reactions ship)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "More than one person matches that name. Choose them from the list." : {
       "comment" : "Chat panel: reason under a failed private message",
@@ -2837,11 +2848,13 @@
     },
     "Needs Attention" : {
       "comment" : "Meeting Details panel (S20 15): live notes status value when live notes stopped with a problem",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Needs attention" : {
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): status under Transcript while live notes need attention",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Network interrupted" : {
       "comment" : "Video tile: reason shown under Reconnecting when the participant's network dropped",
@@ -3559,11 +3572,13 @@
     },
     "Reactions Are Off" : {
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): disabled row shown in place of the reaction palette when the host turned reactions off or the call is reconnecting",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Reactions are off" : {
       "comment" : "Reaction palette: reason read on each emoji while the host turned reactions off; the row stays, disabled",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Read This Naturally" : {
       "comment" : "Settings, Record voice (S60 2, L6-13): heading above the sample script",
@@ -3835,11 +3850,13 @@
     },
     "Rotate Link" : {
       "comment" : "Host Controls (S50 6 g): rotate confirmation button",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Rotate Link…" : {
       "comment" : "Webinar Settings (S50 9 g): opens the confirmation that replaces the webinar link",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Rotate Webinar Link?" : {
       "comment" : "Host Controls (S50 6 g): confirmation title (S50 9, PPL-5 page)",
@@ -4155,15 +4172,18 @@
     },
     "Sign Out" : {
       "comment" : "Account (signed in): row that signs out on this device",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Sign Out?" : {
       "comment" : "Settings (S60 1): title of the sign-out confirmation",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Sign Out…" : {
       "comment" : "Settings (S60 1): row that signs you out after a confirmation (iOS ends with an ellipsis because it opens a confirmation); also the Android confirm button",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Sign in to create a personal voice for voice messages. Until then, messages use the system voice." : {
       "comment" : "Settings, Voice messages (S60 2): shown to guests in place of the personal voice rows",
@@ -4443,11 +4463,13 @@
     },
     "System Voice" : {
       "comment" : "Settings, Voice messages (S60 2): the device’s built-in voice for your voice messages",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "System voice" : {
       "comment" : "Chat panel, voice messages: second half of the composer’s voice mode line: your message is read with the device’s voice",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Take turns describing the word, but stay vague." : {
       "comment" : "Prompt games in the activity card (S60 9), Imposter: the discussion instruction",
@@ -4631,11 +4653,13 @@
     },
     "Thinking" : {
       "comment" : "Chat panel: spoken name of the thinking reaction; also the assistant status before an answer (CHT-7)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Thinking…" : {
       "comment" : "Chat panel, Conclave AI row: label of the reasoning disclosure while the model is still thinking",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "This Game Needs a Newer Version of Conclave" : {
       "comment" : "Game shell in the activity card (S60 8): notice title for a game this app version cannot show",
@@ -4743,7 +4767,8 @@
     },
     "Too Soon" : {
       "comment" : "Prompt games in the activity card (S60 9), Reaction: the pad after you tapped before it turned green",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Too many host actions. Try again in a moment." : {
       "comment" : "Host action failure (S50 3 g, PL14: inline line, page snackbar or stage toast, with Retry): rate limited",
@@ -5335,11 +5360,13 @@
     },
     "Your Answer" : {
       "comment" : "Webinar Q&A (S50 11 g): written answer field label",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Your Bluff" : {
       "comment" : "Prompt games in the activity card (S60 9), Bluff: label of the text field where you write a fake answer",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Your Connection" : {
       "comment" : "Meeting Details panel (S20 15): row showing the quality of your own network connection",
@@ -5359,7 +5386,8 @@
     },
     "Your Voice" : {
       "comment" : "Settings, Voice messages (S60 2): a personal voice that sounds like you; also its section header",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Your account was deleted." : {
       "comment" : "Account (iOS): footer of the signed-out content after the account was deleted",
@@ -5367,7 +5395,8 @@
     },
     "Your answer" : {
       "comment" : "Game shell in the activity card (S60 8): marks your own pick (text twin of the selection border)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Your audio is paused while another call or app uses it." : {
       "comment" : "In-call banner (priority 7): another call or app holds the audio",
@@ -5379,7 +5408,8 @@
     },
     "Your bluff" : {
       "comment" : "Prompt games in the activity card (S60 9), Bluff: marks your own fake answer in the list (it cannot be picked)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Your call is back. You’re muted." : {
       "comment" : "In-call toast: the call resumed after a hold, muted",
@@ -5431,7 +5461,8 @@
     },
     "Your voice" : {
       "comment" : "Chat panel, voice messages: second half of the composer’s voice mode line: your message is read with your personal voice",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Your word: %@" : {
       "comment" : "Prompt games in the activity card (S60 9), Imposter: the held secret card for the crew; %@ is the secret word",
@@ -5581,7 +5612,8 @@
     },
     "custom-link" : {
       "comment" : "Webinar Settings (S50 9 g): placeholder in the custom link field; an example slug, keep lowercase with a hyphen",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "iPhone" : {
       "comment" : "Audio route name for the iPhone's own receiver (the earpiece), as the system route list names it; shown in the Mic shortcut and route toasts (S30 3 g, SYS-2)",
@@ -5617,7 +5649,8 @@
     },
     "too soon" : {
       "comment" : "Prompt games in the activity card (S60 9), Reaction: a result row value for someone who tapped early (lowercase in the results list)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "your current meeting" : {
       "comment" : "Prompt body fallback when the current meeting code is unknown (lower case: it sits mid sentence)",

@@ -12609,7 +12609,8 @@ final class MeetingViewModel {
         let token = UUID().uuidString
         conclaveAssistantTasks[token] = Task { @MainActor [weak self] in
             await body()
-            self?.conclaveAssistantTasks[token] = nil
+            guard let self else { return }
+            self.conclaveAssistantTasks[token] = nil
         }
     }
 

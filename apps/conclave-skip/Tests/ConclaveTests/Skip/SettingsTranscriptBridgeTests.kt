@@ -39,7 +39,7 @@ class SettingsTranscriptBridgeTests {
         assertEquals(listOf(SettingsRowID.output, SettingsRowID.microphone, SettingsRowID.noiseSuppression, SettingsRowID.testSound,
             SettingsRowID.cameraFacing, SettingsRowID.captions, SettingsRowID.captionStyle, SettingsRowID.chatPreviews,
             SettingsRowID.playVoiceMessages, SettingsRowID.voiceMessages, SettingsRowID.hostControls, SettingsRowID.knockSound,
-            SettingsRowID.handSound, SettingsRowID.connection, SettingsRowID.alwaysShowControls, SettingsRowID.name,
+            SettingsRowID.handSound, SettingsRowID.connection, SettingsRowID.alwaysShowControls, SettingsRowID.name_,
             SettingsRowID.identity, SettingsRowID.signOut, SettingsRowID.privacy, SettingsRowID.version),
             rows(SettingsScope.call, attendee = false, host = true, platform = SettingsPlatform.android, caps = caps))
         assertEquals(listOf(SettingsRowID.noiseSuppression, SettingsRowID.captions, SettingsRowID.captionStyle, SettingsRowID.chatPreviews,

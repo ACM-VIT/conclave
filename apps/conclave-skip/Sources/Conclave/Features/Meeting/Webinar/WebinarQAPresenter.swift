@@ -26,7 +26,7 @@ final class WebinarQAPresenter {
     @ObservationIgnored private(set) var applyCount = 0
     @ObservationIgnored private(set) var openPresentationID = 0
     @ObservationIgnored private var sort = QaSort.top
-    @ObservationIgnored private var filter = QaHostFilter.open
+    @ObservationIgnored private var filter = QaHostFilter.openQuestions
     @ObservationIgnored private var submitPhase = QaSubmitPhase.idle
     @ObservationIgnored private var submitSerial = 0
     @ObservationIgnored private var answeredQuestionId = ""
@@ -65,8 +65,8 @@ final class WebinarQAPresenter {
         if presentationID == 0 || presentationID == openPresentationID { return }
         openPresentationID = presentationID
         // A host lands on Open each presentation; the attendee sort is kept (a choice, not a filter).
-        if filter != QaHostFilter.open {
-            filter = QaHostFilter.open
+        if filter != QaHostFilter.openQuestions {
+            filter = QaHostFilter.openQuestions
             rebuild()
         }
     }
@@ -215,7 +215,7 @@ final class WebinarQAPresenter {
         questions.removeAll()
         inputs = QaInputs.make()
         sort = QaSort.top
-        filter = QaHostFilter.open
+        filter = QaHostFilter.openQuestions
         submitPhase = QaSubmitPhase.idle
         openPresentationID = 0
         if snapshot.withRevision(0) != QaPanelSnapshot.empty {

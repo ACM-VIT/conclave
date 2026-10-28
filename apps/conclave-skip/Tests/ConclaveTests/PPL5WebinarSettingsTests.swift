@@ -321,9 +321,9 @@ struct PPL5WebinarSettingsTests {
         }
     }
 }
-#endif
 
 private func ppl5Source(_ packageRelativePath: String) throws -> String {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     return try String(contentsOf: root.appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
 }
+#endif

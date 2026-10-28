@@ -111,7 +111,7 @@ final class ConclaveAssistantStore {
             }
         case .reasoning:
             if !event.delta.isEmpty {
-                if answer.reasoningStartedAt == 0 { answer.reasoningStartedAt = time }
+                if answer.reasoningStartedAt == 0.0 { answer.reasoningStartedAt = time }
                 answer.reasoning += event.delta
                 if answer.reasoningDone {
                     // A later tool round resumed thinking (web route `emitReasoning`).
@@ -184,7 +184,7 @@ final class ConclaveAssistantStore {
         let time = now()
         var immediate = false
         if !reasoning.isEmpty {
-            if answer.reasoningStartedAt == 0 { answer.reasoningStartedAt = time }
+            if answer.reasoningStartedAt == 0.0 { answer.reasoningStartedAt = time }
             if reasoning.count >= answer.reasoning.count { answer.reasoning = reasoning }
         }
         if reasoningDone && !answer.reasoningDone {

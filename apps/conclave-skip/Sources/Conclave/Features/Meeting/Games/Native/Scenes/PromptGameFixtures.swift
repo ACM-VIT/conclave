@@ -293,6 +293,7 @@ enum PromptGameFixtures {
     /// Feeds the activity session for a prompt game state and wires its commands to the recording owner, the way
     /// `ActivityFixtureScript.apply(named:session:owner:)` does for the ACT-2 states. Nil for any other name.
     @discardableResult
+    @MainActor
     static func apply(named raw: String, session: ActivitySession, owner: ActivityFixtureOwner) -> PromptGameFixtureState? {
         guard let state = state(named: raw) else { return nil }
         session.activities.onCommand = { [weak owner] command in

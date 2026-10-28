@@ -37,6 +37,15 @@ enum NativeConclaveAssistantStreamEventKind: String, CaseIterable {
     case delta, reasoning, task, approval, done, error
 }
 
+/// The streamed answer's event handler, always called on the main actor. Skip wraps a closure literal for a `@MainActor`
+/// function type in the suspending `MainActor.run`, which the plain Kotlin callback cannot hold, so the transpiled type
+/// drops the attribute (Android already posts every event to the main thread).
+#if SKIP
+typealias NativeConclaveAssistantEventHandler = (NativeConclaveAssistantStreamEvent) -> Void
+#else
+typealias NativeConclaveAssistantEventHandler = @MainActor (NativeConclaveAssistantStreamEvent) -> Void
+#endif
+
 /// One parsed stream event. `delta` is the text delta (delta) or reasoning delta (reasoning); `isReasoningDone` the
 /// reasoning event's `done`; `relay` the signed packet the asker forwards to the room unchanged.
 struct NativeConclaveAssistantStreamEvent {
@@ -314,7 +323,7 @@ enum NativeConclaveAssistantService {
         transcript: String = "",
         transcriptActive: Bool = false,
         baseURL: URL? = NativeAuthService.resolveAppBaseURL(),
-        onEvent: @escaping @MainActor (NativeConclaveAssistantStreamEvent) -> Void
+        onEvent: @escaping NativeConclaveAssistantEventHandler
     ) async throws -> NativeConclaveAssistantResult {
         let request = try makeRequest(answerId: answerId, question: question, relayToken: relayToken, history: history,
                                       transcript: transcript, transcriptActive: transcriptActive, baseURL: baseURL)

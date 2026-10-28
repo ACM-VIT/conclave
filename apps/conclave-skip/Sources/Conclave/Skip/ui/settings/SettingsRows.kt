@@ -179,7 +179,7 @@ private fun SettingsRootRow(
             SettingsSwitchItem(conclaveString(SettingsCopy.rowName(row)), general.alwaysShowControls, tag,
                 supporting = conclaveString("set_always_show_controls_detail")) { settings.setAlwaysShowControls(it) }
         }
-        SettingsRowID.name -> SettingsNameItem(settings, tag)
+        SettingsRowID.name_ -> SettingsNameItem(settings, tag)
         SettingsRowID.identity -> SettingsIdentityItem(settings, tag)
         SettingsRowID.signOut -> {
             val account = settings.account

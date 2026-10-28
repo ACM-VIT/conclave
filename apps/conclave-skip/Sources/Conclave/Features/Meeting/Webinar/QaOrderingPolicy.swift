@@ -26,7 +26,7 @@ enum QaOrderingPolicy {
         }
         if role == QaRole.host {
             switch filter {
-            case .open: return question.status.isOpen
+            case .openQuestions: return question.status.isOpen
             case .answered: return question.status == QaStatus.answered
             case .dismissed: return question.status == QaStatus.dismissed
             }

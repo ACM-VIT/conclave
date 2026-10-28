@@ -21,7 +21,9 @@ enum QaSort: String, CaseIterable, Equatable {
 }
 
 enum QaHostFilter: String, CaseIterable, Equatable {
-    case open, answered, dismissed
+    // `open` is a Kotlin modifier keyword, so the Open filter is `openQuestions` (raw value unchanged).
+    case openQuestions = "open"
+    case answered, dismissed
 }
 
 /// The viewer's Q&A role (S50 0.5 `QaPanelSnapshot.role`; RECONCILE R18: hosts moderate, attendees ask).
@@ -251,7 +253,7 @@ struct QaPanelSnapshot: Equatable {
 
     static let empty = QaPanelSnapshot(revision: 0, role: QaRole.none, isEnabled: false, isLoaded: false,
                                        availability: QaAvailability.available, availableSorts: [], sort: QaSort.top,
-                                       filter: QaHostFilter.open, questionIds: [], counts: [0, 0, 0],
+                                       filter: QaHostFilter.openQuestions, questionIds: [], counts: [0, 0, 0],
                                        composerEnabled: false, composerReason: QaComposerReason.qaOff,
                                        submitPhase: QaSubmitPhase.idle, submitSerial: 0, answeredQuestionId: "",
                                        answerSerial: 0)
@@ -267,7 +269,7 @@ struct QaPanelSnapshot: Equatable {
     var isHost: Bool { role == QaRole.host }
 
     func count(_ filter: QaHostFilter) -> Int {
-        let index = filter == QaHostFilter.open ? 0 : (filter == QaHostFilter.answered ? 1 : 2)
+        let index = filter == QaHostFilter.openQuestions ? 0 : (filter == QaHostFilter.answered ? 1 : 2)
         return index < counts.count ? counts[index] : 0
     }
 }

@@ -110,18 +110,28 @@ private struct QaSortBar: View {
 
     var body: some View {
         if snapshot.availableSorts.count > 1 && snapshot.availability == QaAvailability.available {
-            Picker(ConclaveStrings.text("Sort"), selection: Binding(get: { snapshot.sort.rawValue },
-                                                                  set: { qa.setSort(QaSort(rawValue: $0) ?? QaSort.top) })) {
-                ForEach(snapshot.availableSorts, id: \.self) { raw in
-                    Text(QaText.sortTitle(raw)).tag(raw)
+            // The two picker styles are different types, so each branch applies its own.
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    sortPicker.pickerStyle(.menu)
+                } else {
+                    sortPicker.pickerStyle(.segmented)
                 }
             }
-            .pickerStyle(dynamicTypeSize.isAccessibilitySize ? .menu : .segmented)
             .labelsHidden()
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .background(Color(uiColor: .systemBackground))
             .accessibilityIdentifier("qa.sort")
+        }
+    }
+
+    private var sortPicker: some View {
+        Picker(ConclaveStrings.text("Sort"), selection: Binding(get: { snapshot.sort.rawValue },
+                                                              set: { qa.setSort(QaSort(rawValue: $0) ?? QaSort.top) })) {
+            ForEach(snapshot.availableSorts, id: \.self) { raw in
+                Text(QaText.sortTitle(raw)).tag(raw)
+            }
         }
     }
 }
@@ -134,7 +144,7 @@ private struct QaFilterMenu: View {
     var body: some View {
         Menu {
             Picker(ConclaveStrings.text("Filter"), selection: Binding(get: { snapshot.filter.rawValue },
-                                                                    set: { qa.setFilter(QaHostFilter(rawValue: $0) ?? QaHostFilter.open) })) {
+                                                                    set: { qa.setFilter(QaHostFilter(rawValue: $0) ?? QaHostFilter.openQuestions) })) {
                 ForEach(QaHostFilter.allCases, id: \.self) { filter in
                     Text(QaText.filterTitle(filter, count: snapshot.count(filter))).tag(filter.rawValue)
                 }
@@ -174,7 +184,7 @@ enum QaPanelText {
     static func emptyMessage(_ snapshot: QaPanelSnapshot) -> String? {
         if snapshot.isHost {
             switch snapshot.filter {
-            case .open: return ConclaveStrings.text("Attendee questions land here for you to answer live or dismiss.")
+            case .openQuestions: return ConclaveStrings.text("Attendee questions land here for you to answer live or dismiss.")
             case .answered: return ConclaveStrings.text("No answered questions.")
             case .dismissed: return ConclaveStrings.text("No dismissed questions.")
             }

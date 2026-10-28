@@ -281,8 +281,9 @@ final class ChatRowEntry {
             row = next
             changed = true
         }
-        if nextAssistant != assistant {
-            assistant = nextAssistant
+        // `self.` because the transpiled parameter takes the label's name and would shadow the property.
+        if nextAssistant != self.assistant {
+            self.assistant = nextAssistant
             changed = true
         }
         return changed

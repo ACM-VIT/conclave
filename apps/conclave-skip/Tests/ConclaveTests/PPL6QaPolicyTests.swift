@@ -67,16 +67,16 @@ struct PPL6QaPolicyTests {
     @Test func topPutsTheLiveQuestionFirstThenVotesThenAskedTime() {
         let questions = [model("a", upvotes: 4, asked: 2), model("b", status: .answering, upvotes: 1, asked: 5),
                          model("c", upvotes: 9, asked: 3), model("d", upvotes: 4, asked: 1)]
-        #expect(QaOrderingPolicy.orderedIds(questions, role: QaRole.attendee, sort: .top, filter: .open) == ["b", "c", "d", "a"])
+        #expect(QaOrderingPolicy.orderedIds(questions, role: QaRole.attendee, sort: .top, filter: .openQuestions) == ["b", "c", "d", "a"])
         // Recent: the live question first, then the newest asked.
-        #expect(QaOrderingPolicy.orderedIds(questions, role: QaRole.attendee, sort: .recent, filter: .open) == ["b", "c", "a", "d"])
+        #expect(QaOrderingPolicy.orderedIds(questions, role: QaRole.attendee, sort: .recent, filter: .openQuestions) == ["b", "c", "a", "d"])
     }
 
     @Test func attendeesNeverSeeDismissedAndMineIsOwnOnly() {
         let questions = [model("x", status: .dismissed, mine: true), model("y", asked: 2, mine: true), model("z", asked: 3)]
         // Equal votes order by asked time; your dismissed question never shows (web parity).
-        #expect(QaOrderingPolicy.orderedIds(questions, role: QaRole.attendee, sort: .top, filter: .open) == ["y", "z"])
-        #expect(QaOrderingPolicy.orderedIds(questions, role: QaRole.attendee, sort: .mine, filter: .open) == ["y"])
+        #expect(QaOrderingPolicy.orderedIds(questions, role: QaRole.attendee, sort: .top, filter: .openQuestions) == ["y", "z"])
+        #expect(QaOrderingPolicy.orderedIds(questions, role: QaRole.attendee, sort: .mine, filter: .openQuestions) == ["y"])
     }
 
     @Test func hostsGetTopAndRecentOnlyAndTheFilter() {
@@ -84,7 +84,7 @@ struct PPL6QaPolicyTests {
         #expect(QaOrderingPolicy.availableSorts(role: QaRole.attendee) == [.top, .recent, .mine])
         #expect(QaOrderingPolicy.effectiveSort(.mine, role: QaRole.host) == .top)
         let questions = [model("p"), model("l", status: .answering), model("a", status: .answered), model("d", status: .dismissed)]
-        #expect(Set(QaOrderingPolicy.orderedIds(questions, role: QaRole.host, sort: .top, filter: .open)) == ["p", "l"])
+        #expect(Set(QaOrderingPolicy.orderedIds(questions, role: QaRole.host, sort: .top, filter: .openQuestions)) == ["p", "l"])
         #expect(QaOrderingPolicy.orderedIds(questions, role: QaRole.host, sort: .top, filter: .answered) == ["a"])
         #expect(QaOrderingPolicy.orderedIds(questions, role: QaRole.host, sort: .top, filter: .dismissed) == ["d"])
         #expect(QaOrderingPolicy.counts(questions) == [2, 1, 1])
@@ -241,7 +241,7 @@ struct PPL6QaPolicyTests {
         #expect(panel.contains("ConclaveComposerField(identifier: \"qa.composer.cluster\")"), "OQ2: the one composer glass file")
         #expect(panel.contains(".navigationDestination(for: QaRoute.self)"))
         #expect(panel.contains("people.qa.panelDidOpen(presentationID: presentation.request.presentationID)"))
-        #expect(panel.contains(".pickerStyle(dynamicTypeSize.isAccessibilitySize ? .menu : .segmented)"))
+        #expect(panel.contains("if dynamicTypeSize.isAccessibilitySize {\n                    sortPicker.pickerStyle(.menu)\n                } else {\n                    sortPicker.pickerStyle(.segmented)"))
         let answer = try ppl6Source("Sources/Conclave/Features/Meeting/Webinar/QaAnswerPage+iOS.swift")
         #expect(answer.contains(".lineLimit(4...12)") && answer.contains("ToolbarItem(placement: .confirmationAction)"))
         let row = try ppl6Source("Sources/Conclave/Features/Meeting/Webinar/QuestionRow+iOS.swift")
@@ -273,9 +273,9 @@ struct PPL6QaPolicyTests {
         }
     }
 }
-#endif
 
 private func ppl6Source(_ packageRelativePath: String) throws -> String {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     return try String(contentsOf: root.appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
 }
+#endif

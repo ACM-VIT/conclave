@@ -21,7 +21,7 @@ enum QaText {
 
     static func filterTitle(_ filter: QaHostFilter, count: Int) -> String {
         switch filter {
-        case .open: return ConclaveStrings.format("Open (%lld)", count)
+        case .openQuestions: return ConclaveStrings.format("Open (%lld)", count)
         case .answered: return ConclaveStrings.format("Answered (%lld)", count)
         case .dismissed: return ConclaveStrings.format("Dismissed (%lld)", count)
         }

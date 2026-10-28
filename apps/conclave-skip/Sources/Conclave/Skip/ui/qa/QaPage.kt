@@ -111,7 +111,7 @@ private fun QaContent(people: PeoplePresenter, snapshot: QaPanelSnapshot, reques
             val haptics = rememberConclaveHaptics()
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp).testTag("qa.filter"),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (filter in listOf(QaHostFilter.open, QaHostFilter.answered, QaHostFilter.dismissed)) {
+                for (filter in listOf(QaHostFilter.openQuestions, QaHostFilter.answered, QaHostFilter.dismissed)) {
                     FilterChip(
                         selected = snapshot.filter == filter,
                         onClick = {

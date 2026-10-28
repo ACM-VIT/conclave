@@ -44,7 +44,7 @@ internal object SettingsCopy {
         SettingsRowID.openLinks -> "sys_links_title"
         SettingsRowID.alwaysShowControls -> "set_always_show_controls"
         SettingsRowID.haptics -> "set_haptics"
-        SettingsRowID.name -> "set_name"
+        SettingsRowID.name_ -> "set_name"
         SettingsRowID.identity -> "set_account"
         SettingsRowID.signOut -> "set_sign_out"
         SettingsRowID.privacy -> "set_privacy_policy"
